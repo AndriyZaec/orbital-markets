@@ -1,0 +1,52 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
+)
+
+func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	sc := scanner.New(logger)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	go sc.Run(ctx, 30*time.Second)
+
+	srv := api.NewServer(logger, sc)
+
+	addr := envOr("ADDR", ":8080")
+	logger.Info("starting server", "addr", addr)
+
+	httpSrv := &http.Server{
+		Addr:    addr,
+		Handler: srv.Handler(),
+	}
+
+	go func() {
+		<-ctx.Done()
+		logger.Info("shutting down")
+		httpSrv.Shutdown(context.Background())
+	}()
+
+	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
+		logger.Error("server error", "err", err)
+		os.Exit(1)
+	}
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
