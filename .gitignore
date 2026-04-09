@@ -1,0 +1,28 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+apps/api/tmp/
+apps/api/bin/
+
+# Node / Web
+node_modules/
+dist/
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# Build
+*.exe
+*.dll
+*.so
+*.dylib
