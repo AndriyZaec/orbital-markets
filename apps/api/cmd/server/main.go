@@ -10,16 +10,20 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	sc := scanner.New(logger)
+	pac := pacifica.New(logger)
+
+	sc := scanner.New(logger, pac)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	go pac.Connect(ctx)
 	go sc.Run(ctx, 30*time.Second)
 
 	srv := api.NewServer(logger, sc)

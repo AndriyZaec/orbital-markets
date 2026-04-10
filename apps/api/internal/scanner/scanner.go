@@ -47,6 +47,20 @@ func (s *Scanner) Opportunities() []domain.Opportunity {
 	return out
 }
 
+// MarketData returns the latest snapshots from all adapters.
+func (s *Scanner) MarketData(ctx context.Context) []venue.MarketData {
+	var all []venue.MarketData
+	for _, a := range s.adapters {
+		data, err := a.FetchMarketData(ctx)
+		if err != nil {
+			s.logger.Error("fetch market data", "venue", a.Name(), "err", err)
+			continue
+		}
+		all = append(all, data...)
+	}
+	return all
+}
+
 func (s *Scanner) scan(ctx context.Context) {
 	s.logger.Info("scanning venues", "adapters", len(s.adapters))
 	// TODO: fetch from adapters, compute spreads, rank opportunities

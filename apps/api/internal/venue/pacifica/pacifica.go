@@ -21,8 +21,8 @@ const (
 
 // wsMessage is the raw message from the Pacifica WebSocket.
 type wsMessage struct {
-	Channel string    `json:"channel"`
-	Data    []wsPrice `json:"data"`
+	Channel string          `json:"channel"`
+	Data    json.RawMessage `json:"data"`
 }
 
 type wsPrice struct {
@@ -121,11 +121,17 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 			continue
 		}
 
-		if msg.Channel != "prices" {
+		if msg.Channel != "prices" || len(msg.Data) == 0 || msg.Data[0] != '[' {
 			continue
 		}
 
-		a.updateSnapshots(msg.Data)
+		var prices []wsPrice
+		if err := json.Unmarshal(msg.Data, &prices); err != nil {
+			a.logger.Warn("pacifica ws parse prices", "err", err)
+			continue
+		}
+
+		a.updateSnapshots(prices)
 	}
 }
 
