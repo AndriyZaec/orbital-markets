@@ -10,6 +10,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/gmtrade"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
 
@@ -17,8 +18,9 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	pac := pacifica.New(logger)
+	gmt := gmtrade.New(logger, envOr("GMTRADE_SIDECAR_URL", "http://127.0.0.1:8081"))
 
-	sc := scanner.New(logger, pac)
+	sc := scanner.New(logger, pac, gmt)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
