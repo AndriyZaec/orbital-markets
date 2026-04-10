@@ -7,22 +7,17 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
-type VenueAdapter interface {
-	Name() string
-	FetchFundingRates(ctx context.Context) (map[string]float64, error)
-	FetchMarkPrices(ctx context.Context) (map[string]float64, error)
-}
-
 type Scanner struct {
-	adapters []VenueAdapter
+	adapters []venue.Adapter
 	mu       sync.RWMutex
 	opps     []domain.Opportunity
 	logger   *slog.Logger
 }
 
-func New(logger *slog.Logger, adapters ...VenueAdapter) *Scanner {
+func New(logger *slog.Logger, adapters ...venue.Adapter) *Scanner {
 	return &Scanner{
 		adapters: adapters,
 		logger:   logger,
