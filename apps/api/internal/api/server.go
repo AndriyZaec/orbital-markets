@@ -30,11 +30,17 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/v1/markets", s.handleMarkets)
 	s.mux.HandleFunc("GET /api/v1/opportunities", s.handleOpportunities)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
+	data := s.scanner.MarketData(r.Context())
+	writeJSON(w, http.StatusOK, data)
 }
 
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
