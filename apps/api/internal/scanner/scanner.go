@@ -194,14 +194,7 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid/ask", b.Venue))
 	}
 
-	// Confidence based on data completeness.
-	confidence := domain.ConfidenceHigh
-	if len(warnings) > 0 {
-		confidence = domain.ConfidenceMedium
-	}
-	if (a.BidPrice == 0 && a.AskPrice == 0) || (b.BidPrice == 0 && b.AskPrice == 0) {
-		confidence = domain.ConfidenceLow
-	}
+	confidence := classifyConfidence(a, b, now)
 
 	// Risk tier based on annualized edge magnitude.
 	riskTier := classifyRisk(annualizedGross, entrySpread)
@@ -227,29 +220,5 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		RiskTier:            riskTier,
 		Executable:          confidence != domain.ConfidenceLow && len(warnings) == 0,
 		Warnings:            warnings,
-	}
-}
-
-func classifyRisk(annualizedGross, entrySpread float64) domain.RiskTier {
-	// If entry cost eats more than half the annualized edge, it's aggressive.
-	if entrySpread > 0 && annualizedGross > 0 {
-		ratio := entrySpread / annualizedGross
-		if ratio > 0.5 {
-			return domain.RiskExperimental
-		}
-		if ratio > 0.2 {
-			return domain.RiskAggressive
-		}
-	}
-
-	switch {
-	case annualizedGross > 0.50: // >50% annualized
-		return domain.RiskExperimental
-	case annualizedGross > 0.20: // >20%
-		return domain.RiskAggressive
-	case annualizedGross > 0.05: // >5%
-		return domain.RiskStandard
-	default:
-		return domain.RiskConservative
 	}
 }
