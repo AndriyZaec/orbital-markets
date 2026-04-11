@@ -1,121 +1,101 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useOpportunities } from '@/hooks/useOpportunities'
+import type { Opportunity } from '@/hooks/useOpportunities'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
 
-function App() {
-  const [count, setCount] = useState(0)
-
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+function confidenceVariant(c: Opportunity['confidence']) {
+  switch (c) {
+    case 'high': return 'default' as const
+    case 'medium': return 'secondary' as const
+    case 'low': return 'outline' as const
+  }
 }
 
-export default App
+function riskColor(r: Opportunity['risk_tier']) {
+  switch (r) {
+    case 'conservative': return 'text-green-400'
+    case 'standard': return 'text-blue-400'
+    case 'aggressive': return 'text-yellow-400'
+    case 'experimental': return 'text-red-400'
+  }
+}
+
+function fmtPct(n: number, decimals = 2) {
+  return (n * 100).toFixed(decimals) + '%'
+}
+
+function fmtRate(n: number) {
+  return (n * 100).toFixed(4) + '%'
+}
+
+export default function App() {
+  const { opportunities, loading, error } = useOpportunities()
+
+  return (
+    <div className="dark min-h-screen bg-background">
+      <header className="border-b border-border px-6 py-4">
+        <h1 className="text-xl font-semibold tracking-tight">Orbital Market</h1>
+        <p className="text-sm text-muted-foreground">Perp spread opportunities</p>
+      </header>
+
+      <main className="p-6">
+        {loading && <p className="text-muted-foreground">Loading...</p>}
+        {error && <p className="text-destructive">Error: {error}</p>}
+        {!loading && !error && opportunities.length === 0 && (
+          <p className="text-muted-foreground">No opportunities detected yet. Waiting for scan...</p>
+        )}
+        {opportunities.length > 0 && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Asset</TableHead>
+                <TableHead>Venues</TableHead>
+                <TableHead>Direction</TableHead>
+                <TableHead className="text-right">Funding A</TableHead>
+                <TableHead className="text-right">Funding B</TableHead>
+                <TableHead className="text-right">Spread</TableHead>
+                <TableHead className="text-right">Ann. Edge</TableHead>
+                <TableHead className="text-right">Entry Cost</TableHead>
+                <TableHead>Risk</TableHead>
+                <TableHead>Confidence</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {opportunities.map((opp) => (
+                <TableRow key={opp.id}>
+                  <TableCell className="font-medium">{opp.asset}</TableCell>
+                  <TableCell className="text-muted-foreground text-sm">
+                    {opp.venue_pair.venue_a} / {opp.venue_pair.venue_b}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {opp.direction === 'long_a_short_b' ? '⬆ A ⬇ B' : '⬇ A ⬆ B'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-sm">{fmtRate(opp.funding_rate_a)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{fmtRate(opp.funding_rate_b)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{fmtRate(opp.funding_spread)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{fmtPct(opp.annualized_gross_edge)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{fmtPct(opp.entry_spread_estimate, 4)}</TableCell>
+                  <TableCell>
+                    <span className={`text-sm font-medium ${riskColor(opp.risk_tier)}`}>
+                      {opp.risk_tier}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={confidenceVariant(opp.confidence)}>{opp.confidence}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </main>
+    </div>
+  )
+}
