@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useOpportunities } from '@/hooks/useOpportunities'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import {
@@ -9,6 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 
 function confidenceVariant(c: Opportunity['confidence']) {
   switch (c) {
@@ -37,12 +39,31 @@ function fmtRate(n: number) {
 
 export default function App() {
   const { opportunities, loading, error } = useOpportunities()
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  const selected = opportunities.find((o) => o.id === selectedId) ?? null
 
   return (
     <div className="dark min-h-screen bg-background">
-      <header className="border-b border-border px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">Orbital Market</h1>
-        <p className="text-sm text-muted-foreground">Perp spread opportunities</p>
+      <header className="border-b border-border px-6 py-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Orbital Market</h1>
+          <p className="text-sm text-muted-foreground">Perp spread opportunities</p>
+        </div>
+        {selected && (
+          <div className="flex items-center gap-4">
+            <div className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{selected.asset}</span>
+              {' · '}
+              {selected.venue_pair.venue_a} / {selected.venue_pair.venue_b}
+              {' · '}
+              {fmtPct(selected.annualized_gross_edge)} ann.
+            </div>
+            <Button size="lg" disabled={!selected.executable}>
+              Open Spread
+            </Button>
+          </div>
+        )}
       </header>
 
       <main className="p-6">
@@ -69,7 +90,11 @@ export default function App() {
             </TableHeader>
             <TableBody>
               {opportunities.map((opp) => (
-                <TableRow key={opp.id}>
+                <TableRow
+                  key={opp.id}
+                  className={`cursor-pointer ${selectedId === opp.id ? 'bg-accent' : ''}`}
+                  onClick={() => setSelectedId(selectedId === opp.id ? null : opp.id)}
+                >
                   <TableCell className="font-medium">{opp.asset}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">
                     {opp.venue_pair.venue_a} / {opp.venue_pair.venue_b}
