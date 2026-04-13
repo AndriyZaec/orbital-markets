@@ -32,6 +32,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	s.mux.HandleFunc("GET /api/v1/markets", s.handleMarkets)
 	s.mux.HandleFunc("GET /api/v1/opportunities", s.handleOpportunities)
+	s.mux.HandleFunc("POST /api/v1/plan", s.handleBuildPlan)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +47,29 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 	opps := s.scanner.Opportunities()
 	writeJSON(w, http.StatusOK, opps)
+}
+
+func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		OpportunityID string `json:"opportunity_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if req.OpportunityID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "opportunity_id required"})
+		return
+	}
+
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID)
+	if err != nil {
+		s.logger.Error("build plan", "err", err)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, plan)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
