@@ -9,6 +9,7 @@ interface Props {
   opportunity: Opportunity
   lastUpdated: Date | null
   onClose: () => void
+  onOpenSpread: () => void
 }
 
 function fmtPct(n: number, decimals = 2) {
@@ -59,7 +60,7 @@ function useCountdown(lastUpdated: Date | null, intervalSec: number) {
   return remaining
 }
 
-export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose }: Props) {
+export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onOpenSpread }: Props) {
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
@@ -155,7 +156,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose }: Pro
       )}
 
       {/* Action */}
-      <Button className="w-full" size="lg" disabled={!opp.executable}>
+      <Button className="w-full" size="lg" disabled={!opp.executable} onClick={onOpenSpread}>
         {opp.executable ? 'Open Spread Trade' : 'Not Executable'}
       </Button>
       {!opp.executable && (

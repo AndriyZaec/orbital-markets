@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useOpportunities } from '@/hooks/useOpportunities'
+import { usePlan } from '@/hooks/usePlan'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import {
   Table,
@@ -11,6 +12,7 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
+import { PlanPreview } from '@/components/PlanPreview'
 
 function confidenceVariant(c: Opportunity['confidence']) {
   switch (c) {
@@ -40,8 +42,19 @@ function fmtRate(n: number) {
 export default function App() {
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [planOppId, setPlanOppId] = useState<string | null>(null)
+  const { plan, loading: planLoading, error: planError, clear: clearPlan } = usePlan(planOppId)
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
+
+  const handleOpenSpread = (oppId: string) => {
+    setPlanOppId(oppId)
+  }
+
+  const handleClosePlan = () => {
+    setPlanOppId(null)
+    clearPlan()
+  }
 
   return (
     <div className="dark min-h-screen bg-background flex">
@@ -114,6 +127,17 @@ export default function App() {
           opportunity={selected}
           lastUpdated={lastUpdated}
           onClose={() => setSelectedId(null)}
+          onOpenSpread={() => handleOpenSpread(selected.id)}
+        />
+      )}
+
+      {/* Plan preview modal */}
+      {plan && (
+        <PlanPreview
+          plan={plan}
+          loading={planLoading}
+          error={planError}
+          onClose={handleClosePlan}
         />
       )}
     </div>
