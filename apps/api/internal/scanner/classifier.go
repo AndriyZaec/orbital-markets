@@ -54,6 +54,25 @@ func classifyConfidence(a, b venue.MarketData, now time.Time) domain.Confidence 
 	return domain.ConfidenceLow
 }
 
+// recommendedNotional returns an initial conservative sizing heuristic as a fraction of available liquidity.
+// Lower risk tiers get a larger share since the trade is more predictable.
+func recommendedNotional(available float64, risk domain.RiskTier) float64 {
+	var pct float64
+	switch risk {
+	case domain.RiskConservative:
+		pct = 0.05
+	case domain.RiskStandard:
+		pct = 0.03
+	case domain.RiskAggressive:
+		pct = 0.02
+	case domain.RiskExperimental:
+		pct = 0.01
+	default:
+		pct = 0.01
+	}
+	return available * pct
+}
+
 func classifyRisk(annualizedGross, entrySpread float64) domain.RiskTier {
 	// If entry cost eats more than half the annualized edge, it's aggressive.
 	if entrySpread > 0 && annualizedGross > 0 {

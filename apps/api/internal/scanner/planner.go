@@ -61,7 +61,8 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string) (*domain.
 	}
 
 	// Recompute net edge with fresh data
-	fundingSpread := longSnap.FundingRate - shortSnap.FundingRate
+	// Edge = funding collected on short - funding paid on long
+	fundingSpread := shortSnap.FundingRate - longSnap.FundingRate
 	totalCosts := leg1.Slippage + leg1.Fee + leg2.Slippage + leg2.Fee
 	estimatedNetEdge := (fundingSpread * hoursPerYear) - totalCosts
 
@@ -82,11 +83,7 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string) (*domain.
 		executable = false
 	}
 
-	// Use recommended notional from opportunity, or fall back
 	notional := opp.RecommendedNotional
-	if notional == 0 {
-		notional = opp.AvailableNotional * 0.1 // conservative default: 10% of available
-	}
 
 	plan := &domain.ExecutionPlan{
 		ID:               fmt.Sprintf("plan-%s-%d", opp.ID, now.UnixMilli()),
