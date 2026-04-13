@@ -58,10 +58,15 @@ type wsMessage struct {
 }
 
 type bboData struct {
-	Coin string `json:"coin"`
-	Time int64  `json:"time"`
-	Bid  string `json:"bid"`
-	Ask  string `json:"ask"`
+	Coin string     `json:"coin"`
+	Time int64      `json:"time"`
+	BBO  []bboLevel `json:"bbo"`
+}
+
+type bboLevel struct {
+	Px string `json:"px"`
+	Sz string `json:"sz"`
+	N  int    `json:"n"`
 }
 
 // Internal state per asset
@@ -284,10 +289,14 @@ func (a *Adapter) connectWS(ctx context.Context) error {
 			continue
 		}
 
+		if len(bbo.BBO) < 2 {
+			continue
+		}
+
 		a.mu.Lock()
 		if state, ok := a.assets[bbo.Coin]; ok {
-			state.bidPrice = parseFloat(bbo.Bid)
-			state.askPrice = parseFloat(bbo.Ask)
+			state.bidPrice = parseFloat(bbo.BBO[0].Px)
+			state.askPrice = parseFloat(bbo.BBO[1].Px)
 			if bbo.Time > 0 {
 				state.timestamp = time.UnixMilli(bbo.Time)
 			}
