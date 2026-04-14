@@ -48,14 +48,14 @@ func (s *Store) List() []*Position {
 	return out
 }
 
-// OpenPositions returns positions in open or degraded state.
-func (s *Store) OpenPositions() []*Position {
+// OpenPositionIDs returns IDs of positions in open or degraded state.
+func (s *Store) OpenPositionIDs() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []*Position
+	var out []string
 	for _, p := range s.positions {
 		if p.State == StateOpen || p.State == StateDegraded {
-			out = append(out, p)
+			out = append(out, p.ID)
 		}
 	}
 	return out

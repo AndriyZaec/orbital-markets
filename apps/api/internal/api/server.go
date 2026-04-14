@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 )
 
 type Server struct {
+	ctx      context.Context // server-lifetime context, not per-request
 	scanner  *scanner.Scanner
 	executor *paper.Executor
 	store    *paper.Store
@@ -17,8 +19,9 @@ type Server struct {
 	mux      *http.ServeMux
 }
 
-func NewServer(logger *slog.Logger, sc *scanner.Scanner, executor *paper.Executor, store *paper.Store) *Server {
+func NewServer(ctx context.Context, logger *slog.Logger, sc *scanner.Scanner, executor *paper.Executor, store *paper.Store) *Server {
 	s := &Server{
+		ctx:      ctx,
 		scanner:  sc,
 		executor: executor,
 		store:    store,

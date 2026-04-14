@@ -56,74 +56,70 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 	e.logger.Info("paper execution started", "id", pos.ID, "asset", pos.Asset)
 
 	// Step 1: Submit leg 1 (riskier leg first — per EXECUTION.md)
-	pos.transition(StateSubmittingLeg1, "starting leg 1")
-	e.store.Update(pos)
+	e.transition(pos, StateSubmittingLeg1, "starting leg 1")
 
-	leg1Fill, err := e.simulateFill(ctx, plan.Leg1, plan.Notional, plan.Leg1.Venue, plan.Asset)
-	if err != nil {
-		pos.transition(StateFailed, fmt.Sprintf("leg 1 fill error: %s", err))
-		e.store.Update(pos)
-		return pos, nil
-	}
+	leg1Fill := e.simulateFill(plan.Leg1, plan.Notional)
 
-	pos.transition(StateAwaitingLeg1Fill, "leg 1 submitted")
-	e.store.Update(pos)
+	e.transition(pos, StateAwaitingLeg1Fill, "leg 1 submitted")
 
-	// Simulate fill delay
 	simulateDelay(ctx)
 
 	pos.Leg1Fill = leg1Fill
+	e.store.Update(pos)
 
 	// Check minimum hedgeable fill threshold
 	if leg1Fill.FillRatio() < minHedgeableFillPct {
-		pos.transition(StateFailed, fmt.Sprintf("leg 1 fill ratio %.1f%% below 50%% threshold", leg1Fill.FillRatio()*100))
-		e.store.Update(pos)
+		e.transition(pos, StateFailed, fmt.Sprintf("leg 1 fill ratio %.1f%% below 50%% threshold", leg1Fill.FillRatio()*100))
 		return pos, nil
 	}
 
 	e.logger.Info("leg 1 filled", "id", pos.ID, "ratio", fmt.Sprintf("%.1f%%", leg1Fill.FillRatio()*100))
 
+	// Enforce maxWaitBetweenLegs — leg 2 must start within this window
+	leg2Deadline := time.Now().Add(maxWaitBetweenLegs)
+	leg2Ctx, leg2Cancel := context.WithDeadline(ctx, leg2Deadline)
+	defer leg2Cancel()
+
 	// Step 2: Submit leg 2 sized from actual leg 1 fill
 	leg2TargetSize := leg1Fill.FilledSize // EXECUTION.md: leg 2 target = actual filled size of leg 1
 
-	pos.transition(StateSubmittingLeg2, "starting leg 2")
-	e.store.Update(pos)
+	e.transition(pos, StateSubmittingLeg2, "starting leg 2")
 
-	leg2Fill, err := e.simulateFill(ctx, plan.Leg2, leg2TargetSize, plan.Leg2.Venue, plan.Asset)
-	if err != nil {
-		pos.transition(StateRetryingLeg2, fmt.Sprintf("leg 2 error: %s, retrying", err))
-		e.store.Update(pos)
-
-		// Retry once per EXECUTION.md
-		leg2Fill, err = e.simulateFill(ctx, plan.Leg2, leg2TargetSize, plan.Leg2.Venue, plan.Asset)
-		if err != nil {
-			return e.handleLeg2Failure(ctx, pos, plan, "retry also failed")
-		}
+	leg2Fill := e.simulateFillWithTimeout(leg2Ctx, plan.Leg2, leg2TargetSize)
+	if leg2Fill == nil {
+		// Timeout — could not submit leg 2 within window
+		return e.handleLeg2Failure(ctx, pos, "leg 2 submission timed out (5s window)")
 	}
 
-	pos.transition(StateAwaitingLeg2Fill, "leg 2 submitted")
-	e.store.Update(pos)
+	e.transition(pos, StateAwaitingLeg2Fill, "leg 2 submitted")
 
-	simulateDelay(ctx)
+	simulateDelay(leg2Ctx)
+
+	// Check if we've exceeded the inter-leg deadline
+	if leg2Ctx.Err() != nil {
+		return e.handleLeg2Failure(ctx, pos, "leg 2 confirmation exceeded 5s window")
+	}
 
 	pos.Leg2Fill = leg2Fill
+	e.store.Update(pos)
 
 	// Check hedge mismatch
 	mismatch := math.Abs(leg2Fill.FilledSize-leg2TargetSize) / leg2TargetSize
 	pos.HedgeMismatch = mismatch
+	e.store.Update(pos)
 
 	if mismatch > maxHedgeMismatchPct {
-		// Retry once
-		pos.transition(StateRetryingLeg2, fmt.Sprintf("hedge mismatch %.1f%% exceeds 5%%", mismatch*100))
+		// Retry once per EXECUTION.md
+		e.transition(pos, StateRetryingLeg2, fmt.Sprintf("hedge mismatch %.1f%% exceeds 5%%", mismatch*100))
+
+		retryFill := e.simulateFill(plan.Leg2, leg2TargetSize)
+		pos.Leg2Fill = retryFill
+		mismatch = math.Abs(retryFill.FilledSize-leg2TargetSize) / leg2TargetSize
+		pos.HedgeMismatch = mismatch
 		e.store.Update(pos)
 
-		leg2Fill, _ = e.simulateFill(ctx, plan.Leg2, leg2TargetSize, plan.Leg2.Venue, plan.Asset)
-		pos.Leg2Fill = leg2Fill
-		mismatch = math.Abs(leg2Fill.FilledSize-leg2TargetSize) / leg2TargetSize
-		pos.HedgeMismatch = mismatch
-
 		if mismatch > maxHedgeMismatchPct {
-			return e.handleLeg2Failure(ctx, pos, plan, fmt.Sprintf("hedge mismatch %.1f%% after retry", mismatch*100))
+			return e.handleLeg2Failure(ctx, pos, fmt.Sprintf("hedge mismatch %.1f%% after retry", mismatch*100))
 		}
 	}
 
@@ -134,38 +130,37 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 
 	now := time.Now()
 	pos.OpenedAt = &now
-	pos.transition(StateOpen, "hedge integrity confirmed")
-	e.store.Update(pos)
+	e.transition(pos, StateOpen, "hedge integrity confirmed")
 
 	e.logger.Info("paper position opened", "id", pos.ID, "mismatch", fmt.Sprintf("%.2f%%", mismatch*100))
 	return pos, nil
 }
 
-// Close executes the close flow for an open or degraded position.
-func (e *Executor) Close(ctx context.Context, pos *Position, reason CloseReason) error {
+// CloseByID closes a position by ID. Safe for concurrent use.
+func (e *Executor) CloseByID(ctx context.Context, id string, reason CloseReason) error {
+	pos := e.store.Get(id)
+	if pos == nil {
+		return fmt.Errorf("position not found: %s", id)
+	}
 	if pos.State != StateOpen && pos.State != StateDegraded {
 		return fmt.Errorf("cannot close position in state %s", pos.State)
 	}
 
 	pos.CloseReason = reason
-	pos.transition(StatePendingClose, fmt.Sprintf("close requested: %s", reason))
-	e.store.Update(pos)
+	e.transition(pos, StatePendingClose, fmt.Sprintf("close requested: %s", reason))
+	e.transition(pos, StateClosing, "closing legs")
 
-	pos.transition(StateClosing, "closing legs")
-	e.store.Update(pos)
-
-	// Simulate close fills using current market prices
+	// Compute realized P&L from entry vs current prices
 	snapA, snapB, err := e.market.FreshSnapshots(ctx, pos.Asset, pos.VenuePair.VenueA, pos.VenuePair.VenueB)
 	if err != nil {
 		e.logger.Error("close: failed to fetch market data", "id", pos.ID, "err", err)
 	}
 
-	// Compute realized P&L from entry vs current prices
 	if pos.Leg1Fill != nil && pos.Leg2Fill != nil && err == nil {
 		var currentLongPrice, currentShortPrice float64
 		if pos.Leg1Fill.Side == domain.SideLong {
-			currentLongPrice = snapA.BidPrice  // close long at bid
-			currentShortPrice = snapB.AskPrice // close short at ask
+			currentLongPrice = snapA.BidPrice
+			currentShortPrice = snapB.AskPrice
 		} else {
 			currentLongPrice = snapB.BidPrice
 			currentShortPrice = snapA.AskPrice
@@ -180,43 +175,60 @@ func (e *Executor) Close(ctx context.Context, pos *Position, reason CloseReason)
 
 	now := time.Now()
 	pos.ClosedAt = &now
-	pos.transition(StateClosed, fmt.Sprintf("closed: %s", reason))
-	e.store.Update(pos)
+	e.transition(pos, StateClosed, fmt.Sprintf("closed: %s", reason))
 
 	e.logger.Info("paper position closed", "id", pos.ID, "reason", reason, "pnl", pos.RealizedPnL)
 	return nil
 }
 
-func (e *Executor) handleLeg2Failure(ctx context.Context, pos *Position, plan *domain.ExecutionPlan, reason string) (*Position, error) {
-	pos.transition(StateUnwinding, reason)
-	e.store.Update(pos)
+func (e *Executor) handleLeg2Failure(ctx context.Context, pos *Position, reason string) (*Position, error) {
+	e.transition(pos, StateUnwinding, reason)
 
 	e.logger.Warn("paper: unwinding leg 1", "id", pos.ID, "reason", reason)
 
-	// Simulate unwind of leg 1
 	simulateDelay(ctx)
 
-	// Mark as degraded — unwind is best-effort in paper mode
-	pos.transition(StateDegraded, "unwind attempted, hedge incomplete")
-	e.store.Update(pos)
+	e.transition(pos, StateDegraded, "unwind attempted, hedge incomplete")
 
 	return pos, nil
 }
 
-func (e *Executor) simulateFill(ctx context.Context, leg domain.Leg, targetSize float64, venueName, asset string) (*Fill, error) {
-	// Simulate fill with bounded noise
-	slippagePct := rand.Float64() * 0.003 // 0-0.3% slippage
-	fillRatio := 0.85 + rand.Float64()*0.15 // 85-100% fill
+// transition updates state and persists atomically through the store.
+func (e *Executor) transition(pos *Position, to ExecState, reason string) {
+	pos.transition(to, reason)
+	e.store.Update(pos)
+}
+
+// simulateFill produces a fill with realistic failure distribution.
+//
+// Distribution:
+//   - 5% chance: sub-50% fill (exercises minimum hedgeable threshold)
+//   - 10% chance: 50-90% fill (partial fill, may cause hedge mismatch)
+//   - 85% chance: 90-100% fill (normal execution)
+func (e *Executor) simulateFill(leg domain.Leg, targetSize float64) *Fill {
+	slippagePct := rand.Float64() * 0.003 // 0-0.3%
+
+	// Fill ratio with realistic failure distribution
+	roll := rand.Float64()
+	var fillRatio float64
+	switch {
+	case roll < 0.05: // 5% chance: catastrophic partial fill
+		fillRatio = 0.1 + rand.Float64()*0.35 // 10-45%
+	case roll < 0.15: // 10% chance: significant partial fill
+		fillRatio = 0.50 + rand.Float64()*0.40 // 50-90%
+	default: // 85% chance: normal fill
+		fillRatio = 0.90 + rand.Float64()*0.10 // 90-100%
+	}
 
 	var fillPrice float64
 	if leg.Side == domain.SideLong {
-		fillPrice = leg.ExpectedPrice * (1 + slippagePct) // buy slightly higher
+		fillPrice = leg.ExpectedPrice * (1 + slippagePct)
 	} else {
-		fillPrice = leg.ExpectedPrice * (1 - slippagePct) // sell slightly lower
+		fillPrice = leg.ExpectedPrice * (1 - slippagePct)
 	}
 
 	return &Fill{
-		Venue:      venueName,
+		Venue:      leg.Venue,
 		Side:       leg.Side,
 		TargetSize: targetSize,
 		FilledSize: targetSize * fillRatio,
@@ -224,7 +236,22 @@ func (e *Executor) simulateFill(ctx context.Context, leg domain.Leg, targetSize 
 		Slippage:   slippagePct,
 		Fee:        leg.Fee,
 		FilledAt:   time.Now(),
-	}, nil
+	}
+}
+
+// simulateFillWithTimeout returns nil if context expires before fill completes.
+func (e *Executor) simulateFillWithTimeout(ctx context.Context, leg domain.Leg, targetSize float64) *Fill {
+	// 5% chance of timeout (simulates venue being unreachable within window)
+	if rand.Float64() < 0.05 {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(maxWaitBetweenLegs + time.Second): // intentionally exceed deadline
+			return nil
+		}
+	}
+
+	return e.simulateFill(leg, targetSize)
 }
 
 func simulateDelay(ctx context.Context) {

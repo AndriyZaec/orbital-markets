@@ -9,8 +9,8 @@ import (
 
 const (
 	monitorInterval = 10 * time.Second
-	maxDuration     = 1 * time.Hour     // paper mode max position duration
-	minEdgeClose    = 0.01              // 1% annualized — close if edge drops below
+	maxDuration     = 1 * time.Hour // paper mode max position duration
+	minEdgeClose    = 0.01          // 1% annualized — close if edge drops below
 	hoursPerYear    = 8760.0
 )
 
@@ -46,21 +46,19 @@ func (m *Monitor) Run(ctx context.Context) {
 }
 
 func (m *Monitor) check(ctx context.Context) {
-	positions := m.store.OpenPositions()
-	if len(positions) == 0 {
-		return
-	}
-
-	for _, pos := range positions {
+	ids := m.store.OpenPositionIDs()
+	for _, id := range ids {
+		pos := m.store.Get(id)
+		if pos == nil {
+			continue
+		}
 		reason := m.shouldClose(ctx, pos)
 		if reason == "" {
 			continue
 		}
-		go func(p *Position, r CloseReason) {
-			if err := m.executor.Close(ctx, p, r); err != nil {
-				m.logger.Error("monitor: close failed", "id", p.ID, "err", err)
-			}
-		}(pos, reason)
+		if err := m.executor.CloseByID(ctx, id, reason); err != nil {
+			m.logger.Error("monitor: close failed", "id", id, "err", err)
+		}
 	}
 }
 
@@ -75,7 +73,7 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 		return CloseReasonMaxDuration
 	}
 
-	// 3. Edge collapse — check if funding spread has dropped below threshold
+	// 3. Edge collapse
 	if pos.Leg1Fill == nil || pos.Leg2Fill == nil {
 		return ""
 	}
@@ -86,32 +84,33 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 		return ""
 	}
 
-	// Compute current funding spread in the same direction as the position
+	// Compute current funding edge
 	var currentEdge float64
 	if pos.Leg1Fill.Side == "long" {
-		// Leg1 is long (on venue A), leg2 is short (on venue B)
-		// Edge = short funding - long funding
 		currentEdge = math.Abs(snapB.FundingRate-snapA.FundingRate) * hoursPerYear
 	} else {
 		currentEdge = math.Abs(snapA.FundingRate-snapB.FundingRate) * hoursPerYear
 	}
 
-	// Update unrealized P&L
+	// Update unrealized P&L on the stored position
 	if snapA.BidPrice > 0 && snapB.BidPrice > 0 {
-		var currentLongPrice, currentShortPrice float64
-		if pos.Leg1Fill.Side == "long" {
-			currentLongPrice = snapA.BidPrice
-			currentShortPrice = snapB.AskPrice
-		} else {
-			currentLongPrice = snapB.BidPrice
-			currentShortPrice = snapA.AskPrice
+		stored := m.store.Get(pos.ID)
+		if stored != nil {
+			var currentLongPrice, currentShortPrice float64
+			if stored.Leg1Fill.Side == "long" {
+				currentLongPrice = snapA.BidPrice
+				currentShortPrice = snapB.AskPrice
+			} else {
+				currentLongPrice = snapB.BidPrice
+				currentShortPrice = snapA.AskPrice
+			}
+			longPnL := (currentLongPrice - stored.Leg1Fill.FillPrice) / stored.Leg1Fill.FillPrice * stored.Leg1Fill.FilledSize
+			shortPnL := (stored.Leg2Fill.FillPrice - currentShortPrice) / stored.Leg2Fill.FillPrice * stored.Leg2Fill.FilledSize
+			stored.UnrealizedPnL = longPnL + shortPnL
+			stored.CurrentSpread = currentEdge
+			stored.UpdatedAt = time.Now()
+			m.store.Update(stored)
 		}
-		longPnL := (currentLongPrice - pos.Leg1Fill.FillPrice) / pos.Leg1Fill.FillPrice * pos.Leg1Fill.FilledSize
-		shortPnL := (pos.Leg2Fill.FillPrice - currentShortPrice) / pos.Leg2Fill.FillPrice * pos.Leg2Fill.FilledSize
-		pos.UnrealizedPnL = longPnL + shortPnL
-		pos.CurrentSpread = currentEdge
-		pos.UpdatedAt = time.Now()
-		m.store.Update(pos)
 	}
 
 	if currentEdge < minEdgeClose {

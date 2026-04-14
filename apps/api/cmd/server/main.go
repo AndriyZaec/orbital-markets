@@ -36,7 +36,7 @@ func main() {
 	go sc.Run(ctx, 30*time.Second)
 	go monitor.Run(ctx)
 
-	srv := api.NewServer(logger, sc, executor, store)
+	srv := api.NewServer(ctx, logger, sc, executor, store)
 
 	addr := envOr("ADDR", ":8080")
 	logger.Info("starting server", "addr", addr)
