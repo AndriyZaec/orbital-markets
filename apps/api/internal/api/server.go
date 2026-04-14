@@ -5,20 +5,25 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 )
 
 type Server struct {
-	scanner *scanner.Scanner
-	logger  *slog.Logger
-	mux     *http.ServeMux
+	scanner  *scanner.Scanner
+	executor *paper.Executor
+	store    *paper.Store
+	logger   *slog.Logger
+	mux      *http.ServeMux
 }
 
-func NewServer(logger *slog.Logger, sc *scanner.Scanner) *Server {
+func NewServer(logger *slog.Logger, sc *scanner.Scanner, executor *paper.Executor, store *paper.Store) *Server {
 	s := &Server{
-		scanner: sc,
-		logger:  logger,
-		mux:     http.NewServeMux(),
+		scanner:  sc,
+		executor: executor,
+		store:    store,
+		logger:   logger,
+		mux:      http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -33,6 +38,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/markets", s.handleMarkets)
 	s.mux.HandleFunc("GET /api/v1/opportunities", s.handleOpportunities)
 	s.mux.HandleFunc("POST /api/v1/plan", s.handleBuildPlan)
+
+	// Paper trading
+	s.mux.HandleFunc("POST /api/v1/paper/open", s.handlePaperOpen)
+	s.mux.HandleFunc("GET /api/v1/paper/positions", s.handlePaperPositions)
+	s.mux.HandleFunc("GET /api/v1/paper/positions/", s.handlePaperPosition)
+	s.mux.HandleFunc("POST /api/v1/paper/close/", s.handlePaperClose)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

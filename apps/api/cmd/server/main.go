@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
@@ -22,14 +23,20 @@ func main() {
 
 	sc := scanner.New(logger, pac, hl)
 
+	// Paper trading
+	store := paper.NewStore()
+	executor := paper.NewExecutor(logger, store, sc)
+	monitor := paper.NewMonitor(logger, executor, store, sc)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
 	go sc.Run(ctx, 30*time.Second)
+	go monitor.Run(ctx)
 
-	srv := api.NewServer(logger, sc)
+	srv := api.NewServer(logger, sc, executor, store)
 
 	addr := envOr("ADDR", ":8080")
 	logger.Info("starting server", "addr", addr)
