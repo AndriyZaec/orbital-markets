@@ -20,7 +20,7 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string) (*domain.
 	}
 
 	// Fetch fresh snapshots for both venues
-	snapA, snapB, err := s.freshSnapshots(ctx, opp.Asset, opp.VenuePair.VenueA, opp.VenuePair.VenueB)
+	snapA, snapB, err := s.FreshSnapshots(ctx, opp.Asset, opp.VenuePair.VenueA, opp.VenuePair.VenueB)
 	if err != nil {
 		return nil, fmt.Errorf("fetch fresh data: %w", err)
 	}
@@ -122,7 +122,8 @@ func (s *Scanner) findOpportunity(id string) *domain.Opportunity {
 	return nil
 }
 
-func (s *Scanner) freshSnapshots(ctx context.Context, asset, venueA, venueB string) (venue.MarketData, venue.MarketData, error) {
+// FreshSnapshots fetches current market data for a given asset from two venues.
+func (s *Scanner) FreshSnapshots(ctx context.Context, asset, venueA, venueB string) (venue.MarketData, venue.MarketData, error) {
 	var snapA, snapB venue.MarketData
 	var foundA, foundB bool
 
