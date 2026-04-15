@@ -10,6 +10,7 @@ interface Props {
   loading: boolean
   error: string | null
   onClose: () => void
+  onExecute: (opportunityId: string) => void
 }
 
 function fmtPrice(n: number) {
@@ -51,7 +52,7 @@ function useExpiry(expiresAt: string) {
   return { remaining, expired }
 }
 
-export function PlanPreview({ plan, loading, error, onClose }: Props) {
+export function PlanPreview({ plan, loading, error, onClose, onExecute }: Props) {
   const { remaining, expired } = useExpiry(plan.expires_at)
 
   return (
@@ -134,8 +135,13 @@ export function PlanPreview({ plan, loading, error, onClose }: Props) {
 
         {/* Action */}
         <div className="px-6 py-4 flex flex-col gap-2">
-          <Button size="lg" className="w-full" disabled={!plan.executable || expired}>
-            {expired ? 'Plan Expired — Refresh' : plan.executable ? 'Confirm & Execute' : 'Not Executable'}
+          <Button
+            size="lg"
+            className="w-full"
+            disabled={!plan.executable || expired}
+            onClick={() => onExecute(plan.opportunity_id)}
+          >
+            {expired ? 'Plan Expired — Refresh' : plan.executable ? 'Confirm & Execute (Paper)' : 'Not Executable'}
           </Button>
           {expired && (
             <p className="text-xs text-muted-foreground text-center">
