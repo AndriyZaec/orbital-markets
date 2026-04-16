@@ -45,8 +45,9 @@ export function PaperPositions() {
   const selected = positions.find((p) => p.id === selectedId) ?? null
 
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded')
-  const totalUnrealized = positions.reduce((sum, p) => sum + p.unrealized_pnl, 0)
-  const totalRealized = positions.filter((p) => p.state === 'closed').reduce((sum, p) => sum + p.realized_pnl, 0)
+  const totalPricePnL = positions.reduce((sum, p) => sum + p.price_pnl, 0)
+  const totalFundingPnL = positions.reduce((sum, p) => sum + p.funding_pnl, 0)
+  const totalPnL = positions.reduce((sum, p) => sum + p.total_pnl, 0)
 
   const handleClose = async (id: string) => {
     setClosing(id)
@@ -72,15 +73,21 @@ export function PaperPositions() {
           <span className="font-medium">{openPositions.length}</span>
         </div>
         <div>
-          <span className="text-muted-foreground">Unrealized: </span>
-          <span className={`font-mono font-medium ${totalUnrealized >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {fmtPnL(totalUnrealized)}
+          <span className="text-muted-foreground">Price: </span>
+          <span className={`font-mono font-medium ${totalPricePnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {fmtPnL(totalPricePnL)}
           </span>
         </div>
         <div>
-          <span className="text-muted-foreground">Realized: </span>
-          <span className={`font-mono font-medium ${totalRealized >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {fmtPnL(totalRealized)}
+          <span className="text-muted-foreground">Funding: </span>
+          <span className={`font-mono font-medium ${totalFundingPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {fmtPnL(totalFundingPnL)}
+          </span>
+        </div>
+        <div>
+          <span className="text-muted-foreground">Total: </span>
+          <span className={`font-mono font-medium ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {fmtPnL(totalPnL)}
           </span>
         </div>
         <div>
@@ -98,8 +105,9 @@ export function PaperPositions() {
               <TableHead>Venues</TableHead>
               <TableHead>State</TableHead>
               <TableHead>Close Reason</TableHead>
-              <TableHead className="text-right">Unrealized</TableHead>
-              <TableHead className="text-right">Realized</TableHead>
+              <TableHead className="text-right">Price P&L</TableHead>
+              <TableHead className="text-right">Funding P&L</TableHead>
+              <TableHead className="text-right">Total P&L</TableHead>
               <TableHead className="text-right">Mismatch</TableHead>
               <TableHead>Opened</TableHead>
               <TableHead></TableHead>
@@ -120,11 +128,14 @@ export function PaperPositions() {
                 <TableCell className="text-sm text-muted-foreground">
                   {pos.close_reason || '—'}
                 </TableCell>
-                <TableCell className={`text-right font-mono text-sm ${pos.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {fmtPnL(pos.unrealized_pnl)}
+                <TableCell className={`text-right font-mono text-sm ${pos.price_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {fmtPnL(pos.price_pnl)}
                 </TableCell>
-                <TableCell className={`text-right font-mono text-sm ${pos.realized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {pos.state === 'closed' ? fmtPnL(pos.realized_pnl) : '—'}
+                <TableCell className={`text-right font-mono text-sm ${pos.funding_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {fmtPnL(pos.funding_pnl)}
+                </TableCell>
+                <TableCell className={`text-right font-mono text-sm ${pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {fmtPnL(pos.total_pnl)}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm">
                   {(pos.hedge_mismatch * 100).toFixed(1)}%

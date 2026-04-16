@@ -166,9 +166,15 @@ func (e *Executor) CloseByID(ctx context.Context, id string, reason CloseReason)
 			currentShortPrice = snapA.AskPrice
 		}
 
+		// Price P&L
 		longPnL := (currentLongPrice - pos.Leg1Fill.FillPrice) / pos.Leg1Fill.FillPrice * pos.Leg1Fill.FilledSize
 		shortPnL := (pos.Leg2Fill.FillPrice - currentShortPrice) / pos.Leg2Fill.FillPrice * pos.Leg2Fill.FilledSize
-		pos.RealizedPnL = longPnL + shortPnL
+		pos.PricePnL = longPnL + shortPnL
+
+		// Funding P&L at close = use last computed value (accrued by monitor)
+		// Already set by monitor updates, just finalize total
+		pos.RealizedPnL = pos.PricePnL + pos.FundingPnL
+		pos.TotalPnL = pos.RealizedPnL
 	}
 
 	simulateDelay(ctx)

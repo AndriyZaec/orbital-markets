@@ -92,10 +92,11 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 		currentEdge = math.Abs(snapA.FundingRate-snapB.FundingRate) * hoursPerYear
 	}
 
-	// Update unrealized P&L on the stored position
+	// Update P&L components on the stored position
 	if snapA.BidPrice > 0 && snapB.BidPrice > 0 {
 		stored := m.store.Get(pos.ID)
-		if stored != nil {
+		if stored != nil && stored.Leg1Fill != nil && stored.Leg2Fill != nil {
+			// Price P&L: unrealized mark-to-market from price movement
 			var currentLongPrice, currentShortPrice float64
 			if stored.Leg1Fill.Side == "long" {
 				currentLongPrice = snapA.BidPrice
@@ -106,7 +107,25 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 			}
 			longPnL := (currentLongPrice - stored.Leg1Fill.FillPrice) / stored.Leg1Fill.FillPrice * stored.Leg1Fill.FilledSize
 			shortPnL := (stored.Leg2Fill.FillPrice - currentShortPrice) / stored.Leg2Fill.FillPrice * stored.Leg2Fill.FilledSize
-			stored.UnrealizedPnL = longPnL + shortPnL
+			stored.PricePnL = longPnL + shortPnL
+
+			// Funding P&L: accrued funding since open
+			if stored.OpenedAt != nil {
+				hoursOpen := time.Since(*stored.OpenedAt).Hours()
+				// Funding collected on short leg - funding paid on long leg
+				var longFunding, shortFunding float64
+				if stored.Leg1Fill.Side == "long" {
+					longFunding = snapA.FundingRate
+					shortFunding = snapB.FundingRate
+				} else {
+					longFunding = snapB.FundingRate
+					shortFunding = snapA.FundingRate
+				}
+				fundingEdgePerHour := shortFunding - longFunding
+				stored.FundingPnL = fundingEdgePerHour * hoursOpen * stored.Leg1Fill.FilledSize
+			}
+
+			stored.TotalPnL = stored.PricePnL + stored.FundingPnL
 			stored.CurrentSpread = currentEdge
 			stored.UpdatedAt = time.Now()
 			m.store.Update(stored)

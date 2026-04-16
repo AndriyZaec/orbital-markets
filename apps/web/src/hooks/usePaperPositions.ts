@@ -33,7 +33,9 @@ interface PaperPosition {
   current_spread: number
   hedge_mismatch: number
   close_reason: string
-  unrealized_pnl: number
+  price_pnl: number
+  funding_pnl: number
+  total_pnl: number
   realized_pnl: number
   events: Event[]
   created_at: string

@@ -82,7 +82,9 @@ type Position struct {
 	HedgeMismatch   float64        `json:"hedge_mismatch"`
 	CloseReason     CloseReason    `json:"close_reason,omitempty"`
 
-	UnrealizedPnL   float64        `json:"unrealized_pnl"`
+	PricePnL        float64        `json:"price_pnl"`
+	FundingPnL      float64        `json:"funding_pnl"`
+	TotalPnL        float64        `json:"total_pnl"`
 	RealizedPnL     float64        `json:"realized_pnl"`
 
 	Events          []Event        `json:"events"`

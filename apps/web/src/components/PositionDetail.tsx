@@ -68,17 +68,29 @@ export function PositionDetail({ position: pos, onClose }: Props) {
             <InfoItem label="Target Notional" value={`$${pos.target_notional.toFixed(2)}`} />
             <InfoItem label="Hedge Mismatch" value={`${(pos.hedge_mismatch * 100).toFixed(1)}%`} />
             <InfoItem label="Entry Spread" value={`${(pos.entry_spread * 100).toFixed(4)}%`} />
-            <InfoItem label="Current Spread" value={`${(pos.current_spread * 100).toFixed(2)}%`} />
+            <InfoItem label="Current Ann. Edge" value={`${(pos.current_spread * 100).toFixed(2)}%`} />
             <InfoItem
-              label="Unrealized P&L"
-              value={fmtPnL(pos.unrealized_pnl)}
-              color={pos.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
+              label="Price P&L"
+              value={fmtPnL(pos.price_pnl)}
+              color={pos.price_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
             />
             <InfoItem
-              label="Realized P&L"
-              value={pos.state === 'closed' ? fmtPnL(pos.realized_pnl) : '—'}
-              color={pos.realized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
+              label="Funding P&L"
+              value={fmtPnL(pos.funding_pnl)}
+              color={pos.funding_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
             />
+            <InfoItem
+              label="Total P&L"
+              value={fmtPnL(pos.total_pnl)}
+              color={pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
+            />
+            {pos.state === 'closed' && (
+              <InfoItem
+                label="Realized P&L"
+                value={fmtPnL(pos.realized_pnl)}
+                color={pos.realized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
+              />
+            )}
             {pos.close_reason && (
               <InfoItem label="Close Reason" value={pos.close_reason} />
             )}
