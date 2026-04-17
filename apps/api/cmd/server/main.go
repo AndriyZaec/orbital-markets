@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
@@ -17,6 +18,16 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// Database
+	dbPath := envOr("DB_PATH", "orbital.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		logger.Error("failed to open database", "err", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+	logger.Info("database ready", "path", dbPath)
 
 	pac := pacifica.New(logger)
 	hl := hyperliquid.New(logger)

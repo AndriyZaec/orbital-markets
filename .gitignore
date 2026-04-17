@@ -21,6 +21,11 @@ dist/
 # Claude Code
 .claude/
 
+# Database
+*.db
+*.db-shm
+*.db-wal
+
 # Build
 *.exe
 *.dll
