@@ -34,6 +34,9 @@ func main() {
 
 	sc := scanner.New(logger, pac, hl)
 
+	// Snapshot recorder
+	recorder := db.NewRecorder(database, sc, logger)
+
 	// Paper trading
 	store := paper.NewStore()
 	executor := paper.NewExecutor(logger, store, sc)
@@ -45,6 +48,7 @@ func main() {
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
 	go sc.Run(ctx, 30*time.Second)
+	go recorder.Run(ctx)
 	go monitor.Run(ctx)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store)

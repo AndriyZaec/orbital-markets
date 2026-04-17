@@ -8,6 +8,20 @@ import (
 	"database/sql"
 )
 
+type MarketSnapshot struct {
+	ID           int64
+	Venue        string
+	Asset        string
+	MarketKey    string
+	MarkPrice    float64
+	IndexPrice   float64
+	FundingRate  float64
+	BidPrice     float64
+	AskPrice     float64
+	OpenInterest float64
+	Timestamp    string
+}
+
 type PaperEvent struct {
 	ID         int64
 	PositionID string
