@@ -14,12 +14,18 @@ type Server struct {
 	ctx      context.Context // server-lifetime context, not per-request
 	scanner  *scanner.Scanner
 	executor *paper.Executor
-	store    *paper.Store
+	store    *paper.DBStore
 	logger   *slog.Logger
 	mux      *http.ServeMux
 }
 
-func NewServer(ctx context.Context, logger *slog.Logger, sc *scanner.Scanner, executor *paper.Executor, store *paper.Store) *Server {
+func NewServer(
+	ctx context.Context,
+	logger *slog.Logger,
+	sc *scanner.Scanner,
+	executor *paper.Executor,
+	store *paper.DBStore,
+) *Server {
 	s := &Server{
 		ctx:      ctx,
 		scanner:  sc,
@@ -47,6 +53,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/paper/positions", s.handlePaperPositions)
 	s.mux.HandleFunc("GET /api/v1/paper/positions/", s.handlePaperPosition)
 	s.mux.HandleFunc("POST /api/v1/paper/close/", s.handlePaperClose)
+
+	// Analytics
+	s.mux.HandleFunc("GET /api/v1/paper/analytics", s.handlePaperAnalytics)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

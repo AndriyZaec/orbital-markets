@@ -79,6 +79,7 @@ type Position struct {
 	EntrySpread     float64        `json:"entry_spread"`
 	CurrentSpread   float64        `json:"current_spread"`
 
+	RiskTier        domain.RiskTier `json:"risk_tier"`
 	HedgeMismatch   float64        `json:"hedge_mismatch"`
 	CloseReason     CloseReason    `json:"close_reason,omitempty"`
 
@@ -86,6 +87,11 @@ type Position struct {
 	FundingPnL      float64        `json:"funding_pnl"`
 	TotalPnL        float64        `json:"total_pnl"`
 	RealizedPnL     float64        `json:"realized_pnl"`
+
+	// Break-even estimate
+	EstBreakEvenHours float64      `json:"est_break_even_hours"`
+	BreakEvenReached  bool         `json:"break_even_reached"`
+	HoldHours         float64      `json:"hold_hours"`
 
 	Events          []Event        `json:"events"`
 

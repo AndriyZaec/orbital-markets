@@ -23,13 +23,26 @@ type MarketDataSource interface {
 	FreshSnapshots(ctx context.Context, asset, venueA, venueB string) (venue.MarketData, venue.MarketData, error)
 }
 
+// PositionStore is the interface for position persistence.
+type PositionStore interface {
+	Add(pos *Position)
+	Get(id string) *Position
+	Update(pos *Position)
+	List() []*Position
+	OpenPositionIDs() []string
+}
+
 type Executor struct {
-	store  *Store
+	store  PositionStore
 	market MarketDataSource
 	logger *slog.Logger
 }
 
-func NewExecutor(logger *slog.Logger, store *Store, market MarketDataSource) *Executor {
+func NewExecutor(
+	logger *slog.Logger,
+	store PositionStore,
+	market MarketDataSource,
+) *Executor {
 	return &Executor{
 		store:  store,
 		market: market,
@@ -175,6 +188,7 @@ func (e *Executor) CloseByID(ctx context.Context, id string, reason CloseReason)
 		// Already set by monitor updates, just finalize total
 		pos.RealizedPnL = pos.PricePnL + pos.FundingPnL
 		pos.TotalPnL = pos.RealizedPnL
+		pos.HoldHours = ComputeHoldHours(pos)
 	}
 
 	simulateDelay(ctx)

@@ -37,8 +37,11 @@ func main() {
 	// Snapshot recorder
 	recorder := db.NewRecorder(database, sc, logger)
 
-	// Paper trading
-	store := paper.NewStore()
+	// Paper trading (SQLite-backed)
+	store := paper.NewDBStore(database)
+	if err := store.LoadFromDB(context.Background()); err != nil {
+		logger.Error("failed to load positions from DB", "err", err)
+	}
 	executor := paper.NewExecutor(logger, store, sc)
 	monitor := paper.NewMonitor(logger, executor, store, sc)
 

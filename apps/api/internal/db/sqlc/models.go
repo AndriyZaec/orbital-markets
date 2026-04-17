@@ -46,24 +46,28 @@ type PaperFill struct {
 }
 
 type PaperPosition struct {
-	ID             string
-	PlanID         string
-	OpportunityID  string
-	Asset          string
-	Direction      string
-	VenueA         string
-	VenueB         string
-	State          string
-	TargetNotional float64
-	EntrySpread    float64
-	HedgeMismatch  float64
-	CloseReason    string
-	PricePnl       float64
-	FundingPnl     float64
-	TotalPnl       float64
-	RealizedPnl    float64
-	CreatedAt      string
-	OpenedAt       sql.NullString
-	ClosedAt       sql.NullString
-	UpdatedAt      string
+	ID                string
+	PlanID            string
+	OpportunityID     string
+	Asset             string
+	Direction         string
+	VenueA            string
+	VenueB            string
+	State             string
+	TargetNotional    float64
+	EntrySpread       float64
+	HedgeMismatch     float64
+	CloseReason       string
+	PricePnl          float64
+	FundingPnl        float64
+	TotalPnl          float64
+	RealizedPnl       float64
+	CreatedAt         string
+	OpenedAt          sql.NullString
+	ClosedAt          sql.NullString
+	UpdatedAt         string
+	RiskTier          string
+	EstBreakEvenHours float64
+	BreakEvenReached  int64
+	HoldHours         float64
 }

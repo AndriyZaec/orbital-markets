@@ -16,12 +16,17 @@ const (
 
 type Monitor struct {
 	executor *Executor
-	store    *Store
+	store    PositionStore
 	market   MarketDataSource
 	logger   *slog.Logger
 }
 
-func NewMonitor(logger *slog.Logger, executor *Executor, store *Store, market MarketDataSource) *Monitor {
+func NewMonitor(
+	logger *slog.Logger,
+	executor *Executor,
+	store PositionStore,
+	market MarketDataSource,
+) *Monitor {
 	return &Monitor{
 		executor: executor,
 		store:    store,
@@ -127,6 +132,9 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 
 			stored.TotalPnL = stored.PricePnL + stored.FundingPnL
 			stored.CurrentSpread = currentEdge
+			stored.HoldHours = ComputeHoldHours(stored)
+			stored.EstBreakEvenHours = ComputeBreakEven(stored)
+			stored.BreakEvenReached = stored.HoldHours >= stored.EstBreakEvenHours && stored.EstBreakEvenHours > 0
 			stored.UpdatedAt = time.Now()
 			m.store.Update(stored)
 		}

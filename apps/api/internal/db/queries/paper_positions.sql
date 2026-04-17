@@ -3,13 +3,17 @@ INSERT INTO paper_positions (
     id, plan_id, opportunity_id, asset, direction,
     venue_a, venue_b, state, target_notional,
     entry_spread, hedge_mismatch, close_reason,
+    risk_tier,
     price_pnl, funding_pnl, total_pnl, realized_pnl,
+    est_break_even_hours, break_even_reached, hold_hours,
     created_at, opened_at, closed_at, updated_at
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?,
+    ?,
     ?, ?, ?, ?,
+    ?, ?, ?,
     ?, ?, ?, ?
 );
 
@@ -19,10 +23,14 @@ UPDATE paper_positions SET
     entry_spread = ?,
     hedge_mismatch = ?,
     close_reason = ?,
+    risk_tier = ?,
     price_pnl = ?,
     funding_pnl = ?,
     total_pnl = ?,
     realized_pnl = ?,
+    est_break_even_hours = ?,
+    break_even_reached = ?,
+    hold_hours = ?,
     opened_at = ?,
     closed_at = ?,
     updated_at = ?

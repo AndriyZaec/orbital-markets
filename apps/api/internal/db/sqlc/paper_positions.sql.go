@@ -84,7 +84,7 @@ func (q *Queries) GetFillsByPosition(ctx context.Context, positionID string) ([]
 }
 
 const getPosition = `-- name: GetPosition :one
-SELECT id, plan_id, opportunity_id, asset, direction, venue_a, venue_b, state, target_notional, entry_spread, hedge_mismatch, close_reason, price_pnl, funding_pnl, total_pnl, realized_pnl, created_at, opened_at, closed_at, updated_at FROM paper_positions WHERE id = ?
+SELECT id, plan_id, opportunity_id, asset, direction, venue_a, venue_b, state, target_notional, entry_spread, hedge_mismatch, close_reason, price_pnl, funding_pnl, total_pnl, realized_pnl, created_at, opened_at, closed_at, updated_at, risk_tier, est_break_even_hours, break_even_reached, hold_hours FROM paper_positions WHERE id = ?
 `
 
 func (q *Queries) GetPosition(ctx context.Context, id string) (PaperPosition, error) {
@@ -111,6 +111,10 @@ func (q *Queries) GetPosition(ctx context.Context, id string) (PaperPosition, er
 		&i.OpenedAt,
 		&i.ClosedAt,
 		&i.UpdatedAt,
+		&i.RiskTier,
+		&i.EstBreakEvenHours,
+		&i.BreakEvenReached,
+		&i.HoldHours,
 	)
 	return i, err
 }
@@ -182,38 +186,46 @@ INSERT INTO paper_positions (
     id, plan_id, opportunity_id, asset, direction,
     venue_a, venue_b, state, target_notional,
     entry_spread, hedge_mismatch, close_reason,
+    risk_tier,
     price_pnl, funding_pnl, total_pnl, realized_pnl,
+    est_break_even_hours, break_even_reached, hold_hours,
     created_at, opened_at, closed_at, updated_at
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?,
+    ?,
     ?, ?, ?, ?,
+    ?, ?, ?,
     ?, ?, ?, ?
 )
 `
 
 type InsertPositionParams struct {
-	ID             string
-	PlanID         string
-	OpportunityID  string
-	Asset          string
-	Direction      string
-	VenueA         string
-	VenueB         string
-	State          string
-	TargetNotional float64
-	EntrySpread    float64
-	HedgeMismatch  float64
-	CloseReason    string
-	PricePnl       float64
-	FundingPnl     float64
-	TotalPnl       float64
-	RealizedPnl    float64
-	CreatedAt      string
-	OpenedAt       sql.NullString
-	ClosedAt       sql.NullString
-	UpdatedAt      string
+	ID                string
+	PlanID            string
+	OpportunityID     string
+	Asset             string
+	Direction         string
+	VenueA            string
+	VenueB            string
+	State             string
+	TargetNotional    float64
+	EntrySpread       float64
+	HedgeMismatch     float64
+	CloseReason       string
+	RiskTier          string
+	PricePnl          float64
+	FundingPnl        float64
+	TotalPnl          float64
+	RealizedPnl       float64
+	EstBreakEvenHours float64
+	BreakEvenReached  int64
+	HoldHours         float64
+	CreatedAt         string
+	OpenedAt          sql.NullString
+	ClosedAt          sql.NullString
+	UpdatedAt         string
 }
 
 func (q *Queries) InsertPosition(ctx context.Context, arg InsertPositionParams) error {
@@ -230,10 +242,14 @@ func (q *Queries) InsertPosition(ctx context.Context, arg InsertPositionParams) 
 		arg.EntrySpread,
 		arg.HedgeMismatch,
 		arg.CloseReason,
+		arg.RiskTier,
 		arg.PricePnl,
 		arg.FundingPnl,
 		arg.TotalPnl,
 		arg.RealizedPnl,
+		arg.EstBreakEvenHours,
+		arg.BreakEvenReached,
+		arg.HoldHours,
 		arg.CreatedAt,
 		arg.OpenedAt,
 		arg.ClosedAt,
@@ -243,7 +259,7 @@ func (q *Queries) InsertPosition(ctx context.Context, arg InsertPositionParams) 
 }
 
 const listOpenPositions = `-- name: ListOpenPositions :many
-SELECT id, plan_id, opportunity_id, asset, direction, venue_a, venue_b, state, target_notional, entry_spread, hedge_mismatch, close_reason, price_pnl, funding_pnl, total_pnl, realized_pnl, created_at, opened_at, closed_at, updated_at FROM paper_positions WHERE state IN ('open', 'degraded') ORDER BY created_at DESC
+SELECT id, plan_id, opportunity_id, asset, direction, venue_a, venue_b, state, target_notional, entry_spread, hedge_mismatch, close_reason, price_pnl, funding_pnl, total_pnl, realized_pnl, created_at, opened_at, closed_at, updated_at, risk_tier, est_break_even_hours, break_even_reached, hold_hours FROM paper_positions WHERE state IN ('open', 'degraded') ORDER BY created_at DESC
 `
 
 func (q *Queries) ListOpenPositions(ctx context.Context) ([]PaperPosition, error) {
@@ -276,6 +292,10 @@ func (q *Queries) ListOpenPositions(ctx context.Context) ([]PaperPosition, error
 			&i.OpenedAt,
 			&i.ClosedAt,
 			&i.UpdatedAt,
+			&i.RiskTier,
+			&i.EstBreakEvenHours,
+			&i.BreakEvenReached,
+			&i.HoldHours,
 		); err != nil {
 			return nil, err
 		}
@@ -291,7 +311,7 @@ func (q *Queries) ListOpenPositions(ctx context.Context) ([]PaperPosition, error
 }
 
 const listPositions = `-- name: ListPositions :many
-SELECT id, plan_id, opportunity_id, asset, direction, venue_a, venue_b, state, target_notional, entry_spread, hedge_mismatch, close_reason, price_pnl, funding_pnl, total_pnl, realized_pnl, created_at, opened_at, closed_at, updated_at FROM paper_positions ORDER BY created_at DESC
+SELECT id, plan_id, opportunity_id, asset, direction, venue_a, venue_b, state, target_notional, entry_spread, hedge_mismatch, close_reason, price_pnl, funding_pnl, total_pnl, realized_pnl, created_at, opened_at, closed_at, updated_at, risk_tier, est_break_even_hours, break_even_reached, hold_hours FROM paper_positions ORDER BY created_at DESC
 `
 
 func (q *Queries) ListPositions(ctx context.Context) ([]PaperPosition, error) {
@@ -324,6 +344,10 @@ func (q *Queries) ListPositions(ctx context.Context) ([]PaperPosition, error) {
 			&i.OpenedAt,
 			&i.ClosedAt,
 			&i.UpdatedAt,
+			&i.RiskTier,
+			&i.EstBreakEvenHours,
+			&i.BreakEvenReached,
+			&i.HoldHours,
 		); err != nil {
 			return nil, err
 		}
@@ -344,10 +368,14 @@ UPDATE paper_positions SET
     entry_spread = ?,
     hedge_mismatch = ?,
     close_reason = ?,
+    risk_tier = ?,
     price_pnl = ?,
     funding_pnl = ?,
     total_pnl = ?,
     realized_pnl = ?,
+    est_break_even_hours = ?,
+    break_even_reached = ?,
+    hold_hours = ?,
     opened_at = ?,
     closed_at = ?,
     updated_at = ?
@@ -355,18 +383,22 @@ WHERE id = ?
 `
 
 type UpdatePositionParams struct {
-	State         string
-	EntrySpread   float64
-	HedgeMismatch float64
-	CloseReason   string
-	PricePnl      float64
-	FundingPnl    float64
-	TotalPnl      float64
-	RealizedPnl   float64
-	OpenedAt      sql.NullString
-	ClosedAt      sql.NullString
-	UpdatedAt     string
-	ID            string
+	State             string
+	EntrySpread       float64
+	HedgeMismatch     float64
+	CloseReason       string
+	RiskTier          string
+	PricePnl          float64
+	FundingPnl        float64
+	TotalPnl          float64
+	RealizedPnl       float64
+	EstBreakEvenHours float64
+	BreakEvenReached  int64
+	HoldHours         float64
+	OpenedAt          sql.NullString
+	ClosedAt          sql.NullString
+	UpdatedAt         string
+	ID                string
 }
 
 func (q *Queries) UpdatePosition(ctx context.Context, arg UpdatePositionParams) error {
@@ -375,10 +407,14 @@ func (q *Queries) UpdatePosition(ctx context.Context, arg UpdatePositionParams) 
 		arg.EntrySpread,
 		arg.HedgeMismatch,
 		arg.CloseReason,
+		arg.RiskTier,
 		arg.PricePnl,
 		arg.FundingPnl,
 		arg.TotalPnl,
 		arg.RealizedPnl,
+		arg.EstBreakEvenHours,
+		arg.BreakEvenReached,
+		arg.HoldHours,
 		arg.OpenedAt,
 		arg.ClosedAt,
 		arg.UpdatedAt,
