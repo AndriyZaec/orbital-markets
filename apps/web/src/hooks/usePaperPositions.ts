@@ -54,6 +54,7 @@ export function usePaperPositions(pollInterval = 5_000) {
       const resp = await fetch('/api/v1/paper/positions')
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data: PaperPosition[] = await resp.json()
+      data.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       setPositions(data)
       setError(null)
     } catch (e) {
