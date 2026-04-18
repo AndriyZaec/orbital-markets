@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
 import { PlanPreview } from '@/components/PlanPreview'
 import { PaperPositions } from '@/components/PaperPositions'
+import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
 
 function confidenceVariant(c: Opportunity['confidence']) {
   switch (c) {
@@ -95,6 +96,7 @@ export default function App() {
               )}
             </TabsTrigger>
             <TabsTrigger value="positions">Paper Positions</TabsTrigger>
+            <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
 
           <TabsContent value="opportunities" className="flex-1 flex">
@@ -165,6 +167,10 @@ export default function App() {
 
           <TabsContent value="positions" className="flex-1">
             <PaperPositions />
+          </TabsContent>
+
+          <TabsContent value="analytics" className="flex-1 overflow-auto">
+            <AnalyticsDashboard />
           </TabsContent>
         </Tabs>
       </div>

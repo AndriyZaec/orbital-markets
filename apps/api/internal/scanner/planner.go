@@ -100,6 +100,7 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string) (*domain.
 			MaxEntrySpreadPct: 0.01,   // 1%
 			MinNetEdgePct:     0.01,   // 1% annualized minimum
 		},
+		RiskTier:   opp.RiskTier,
 		Confidence: confidence,
 		Executable: executable,
 		Warnings:   warnings,

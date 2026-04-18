@@ -14,10 +14,13 @@ var migrations embed.FS
 
 // Open opens a SQLite database and runs migrations.
 func Open(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+
+	// Single writer connection — prevents SQLITE_BUSY from concurrent writes
+	db.SetMaxOpenConns(1)
 
 	// SQLite pragmas for performance
 	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"); err != nil {

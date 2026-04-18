@@ -134,7 +134,10 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 			stored.CurrentSpread = currentEdge
 			stored.HoldHours = ComputeHoldHours(stored)
 			stored.EstBreakEvenHours = ComputeBreakEven(stored)
-			stored.BreakEvenReached = stored.HoldHours >= stored.EstBreakEvenHours && stored.EstBreakEvenHours > 0
+			// Once reached, never reset — tracks whether thesis materialized at least once
+			if !stored.BreakEvenReached && stored.EstBreakEvenHours > 0 && stored.HoldHours >= stored.EstBreakEvenHours {
+				stored.BreakEvenReached = true
+			}
 			stored.UpdatedAt = time.Now()
 			m.store.Update(stored)
 		}

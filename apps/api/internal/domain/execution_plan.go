@@ -35,6 +35,7 @@ type ExecutionPlan struct {
 	ExpectedSpread  float64   `json:"expected_spread"`
 	EstimatedNetEdge float64  `json:"estimated_net_edge"`
 	Bounds          Bounds    `json:"bounds"`
+	RiskTier        RiskTier   `json:"risk_tier"`
 	Confidence      Confidence `json:"confidence"`
 	Executable      bool      `json:"executable"`
 	Warnings        []string  `json:"warnings,omitempty"`

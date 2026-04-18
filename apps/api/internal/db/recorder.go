@@ -19,6 +19,7 @@ type MarketDataProvider interface {
 
 // Recorder periodically writes downsampled market snapshots to SQLite.
 type Recorder struct {
+	db       *sql.DB
 	queries  *sqlc.Queries
 	provider MarketDataProvider
 	logger   *slog.Logger
@@ -26,6 +27,7 @@ type Recorder struct {
 
 func NewRecorder(db *sql.DB, provider MarketDataProvider, logger *slog.Logger) *Recorder {
 	return &Recorder{
+		db:       db,
 		queries:  sqlc.New(db),
 		provider: provider,
 		logger:   logger,
@@ -52,9 +54,18 @@ func (r *Recorder) record(ctx context.Context) {
 		return
 	}
 
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		r.logger.Error("record: begin tx", "err", err)
+		return
+	}
+	defer tx.Rollback()
+
+	qtx := r.queries.WithTx(tx)
 	count := 0
+
 	for _, md := range data {
-		err := r.queries.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		err := qtx.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 			Venue:        md.Venue,
 			Asset:        md.Asset,
 			MarketKey:    md.MarketKey,
@@ -71,6 +82,11 @@ func (r *Recorder) record(ctx context.Context) {
 			continue
 		}
 		count++
+	}
+
+	if err := tx.Commit(); err != nil {
+		r.logger.Error("record: commit", "err", err)
+		return
 	}
 
 	r.logger.Info("snapshots recorded", "count", count)

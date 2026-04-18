@@ -59,6 +59,7 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 		Asset:          plan.Asset,
 		Direction:      plan.Direction,
 		VenuePair:      domain.VenuePair{VenueA: plan.Leg1.Venue, VenueB: plan.Leg2.Venue},
+		RiskTier:       plan.RiskTier,
 		State:          StatePlanned,
 		TargetNotional: plan.Notional,
 		CreatedAt:      time.Now(),
@@ -185,16 +186,15 @@ func (e *Executor) CloseByID(ctx context.Context, id string, reason CloseReason)
 		pos.PricePnL = longPnL + shortPnL
 
 		// Funding P&L at close = use last computed value (accrued by monitor)
-		// Already set by monitor updates, just finalize total
 		pos.RealizedPnL = pos.PricePnL + pos.FundingPnL
 		pos.TotalPnL = pos.RealizedPnL
-		pos.HoldHours = ComputeHoldHours(pos)
 	}
 
 	simulateDelay(ctx)
 
 	now := time.Now()
 	pos.ClosedAt = &now
+	pos.HoldHours = ComputeHoldHours(pos)
 	e.transition(pos, StateClosed, fmt.Sprintf("closed: %s", reason))
 
 	e.logger.Info("paper position closed", "id", pos.ID, "reason", reason, "pnl", pos.RealizedPnL)

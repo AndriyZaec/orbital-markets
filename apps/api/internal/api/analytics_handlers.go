@@ -24,17 +24,34 @@ func (s *Server) handlePaperAnalytics(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := s.store.Queries()
 
+	var warnings []string
+
+	// Summary is required — fail if it errors
 	summary, err := q.AnalyticsSummary(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	byAsset, _ := q.AnalyticsByAsset(ctx)
-	byRiskTier, _ := q.AnalyticsByRiskTier(ctx)
-	byCloseReason, _ := q.AnalyticsByCloseReason(ctx)
+	// Grouped blocks are optional — collect what succeeds
+	byAsset, err := q.AnalyticsByAsset(ctx)
+	if err != nil {
+		warnings = append(warnings, "by_asset: "+err.Error())
+	}
 
-	// Break-even rate
+	byRiskTier, err := q.AnalyticsByRiskTier(ctx)
+	if err != nil {
+		warnings = append(warnings, "by_risk_tier: "+err.Error())
+	}
+
+	byCloseReason, err := q.AnalyticsByCloseReason(ctx)
+	if err != nil {
+		warnings = append(warnings, "by_close_reason: "+err.Error())
+	}
+
+	// Break-even rate: based on closed trades only.
+	// break_even_reached means the position's funding carry exceeded entry costs
+	// at least once during its lifetime — NOT the same as closing profitably.
 	beTotal := summary.BreakEvenReachedCount + summary.BreakEvenNotReachedCount
 	var beRate float64
 	if beTotal > 0 {
@@ -42,13 +59,15 @@ func (s *Server) handlePaperAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mode": "paper",
+		"mode":     "paper",
+		"partial":  len(warnings) > 0,
+		"warnings": warnings,
 		"summary": map[string]any{
-			"total_trades":      summary.TotalTrades,
-			"closed_trades":     summary.ClosedTrades,
-			"open_trades":       summary.OpenTrades,
-			"failed_trades":     summary.FailedTrades,
-			"profitable_trades": summary.ProfitableTrades,
+			"total_trades":        summary.TotalTrades,
+			"closed_trades":       summary.ClosedTrades,
+			"open_trades":         summary.OpenTrades,
+			"failed_trades":       summary.FailedTrades,
+			"profitable_trades":   summary.ProfitableTrades,
 			"unprofitable_trades": summary.UnprofitableTrades,
 			"pnl": map[string]any{
 				"price_pnl":      toFloat(summary.TotalPricePnl),
