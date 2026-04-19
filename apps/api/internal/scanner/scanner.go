@@ -182,8 +182,8 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 	// Annualized gross edge from funding spread (funding rates are typically per-hour).
 	annualizedGross := math.Abs(fundingSpread) * hoursPerYear
 
-	// Available notional: minimum OI across venues as a rough liquidity proxy.
-	availableNotional := math.Min(a.OpenInterest, b.OpenInterest)
+	// Execution-aware sizing
+	sizing := computeSizing(a, b, annualizedGross)
 
 	// Build warnings.
 	var warnings []string
@@ -215,8 +215,8 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		FundingSpread:       fundingSpread,
 		AnnualizedGrossEdge: annualizedGross,
 		EntrySpreadEstimate: entrySpread,
-		AvailableNotional:   availableNotional,
-		RecommendedNotional: recommendedNotional(availableNotional, riskTier),
+		AvailableNotional:   sizing.MaxAvailableNotional,
+		RecommendedNotional: sizing.RecommendedNotional,
 		Confidence:          confidence,
 		RiskTier:            riskTier,
 		Executable:          confidence != domain.ConfidenceLow && len(warnings) == 0,
