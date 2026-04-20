@@ -3,6 +3,7 @@ package scanner
 import (
 	"math"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -68,15 +69,10 @@ func computeSizing(a, b venue.MarketData, annualizedGrossEdge float64) SizingRes
 	// does this one-time cost consume if the position is held for an
 	// estimated hold period?
 	//
-	// Assumption: typical paper hold = ~1 hour. This means a 0.1% entry
-	// cost translates to ~0.1% * 8760 = 876% annualized drag if held only
-	// 1 hour. That's too pessimistic.
-	//
-	// Better: entry cost is acceptable if the edge can recoup it within
-	// a reasonable window. We use: net_edge_per_hour * assumed_hold_hours > entry_cost.
-	// Rearranged: entry_cost < edge_per_hour * hold_hours.
+	// Entry cost is acceptable if the edge can recoup it within a reasonable
+	// hold window. We use: edge_per_hour * assumed_hold_hours > entry_cost.
 	const assumedHoldHours = 4.0 // conservative assumed hold for v1
-	edgePerHour := annualizedGrossEdge / hoursPerYear
+	edgePerHour := domain.DeannualizeRate(annualizedGrossEdge)
 
 	var recommended float64
 

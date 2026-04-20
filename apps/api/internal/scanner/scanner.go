@@ -69,8 +69,6 @@ const (
 	maxSnapshotAge = 30 * time.Second
 	// Minimum mark price to filter out broken/zero data.
 	minMarkPrice = 1e-12
-	// Hours per year for annualizing funding.
-	hoursPerYear = 8760.0
 )
 
 func (s *Scanner) scan(ctx context.Context) {
@@ -179,8 +177,8 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		entrySpread = spreadA + spreadB
 	}
 
-	// Annualized gross edge from funding spread (funding rates are typically per-hour).
-	annualizedGross := math.Abs(fundingSpread) * hoursPerYear
+	// Annualized gross edge from funding spread.
+	annualizedGross := domain.AnnualizedGrossEdge(a.FundingRate, b.FundingRate)
 
 	// Execution-aware sizing
 	sizing := computeSizing(a, b, annualizedGross)

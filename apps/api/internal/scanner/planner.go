@@ -61,10 +61,9 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string) (*domain.
 	}
 
 	// Recompute net edge with fresh data
-	// Edge = funding collected on short - funding paid on long
-	fundingSpread := shortSnap.FundingRate - longSnap.FundingRate
+	grossEdge := domain.AnnualizedGrossEdge(shortSnap.FundingRate, longSnap.FundingRate)
 	totalCosts := leg1.Slippage + leg1.Fee + leg2.Slippage + leg2.Fee
-	estimatedNetEdge := (fundingSpread * hoursPerYear) - totalCosts
+	estimatedNetEdge := domain.EstimatedNetEdge(grossEdge, totalCosts)
 
 	// Confidence from fresh data
 	now := time.Now()

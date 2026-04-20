@@ -3,15 +3,15 @@ package paper
 import (
 	"context"
 	"log/slog"
-	"math"
 	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
 const (
 	monitorInterval = 10 * time.Second
 	maxDuration     = 1 * time.Hour // paper mode max position duration
 	minEdgeClose    = 0.01          // 1% annualized — close if edge drops below
-	hoursPerYear    = 8760.0
 )
 
 type Monitor struct {
