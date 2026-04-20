@@ -158,12 +158,12 @@ func ComputeBreakEven(pos *Position) float64 {
 	// Total entry cost = slippage + fees on both legs
 	totalEntryCost := (pos.Leg1Fill.Slippage + pos.Leg1Fill.Fee + pos.Leg2Fill.Slippage + pos.Leg2Fill.Fee) * pos.Leg1Fill.FilledSize
 
-	// Expected net funding per hour = funding spread * notional
-	// CurrentSpread is annualized edge, convert back to hourly
+	// Expected net funding per hour = deannualized edge * notional
+	// CurrentSpread is annualized edge
 	if pos.CurrentSpread <= 0 {
-		return 0 // no edge, break-even is infinite
+		return 0
 	}
-	hourlyEdge := pos.CurrentSpread / 8760.0 * pos.Leg1Fill.FilledSize
+	hourlyEdge := domain.DeannualizeRate(pos.CurrentSpread) * pos.Leg1Fill.FilledSize
 
 	if hourlyEdge <= 0 {
 		return 0

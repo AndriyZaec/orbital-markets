@@ -89,13 +89,8 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 		return ""
 	}
 
-	// Compute current funding edge
-	var currentEdge float64
-	if pos.Leg1Fill.Side == "long" {
-		currentEdge = math.Abs(snapB.FundingRate-snapA.FundingRate) * hoursPerYear
-	} else {
-		currentEdge = math.Abs(snapA.FundingRate-snapB.FundingRate) * hoursPerYear
-	}
+	// Compute current annualized funding edge
+	currentEdge := domain.AnnualizedGrossEdge(snapA.FundingRate, snapB.FundingRate)
 
 	// Update P&L components on the stored position
 	if snapA.BidPrice > 0 && snapB.BidPrice > 0 {
@@ -117,7 +112,6 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 			// Funding P&L: accrued funding since open
 			if stored.OpenedAt != nil {
 				hoursOpen := time.Since(*stored.OpenedAt).Hours()
-				// Funding collected on short leg - funding paid on long leg
 				var longFunding, shortFunding float64
 				if stored.Leg1Fill.Side == "long" {
 					longFunding = snapA.FundingRate
@@ -126,8 +120,8 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 					longFunding = snapB.FundingRate
 					shortFunding = snapA.FundingRate
 				}
-				fundingEdgePerHour := shortFunding - longFunding
-				stored.FundingPnL = fundingEdgePerHour * hoursOpen * stored.Leg1Fill.FilledSize
+				carryPerHour := domain.CarryEdgePerHour(shortFunding, longFunding)
+				stored.FundingPnL = carryPerHour * hoursOpen * stored.Leg1Fill.FilledSize
 			}
 
 			stored.TotalPnL = stored.PricePnL + stored.FundingPnL
