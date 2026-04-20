@@ -95,8 +95,8 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onOpe
       <div className="grid grid-cols-2 gap-3 mb-5">
         <InfoItem label="Venue Pair" value={`${opp.venue_pair.venue_a} / ${opp.venue_pair.venue_b}`} />
         <InfoItem label="Direction" value={opp.direction === 'long_a_short_b' ? 'Long A / Short B' : 'Long B / Short A'} />
-        <InfoItem label="Ann. Gross Edge" value={fmtPct(opp.annualized_gross_edge)} highlight />
-        <InfoItem label="Est. Net Edge" value={fmtPct(opp.estimated_net_edge)} />
+        <InfoItem label="Annualized Gross Edge" value={fmtPct(opp.annualized_gross_edge)} highlight hint="Hourly funding differential, annualized" />
+        <InfoItem label="Estimated Net Edge" value={fmtPct(opp.estimated_net_edge)} hint="Gross edge minus estimated entry costs" />
       </div>
 
       <Separator className="mb-5" />
@@ -131,10 +131,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onOpe
       {/* Costs & Bounds */}
       <h3 className="text-sm font-medium text-muted-foreground mb-3">Execution Bounds</h3>
       <div className="grid grid-cols-2 gap-3 mb-5">
-        <InfoItem label="Entry Spread" value={fmtPct(opp.entry_spread_estimate, 4)} />
-        <InfoItem label="Slippage Est." value={fmtPct(opp.slippage_estimate, 4)} />
-        <InfoItem label="Fee Est." value={fmtPct(opp.fee_estimate, 4)} />
-        <InfoItem label="Funding Spread" value={fmtRate(opp.funding_spread)} />
+        <InfoItem label="Entry Cost (est.)" value={fmtPct(opp.entry_spread_estimate, 4)} />
+        <InfoItem label="Slippage (est.)" value={fmtPct(opp.slippage_estimate, 4)} />
+        <InfoItem label="Fee (est.)" value={fmtPct(opp.fee_estimate, 4)} />
+        <InfoItem label="Funding Spread (hourly)" value={fmtRate(opp.funding_spread)} />
       </div>
 
       {/* Warnings */}
@@ -168,11 +168,12 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onOpe
   )
 }
 
-function InfoItem({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function InfoItem({ label, value, highlight, hint }: { label: string; value: string; highlight?: boolean; hint?: string }) {
   return (
     <div>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={`text-sm font-mono ${highlight ? 'text-foreground font-semibold' : 'text-foreground'}`}>{value}</p>
+      {hint && <p className="text-xs text-muted-foreground/60 mt-0.5">{hint}</p>}
     </div>
   )
 }
@@ -194,7 +195,7 @@ function LegCard({ label, venue, side, fundingRate }: { label: string; venue: st
             <p className={side === 'Long' ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>{side}</p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">Funding</p>
+            <p className="text-xs text-muted-foreground">Funding (h)</p>
             <p className="font-mono">{fmtRate(fundingRate)}</p>
           </div>
         </div>

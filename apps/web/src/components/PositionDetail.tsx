@@ -67,8 +67,8 @@ export function PositionDetail({ position: pos, onClose }: Props) {
           <div className="grid grid-cols-2 gap-y-3 gap-x-6">
             <InfoItem label="Target Notional" value={`$${pos.target_notional.toFixed(2)}`} />
             <InfoItem label="Hedge Mismatch" value={`${(pos.hedge_mismatch * 100).toFixed(1)}%`} />
-            <InfoItem label="Entry Spread" value={`${(pos.entry_spread * 100).toFixed(4)}%`} />
-            <InfoItem label="Current Ann. Edge" value={`${(pos.current_spread * 100).toFixed(2)}%`} />
+            <InfoItem label="Entry Cost" value={`${(pos.entry_spread * 100).toFixed(4)}%`} />
+            <InfoItem label="Annualized Gross Edge" value={`${(pos.current_spread * 100).toFixed(2)}%`} />
             <InfoItem
               label="Price P&L"
               value={fmtPnL(pos.price_pnl)}

@@ -97,8 +97,8 @@ export function PlanPreview({ plan, loading, error, onClose, onExecute }: Props)
           <div className="grid grid-cols-2 gap-y-3 gap-x-6">
             <InfoItem label="Direction" value={plan.direction === 'long_a_short_b' ? 'Long A / Short B' : 'Long B / Short A'} />
             <InfoItem label="Target Notional" value={fmtUsd(plan.notional)} />
-            <InfoItem label="Expected Spread" value={fmtPct(plan.expected_spread, 4)} />
-            <InfoItem label="Est. Net Edge (ann.)" value={fmtPct(plan.estimated_net_edge)} highlight />
+            <InfoItem label="Expected Entry Cost" value={fmtPct(plan.expected_spread, 4)} />
+            <InfoItem label="Estimated Net Edge (ann.)" value={fmtPct(plan.estimated_net_edge)} highlight />
           </div>
         </div>
 
@@ -109,8 +109,8 @@ export function PlanPreview({ plan, loading, error, onClose, onExecute }: Props)
           <h3 className="text-sm font-medium text-muted-foreground mb-3">Execution Bounds</h3>
           <div className="grid grid-cols-3 gap-3">
             <BoundItem label="Max Slippage" value={fmtPct(plan.bounds.max_slippage_pct)} />
-            <BoundItem label="Max Entry Spread" value={fmtPct(plan.bounds.max_entry_spread_pct)} />
-            <BoundItem label="Min Net Edge" value={fmtPct(plan.bounds.min_net_edge_pct)} />
+            <BoundItem label="Max Entry Cost" value={fmtPct(plan.bounds.max_entry_spread_pct)} />
+            <BoundItem label="Min Net Edge (ann.)" value={fmtPct(plan.bounds.min_net_edge_pct)} />
           </div>
         </div>
 

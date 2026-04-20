@@ -114,8 +114,8 @@ export default function App() {
                         <TableHead>Asset</TableHead>
                         <TableHead>Venues</TableHead>
                         <TableHead>Direction</TableHead>
-                        <TableHead className="text-right">Spread</TableHead>
-                        <TableHead className="text-right">Ann. Edge</TableHead>
+                        <TableHead className="text-right">Funding Spread (h)</TableHead>
+                        <TableHead className="text-right">Gross Edge (ann.)</TableHead>
                         <TableHead className="text-right">Entry Cost</TableHead>
                         <TableHead>Risk</TableHead>
                         <TableHead>Confidence</TableHead>
