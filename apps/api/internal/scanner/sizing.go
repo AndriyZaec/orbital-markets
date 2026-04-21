@@ -7,82 +7,109 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
-// Sizing constants — tunable later with paper analytics.
 const (
 	// sizeSteps is the number of size increments to test.
 	sizeSteps = 20
 
-	// maxSizePctOfOI caps recommended size as a fraction of min OI
-	// regardless of edge quality.
-	maxSizePctOfOI = 0.05 // never recommend more than 5% of min OI
+	// maxSizePctOfOI caps recommended size relative to OI as an absolute ceiling.
+	maxSizePctOfOI = 0.05
+
+	// maxTopOfBookMultiple caps recommended at N× the weaker venue's top-of-book depth.
+	maxTopOfBookMultiple = 10.0
+
+	// assumedHoldHours is the minimum expected hold for edge recoup calculation.
+	assumedHoldHours = 4.0
+
+	// minHiddenSpread is applied when bid == ask (mid-only data, no real BBO yet).
+	minHiddenSpread = 0.0005 // 5bps
 )
 
 // SizingResult contains the separated sizing outputs.
 type SizingResult struct {
-	MaxAvailableNotional float64 // observed market capacity (min OI)
+	MaxAvailableNotional float64 // observed market capacity (min OI, display only)
 	RecommendedNotional  float64 // largest size with acceptable execution quality
-	CautionNotionalCap   float64 // hard cap based on market depth
+	CautionNotionalCap   float64 // hard cap from depth + OI
 }
 
-// computeSizing determines execution-aware sizing from market data.
-//
-// Model (v1):
-//   - Entry cost for a given size = base_spread + estimated_slippage(size) + fees
-//   - Slippage scales with size relative to market depth (min OI as proxy)
-//   - Net edge at size = annualized_funding_edge - entry_cost(size) * annualization_factor
-//   - Recommended = largest size where net_edge(size) >= minAcceptableNetEdge
-//
-// Slippage model:
-//   - slippage(size) = base_half_spread * (1 + size / comfortable_depth)
-//   - comfortable_depth = 1% of min OI (the size range where impact is minimal)
-//
-// This is an approximation — no real orderbook depth. Good enough for v1
-// and easy to calibrate with paper analytics results.
-func computeSizing(a, b venue.MarketData, annualizedGrossEdge float64) SizingResult {
-	minOI := math.Min(a.OpenInterest, b.OpenInterest)
-	if minOI <= 0 {
-		return SizingResult{}
+// venueDepth extracts top-of-book depth and spread for one venue.
+type venueDepth struct {
+	topOfBook float64 // notional at best bid/ask (min of the two)
+	spread    float64 // relative spread (ask - bid) / mid
+}
+
+func getVenueDepth(md venue.MarketData) venueDepth {
+	depth := math.Min(md.BidSize, md.AskSize)
+
+	// Fallback: if BBO sizes not yet available, use conservative OI proxy
+	if depth <= 0 && md.OpenInterest > 0 {
+		depth = md.OpenInterest * 0.001
 	}
 
-	cautionCap := minOI * maxSizePctOfOI
+	spread := relSpread(md)
 
-	// Base spread from current bid/ask on each venue
-	baseSpreadA := relSpread(a)
-	baseSpreadB := relSpread(b)
-	baseTotalSpread := baseSpreadA + baseSpreadB
+	// If bid == ask (mid-only, no real BBO yet), assume a minimum hidden spread
+	if spread <= 0 && md.BidPrice > 0 {
+		spread = minHiddenSpread
+	}
 
-	// Comfortable depth: the size range where slippage is close to base
-	comfortableDepth := minOI * 0.01
+	return venueDepth{topOfBook: depth, spread: spread}
+}
 
-	if comfortableDepth <= 0 || annualizedGrossEdge <= 0 {
+// venueImpact estimates execution cost for one leg using sqrt impact model.
+//
+// At size=0: cost = half-spread (crossing the spread)
+// As size grows: cost increases as sqrt(1 + size/depth)
+func venueImpact(size float64, vd venueDepth) float64 {
+	if vd.topOfBook <= 0 {
+		return vd.spread // no depth info, just return full spread
+	}
+	return (vd.spread / 2) * math.Sqrt(1+size/vd.topOfBook)
+}
+
+// computeSizing determines execution-aware sizing from BBO depth.
+//
+// Primary input: top-of-book bid/ask sizes from both venues.
+// Secondary input: OI as an absolute ceiling only.
+//
+// The weaker venue naturally constrains sizing — its impact grows faster
+// because its topOfBook is smaller.
+func computeSizing(a, b venue.MarketData, annualizedGrossEdge float64) SizingResult {
+	depthA := getVenueDepth(a)
+	depthB := getVenueDepth(b)
+
+	minOI := math.Min(a.OpenInterest, b.OpenInterest)
+	minTopOfBook := math.Min(depthA.topOfBook, depthB.topOfBook)
+
+	if minTopOfBook <= 0 || annualizedGrossEdge <= 0 {
 		return SizingResult{
 			MaxAvailableNotional: minOI,
-			CautionNotionalCap:   cautionCap,
+		}
+	}
+
+	// Caution cap: min of depth-based cap and OI-based cap
+	depthCap := minTopOfBook * maxTopOfBookMultiple
+	oiCap := minOI * maxSizePctOfOI
+	cautionCap := math.Min(depthCap, oiCap)
+
+	if cautionCap <= 0 {
+		return SizingResult{
+			MaxAvailableNotional: minOI,
 		}
 	}
 
 	// Walk up from small to large and find the inflection point
-	// where net edge drops below minimum acceptable.
-	//
-	// Entry cost is a one-time cost paid at open. To compare it against
-	// annualized funding edge, we express it as: what annualized rate
-	// does this one-time cost consume if the position is held for an
-	// estimated hold period?
-	//
-	// Entry cost is acceptable if the edge can recoup it within a reasonable
-	// hold window. We use: edge_per_hour * assumed_hold_hours > entry_cost.
-	const assumedHoldHours = 4.0 // conservative assumed hold for v1
+	// where total execution cost exceeds what the edge can recoup.
 	edgePerHour := domain.DeannualizeRate(annualizedGrossEdge)
+	edgeBudget := edgePerHour * assumedHoldHours
 
 	var recommended float64
 
 	for step := 1; step <= sizeSteps; step++ {
 		size := cautionCap * float64(step) / float64(sizeSteps)
 
-		entryCost := estimateEntryCost(size, baseTotalSpread, comfortableDepth)
-		edgeBudget := edgePerHour * assumedHoldHours
+		totalImpact := venueImpact(size, depthA) + venueImpact(size, depthB)
 
-		if entryCost < edgeBudget {
+		if totalImpact < edgeBudget {
 			recommended = size
 		} else {
 			break
@@ -96,22 +123,14 @@ func computeSizing(a, b venue.MarketData, annualizedGrossEdge float64) SizingRes
 	}
 }
 
-// estimateEntryCost returns the incremental execution cost from sizing.
-// This is the additional cost above the base spread+fees that the scanner
-// already accounts for in opportunity ranking. Only the size-dependent
-// slippage matters here — base fees and base spread are constant regardless
-// of size.
-func estimateEntryCost(size, baseTotalSpread, comfortableDepth float64) float64 {
-	// Additional slippage from size impact
-	sizeImpact := (size / comfortableDepth) * baseTotalSpread / 2
-	return sizeImpact
-}
-
 // relSpread returns the bid-ask spread relative to mid price.
 func relSpread(md venue.MarketData) float64 {
 	if md.BidPrice <= 0 || md.AskPrice <= 0 {
 		return 0
 	}
 	mid := (md.BidPrice + md.AskPrice) / 2
+	if mid <= 0 {
+		return 0
+	}
 	return (md.AskPrice - md.BidPrice) / mid
 }

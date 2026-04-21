@@ -19,36 +19,54 @@ const (
 	venueName = "pacifica"
 )
 
-// wsMessage is the raw message from the Pacifica WebSocket.
+// wsMessage wraps both prices and bbo channel messages.
 type wsMessage struct {
-	Channel string    `json:"channel"`
-	Data    []wsPrice `json:"data"`
+	Channel string          `json:"channel"`
+	Data    json.RawMessage `json:"data"`
 }
 
 type wsPrice struct {
-	Symbol         string `json:"symbol"`
-	Mark           string `json:"mark"`
-	Oracle         string `json:"oracle"`
-	Mid            string `json:"mid"`
-	Funding        string `json:"funding"`
-	NextFunding    string `json:"next_funding"`
-	OpenInterest   string `json:"open_interest"`
-	Volume24h      string `json:"volume_24h"`
-	YesterdayPrice string `json:"yesterday_price"`
-	Timestamp      int64  `json:"timestamp"`
+	Symbol       string `json:"symbol"`
+	Mark         string `json:"mark"`
+	Oracle       string `json:"oracle"`
+	Mid          string `json:"mid"`
+	Funding      string `json:"funding"`
+	OpenInterest string `json:"open_interest"`
+	Timestamp    int64  `json:"timestamp"`
 }
 
-// Adapter connects to Pacifica's WebSocket and keeps market data fresh.
+type wsBBO struct {
+	Symbol    string `json:"s"`
+	BidPrice  string `json:"b"`
+	BidAmount string `json:"B"`
+	AskPrice  string `json:"a"`
+	AskAmount string `json:"A"`
+	Timestamp int64  `json:"t"`
+}
+
+// assetState holds combined prices + bbo data for one symbol.
+type assetState struct {
+	markPrice    float64
+	indexPrice   float64
+	fundingRate  float64
+	openInterest float64
+	bidPrice     float64
+	bidSize      float64 // notional
+	askPrice     float64
+	askSize      float64 // notional
+	timestamp    time.Time
+}
+
 type Adapter struct {
-	mu        sync.RWMutex
-	snapshots map[string]venue.MarketData
-	logger    *slog.Logger
+	mu     sync.RWMutex
+	assets map[string]*assetState
+	logger *slog.Logger
 }
 
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
-		snapshots: make(map[string]venue.MarketData),
-		logger:    logger,
+		assets: make(map[string]*assetState),
+		logger: logger,
 	}
 }
 
@@ -60,15 +78,27 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	out := make([]venue.MarketData, 0, len(a.snapshots))
-	for _, s := range a.snapshots {
-		out = append(out, s)
+	out := make([]venue.MarketData, 0, len(a.assets))
+	for name, s := range a.assets {
+		out = append(out, venue.MarketData{
+			Venue:        venueName,
+			Asset:        name,
+			MarketKey:    name,
+			MarkPrice:    s.markPrice,
+			IndexPrice:   s.indexPrice,
+			FundingRate:  s.fundingRate,
+			BidPrice:     s.bidPrice,
+			BidSize:      s.bidSize,
+			AskPrice:     s.askPrice,
+			AskSize:      s.askSize,
+			OpenInterest: s.openInterest,
+			Timestamp:    s.timestamp,
+		})
 	}
 	return out, nil
 }
 
 // Connect starts the WebSocket connection and processes messages until ctx is cancelled.
-// Should be called as a goroutine.
 func (a *Adapter) Connect(ctx context.Context) error {
 	for {
 		err := a.connectAndListen(ctx)
@@ -91,17 +121,18 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	sub := map[string]any{
+	// Subscribe to prices (all symbols, funding/mark/OI)
+	if err := conn.WriteJSON(map[string]any{
 		"method": "subscribe",
-		"params": map[string]string{
-			"source": "prices",
-		},
-	}
-	if err := conn.WriteJSON(sub); err != nil {
-		return fmt.Errorf("subscribe: %w", err)
+		"params": map[string]string{"source": "prices"},
+	}); err != nil {
+		return fmt.Errorf("subscribe prices: %w", err)
 	}
 
 	a.logger.Info("pacifica ws connected")
+
+	// Track which symbols we've subscribed BBO for
+	bboSubscribed := make(map[string]bool)
 
 	for {
 		select {
@@ -117,64 +148,107 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 
 		var msg wsMessage
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			a.logger.Warn("pacifica ws parse error", "err", err)
 			continue
 		}
 
-		if msg.Channel != "prices" {
-			continue
-		}
+		switch msg.Channel {
+		case "prices":
+			var prices []wsPrice
+			if len(msg.Data) == 0 || msg.Data[0] != '[' {
+				continue
+			}
+			if err := json.Unmarshal(msg.Data, &prices); err != nil {
+				a.logger.Warn("pacifica: parse prices", "err", err)
+				continue
+			}
+			a.updatePrices(prices)
 
-		a.updateSnapshots(msg.Data)
+			// Subscribe to BBO for any new symbols we discovered
+			for _, p := range prices {
+				if bboSubscribed[p.Symbol] {
+					continue
+				}
+				if err := conn.WriteJSON(map[string]any{
+					"method": "subscribe",
+					"params": map[string]string{
+						"source": "bbo",
+						"symbol": p.Symbol,
+					},
+				}); err != nil {
+					a.logger.Warn("pacifica: subscribe bbo", "symbol", p.Symbol, "err", err)
+					continue
+				}
+				bboSubscribed[p.Symbol] = true
+			}
+
+		case "bbo":
+			var bbo wsBBO
+			if err := json.Unmarshal(msg.Data, &bbo); err != nil {
+				continue
+			}
+			a.updateBBO(bbo)
+		}
 	}
 }
 
-func (a *Adapter) updateSnapshots(prices []wsPrice) {
+func (a *Adapter) updatePrices(prices []wsPrice) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	for _, p := range prices {
-		md, err := toMarketData(p)
-		if err != nil {
-			a.logger.Warn("pacifica parse price", "symbol", p.Symbol, "err", err)
-			continue
+		mark := parseFloat(p.Mark)
+		oracle := parseFloat(p.Oracle)
+		funding := parseFloat(p.Funding)
+		oi := parseFloat(p.OpenInterest)
+		mid := parseFloat(p.Mid)
+
+		state, exists := a.assets[p.Symbol]
+		if !exists {
+			state = &assetState{}
+			a.assets[p.Symbol] = state
 		}
-		a.snapshots[p.Symbol] = md
+
+		state.markPrice = mark
+		state.indexPrice = oracle
+		state.fundingRate = funding
+		state.openInterest = oi
+		state.timestamp = time.UnixMilli(p.Timestamp)
+
+		// Use mid as fallback bid/ask until BBO arrives
+		if state.bidPrice == 0 {
+			state.bidPrice = mid
+		}
+		if state.askPrice == 0 {
+			state.askPrice = mid
+		}
 	}
 }
 
-func toMarketData(p wsPrice) (venue.MarketData, error) {
-	mark, err := strconv.ParseFloat(p.Mark, 64)
-	if err != nil {
-		return venue.MarketData{}, fmt.Errorf("mark: %w", err)
-	}
-	oracle, err := strconv.ParseFloat(p.Oracle, 64)
-	if err != nil {
-		return venue.MarketData{}, fmt.Errorf("oracle: %w", err)
-	}
-	mid, err := strconv.ParseFloat(p.Mid, 64)
-	if err != nil {
-		return venue.MarketData{}, fmt.Errorf("mid: %w", err)
-	}
-	funding, err := strconv.ParseFloat(p.Funding, 64)
-	if err != nil {
-		return venue.MarketData{}, fmt.Errorf("funding: %w", err)
-	}
-	oi, err := strconv.ParseFloat(p.OpenInterest, 64)
-	if err != nil {
-		return venue.MarketData{}, fmt.Errorf("open_interest: %w", err)
+func (a *Adapter) updateBBO(bbo wsBBO) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, exists := a.assets[bbo.Symbol]
+	if !exists {
+		return
 	}
 
-	return venue.MarketData{
-		Venue:        venueName,
-		Asset:        p.Symbol,
-		MarketKey:    p.Symbol,
-		MarkPrice:    mark,
-		IndexPrice:   oracle,
-		FundingRate:  funding,
-		BidPrice:     mid,
-		AskPrice:     mid,
-		OpenInterest: oi,
-		Timestamp:    time.UnixMilli(p.Timestamp),
-	}, nil
+	bidPx := parseFloat(bbo.BidPrice)
+	bidAmt := parseFloat(bbo.BidAmount)
+	askPx := parseFloat(bbo.AskPrice)
+	askAmt := parseFloat(bbo.AskAmount)
+
+	state.bidPrice = bidPx
+	state.bidSize = bidAmt * bidPx // token amount × price = notional
+	state.askPrice = askPx
+	state.askSize = askAmt * askPx
+
+	if bbo.Timestamp > 0 {
+		state.timestamp = time.UnixMilli(bbo.Timestamp)
+	}
+}
+
+func parseFloat(s string) float64 {
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
 }
