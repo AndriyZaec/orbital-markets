@@ -76,7 +76,9 @@ type assetState struct {
 	fundingRate  float64
 	openInterest float64
 	bidPrice     float64
+	bidSize      float64
 	askPrice     float64
+	askSize      float64
 	timestamp    time.Time
 }
 
@@ -117,7 +119,9 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			IndexPrice:   s.indexPrice,
 			FundingRate:  s.fundingRate,
 			BidPrice:     s.bidPrice,
+			BidSize:      s.bidSize,
 			AskPrice:     s.askPrice,
+			AskSize:      s.askSize,
 			OpenInterest: s.openInterest,
 			Timestamp:    ts,
 		})
@@ -295,8 +299,15 @@ func (a *Adapter) connectWS(ctx context.Context) error {
 
 		a.mu.Lock()
 		if state, ok := a.assets[bbo.Coin]; ok {
-			state.bidPrice = parseFloat(bbo.BBO[0].Px)
-			state.askPrice = parseFloat(bbo.BBO[1].Px)
+			bidPx := parseFloat(bbo.BBO[0].Px)
+			bidSz := parseFloat(bbo.BBO[0].Sz)
+			askPx := parseFloat(bbo.BBO[1].Px)
+			askSz := parseFloat(bbo.BBO[1].Sz)
+
+			state.bidPrice = bidPx
+			state.bidSize = bidSz * bidPx // convert token size to notional
+			state.askPrice = askPx
+			state.askSize = askSz * askPx // convert token size to notional
 			if bbo.Time > 0 {
 				state.timestamp = time.UnixMilli(bbo.Time)
 			}

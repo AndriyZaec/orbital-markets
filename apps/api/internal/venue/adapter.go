@@ -14,7 +14,9 @@ type MarketData struct {
 	IndexPrice   float64   `json:"index_price"`
 	FundingRate  float64   `json:"funding_rate"`
 	BidPrice     float64   `json:"bid_price"`
+	BidSize      float64   `json:"bid_size"`
 	AskPrice     float64   `json:"ask_price"`
+	AskSize      float64   `json:"ask_size"`
 	OpenInterest float64   `json:"open_interest"`
 	Timestamp    time.Time `json:"timestamp"`
 }
