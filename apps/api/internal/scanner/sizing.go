@@ -55,15 +55,20 @@ func getVenueDepth(md venue.MarketData) venueDepth {
 	return venueDepth{topOfBook: depth, spread: spread}
 }
 
-// venueImpact estimates execution cost for one leg using sqrt impact model.
+// venueImpact estimates the incremental execution cost from size impact.
+// Base half-spread (cost of crossing the spread) is excluded — that's a constant
+// cost the scanner already accounts for in opportunity ranking.
+// This returns only the additional cost caused by order size eating into depth.
 //
-// At size=0: cost = half-spread (crossing the spread)
-// As size grows: cost increases as sqrt(1 + size/depth)
+// Model: incremental_impact = half_spread * (sqrt(1 + size/depth) - 1)
+// At size=0: 0 (no incremental cost)
+// At size=topOfBook: half_spread * 0.41 (sqrt(2)-1)
+// At size=4×topOfBook: half_spread * 1.24 (sqrt(5)-1)
 func venueImpact(size float64, vd venueDepth) float64 {
 	if vd.topOfBook <= 0 {
-		return vd.spread // no depth info, just return full spread
+		return vd.spread * size * 0.001 // degenerate fallback
 	}
-	return (vd.spread / 2) * math.Sqrt(1+size/vd.topOfBook)
+	return (vd.spread / 2) * (math.Sqrt(1+size/vd.topOfBook) - 1)
 }
 
 // computeSizing determines execution-aware sizing from BBO depth.
@@ -97,15 +102,26 @@ func computeSizing(a, b venue.MarketData, annualizedGrossEdge float64) SizingRes
 		}
 	}
 
-	// Walk up from small to large and find the inflection point
-	// where total execution cost exceeds what the edge can recoup.
+	// Walk up from small to large using geometric steps.
+	// Starts at 0.5% of cautionCap, each step grows by ~1.3×.
+	// This explores small rational sizes first before scaling up,
+	// preventing the search from skipping the only viable size region.
 	edgePerHour := domain.DeannualizeRate(annualizedGrossEdge)
 	edgeBudget := edgePerHour * assumedHoldHours
 
 	var recommended float64
+	minSize := cautionCap * 0.005 // start at 0.5% of cap
+	if minSize < 1 {
+		minSize = 1
+	}
+	// ratio to reach cautionCap in sizeSteps: cautionCap/minSize^(1/steps)
+	ratio := math.Pow(cautionCap/minSize, 1.0/float64(sizeSteps))
 
-	for step := 1; step <= sizeSteps; step++ {
-		size := cautionCap * float64(step) / float64(sizeSteps)
+	for step := 0; step <= sizeSteps; step++ {
+		size := minSize * math.Pow(ratio, float64(step))
+		if size > cautionCap {
+			size = cautionCap
+		}
 
 		totalImpact := venueImpact(size, depthA) + venueImpact(size, depthB)
 
