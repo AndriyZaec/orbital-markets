@@ -215,6 +215,7 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		EntrySpreadEstimate: entrySpread,
 		AvailableNotional:   sizing.MaxAvailableNotional,
 		RecommendedNotional: sizing.RecommendedNotional,
+		Liquidity:           sizing.Liquidity,
 		Confidence:          confidence,
 		RiskTier:            riskTier,
 		Executable:          confidence != domain.ConfidenceLow && len(warnings) == 0,

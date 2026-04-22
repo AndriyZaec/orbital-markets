@@ -34,6 +34,15 @@ function riskColor(r: Opportunity['risk_tier']) {
   }
 }
 
+function liquidityBadge(l: Opportunity['liquidity']) {
+  switch (l) {
+    case 'deep': return 'bg-green-500/15 text-green-400 border-green-500/30'
+    case 'medium': return 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+    case 'thin': return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+    case 'toxic': return 'bg-red-500/15 text-red-400 border-red-500/30'
+  }
+}
+
 function fmtPct(n: number, decimals = 2) {
   return (n * 100).toFixed(decimals) + '%'
 }
@@ -117,6 +126,7 @@ export default function App() {
                         <TableHead className="text-right">Funding Spread (h)</TableHead>
                         <TableHead className="text-right">Gross Edge (ann.)</TableHead>
                         <TableHead className="text-right">Entry Cost</TableHead>
+                        <TableHead>Liquidity</TableHead>
                         <TableHead>Risk</TableHead>
                         <TableHead>Confidence</TableHead>
                       </TableRow>
@@ -138,6 +148,9 @@ export default function App() {
                           <TableCell className="text-right font-mono text-sm">{fmtRate(opp.funding_spread)}</TableCell>
                           <TableCell className="text-right font-mono text-sm">{fmtPct(opp.annualized_gross_edge)}</TableCell>
                           <TableCell className="text-right font-mono text-sm">{fmtPct(opp.entry_spread_estimate, 4)}</TableCell>
+                          <TableCell>
+                            <Badge className={liquidityBadge(opp.liquidity)}>{opp.liquidity}</Badge>
+                          </TableCell>
                           <TableCell>
                             <span className={`text-sm font-medium ${riskColor(opp.risk_tier)}`}>
                               {opp.risk_tier}

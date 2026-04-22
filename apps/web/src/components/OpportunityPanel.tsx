@@ -43,6 +43,15 @@ function riskColor(r: Opportunity['risk_tier']) {
   }
 }
 
+function liquidityBadge(l: Opportunity['liquidity']) {
+  switch (l) {
+    case 'deep': return 'bg-green-500/15 text-green-400 border-green-500/30'
+    case 'medium': return 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+    case 'thin': return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+    case 'toxic': return 'bg-red-500/15 text-red-400 border-red-500/30'
+  }
+}
+
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
   const [remaining, setRemaining] = useState(intervalSec)
 
@@ -77,6 +86,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onOpe
           <h2 className="text-lg font-semibold">{opp.asset}</h2>
           <Badge variant={confidenceVariant(opp.confidence)}>{opp.confidence}</Badge>
           <span className={`text-sm font-medium ${riskColor(opp.risk_tier)}`}>{opp.risk_tier}</span>
+          <Badge className={liquidityBadge(opp.liquidity)}>{opp.liquidity}</Badge>
         </div>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg">×</button>
       </div>
