@@ -26,9 +26,10 @@ const (
 
 // SizingResult contains the separated sizing outputs.
 type SizingResult struct {
-	MaxAvailableNotional float64 // observed market capacity (min OI, display only)
-	RecommendedNotional  float64 // largest size with acceptable execution quality
-	CautionNotionalCap   float64 // hard cap from depth + OI
+	MaxAvailableNotional float64              // observed market capacity (min OI, display only)
+	RecommendedNotional  float64              // largest size with acceptable execution quality
+	CautionNotionalCap   float64              // hard cap from depth + OI
+	Liquidity            domain.LiquidityTier // liquidity quality indicator
 }
 
 // venueDepth extracts top-of-book depth and spread for one venue.
@@ -136,6 +137,42 @@ func computeSizing(a, b venue.MarketData, annualizedGrossEdge float64) SizingRes
 		MaxAvailableNotional: minOI,
 		RecommendedNotional:  recommended,
 		CautionNotionalCap:   cautionCap,
+		Liquidity:            classifyLiquidity(recommended, cautionCap, minTopOfBook, depthA, depthB),
+	}
+}
+
+// classifyLiquidity derives a liquidity quality tier from sizing results and depth data.
+//
+// Logic:
+//   - toxic: recommended is 0 or both venues have no real BBO depth
+//   - thin: recommended < 10% of caution cap, or weaker venue depth < $100
+//   - medium: recommended fills 10-50% of caution cap
+//   - deep: recommended fills >50% of caution cap
+func classifyLiquidity(recommended, cautionCap, minTopOfBook float64, a, b venueDepth) domain.LiquidityTier {
+	if recommended <= 0 {
+		return domain.LiquidityToxic
+	}
+
+	if a.topOfBook <= 0 || b.topOfBook <= 0 {
+		return domain.LiquidityToxic
+	}
+
+	if minTopOfBook < 100 {
+		return domain.LiquidityThin
+	}
+
+	if cautionCap <= 0 {
+		return domain.LiquidityThin
+	}
+
+	fillRatio := recommended / cautionCap
+	switch {
+	case fillRatio >= 0.50:
+		return domain.LiquidityDeep
+	case fillRatio >= 0.10:
+		return domain.LiquidityMedium
+	default:
+		return domain.LiquidityThin
 	}
 }
 
