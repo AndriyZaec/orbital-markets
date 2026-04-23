@@ -69,18 +69,29 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string) (*domain.
 	now := time.Now()
 	confidence := classifyConfidence(snapA, snapB, now)
 
-	// Determine if still executable
-	executable := confidence == domain.ConfidenceHigh
+	// Slippage classification on fresh data
+	slippageLevel := domain.ClassifySlippage(totalCosts)
 
 	var warnings []string
 	if !hasBidAsk(snapA) {
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid/ask", snapA.Venue))
-		executable = false
 	}
 	if !hasBidAsk(snapB) {
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid/ask", snapB.Venue))
-		executable = false
 	}
+	switch slippageLevel {
+	case domain.SlippageWarn:
+		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: elevated slippage", totalCosts*100))
+	case domain.SlippageHigh:
+		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: high slippage", totalCosts*100))
+	case domain.SlippageBlock:
+		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: exceeds 5%% threshold", totalCosts*100))
+	}
+
+	hasMissingBidAsk := !hasBidAsk(snapA) || !hasBidAsk(snapB)
+	executable := confidence == domain.ConfidenceHigh &&
+		!hasMissingBidAsk &&
+		domain.SlippageExecutable(slippageLevel)
 
 	notional := opp.RecommendedNotional
 

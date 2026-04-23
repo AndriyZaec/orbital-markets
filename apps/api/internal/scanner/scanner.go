@@ -193,9 +193,24 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 	}
 
 	confidence := classifyConfidence(a, b, now)
-
-	// Risk tier based on annualized edge magnitude.
 	riskTier := classifyRisk(annualizedGross, entrySpread)
+	slippageLevel := domain.ClassifySlippage(entrySpread)
+
+	// Slippage warnings
+	switch slippageLevel {
+	case domain.SlippageWarn:
+		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: elevated slippage", entrySpread*100))
+	case domain.SlippageHigh:
+		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: high slippage", entrySpread*100))
+	case domain.SlippageBlock:
+		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: exceeds 5%% threshold, not executable", entrySpread*100))
+	}
+
+	// Blockers: low confidence, missing bid/ask, or slippage > 5%
+	hasBidAskWarning := (a.BidPrice == 0 || a.AskPrice == 0) || (b.BidPrice == 0 || b.AskPrice == 0)
+	executable := confidence != domain.ConfidenceLow &&
+		!hasBidAskWarning &&
+		domain.SlippageExecutable(slippageLevel)
 
 	id := fmt.Sprintf("%s-%s-%s-%s", asset, a.Venue, b.Venue, direction)
 
@@ -218,7 +233,7 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		Liquidity:           sizing.Liquidity,
 		Confidence:          confidence,
 		RiskTier:            riskTier,
-		Executable:          confidence != domain.ConfidenceLow && len(warnings) == 0,
+		Executable:          executable,
 		Warnings:            warnings,
 	}
 }
