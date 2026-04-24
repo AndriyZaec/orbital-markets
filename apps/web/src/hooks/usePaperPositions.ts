@@ -9,6 +9,11 @@ interface Fill {
   slippage: number
   fee: number
   filled_at: string
+  current_price: number
+  current_funding: number
+  accum_funding: number
+  next_funding_at: string | null
+  leg_price_pnl: number
 }
 
 interface Event {

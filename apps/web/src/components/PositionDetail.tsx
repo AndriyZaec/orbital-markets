@@ -127,7 +127,7 @@ function FillCard({ fill, label }: { fill: Fill; label: string }) {
           <span className={`text-xs font-semibold uppercase ${sideColor}`}>{fill.side}</span>
         </CardTitle>
       </CardHeader>
-      <CardContent className="px-4 pb-3">
+      <CardContent className="px-4 pb-3 flex flex-col gap-2">
         <div className="grid grid-cols-4 gap-2 text-sm">
           <div>
             <p className="text-xs text-muted-foreground">Venue</p>
@@ -138,12 +138,30 @@ function FillCard({ fill, label }: { fill: Fill; label: string }) {
             <p className="font-mono">${fmtPrice(fill.fill_price)}</p>
           </div>
           <div>
+            <p className="text-xs text-muted-foreground">Current Price</p>
+            <p className="font-mono">{fill.current_price ? '$' + fmtPrice(fill.current_price) : '—'}</p>
+          </div>
+          <div>
             <p className="text-xs text-muted-foreground">Fill Ratio</p>
             <p className="font-mono">{((fill.filled_size / fill.target_size) * 100).toFixed(1)}%</p>
           </div>
+        </div>
+        <div className="grid grid-cols-4 gap-2 text-sm">
           <div>
-            <p className="text-xs text-muted-foreground">Slippage</p>
-            <p className="font-mono">{(fill.slippage * 100).toFixed(2)}%</p>
+            <p className="text-xs text-muted-foreground">Funding (h)</p>
+            <p className="font-mono">{(fill.current_funding * 100).toFixed(4)}%</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Accum. Funding</p>
+            <p className={`font-mono ${fill.accum_funding >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPnL(fill.accum_funding)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Price P&L</p>
+            <p className={`font-mono ${fill.leg_price_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtPnL(fill.leg_price_pnl)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Next Funding</p>
+            <p className="font-mono text-xs">{fill.next_funding_at ? new Date(fill.next_funding_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '—'}</p>
           </div>
         </div>
       </CardContent>
