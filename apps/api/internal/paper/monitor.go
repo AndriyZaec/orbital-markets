@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 const (
@@ -96,43 +97,63 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 	if snapA.BidPrice > 0 && snapB.BidPrice > 0 {
 		stored := m.store.Get(pos.ID)
 		if stored != nil && stored.Leg1Fill != nil && stored.Leg2Fill != nil {
-			// Price P&L: unrealized mark-to-market from price movement
-			var currentLongPrice, currentShortPrice float64
-			if stored.Leg1Fill.Side == "long" {
-				currentLongPrice = snapA.BidPrice
-				currentShortPrice = snapB.AskPrice
+			// Determine which snap maps to which leg
+			var leg1Snap, leg2Snap venue.MarketData
+			if stored.Leg1Fill.Venue == snapA.Venue {
+				leg1Snap = snapA
+				leg2Snap = snapB
 			} else {
-				currentLongPrice = snapB.BidPrice
-				currentShortPrice = snapA.AskPrice
+				leg1Snap = snapB
+				leg2Snap = snapA
 			}
-			longPnL := (currentLongPrice - stored.Leg1Fill.FillPrice) / stored.Leg1Fill.FillPrice * stored.Leg1Fill.FilledSize
-			shortPnL := (stored.Leg2Fill.FillPrice - currentShortPrice) / stored.Leg2Fill.FillPrice * stored.Leg2Fill.FilledSize
-			stored.PricePnL = longPnL + shortPnL
 
-			// Funding P&L: accrued funding since open
+			// Per-leg current prices and funding
+			stored.Leg1Fill.CurrentFunding = leg1Snap.FundingRate
+			stored.Leg2Fill.CurrentFunding = leg2Snap.FundingRate
+
+			// Per-leg price P&L
+			if stored.Leg1Fill.Side == domain.SideLong {
+				stored.Leg1Fill.CurrentPrice = leg1Snap.BidPrice  // close long at bid
+				stored.Leg2Fill.CurrentPrice = leg2Snap.AskPrice  // close short at ask
+				stored.Leg1Fill.LegPricePnL = (leg1Snap.BidPrice - stored.Leg1Fill.FillPrice) / stored.Leg1Fill.FillPrice * stored.Leg1Fill.FilledSize
+				stored.Leg2Fill.LegPricePnL = (stored.Leg2Fill.FillPrice - leg2Snap.AskPrice) / stored.Leg2Fill.FillPrice * stored.Leg2Fill.FilledSize
+			} else {
+				stored.Leg1Fill.CurrentPrice = leg1Snap.AskPrice  // close short at ask
+				stored.Leg2Fill.CurrentPrice = leg2Snap.BidPrice  // close long at bid
+				stored.Leg1Fill.LegPricePnL = (stored.Leg1Fill.FillPrice - leg1Snap.AskPrice) / stored.Leg1Fill.FillPrice * stored.Leg1Fill.FilledSize
+				stored.Leg2Fill.LegPricePnL = (leg2Snap.BidPrice - stored.Leg2Fill.FillPrice) / stored.Leg2Fill.FillPrice * stored.Leg2Fill.FilledSize
+			}
+			stored.PricePnL = stored.Leg1Fill.LegPricePnL + stored.Leg2Fill.LegPricePnL
+
+			// Per-leg accumulated funding
 			if stored.OpenedAt != nil {
 				hoursOpen := time.Since(*stored.OpenedAt).Hours()
-				var longFunding, shortFunding float64
-				if stored.Leg1Fill.Side == "long" {
-					longFunding = snapA.FundingRate
-					shortFunding = snapB.FundingRate
+
+				// Leg funding: long pays, short collects
+				if stored.Leg1Fill.Side == domain.SideLong {
+					stored.Leg1Fill.AccumFunding = -leg1Snap.FundingRate * hoursOpen * stored.Leg1Fill.FilledSize
+					stored.Leg2Fill.AccumFunding = leg2Snap.FundingRate * hoursOpen * stored.Leg2Fill.FilledSize
 				} else {
-					longFunding = snapB.FundingRate
-					shortFunding = snapA.FundingRate
+					stored.Leg1Fill.AccumFunding = leg1Snap.FundingRate * hoursOpen * stored.Leg1Fill.FilledSize
+					stored.Leg2Fill.AccumFunding = -leg2Snap.FundingRate * hoursOpen * stored.Leg2Fill.FilledSize
 				}
-				carryPerHour := domain.CarryEdgePerHour(shortFunding, longFunding)
-				stored.FundingPnL = carryPerHour * hoursOpen * stored.Leg1Fill.FilledSize
+				stored.FundingPnL = stored.Leg1Fill.AccumFunding + stored.Leg2Fill.AccumFunding
 			}
+
+			// Next funding estimate (best-effort: next hour boundary)
+			now := time.Now()
+			nextHour := now.Truncate(time.Hour).Add(time.Hour)
+			stored.Leg1Fill.NextFundingAt = &nextHour
+			stored.Leg2Fill.NextFundingAt = &nextHour
 
 			stored.TotalPnL = stored.PricePnL + stored.FundingPnL
 			stored.CurrentSpread = currentEdge
 			stored.HoldHours = ComputeHoldHours(stored)
 			stored.EstBreakEvenHours = ComputeBreakEven(stored)
-			// Once reached, never reset — tracks whether thesis materialized at least once
 			if !stored.BreakEvenReached && stored.EstBreakEvenHours > 0 && stored.HoldHours >= stored.EstBreakEvenHours {
 				stored.BreakEvenReached = true
 			}
-			stored.UpdatedAt = time.Now()
+			stored.UpdatedAt = now
 			m.store.Update(stored)
 		}
 	}
