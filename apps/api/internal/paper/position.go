@@ -36,14 +36,21 @@ const (
 
 // Fill represents a simulated fill for one leg.
 type Fill struct {
-	Venue       string    `json:"venue"`
+	Venue       string      `json:"venue"`
 	Side        domain.Side `json:"side"`
-	TargetSize  float64   `json:"target_size"`
-	FilledSize  float64   `json:"filled_size"`
-	FillPrice   float64   `json:"fill_price"`
-	Slippage    float64   `json:"slippage"`
-	Fee         float64   `json:"fee"`
-	FilledAt    time.Time `json:"filled_at"`
+	TargetSize  float64     `json:"target_size"`
+	FilledSize  float64     `json:"filled_size"`
+	FillPrice   float64     `json:"fill_price"`
+	Slippage    float64     `json:"slippage"`
+	Fee         float64     `json:"fee"`
+	FilledAt    time.Time   `json:"filled_at"`
+
+	// Live leg metrics (updated by monitor)
+	CurrentPrice    float64    `json:"current_price"`
+	CurrentFunding  float64    `json:"current_funding"`   // current hourly funding rate on this venue
+	AccumFunding    float64    `json:"accum_funding"`     // accumulated funding P&L for this leg
+	NextFundingAt   *time.Time `json:"next_funding_at"`   // next funding timestamp (best-effort)
+	LegPricePnL     float64    `json:"leg_price_pnl"`     // unrealized price P&L for this leg
 }
 
 // FillRatio returns filled / target.
