@@ -137,9 +137,14 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 		}
 	}
 
-	// Success — compute entry spread
-	if pos.Leg1Fill.FillPrice > 0 {
+	// Success — compute entry spread and entry basis
+	if pos.Leg1Fill.FillPrice > 0 && pos.Leg2Fill.FillPrice > 0 {
 		pos.EntrySpread = (pos.Leg2Fill.FillPrice - pos.Leg1Fill.FillPrice) / pos.Leg1Fill.FillPrice
+		// Basis = (leg1 price - leg2 price) / leg1 price
+		// Measures the relative price gap between venues at entry
+		mid := (pos.Leg1Fill.FillPrice + pos.Leg2Fill.FillPrice) / 2
+		pos.EntryBasis = (pos.Leg1Fill.FillPrice - pos.Leg2Fill.FillPrice) / mid
+		pos.CurrentBasis = pos.EntryBasis
 	}
 
 	now := time.Now()
