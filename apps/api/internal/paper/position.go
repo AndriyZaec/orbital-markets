@@ -95,6 +95,12 @@ type Position struct {
 	TotalPnL        float64        `json:"total_pnl"`
 	RealizedPnL     float64        `json:"realized_pnl"`
 
+	// Basis: relative price difference between legs.
+	// Positive basis means leg1 price > leg2 price (relative to entry).
+	EntryBasis      float64        `json:"entry_basis"`
+	CurrentBasis    float64        `json:"current_basis"`
+	BasisChange     float64        `json:"basis_change"`
+
 	// Break-even estimate
 	EstBreakEvenHours float64      `json:"est_break_even_hours"`
 	BreakEvenReached  bool         `json:"break_even_reached"`
