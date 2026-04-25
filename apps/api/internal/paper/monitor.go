@@ -146,6 +146,13 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 			stored.Leg1Fill.NextFundingAt = &nextHour
 			stored.Leg2Fill.NextFundingAt = &nextHour
 
+			// Basis: relative price gap between venues now vs at entry
+			if stored.Leg1Fill.CurrentPrice > 0 && stored.Leg2Fill.CurrentPrice > 0 {
+				mid := (stored.Leg1Fill.CurrentPrice + stored.Leg2Fill.CurrentPrice) / 2
+				stored.CurrentBasis = (stored.Leg1Fill.CurrentPrice - stored.Leg2Fill.CurrentPrice) / mid
+				stored.BasisChange = stored.CurrentBasis - stored.EntryBasis
+			}
+
 			stored.TotalPnL = stored.PricePnL + stored.FundingPnL
 			stored.CurrentSpread = currentEdge
 			stored.HoldHours = ComputeHoldHours(stored)
