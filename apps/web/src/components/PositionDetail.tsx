@@ -84,6 +84,13 @@ export function PositionDetail({ position: pos, onClose }: Props) {
               value={fmtPnL(pos.total_pnl)}
               color={pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}
             />
+            <InfoItem label="Entry Basis" value={`${(pos.entry_basis * 100).toFixed(4)}%`} />
+            <InfoItem label="Current Basis" value={`${(pos.current_basis * 100).toFixed(4)}%`} />
+            <InfoItem
+              label="Basis Change"
+              value={`${pos.basis_change >= 0 ? '+' : ''}${(pos.basis_change * 100).toFixed(4)}%`}
+              color={pos.basis_change >= 0 ? 'text-green-400' : 'text-red-400'}
+            />
             {pos.state === 'closed' && (
               <InfoItem
                 label="Realized P&L"

@@ -42,6 +42,9 @@ interface PaperPosition {
   funding_pnl: number
   total_pnl: number
   realized_pnl: number
+  entry_basis: number
+  current_basis: number
+  basis_change: number
   events: Event[]
   created_at: string
   opened_at: string | null
