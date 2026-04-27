@@ -82,7 +82,8 @@ type Position struct {
 	Leg1Fill        *Fill          `json:"leg_1_fill,omitempty"`
 	Leg2Fill        *Fill          `json:"leg_2_fill,omitempty"`
 
-	TargetNotional  float64        `json:"target_notional"`
+	TargetNotional  float64              `json:"target_notional"`
+	Leverage        domain.LeverageConfig `json:"leverage"`
 	EntrySpread     float64        `json:"entry_spread"`
 	CurrentSpread   float64        `json:"current_spread"`
 

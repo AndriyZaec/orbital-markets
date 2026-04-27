@@ -29,8 +29,9 @@ type ExecutionPlan struct {
 	OpportunityID   string    `json:"opportunity_id"`
 	Asset           string    `json:"asset"`
 	Direction       Direction `json:"direction"`
-	Notional        float64   `json:"notional"`
-	Leg1            Leg       `json:"leg_1"`
+	Notional        float64        `json:"notional"`
+	Leverage        LeverageConfig `json:"leverage"`
+	Leg1            Leg            `json:"leg_1"`
 	Leg2            Leg       `json:"leg_2"`
 	ExpectedSpread  float64   `json:"expected_spread"`
 	EstimatedNetEdge float64  `json:"estimated_net_edge"`
