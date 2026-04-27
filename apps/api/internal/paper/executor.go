@@ -62,6 +62,7 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 		RiskTier:       plan.RiskTier,
 		State:          StatePlanned,
 		TargetNotional: plan.Notional,
+		Leverage:       plan.Leverage,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}

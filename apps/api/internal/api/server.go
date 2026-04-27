@@ -74,7 +74,8 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OpportunityID string `json:"opportunity_id"`
+		OpportunityID string  `json:"opportunity_id"`
+		Leverage      float64 `json:"leverage"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -85,7 +86,7 @@ func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage)
 	if err != nil {
 		s.logger.Error("build plan", "err", err)
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
