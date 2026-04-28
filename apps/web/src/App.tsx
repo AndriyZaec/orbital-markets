@@ -55,12 +55,14 @@ export default function App() {
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [planOppId, setPlanOppId] = useState<string | null>(null)
-  const { plan, loading: planLoading, error: planError, clear: clearPlan } = usePlan(planOppId)
+  const [leverage, setLeverage] = useState(1)
+  const { plan, loading: planLoading, error: planError, clear: clearPlan } = usePlan(planOppId, leverage)
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
 
   const handleOpenSpread = (oppId: string) => {
     setPlanOppId(oppId)
+    setLeverage(1) // reset to default when opening new plan
   }
 
   const handleClosePlan = () => {
@@ -73,7 +75,7 @@ export default function App() {
       const resp = await fetch('/api/v1/paper/open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ opportunity_id: opportunityId }),
+        body: JSON.stringify({ opportunity_id: opportunityId, leverage }),
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
@@ -194,6 +196,8 @@ export default function App() {
           plan={plan}
           loading={planLoading}
           error={planError}
+          leverage={leverage}
+          onLeverageChange={setLeverage}
           onClose={handleClosePlan}
           onExecute={handleExecutePaper}
         />

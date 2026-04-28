@@ -34,6 +34,12 @@ interface PaperPosition {
   leg_1_fill: Fill | null
   leg_2_fill: Fill | null
   target_notional: number
+  leverage: {
+    leverage: number
+    margin_required: number
+    gross_exposure: number
+    effective_leverage: number
+  }
   entry_spread: number
   current_spread: number
   hedge_mismatch: number

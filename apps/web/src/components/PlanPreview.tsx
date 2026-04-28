@@ -9,6 +9,8 @@ interface Props {
   plan: ExecutionPlan
   loading: boolean
   error: string | null
+  leverage: number
+  onLeverageChange: (lev: number) => void
   onClose: () => void
   onExecute: (opportunityId: string) => void
 }
@@ -52,7 +54,9 @@ function useExpiry(expiresAt: string) {
   return { remaining, expired }
 }
 
-export function PlanPreview({ plan, loading, error, onClose, onExecute }: Props) {
+const LEVERAGE_OPTIONS = [1, 2, 3, 5]
+
+export function PlanPreview({ plan, loading, error, leverage, onLeverageChange, onClose, onExecute }: Props) {
   const { remaining, expired } = useExpiry(plan.expires_at)
 
   return (
@@ -87,6 +91,33 @@ export function PlanPreview({ plan, loading, error, onClose, onExecute }: Props)
         <div className="px-6 py-4 flex flex-col gap-3">
           <LegCard leg={plan.leg_1} label="Leg 1" />
           <LegCard leg={plan.leg_2} label="Leg 2" />
+        </div>
+
+        <Separator />
+
+        {/* Leverage */}
+        <div className="px-6 py-4">
+          <h3 className="text-sm font-medium text-muted-foreground mb-3">Leverage</h3>
+          <div className="flex gap-2 mb-3">
+            {LEVERAGE_OPTIONS.map((lev) => (
+              <button
+                key={lev}
+                onClick={() => onLeverageChange(lev)}
+                className={`px-3 py-1.5 rounded-md text-sm font-mono transition-colors ${
+                  leverage === lev
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {lev}x
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <InfoItem label="Margin Required" value={fmtUsd(plan.leverage.margin_required)} />
+            <InfoItem label="Gross Exposure" value={fmtUsd(plan.leverage.gross_exposure)} />
+            <InfoItem label="Effective Leverage" value={`${plan.leverage.effective_leverage.toFixed(1)}x`} />
+          </div>
         </div>
 
         <Separator />

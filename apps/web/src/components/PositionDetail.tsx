@@ -66,6 +66,8 @@ export function PositionDetail({ position: pos, onClose }: Props) {
           <h3 className="text-sm font-medium text-muted-foreground mb-3">Position Metrics</h3>
           <div className="grid grid-cols-2 gap-y-3 gap-x-6">
             <InfoItem label="Target Notional" value={`$${pos.target_notional.toFixed(2)}`} />
+            <InfoItem label="Leverage" value={`${pos.leverage.leverage.toFixed(0)}x (${pos.leverage.effective_leverage.toFixed(1)}x eff.)`} />
+            <InfoItem label="Margin Required" value={`$${pos.leverage.margin_required.toFixed(2)}`} />
             <InfoItem label="Hedge Mismatch" value={`${(pos.hedge_mismatch * 100).toFixed(1)}%`} />
             <InfoItem label="Entry Cost" value={`${(pos.entry_spread * 100).toFixed(4)}%`} />
             <InfoItem label="Annualized Gross Edge" value={`${(pos.current_spread * 100).toFixed(2)}%`} />
