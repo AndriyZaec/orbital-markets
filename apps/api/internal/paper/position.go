@@ -47,10 +47,14 @@ type Fill struct {
 
 	// Live leg metrics (updated by monitor)
 	CurrentPrice    float64    `json:"current_price"`
-	CurrentFunding  float64    `json:"current_funding"`   // current hourly funding rate on this venue
-	AccumFunding    float64    `json:"accum_funding"`     // accumulated funding P&L for this leg
-	NextFundingAt   *time.Time `json:"next_funding_at"`   // next funding timestamp (best-effort)
-	LegPricePnL     float64    `json:"leg_price_pnl"`     // unrealized price P&L for this leg
+	CurrentFunding  float64    `json:"current_funding"`
+	AccumFunding    float64    `json:"accum_funding"`
+	NextFundingAt   *time.Time `json:"next_funding_at"`
+	LegPricePnL     float64    `json:"leg_price_pnl"`
+
+	// Liquidation (v1 approximation)
+	LiquidationPrice float64  `json:"liquidation_price"`
+	LiquidationDist  float64  `json:"liquidation_dist"` // distance as fraction, e.g. 0.15 = 15% away
 }
 
 // FillRatio returns filled / target.
