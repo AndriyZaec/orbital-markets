@@ -14,6 +14,8 @@ interface Fill {
   accum_funding: number
   next_funding_at: string | null
   leg_price_pnl: number
+  liquidation_price: number
+  liquidation_dist: number
 }
 
 interface Event {

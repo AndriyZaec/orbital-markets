@@ -173,6 +173,20 @@ function FillCard({ fill, label }: { fill: Fill; label: string }) {
             <p className="font-mono text-xs">{fill.next_funding_at ? new Date(fill.next_funding_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '—'}</p>
           </div>
         </div>
+        {fill.liquidation_price > 0 && (
+          <div className="grid grid-cols-2 gap-2 text-sm pt-1 border-t border-border/50 mt-1">
+            <div>
+              <p className="text-xs text-muted-foreground">Liq. Price (est.)</p>
+              <p className="font-mono">${fmtPrice(fill.liquidation_price)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Liq. Distance</p>
+              <p className={`font-mono ${fill.liquidation_dist < 0.1 ? 'text-red-400' : fill.liquidation_dist < 0.25 ? 'text-yellow-400' : 'text-green-400'}`}>
+                {(fill.liquidation_dist * 100).toFixed(1)}%
+              </p>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

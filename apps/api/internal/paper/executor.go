@@ -138,14 +138,19 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 		}
 	}
 
-	// Success — compute entry spread and entry basis
+	// Success — compute entry spread, basis, and liquidation prices
 	if pos.Leg1Fill.FillPrice > 0 && pos.Leg2Fill.FillPrice > 0 {
 		pos.EntrySpread = (pos.Leg2Fill.FillPrice - pos.Leg1Fill.FillPrice) / pos.Leg1Fill.FillPrice
-		// Basis = (leg1 price - leg2 price) / leg1 price
-		// Measures the relative price gap between venues at entry
 		mid := (pos.Leg1Fill.FillPrice + pos.Leg2Fill.FillPrice) / 2
 		pos.EntryBasis = (pos.Leg1Fill.FillPrice - pos.Leg2Fill.FillPrice) / mid
 		pos.CurrentBasis = pos.EntryBasis
+
+		// Per-leg liquidation prices (v1 approximation)
+		lev := pos.Leverage.Leverage
+		pos.Leg1Fill.LiquidationPrice = domain.LiquidationPrice(pos.Leg1Fill.FillPrice, pos.Leg1Fill.Side, lev)
+		pos.Leg2Fill.LiquidationPrice = domain.LiquidationPrice(pos.Leg2Fill.FillPrice, pos.Leg2Fill.Side, lev)
+		pos.Leg1Fill.LiquidationDist = domain.LiquidationDistance(pos.Leg1Fill.FillPrice, pos.Leg1Fill.LiquidationPrice, pos.Leg1Fill.Side)
+		pos.Leg2Fill.LiquidationDist = domain.LiquidationDistance(pos.Leg2Fill.FillPrice, pos.Leg2Fill.LiquidationPrice, pos.Leg2Fill.Side)
 	}
 
 	now := time.Now()
