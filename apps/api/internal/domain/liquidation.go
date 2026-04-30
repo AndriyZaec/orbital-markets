@@ -28,8 +28,10 @@ import "math"
 const MaintenanceMargin = 0.005 // 0.5% conservative buffer
 
 // LiquidationPrice computes the approximate liquidation price for one leg.
+// LiquidationPrice computes the approximate liquidation price for one leg.
+// Returns 0 for 1x leverage — not practically liquidatable.
 func LiquidationPrice(entryPrice float64, side Side, leverage float64) float64 {
-	if leverage <= 0 || entryPrice <= 0 {
+	if leverage <= 1 || entryPrice <= 0 {
 		return 0
 	}
 
