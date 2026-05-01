@@ -16,6 +16,7 @@ interface Fill {
   leg_price_pnl: number
   liquidation_price: number
   liquidation_dist: number
+  liq_risk: '' | 'safe' | 'elevated' | 'warning' | 'critical'
 }
 
 interface Event {

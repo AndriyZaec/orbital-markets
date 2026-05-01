@@ -32,6 +32,26 @@ function stateColor(state: string) {
   }
 }
 
+function liqDistColor(risk: Fill['liq_risk']) {
+  switch (risk) {
+    case 'safe': return 'text-green-400'
+    case 'elevated': return 'text-blue-400'
+    case 'warning': return 'text-yellow-400'
+    case 'critical': return 'text-red-400'
+    default: return ''
+  }
+}
+
+function liqRiskBadge(risk: Fill['liq_risk']) {
+  switch (risk) {
+    case 'safe': return 'bg-green-500/15 text-green-400'
+    case 'elevated': return 'bg-blue-500/15 text-blue-400'
+    case 'warning': return 'bg-yellow-500/15 text-yellow-400'
+    case 'critical': return 'bg-red-500/15 text-red-400'
+    default: return 'bg-muted text-muted-foreground'
+  }
+}
+
 export function PositionDetail({ position: pos, onClose }: Props) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
@@ -174,16 +194,22 @@ function FillCard({ fill, label }: { fill: Fill; label: string }) {
           </div>
         </div>
         {fill.liquidation_price > 0 && (
-          <div className="grid grid-cols-2 gap-2 text-sm pt-1 border-t border-border/50 mt-1">
+          <div className="grid grid-cols-3 gap-2 text-sm pt-1 border-t border-border/50 mt-1">
             <div>
               <p className="text-xs text-muted-foreground">Liq. Price (est.)</p>
               <p className="font-mono">${fmtPrice(fill.liquidation_price)}</p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Liq. Distance</p>
-              <p className={`font-mono ${fill.liquidation_dist < 0.1 ? 'text-red-400' : fill.liquidation_dist < 0.25 ? 'text-yellow-400' : 'text-green-400'}`}>
+              <p className={`font-mono ${liqDistColor(fill.liq_risk)}`}>
                 {(fill.liquidation_dist * 100).toFixed(1)}%
               </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Liq. Risk</p>
+              <span className={`inline-block text-xs font-medium px-1.5 py-0.5 rounded ${liqRiskBadge(fill.liq_risk)}`}>
+                {fill.liq_risk || 'n/a'}
+              </span>
             </div>
           </div>
         )}
