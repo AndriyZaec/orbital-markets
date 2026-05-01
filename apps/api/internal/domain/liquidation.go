@@ -27,6 +27,34 @@ import "math"
 
 const MaintenanceMargin = 0.005 // 0.5% conservative buffer
 
+// LiqRiskLevel classifies liquidation proximity.
+type LiqRiskLevel string
+
+const (
+	LiqRiskSafe     LiqRiskLevel = "safe"     // > 25%
+	LiqRiskElevated LiqRiskLevel = "elevated" // <= 25%, > 10%
+	LiqRiskWarning  LiqRiskLevel = "warning"  // <= 10%, > 5%
+	LiqRiskCritical LiqRiskLevel = "critical" // <= 5%
+)
+
+// ClassifyLiqRisk returns the liquidation risk level for a given distance.
+// Returns empty string for non-liquidatable positions (1x / liq price = 0).
+func ClassifyLiqRisk(dist float64, liqPrice float64) LiqRiskLevel {
+	if liqPrice <= 0 {
+		return "" // 1x, not applicable
+	}
+	switch {
+	case dist > 0.25:
+		return LiqRiskSafe
+	case dist > 0.10:
+		return LiqRiskElevated
+	case dist > 0.05:
+		return LiqRiskWarning
+	default:
+		return LiqRiskCritical
+	}
+}
+
 // LiquidationPrice computes the approximate liquidation price for one leg.
 // LiquidationPrice computes the approximate liquidation price for one leg.
 // Returns 0 for 1x leverage — not practically liquidatable.

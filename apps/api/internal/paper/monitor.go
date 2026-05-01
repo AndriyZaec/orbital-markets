@@ -130,6 +130,8 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 				stored.Leg1Fill.CurrentPrice, stored.Leg1Fill.LiquidationPrice, stored.Leg1Fill.Side)
 			stored.Leg2Fill.LiquidationDist = domain.LiquidationDistance(
 				stored.Leg2Fill.CurrentPrice, stored.Leg2Fill.LiquidationPrice, stored.Leg2Fill.Side)
+			stored.Leg1Fill.LiqRisk = domain.ClassifyLiqRisk(stored.Leg1Fill.LiquidationDist, stored.Leg1Fill.LiquidationPrice)
+			stored.Leg2Fill.LiqRisk = domain.ClassifyLiqRisk(stored.Leg2Fill.LiquidationDist, stored.Leg2Fill.LiquidationPrice)
 
 			// Per-leg accumulated funding
 			if stored.OpenedAt != nil {

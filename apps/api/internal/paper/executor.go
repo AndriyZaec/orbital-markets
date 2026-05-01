@@ -151,6 +151,8 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 		pos.Leg2Fill.LiquidationPrice = domain.LiquidationPrice(pos.Leg2Fill.FillPrice, pos.Leg2Fill.Side, lev)
 		pos.Leg1Fill.LiquidationDist = domain.LiquidationDistance(pos.Leg1Fill.FillPrice, pos.Leg1Fill.LiquidationPrice, pos.Leg1Fill.Side)
 		pos.Leg2Fill.LiquidationDist = domain.LiquidationDistance(pos.Leg2Fill.FillPrice, pos.Leg2Fill.LiquidationPrice, pos.Leg2Fill.Side)
+		pos.Leg1Fill.LiqRisk = domain.ClassifyLiqRisk(pos.Leg1Fill.LiquidationDist, pos.Leg1Fill.LiquidationPrice)
+		pos.Leg2Fill.LiqRisk = domain.ClassifyLiqRisk(pos.Leg2Fill.LiquidationDist, pos.Leg2Fill.LiquidationPrice)
 	}
 
 	now := time.Now()

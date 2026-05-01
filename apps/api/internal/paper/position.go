@@ -53,8 +53,9 @@ type Fill struct {
 	LegPricePnL     float64    `json:"leg_price_pnl"`
 
 	// Liquidation (v1 approximation)
-	LiquidationPrice float64  `json:"liquidation_price"`
-	LiquidationDist  float64  `json:"liquidation_dist"` // distance as fraction, e.g. 0.15 = 15% away
+	LiquidationPrice float64            `json:"liquidation_price"`
+	LiquidationDist  float64            `json:"liquidation_dist"`
+	LiqRisk          domain.LiqRiskLevel `json:"liq_risk,omitempty"`
 }
 
 // FillRatio returns filled / target.
