@@ -32,6 +32,26 @@ function stateColor(state: string) {
   }
 }
 
+function closeReasonText(reason: string) {
+  const map: Record<string, string> = {
+    manual: 'Manual',
+    edge_collapse: 'Edge Collapse',
+    degraded: 'Degraded',
+    max_duration: 'Max Duration',
+    liquidation_risk: 'Liquidation Risk',
+  }
+  return map[reason] ?? reason
+}
+
+function closeReasonColor(reason: string) {
+  const map: Record<string, string> = {
+    liquidation_risk: 'text-red-400',
+    degraded: 'text-orange-400',
+    edge_collapse: 'text-yellow-400',
+  }
+  return map[reason] ?? ''
+}
+
 function liqDistColor(risk: Fill['liq_risk']) {
   switch (risk) {
     case 'safe': return 'text-green-400'
@@ -121,7 +141,11 @@ export function PositionDetail({ position: pos, onClose }: Props) {
               />
             )}
             {pos.close_reason && (
-              <InfoItem label="Close Reason" value={pos.close_reason} />
+              <InfoItem
+                label="Close Reason"
+                value={closeReasonText(pos.close_reason)}
+                color={closeReasonColor(pos.close_reason)}
+              />
             )}
           </div>
         </div>

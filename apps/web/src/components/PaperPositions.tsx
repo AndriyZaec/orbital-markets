@@ -37,6 +37,19 @@ function fmtTime(s: string | null) {
   return new Date(s).toLocaleTimeString()
 }
 
+function closeReasonLabel(reason: string) {
+  if (!reason) return <span className="text-muted-foreground">—</span>
+  const map: Record<string, { label: string; color: string }> = {
+    manual: { label: 'Manual', color: 'text-muted-foreground' },
+    edge_collapse: { label: 'Edge Collapse', color: 'text-yellow-400' },
+    degraded: { label: 'Degraded', color: 'text-orange-400' },
+    max_duration: { label: 'Max Duration', color: 'text-muted-foreground' },
+    liquidation_risk: { label: 'Liquidation Risk', color: 'text-red-400' },
+  }
+  const entry = map[reason] ?? { label: reason, color: 'text-muted-foreground' }
+  return <span className={`font-medium ${entry.color}`}>{entry.label}</span>
+}
+
 export function PaperPositions() {
   const { positions, loading, error, closePosition } = usePaperPositions()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -125,8 +138,8 @@ export function PaperPositions() {
                   {pos.venue_pair.venue_a} / {pos.venue_pair.venue_b}
                 </TableCell>
                 <TableCell>{stateBadge(pos.state)}</TableCell>
-                <TableCell className="text-sm text-muted-foreground">
-                  {pos.close_reason || '—'}
+                <TableCell className="text-sm">
+                  {closeReasonLabel(pos.close_reason)}
                 </TableCell>
                 <TableCell className={`text-right font-mono text-sm ${pos.price_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {fmtPnL(pos.price_pnl)}
