@@ -206,11 +206,18 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: exceeds 5%% threshold, not executable", entrySpread*100))
 	}
 
-	// Blockers: low confidence, missing bid/ask, or slippage > 5%
+	// Fake-liquidity detection
+	liqCheck := CheckLiquidity(a, b, annualizedGross, now)
+	if liqCheck.Suspect {
+		warnings = append(warnings, liqCheck.Reasons...)
+	}
+
+	// Blockers: low confidence, missing bid/ask, slippage > 5%, or blocking liquidity signal
 	hasBidAskWarning := (a.BidPrice == 0 || a.AskPrice == 0) || (b.BidPrice == 0 || b.AskPrice == 0)
 	executable := confidence != domain.ConfidenceLow &&
 		!hasBidAskWarning &&
-		domain.SlippageExecutable(slippageLevel)
+		domain.SlippageExecutable(slippageLevel) &&
+		!liqCheck.Blocking
 
 	id := fmt.Sprintf("%s-%s-%s-%s", asset, a.Venue, b.Venue, direction)
 
