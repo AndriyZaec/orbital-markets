@@ -105,7 +105,19 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onOpe
       <div className="grid grid-cols-2 gap-3 mb-5">
         <InfoItem label="Venue Pair" value={`${opp.venue_pair.venue_a} / ${opp.venue_pair.venue_b}`} />
         <InfoItem label="Direction" value={opp.direction === 'long_a_short_b' ? 'Long A / Short B' : 'Long B / Short A'} />
-        <InfoItem label="Annualized Gross Edge" value={fmtPct(opp.annualized_gross_edge)} highlight hint="Hourly funding differential, annualized" />
+        <div>
+          <p className="text-xs text-muted-foreground">Annualized Gross Edge</p>
+          <p className="text-sm font-mono text-foreground font-semibold inline-flex items-center gap-1">
+            {fmtPct(opp.annualized_gross_edge)}
+            {opp.liq_suspect && (
+              <span
+                className="inline-flex items-center justify-center size-3.5 rounded-full border border-orange-400 text-orange-400 text-[9px] font-bold leading-none cursor-help"
+                title="Suspect liquidity — displayed depth may be fragile or misleading"
+              >!</span>
+            )}
+          </p>
+          <p className="text-xs text-muted-foreground/60 mt-0.5">Hourly funding differential, annualized</p>
+        </div>
         <InfoItem label="Estimated Net Edge" value={fmtPct(opp.estimated_net_edge)} hint="Gross edge minus estimated entry costs" />
       </div>
 

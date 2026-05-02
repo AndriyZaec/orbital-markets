@@ -240,6 +240,7 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		Liquidity:           sizing.Liquidity,
 		Confidence:          confidence,
 		RiskTier:            riskTier,
+		LiqSuspect:          liqCheck.Suspect,
 		Executable:          executable,
 		Warnings:            warnings,
 	}

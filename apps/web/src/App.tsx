@@ -148,7 +148,17 @@ export default function App() {
                             {opp.direction === 'long_a_short_b' ? '⬆ A ⬇ B' : '⬇ A ⬆ B'}
                           </TableCell>
                           <TableCell className="text-right font-mono text-sm">{fmtRate(opp.funding_spread)}</TableCell>
-                          <TableCell className="text-right font-mono text-sm">{fmtPct(opp.annualized_gross_edge)}</TableCell>
+                          <TableCell className="text-right font-mono text-sm">
+                            <span className="inline-flex items-center gap-1">
+                              {fmtPct(opp.annualized_gross_edge)}
+                              {opp.liq_suspect && (
+                                <span
+                                  className="inline-flex items-center justify-center size-3.5 rounded-full border border-orange-400 text-orange-400 text-[9px] font-bold leading-none cursor-help"
+                                  title="Suspect liquidity — displayed depth may be fragile or misleading"
+                                >!</span>
+                              )}
+                            </span>
+                          </TableCell>
                           <TableCell className="text-right font-mono text-sm">{fmtPct(opp.entry_spread_estimate, 4)}</TableCell>
                           <TableCell>
                             <Badge className={liquidityBadge(opp.liquidity)}>{opp.liquidity}</Badge>

@@ -17,6 +17,7 @@ interface Opportunity {
   available_notional: number
   recommended_notional: number
   liquidity: 'deep' | 'medium' | 'thin' | 'toxic'
+  liq_suspect: boolean
   confidence: 'low' | 'medium' | 'high'
   risk_tier: 'conservative' | 'standard' | 'aggressive' | 'experimental'
   executable: boolean
