@@ -32,6 +32,7 @@ const (
 	CloseReasonEdgeCollapse CloseReason = "edge_collapse"
 	CloseReasonDegraded    CloseReason = "degraded"
 	CloseReasonMaxDuration CloseReason = "max_duration"
+	CloseReasonLiqRisk     CloseReason = "liquidation_risk"
 )
 
 // Fill represents a simulated fill for one leg.
