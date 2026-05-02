@@ -177,5 +177,13 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 		return CloseReasonEdgeCollapse
 	}
 
+	// 4. Critical liquidation proximity on either leg (read fresh values from store)
+	fresh := m.store.Get(pos.ID)
+	if fresh != nil && fresh.Leg1Fill != nil && fresh.Leg2Fill != nil {
+		if fresh.Leg1Fill.LiqRisk == domain.LiqRiskCritical || fresh.Leg2Fill.LiqRisk == domain.LiqRiskCritical {
+			return CloseReasonLiqRisk
+		}
+	}
+
 	return ""
 }
