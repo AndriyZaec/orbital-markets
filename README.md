@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/web/src/assets/hero.png" alt="Orbital Markets" width="1200" />
+  <img src="apps/web/src/assets/orbital-market-banner.png" alt="Orbital Markets" width="1200" />
 </p>
 
 # Orbital Market
@@ -33,16 +33,19 @@ Orbital is designed to close that gap.
 **Three layers. One execution loop. Real carry trades.**
 
 ### Market Intelligence
+
 Funding spread discovery.
 Execution-aware edge ranking.
 Liquidity and slippage checks.
 
 ### Execution Engine
+
 Two-leg execution plans.
 Recommended notional sizing.
 Hedge integrity controls.
 
 ### Monitoring & Analytics
+
 Price, funding, and total PnL.
 Basis and liquidation tracking.
 Paper execution and post-trade analytics.
@@ -76,6 +79,7 @@ In one line:
 ## Current Capabilities
 
 ### Scanner
+
 - Pacifica and Hyperliquid venue adapters
 - normalized market snapshots
 - funding spread detection
@@ -83,6 +87,7 @@ In one line:
 - execution-aware ranking
 
 ### Execution Preview
+
 - fresh execution plan generation
 - two-leg trade preview
 - slippage and entry cost bounds
@@ -90,12 +95,14 @@ In one line:
 - recommended notional sizing
 
 ### Liquidity Intelligence
+
 - BBO-first sizing model
 - explicit liquidity labels: `deep`, `medium`, `thin`, `toxic`
 - fake-liquidity suspicion signals
 - hard slippage blockers and warnings
 
 ### Paper Execution
+
 - execution state machine
 - partial-fill-aware logic
 - retry, unwind, and degraded handling
@@ -103,6 +110,7 @@ In one line:
 - auto-close on degraded state, edge collapse, max duration, and critical liquidation risk
 
 ### Monitoring
+
 - price PnL, funding PnL, total PnL
 - basis tracking
 - leverage and gross exposure
@@ -110,6 +118,7 @@ In one line:
 - per-leg funding and PnL tracking
 
 ### Analytics
+
 - DB-backed paper analytics
 - break-even tracking
 - risk-tier and asset breakdowns
@@ -119,12 +128,14 @@ In one line:
 ## Technical Design
 
 ### Architecture
+
 - `apps/api` — Go backend, scanner, paper execution, analytics, persistence
 - `apps/web` — React frontend for opportunities, plan preview, paper positions, and analytics
 - `packages/shared` — shared types/utilities
 - `services/` — reserved for additional execution and market-data services as the system evolves
 
 ### Backend Principles
+
 - off-chain-first execution architecture
 - normalized venue adapters
 - canonical funding and edge math
@@ -133,6 +144,7 @@ In one line:
 - paper execution before live execution
 
 ### Data Model
+
 The product is organized around three core objects:
 
 - `Opportunity` — scan and ranking object
