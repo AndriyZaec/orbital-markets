@@ -34,26 +34,32 @@ type AccountPosition struct {
 	LiqPrice      float64 `json:"liq_price"`
 }
 
-// AccountState is the live account snapshot from Pacifica private streams.
+// AccountStateSnapshot is an immutable copy of account state for safe reading.
+type AccountStateSnapshot struct {
+	Equity              float64                `json:"equity"`
+	AvailableToSpend    float64                `json:"available_to_spend"`
+	AvailableToWithdraw float64                `json:"available_to_withdraw"`
+	TotalMarginUsed     float64                `json:"total_margin_used"`
+	MaintenanceMargin   float64                `json:"maintenance_margin"`
+	SymbolConfigs       map[string]SymbolConfig `json:"symbol_configs"`
+	Positions           []AccountPosition      `json:"positions"`
+	LastUpdated         time.Time              `json:"last_updated"`
+	Connected           bool                   `json:"connected"`
+}
+
+// AccountState is the live account state from Pacifica private streams.
 type AccountState struct {
 	mu sync.RWMutex
 
-	// Equity & margin
-	Equity              float64 `json:"equity"`
-	AvailableToSpend    float64 `json:"available_to_spend"`
-	AvailableToWithdraw float64 `json:"available_to_withdraw"`
-	TotalMarginUsed     float64 `json:"total_margin_used"`
-	MaintenanceMargin   float64 `json:"maintenance_margin"`
-
-	// Per-symbol config
-	SymbolConfigs map[string]SymbolConfig `json:"symbol_configs"`
-
-	// Current positions
-	Positions []AccountPosition `json:"positions"`
-
-	// Freshness
-	LastUpdated time.Time `json:"last_updated"`
-	Connected   bool      `json:"connected"`
+	equity              float64
+	availableToSpend    float64
+	availableToWithdraw float64
+	totalMarginUsed     float64
+	maintenanceMargin   float64
+	symbolConfigs       map[string]SymbolConfig
+	positions           []AccountPosition
+	lastUpdated         time.Time
+	connected           bool
 }
 
 func NewAccountState() *AccountState {
