@@ -151,7 +151,6 @@ func (s *Subscriber) handleAccountInfo(data json.RawMessage) {
 	available, _ := info.Available.Float64()
 	withdrawable, _ := info.Withdrawable.Float64()
 
-	// Margin fields come from account_margin channel; set partial here
 	snap := s.state.Snapshot()
 	s.state.UpdateEquity(equity, available, withdrawable, snap.TotalMarginUsed, snap.MaintenanceMargin)
 }
@@ -171,7 +170,10 @@ func (s *Subscriber) handleMargin(data json.RawMessage) {
 	maintenance, _ := margin.Maintenance.Float64()
 
 	snap := s.state.Snapshot()
-	s.state.UpdateEquity(snap.Equity, snap.AvailableToSpend, snap.AvailableToWithdraw, totalUsed, maintenance)
+	s.state.UpdateEquity(
+		snap.Equity, snap.AvailableToSpend, snap.AvailableToWithdraw,
+		totalUsed, maintenance,
+	)
 }
 
 // handlePositions processes full position snapshot.

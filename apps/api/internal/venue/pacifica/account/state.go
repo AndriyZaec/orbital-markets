@@ -64,30 +64,41 @@ type AccountState struct {
 
 func NewAccountState() *AccountState {
 	return &AccountState{
-		SymbolConfigs: make(map[string]SymbolConfig),
+		symbolConfigs: make(map[string]SymbolConfig),
 	}
 }
 
-// Snapshot returns a copy of the current state for safe reading.
-func (s *AccountState) Snapshot() AccountState {
+// Snapshot returns an immutable copy of the current state.
+func (s *AccountState) Snapshot() AccountStateSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	snap := *s
-	snap.Positions = make([]AccountPosition, len(s.Positions))
-	copy(snap.Positions, s.Positions)
-	snap.SymbolConfigs = make(map[string]SymbolConfig, len(s.SymbolConfigs))
-	for k, v := range s.SymbolConfigs {
-		snap.SymbolConfigs[k] = v
+	positions := make([]AccountPosition, len(s.positions))
+	copy(positions, s.positions)
+
+	configs := make(map[string]SymbolConfig, len(s.symbolConfigs))
+	for k, v := range s.symbolConfigs {
+		configs[k] = v
 	}
-	return snap
+
+	return AccountStateSnapshot{
+		Equity:              s.equity,
+		AvailableToSpend:    s.availableToSpend,
+		AvailableToWithdraw: s.availableToWithdraw,
+		TotalMarginUsed:     s.totalMarginUsed,
+		MaintenanceMargin:   s.maintenanceMargin,
+		SymbolConfigs:       configs,
+		Positions:           positions,
+		LastUpdated:         s.lastUpdated,
+		Connected:           s.connected,
+	}
 }
 
 // IsFresh returns true if the account state was updated recently.
 func (s *AccountState) IsFresh(maxAge time.Duration) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.Connected && !s.LastUpdated.IsZero() && time.Since(s.LastUpdated) <= maxAge
+	return s.connected && !s.lastUpdated.IsZero() && time.Since(s.lastUpdated) <= maxAge
 }
 
 // UpdateEquity sets equity and margin fields atomically.
@@ -97,33 +108,33 @@ func (s *AccountState) UpdateEquity(
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Equity = equity
-	s.AvailableToSpend = availableToSpend
-	s.AvailableToWithdraw = availableToWithdraw
-	s.TotalMarginUsed = totalMarginUsed
-	s.MaintenanceMargin = maintenanceMargin
-	s.LastUpdated = time.Now()
+	s.equity = equity
+	s.availableToSpend = availableToSpend
+	s.availableToWithdraw = availableToWithdraw
+	s.totalMarginUsed = totalMarginUsed
+	s.maintenanceMargin = maintenanceMargin
+	s.lastUpdated = time.Now()
 }
 
 // UpdatePositions replaces all positions atomically.
 func (s *AccountState) UpdatePositions(positions []AccountPosition) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Positions = positions
-	s.LastUpdated = time.Now()
+	s.positions = positions
+	s.lastUpdated = time.Now()
 }
 
 // UpdateSymbolConfig sets leverage/margin mode for a symbol.
 func (s *AccountState) UpdateSymbolConfig(cfg SymbolConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.SymbolConfigs[cfg.Symbol] = cfg
-	s.LastUpdated = time.Now()
+	s.symbolConfigs[cfg.Symbol] = cfg
+	s.lastUpdated = time.Now()
 }
 
 // SetConnected marks the account stream as connected/disconnected.
 func (s *AccountState) SetConnected(connected bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Connected = connected
+	s.connected = connected
 }
