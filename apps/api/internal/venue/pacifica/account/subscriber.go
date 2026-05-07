@@ -15,19 +15,32 @@ const (
 	reconnectDelay = 5 * time.Second
 )
 
+// StreamHandler receives raw channel data for order/trade events.
+type StreamHandler interface {
+	HandleOrderUpdate(data json.RawMessage)
+	HandleTrade(data json.RawMessage)
+}
+
 // Subscriber connects to Pacifica's private WebSocket and keeps AccountState updated.
 // Requires an API key or auth token for private streams.
 type Subscriber struct {
-	state  *AccountState
-	apiKey string
-	logger *slog.Logger
+	state   *AccountState
+	apiKey  string
+	handler StreamHandler // optional: receives order/trade updates
+	logger  *slog.Logger
 }
 
-func NewSubscriber(logger *slog.Logger, state *AccountState, apiKey string) *Subscriber {
+func NewSubscriber(
+	logger *slog.Logger,
+	state *AccountState,
+	apiKey string,
+	handler StreamHandler,
+) *Subscriber {
 	return &Subscriber{
-		state:  state,
-		apiKey: apiKey,
-		logger: logger,
+		state:   state,
+		apiKey:  apiKey,
+		handler: handler,
+		logger:  logger,
 	}
 }
 
@@ -124,11 +137,13 @@ func (s *Subscriber) handleMessage(msg wsMessage) {
 	case "account_leverage":
 		s.handleLeverage(msg.Data)
 	case "account_order_updates":
-		// TODO: wire into execution engine when live orders are implemented
-		s.logger.Debug("pacifica order update", "data", string(msg.Data[:min(len(msg.Data), 200)]))
+		if s.handler != nil {
+			s.handler.HandleOrderUpdate(msg.Data)
+		}
 	case "account_trades":
-		// TODO: wire into execution reconciliation
-		s.logger.Debug("pacifica trade", "data", string(msg.Data[:min(len(msg.Data), 200)]))
+		if s.handler != nil {
+			s.handler.HandleTrade(msg.Data)
+		}
 	}
 }
 
