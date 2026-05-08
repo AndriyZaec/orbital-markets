@@ -148,7 +148,7 @@ export function FundingChart({ asset, currentSpread }: Props) {
               y={chartH + 12}
               textAnchor="middle"
               fill="#64748b"
-              fontSize="9"
+              fontSize="7"
               fontFamily="monospace"
             >
               {formatTimeLabel(d.time, timeframe)}
