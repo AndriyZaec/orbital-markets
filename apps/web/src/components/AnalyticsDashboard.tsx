@@ -167,14 +167,14 @@ function AssetTable({ rows }: { rows: AssetRow[] }) {
     <Table>
       <TableHeader>
         <TableRow className="border-border hover:bg-transparent">
-          <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">Asset</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Trades</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Price P&L</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Funding P&L</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Total P&L</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Avg Hold</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">BE Rate</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Win Rate</TableHead>
+          <TableHead className="">Asset</TableHead>
+          <TableHead className="text-right">Trades</TableHead>
+          <TableHead className="text-right">Price P&L</TableHead>
+          <TableHead className="text-right">Funding P&L</TableHead>
+          <TableHead className="text-right">Total P&L</TableHead>
+          <TableHead className="text-right">Avg Hold</TableHead>
+          <TableHead className="text-right">BE Rate</TableHead>
+          <TableHead className="text-right">Win Rate</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -206,12 +206,12 @@ function RiskTierTable({ rows }: { rows: RiskTierRow[] }) {
     <Table>
       <TableHeader>
         <TableRow className="border-border hover:bg-transparent">
-          <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">Risk Tier</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Trades</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Total P&L</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Avg Hold</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">BE Reached</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Win Rate</TableHead>
+          <TableHead className="">Risk Tier</TableHead>
+          <TableHead className="text-right">Trades</TableHead>
+          <TableHead className="text-right">Total P&L</TableHead>
+          <TableHead className="text-right">Avg Hold</TableHead>
+          <TableHead className="text-right">BE Reached</TableHead>
+          <TableHead className="text-right">Win Rate</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -237,11 +237,11 @@ function CloseReasonTable({ rows }: { rows: CloseReasonRow[] }) {
     <Table>
       <TableHeader>
         <TableRow className="border-border hover:bg-transparent">
-          <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">Close Reason</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Count</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Realized P&L</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Avg Hold</TableHead>
-          <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Profitable</TableHead>
+          <TableHead className="">Close Reason</TableHead>
+          <TableHead className="text-right">Count</TableHead>
+          <TableHead className="text-right">Realized P&L</TableHead>
+          <TableHead className="text-right">Avg Hold</TableHead>
+          <TableHead className="text-right">Profitable</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
