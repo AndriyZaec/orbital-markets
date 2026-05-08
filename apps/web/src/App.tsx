@@ -14,8 +14,9 @@ import { OpportunityPanel } from '@/components/OpportunityPanel'
 import { PlanPreview } from '@/components/PlanPreview'
 import { PaperPositions } from '@/components/PaperPositions'
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
+import { FundingChart } from '@/components/FundingChart'
 
-type View = 'opportunities' | 'positions' | 'analytics'
+type View = 'trade' | 'analytics'
 
 function fmtPct(n: number, decimals = 2) {
   return (n * 100).toFixed(decimals) + '%'
@@ -42,23 +43,8 @@ function OrbitalLogo() {
   )
 }
 
-function directionIcons(opp: Opportunity) {
-  const isLongA = opp.direction === 'long_a_short_b'
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className={`text-xs font-semibold ${isLongA ? 'text-green-400' : 'text-red-400'}`}>
-        {isLongA ? 'L' : 'S'}
-      </span>
-      <span className="text-muted-foreground text-[10px]">/</span>
-      <span className={`text-xs font-semibold ${isLongA ? 'text-red-400' : 'text-green-400'}`}>
-        {isLongA ? 'S' : 'L'}
-      </span>
-    </div>
-  )
-}
-
 export default function App() {
-  const [activeView, setActiveView] = useState<View>('opportunities')
+  const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [planOppId, setPlanOppId] = useState<string | null>(null)
@@ -91,17 +77,10 @@ export default function App() {
       }
       handleClosePlan()
       setSelectedId(null)
-      setActiveView('positions')
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Unknown error')
     }
   }
-
-  const navItems: { key: View; label: string }[] = [
-    { key: 'opportunities', label: 'Trade' },
-    { key: 'positions', label: 'Positions' },
-    { key: 'analytics', label: 'Analytics' },
-  ]
 
   return (
     <div className="dark min-h-screen bg-background flex flex-col">
@@ -115,19 +94,8 @@ export default function App() {
         </div>
 
         <nav className="flex items-center gap-1">
-          {navItems.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => setActiveView(item.key)}
-              className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                activeView === item.key
-                  ? 'text-foreground bg-white/[0.06]'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
+          <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
+          <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
@@ -140,119 +108,46 @@ export default function App() {
 
       {/* Main Content */}
       <div className="flex-1 flex min-h-0">
-        {/* Content Area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {activeView === 'opportunities' && (
-            <>
-              <div className="px-5 pt-5 pb-3 flex items-center justify-between">
-                <h2 className="text-base font-semibold text-foreground">
-                  Funding Rate Arb Opportunities
-                </h2>
-                {opportunities.length > 0 && (
-                  <span className="text-xs text-muted-foreground">
-                    {opportunities.length} opportunities
-                  </span>
-                )}
+        {activeView === 'trade' && (
+          <>
+            {/* Left: table or detail + positions */}
+            <div className="flex-1 flex flex-col min-w-0 overflow-auto">
+              {selected ? (
+                <OpportunityDetail
+                  opportunity={selected}
+                  onBack={() => setSelectedId(null)}
+                />
+              ) : (
+                <OpportunityTable
+                  opportunities={opportunities}
+                  loading={loading}
+                  error={error}
+                  onSelect={setSelectedId}
+                />
+              )}
+
+              {/* Positions — always visible below */}
+              <div className="border-t border-border">
+                <PaperPositions />
               </div>
-
-              <div className="flex-1 overflow-auto">
-                {loading && (
-                  <p className="text-muted-foreground text-sm px-5 py-8">Loading...</p>
-                )}
-                {error && (
-                  <p className="text-destructive text-sm px-5 py-8">Error: {error}</p>
-                )}
-                {!loading && !error && opportunities.length === 0 && (
-                  <p className="text-muted-foreground text-sm px-5 py-8">
-                    No opportunities detected yet. Waiting for scan...
-                  </p>
-                )}
-                {opportunities.length > 0 && (
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-border hover:bg-transparent">
-                        <TH>Asset</TH>
-                        <TH></TH>
-                        <TH>Long</TH>
-                        <TH>Short</TH>
-                        <TH right>APR</TH>
-                        <TH right>Spread (h)</TH>
-                        <TH right>Net Edge</TH>
-                        <TH right>Notional</TH>
-                        <TableHead className="w-8"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {opportunities.map((opp) => {
-                        const isLongA = opp.direction === 'long_a_short_b'
-                        const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
-                        const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-
-                        return (
-                          <TableRow
-                            key={opp.id}
-                            className={`cursor-pointer transition-colors border-border ${
-                              selectedId === opp.id
-                                ? 'bg-white/[0.04] border-l-2 border-l-blue-500'
-                                : 'hover:bg-white/[0.02]'
-                            }`}
-                            onClick={() => setSelectedId(selectedId === opp.id ? null : opp.id)}
-                          >
-                            <TableCell className="font-medium text-foreground">
-                              {opp.asset}
-                            </TableCell>
-                            <TableCell>
-                              {directionIcons(opp)}
-                            </TableCell>
-                            <TableCell className="text-sm capitalize">
-                              <span className="text-green-400/80">{longVenue}</span>
-                            </TableCell>
-                            <TableCell className="text-sm capitalize">
-                              <span className="text-red-400/80">{shortVenue}</span>
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-sm text-foreground">
-                              {fmtPct(opp.annualized_gross_edge)}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-sm text-foreground">
-                              {fmtRate(opp.funding_spread)}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-sm text-foreground">
-                              {fmtPct(opp.estimated_net_edge)}
-                            </TableCell>
-                            <TableCell className="text-right font-mono text-sm text-muted-foreground">
-                              {fmtUsd(opp.available_notional)}
-                            </TableCell>
-                            <TableCell className="text-muted-foreground">
-                              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="opacity-40">
-                                <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                              </svg>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                )}
-              </div>
-            </>
-          )}
-
-          {activeView === 'positions' && <PaperPositions />}
-          {activeView === 'analytics' && (
-            <div className="flex-1 overflow-auto">
-              <AnalyticsDashboard />
             </div>
-          )}
-        </div>
 
-        {/* Detail sidebar */}
-        {activeView === 'opportunities' && selected && (
-          <OpportunityPanel
-            opportunity={selected}
-            lastUpdated={lastUpdated}
-            onClose={() => setSelectedId(null)}
-            onOpenSpread={() => handleOpenSpread(selected.id)}
-          />
+            {/* Right sidebar: trade execution panel */}
+            {selected && (
+              <OpportunityPanel
+                opportunity={selected}
+                lastUpdated={lastUpdated}
+                onClose={() => setSelectedId(null)}
+                onOpenSpread={() => handleOpenSpread(selected.id)}
+              />
+            )}
+          </>
+        )}
+
+        {activeView === 'analytics' && (
+          <div className="flex-1 overflow-auto">
+            <AnalyticsDashboard />
+          </div>
         )}
       </div>
 
@@ -272,10 +167,193 @@ export default function App() {
   )
 }
 
+/* ── Opportunity Table ─────────────────────────────────── */
+
+function OpportunityTable({ opportunities, loading, error, onSelect }: {
+  opportunities: Opportunity[]
+  loading: boolean
+  error: string | null
+  onSelect: (id: string) => void
+}) {
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="px-5 pt-5 pb-3">
+        <h2 className="text-base font-semibold text-foreground">
+          Funding Rate Arb Opportunities
+        </h2>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        {loading && <p className="text-muted-foreground text-sm px-5 py-8">Loading...</p>}
+        {error && <p className="text-destructive text-sm px-5 py-8">Error: {error}</p>}
+        {!loading && !error && opportunities.length === 0 && (
+          <p className="text-muted-foreground text-sm px-5 py-8">
+            No opportunities detected yet. Waiting for scan...
+          </p>
+        )}
+        {opportunities.length > 0 && (
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-border hover:bg-transparent">
+                  <TH>Asset</TH>
+                  <TH>Long</TH>
+                  <TH>Short</TH>
+                  <TH right>APR</TH>
+                  <TH right>1h Spread</TH>
+                  <TH right>Price Spread</TH>
+                  <TH right>Open Interest</TH>
+                  <TableHead className="w-8" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {opportunities.map((opp) => {
+                  const isLongA = opp.direction === 'long_a_short_b'
+                  const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
+                  const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
+
+                  return (
+                    <TableRow
+                      key={opp.id}
+                      className="cursor-pointer transition-colors border-border hover:bg-white/[0.02]"
+                      onClick={() => onSelect(opp.id)}
+                    >
+                      <TableCell className="font-medium text-foreground">{opp.asset}</TableCell>
+                      <TableCell>
+                        <VenueIcon venue={longVenue} side="long" />
+                      </TableCell>
+                      <TableCell>
+                        <VenueIcon venue={shortVenue} side="short" />
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm text-foreground">
+                        {fmtPct(opp.annualized_gross_edge)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm text-foreground">
+                        {fmtRate(opp.funding_spread)}
+                      </TableCell>
+                      <TableCell className={`text-right font-mono text-sm ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
+                        {fmtPct(opp.entry_spread_estimate, 4)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm text-muted-foreground">
+                        {fmtUsd(opp.available_notional)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="opacity-40">
+                          <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+            <div className="px-5 py-3 text-xs text-muted-foreground">
+              {opportunities.length} opportunities
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ── Opportunity Detail (replaces table) ───────────────── */
+
+function OpportunityDetail({ opportunity: opp, onBack }: {
+  opportunity: Opportunity
+  onBack: () => void
+}) {
+  const isLongA = opp.direction === 'long_a_short_b'
+  const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
+  const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
+
+  return (
+    <div className="flex flex-col">
+      {/* Title bar */}
+      <div className="px-5 pt-5 pb-2">
+        <p className="text-xs text-muted-foreground mb-2">Funding Rate Arb Opportunities</p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onBack}
+            className="text-muted-foreground hover:text-foreground size-7 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors -ml-1"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          <h2 className="text-xl font-bold text-foreground">{opp.asset}</h2>
+        </div>
+      </div>
+
+      {/* Stats bar */}
+      <div className="px-5 py-3 flex items-center gap-6 border-b border-border overflow-x-auto">
+        <StatItem label="Long">
+          <VenueIcon venue={longVenue} side="long" />
+        </StatItem>
+        <StatItem label="Short">
+          <VenueIcon venue={shortVenue} side="short" />
+        </StatItem>
+        <StatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
+        <StatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
+        <StatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
+        <StatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
+      </div>
+
+      {/* Historical Chart */}
+      <div className="px-5 py-5">
+        <FundingChart asset={opp.asset} currentSpread={opp.funding_spread} />
+      </div>
+    </div>
+  )
+}
+
+/* ── Shared small components ───────────────────────────── */
+
+function NavBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+        active ? 'text-foreground bg-white/[0.06]' : 'text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
 function TH({ children, right }: { children: React.ReactNode; right?: boolean }) {
   return (
     <TableHead className={`text-muted-foreground font-medium text-xs uppercase tracking-wider ${right ? 'text-right' : ''}`}>
       {children}
     </TableHead>
+  )
+}
+
+function VenueIcon({ venue, side }: { venue: string; side: 'long' | 'short' }) {
+  const color = side === 'long' ? 'text-green-400 bg-green-400/10 border-green-400/20' : 'text-red-400 bg-red-400/10 border-red-400/20'
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium capitalize ${color}`}>
+      {venue}
+    </span>
+  )
+}
+
+function StatItem({ label, value, mono, negative, children }: {
+  label: string
+  value?: string
+  mono?: boolean
+  negative?: boolean
+  children?: React.ReactNode
+}) {
+  return (
+    <div className="shrink-0">
+      <p className="text-[10px] text-muted-foreground mb-0.5">{label}</p>
+      {children ?? (
+        <p className={`text-sm font-medium ${mono ? 'font-mono' : ''} ${negative ? 'text-red-400' : 'text-foreground'}`}>
+          {value}
+        </p>
+      )}
+    </div>
   )
 }
