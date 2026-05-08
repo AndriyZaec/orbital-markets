@@ -10,38 +10,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
 import { PlanPreview } from '@/components/PlanPreview'
 import { PaperPositions } from '@/components/PaperPositions'
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
 
-function confidenceVariant(c: Opportunity['confidence']) {
-  switch (c) {
-    case 'high': return 'default' as const
-    case 'medium': return 'secondary' as const
-    case 'low': return 'outline' as const
-  }
-}
-
-function riskColor(r: Opportunity['risk_tier']) {
-  switch (r) {
-    case 'conservative': return 'text-green-400'
-    case 'standard': return 'text-blue-400'
-    case 'aggressive': return 'text-yellow-400'
-    case 'experimental': return 'text-red-400'
-  }
-}
-
-function liquidityBadge(l: Opportunity['liquidity']) {
-  switch (l) {
-    case 'deep': return 'bg-green-500/15 text-green-400 border-green-500/30'
-    case 'medium': return 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-    case 'thin': return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
-    case 'toxic': return 'bg-red-500/15 text-red-400 border-red-500/30'
-  }
-}
+type View = 'opportunities' | 'positions' | 'analytics'
 
 function fmtPct(n: number, decimals = 2) {
   return (n * 100).toFixed(decimals) + '%'
@@ -51,7 +25,40 @@ function fmtRate(n: number) {
   return (n * 100).toFixed(4) + '%'
 }
 
+function fmtUsd(n: number) {
+  if (n >= 1_000_000_000) return '$' + (n / 1_000_000_000).toFixed(2) + 'b'
+  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2) + 'm'
+  if (n >= 1_000) return '$' + (n / 1_000).toFixed(1) + 'k'
+  return '$' + n.toFixed(2)
+}
+
+function OrbitalLogo() {
+  return (
+    <div className="relative size-8 flex items-center justify-center">
+      <div className="absolute inset-0 rounded-full border-2 border-slate-500/40" />
+      <div className="absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
+      <div className="absolute size-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
+    </div>
+  )
+}
+
+function directionIcons(opp: Opportunity) {
+  const isLongA = opp.direction === 'long_a_short_b'
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className={`text-xs font-semibold ${isLongA ? 'text-green-400' : 'text-red-400'}`}>
+        {isLongA ? 'L' : 'S'}
+      </span>
+      <span className="text-muted-foreground text-[10px]">/</span>
+      <span className={`text-xs font-semibold ${isLongA ? 'text-red-400' : 'text-green-400'}`}>
+        {isLongA ? 'S' : 'L'}
+      </span>
+    </div>
+  )
+}
+
 export default function App() {
+  const [activeView, setActiveView] = useState<View>('opportunities')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [planOppId, setPlanOppId] = useState<string | null>(null)
@@ -62,7 +69,7 @@ export default function App() {
 
   const handleOpenSpread = (oppId: string) => {
     setPlanOppId(oppId)
-    setLeverage(1) // reset to default when opening new plan
+    setLeverage(1)
   }
 
   const handleClosePlan = () => {
@@ -84,120 +91,169 @@ export default function App() {
       }
       handleClosePlan()
       setSelectedId(null)
-      // Switch to positions tab would be nice but tabs are uncontrolled for now
+      setActiveView('positions')
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Unknown error')
     }
   }
 
+  const navItems: { key: View; label: string }[] = [
+    { key: 'opportunities', label: 'Trade' },
+    { key: 'positions', label: 'Positions' },
+    { key: 'analytics', label: 'Analytics' },
+  ]
+
   return (
-    <div className="dark min-h-screen bg-background flex">
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="border-b border-border px-6 py-4">
-          <h1 className="text-xl font-semibold tracking-tight">Orbital Market</h1>
-          <p className="text-sm text-muted-foreground">Perp spread scanner & paper trading</p>
-        </header>
+    <div className="dark min-h-screen bg-background flex flex-col">
+      {/* Header Nav */}
+      <header className="h-14 border-b border-border flex items-center px-5 shrink-0">
+        <div className="flex items-center gap-2.5 mr-10">
+          <OrbitalLogo />
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">
+            Orbital Market
+          </span>
+        </div>
 
-        <Tabs defaultValue="opportunities" className="flex-1 flex flex-col">
-          <TabsList className="mx-6 mt-4 w-fit">
-            <TabsTrigger value="opportunities">
-              Opportunities
-              {opportunities.length > 0 && (
-                <span className="ml-1.5 text-xs text-muted-foreground">({opportunities.length})</span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="positions">Paper Positions</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
-          </TabsList>
+        <nav className="flex items-center gap-1">
+          {navItems.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setActiveView(item.key)}
+              className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                activeView === item.key
+                  ? 'text-foreground bg-white/[0.06]'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
 
-          <TabsContent value="opportunities" className="flex-1 flex">
-            <div className="flex-1 flex flex-col min-w-0">
-              <main className="p-6 flex-1 overflow-auto">
-                {loading && <p className="text-muted-foreground">Loading...</p>}
-                {error && <p className="text-destructive">Error: {error}</p>}
+        <div className="ml-auto flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <div className="size-1.5 rounded-full bg-yellow-400" />
+            <span className="text-xs text-muted-foreground">Paper</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <div className="flex-1 flex min-h-0">
+        {/* Content Area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {activeView === 'opportunities' && (
+            <>
+              <div className="px-5 pt-5 pb-3 flex items-center justify-between">
+                <h2 className="text-base font-semibold text-foreground">
+                  Funding Rate Arb Opportunities
+                </h2>
+                {opportunities.length > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {opportunities.length} opportunities
+                  </span>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-auto">
+                {loading && (
+                  <p className="text-muted-foreground text-sm px-5 py-8">Loading...</p>
+                )}
+                {error && (
+                  <p className="text-destructive text-sm px-5 py-8">Error: {error}</p>
+                )}
                 {!loading && !error && opportunities.length === 0 && (
-                  <p className="text-muted-foreground">No opportunities detected yet. Waiting for scan...</p>
+                  <p className="text-muted-foreground text-sm px-5 py-8">
+                    No opportunities detected yet. Waiting for scan...
+                  </p>
                 )}
                 {opportunities.length > 0 && (
                   <Table>
                     <TableHeader>
-                      <TableRow>
-                        <TableHead>Asset</TableHead>
-                        <TableHead>Venues</TableHead>
-                        <TableHead>Direction</TableHead>
-                        <TableHead className="text-right">Funding Spread (h)</TableHead>
-                        <TableHead className="text-right">Gross Edge (ann.)</TableHead>
-                        <TableHead className="text-right">Entry Cost</TableHead>
-                        <TableHead>Liquidity</TableHead>
-                        <TableHead>Risk</TableHead>
-                        <TableHead>Confidence</TableHead>
+                      <TableRow className="border-border hover:bg-transparent">
+                        <TH>Asset</TH>
+                        <TH></TH>
+                        <TH>Long</TH>
+                        <TH>Short</TH>
+                        <TH right>APR</TH>
+                        <TH right>Spread (h)</TH>
+                        <TH right>Net Edge</TH>
+                        <TH right>Notional</TH>
+                        <TableHead className="w-8"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {opportunities.map((opp) => (
-                        <TableRow
-                          key={opp.id}
-                          className={`cursor-pointer transition-colors ${selectedId === opp.id ? 'bg-accent' : 'hover:bg-muted/50'}`}
-                          onClick={() => setSelectedId(selectedId === opp.id ? null : opp.id)}
-                        >
-                          <TableCell className="font-medium">{opp.asset}</TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
-                            {opp.venue_pair.venue_a} / {opp.venue_pair.venue_b}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {opp.direction === 'long_a_short_b' ? '⬆ A ⬇ B' : '⬇ A ⬆ B'}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-sm">{fmtRate(opp.funding_spread)}</TableCell>
-                          <TableCell className="text-right font-mono text-sm">
-                            <span className="inline-flex items-center gap-1">
+                      {opportunities.map((opp) => {
+                        const isLongA = opp.direction === 'long_a_short_b'
+                        const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
+                        const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
+
+                        return (
+                          <TableRow
+                            key={opp.id}
+                            className={`cursor-pointer transition-colors border-border ${
+                              selectedId === opp.id
+                                ? 'bg-white/[0.04] border-l-2 border-l-blue-500'
+                                : 'hover:bg-white/[0.02]'
+                            }`}
+                            onClick={() => setSelectedId(selectedId === opp.id ? null : opp.id)}
+                          >
+                            <TableCell className="font-medium text-foreground">
+                              {opp.asset}
+                            </TableCell>
+                            <TableCell>
+                              {directionIcons(opp)}
+                            </TableCell>
+                            <TableCell className="text-sm capitalize">
+                              <span className="text-green-400/80">{longVenue}</span>
+                            </TableCell>
+                            <TableCell className="text-sm capitalize">
+                              <span className="text-red-400/80">{shortVenue}</span>
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-sm text-foreground">
                               {fmtPct(opp.annualized_gross_edge)}
-                              {opp.liq_suspect && (
-                                <span
-                                  className="inline-flex items-center justify-center size-3.5 rounded-full border border-orange-400 text-orange-400 text-[9px] font-bold leading-none cursor-help"
-                                  title="Suspect liquidity — displayed depth may be fragile or misleading"
-                                >!</span>
-                              )}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-sm">{fmtPct(opp.entry_spread_estimate, 4)}</TableCell>
-                          <TableCell>
-                            <Badge className={liquidityBadge(opp.liquidity)}>{opp.liquidity}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <span className={`text-sm font-medium ${riskColor(opp.risk_tier)}`}>
-                              {opp.risk_tier}
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={confidenceVariant(opp.confidence)}>{opp.confidence}</Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-sm text-foreground">
+                              {fmtRate(opp.funding_spread)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-sm text-foreground">
+                              {fmtPct(opp.estimated_net_edge)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-sm text-muted-foreground">
+                              {fmtUsd(opp.available_notional)}
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">
+                              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="opacity-40">
+                                <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
                     </TableBody>
                   </Table>
                 )}
-              </main>
+              </div>
+            </>
+          )}
+
+          {activeView === 'positions' && <PaperPositions />}
+          {activeView === 'analytics' && (
+            <div className="flex-1 overflow-auto">
+              <AnalyticsDashboard />
             </div>
+          )}
+        </div>
 
-            {/* Detail panel */}
-            {selected && (
-              <OpportunityPanel
-                opportunity={selected}
-                lastUpdated={lastUpdated}
-                onClose={() => setSelectedId(null)}
-                onOpenSpread={() => handleOpenSpread(selected.id)}
-              />
-            )}
-          </TabsContent>
-
-          <TabsContent value="positions" className="flex-1">
-            <PaperPositions />
-          </TabsContent>
-
-          <TabsContent value="analytics" className="flex-1 overflow-auto">
-            <AnalyticsDashboard />
-          </TabsContent>
-        </Tabs>
+        {/* Detail sidebar */}
+        {activeView === 'opportunities' && selected && (
+          <OpportunityPanel
+            opportunity={selected}
+            lastUpdated={lastUpdated}
+            onClose={() => setSelectedId(null)}
+            onOpenSpread={() => handleOpenSpread(selected.id)}
+          />
+        )}
       </div>
 
       {/* Plan preview modal */}
@@ -213,5 +269,13 @@ export default function App() {
         />
       )}
     </div>
+  )
+}
+
+function TH({ children, right }: { children: React.ReactNode; right?: boolean }) {
+  return (
+    <TableHead className={`text-muted-foreground font-medium text-xs uppercase tracking-wider ${right ? 'text-right' : ''}`}>
+      {children}
+    </TableHead>
   )
 }

@@ -15,15 +15,15 @@ import { PositionDetail } from '@/components/PositionDetail'
 function stateBadge(state: string) {
   switch (state) {
     case 'open':
-      return <Badge className="bg-green-500/20 text-green-400 border-green-500/30">open</Badge>
+      return <Badge className="bg-green-500/15 text-green-400 border-green-500/30 text-[11px]">open</Badge>
     case 'degraded':
-      return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">degraded</Badge>
+      return <Badge className="bg-red-500/15 text-red-400 border-red-500/30 text-[11px]">degraded</Badge>
     case 'closed':
-      return <Badge variant="secondary">closed</Badge>
+      return <Badge variant="secondary" className="text-[11px]">closed</Badge>
     case 'failed':
-      return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">failed</Badge>
+      return <Badge className="bg-red-500/15 text-red-400 border-red-500/30 text-[11px]">failed</Badge>
     default:
-      return <Badge variant="outline">{state}</Badge>
+      return <Badge variant="outline" className="text-[11px]">{state}</Badge>
   }
 }
 
@@ -73,67 +73,53 @@ export function PaperPositions() {
     }
   }
 
-  if (loading) return <p className="text-muted-foreground p-6">Loading positions...</p>
-  if (error) return <p className="text-destructive p-6">Error: {error}</p>
-  if (positions.length === 0) return <p className="text-muted-foreground p-6">No paper positions yet.</p>
+  if (loading) return <p className="text-muted-foreground text-sm px-5 py-8">Loading positions...</p>
+  if (error) return <p className="text-destructive text-sm px-5 py-8">Error: {error}</p>
+  if (positions.length === 0) return <p className="text-muted-foreground text-sm px-5 py-8">No paper positions yet.</p>
 
   return (
-    <div>
-      {/* Summary bar */}
-      <div className="flex gap-6 px-6 py-3 border-b border-border text-sm">
-        <div>
-          <span className="text-muted-foreground">Open: </span>
-          <span className="font-medium">{openPositions.length}</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Price: </span>
-          <span className={`font-mono font-medium ${totalPricePnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {fmtPnL(totalPricePnL)}
-          </span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Funding: </span>
-          <span className={`font-mono font-medium ${totalFundingPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {fmtPnL(totalFundingPnL)}
-          </span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Total: </span>
-          <span className={`font-mono font-medium ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {fmtPnL(totalPnL)}
-          </span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Total: </span>
-          <span className="font-medium">{positions.length}</span>
+    <div className="flex flex-col flex-1">
+      {/* Header + Summary */}
+      <div className="px-5 pt-5 pb-3 border-b border-border">
+        <h2 className="text-base font-semibold text-foreground mb-3">Positions</h2>
+        <div className="flex gap-6 text-sm">
+          <SummaryItem label="Open" value={String(openPositions.length)} />
+          <SummaryItem label="Price" value={fmtPnL(totalPricePnL)} color={totalPricePnL >= 0 ? 'text-green-400' : 'text-red-400'} mono />
+          <SummaryItem label="Funding" value={fmtPnL(totalFundingPnL)} color={totalFundingPnL >= 0 ? 'text-green-400' : 'text-red-400'} mono />
+          <SummaryItem label="Total" value={fmtPnL(totalPnL)} color={totalPnL >= 0 ? 'text-green-400' : 'text-red-400'} mono />
+          <SummaryItem label="All" value={String(positions.length)} />
         </div>
       </div>
 
       {/* Table */}
-      <div className="p-6">
+      <div className="flex-1 overflow-auto">
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead>Asset</TableHead>
-              <TableHead>Venues</TableHead>
-              <TableHead>State</TableHead>
-              <TableHead>Close Reason</TableHead>
-              <TableHead className="text-right">Price P&L</TableHead>
-              <TableHead className="text-right">Funding P&L</TableHead>
-              <TableHead className="text-right">Total P&L</TableHead>
-              <TableHead className="text-right">Mismatch</TableHead>
-              <TableHead>Opened</TableHead>
-              <TableHead></TableHead>
+            <TableRow className="border-border hover:bg-transparent">
+              <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">Asset</TableHead>
+              <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">Venues</TableHead>
+              <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">State</TableHead>
+              <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">Close Reason</TableHead>
+              <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Price P&L</TableHead>
+              <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Funding P&L</TableHead>
+              <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Total P&L</TableHead>
+              <TableHead className="text-right text-muted-foreground font-medium text-xs uppercase tracking-wider">Mismatch</TableHead>
+              <TableHead className="text-muted-foreground font-medium text-xs uppercase tracking-wider">Opened</TableHead>
+              <TableHead className="w-20"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {positions.map((pos) => (
               <TableRow
                 key={pos.id}
-                className={`cursor-pointer transition-colors ${selectedId === pos.id ? 'bg-accent' : 'hover:bg-muted/50'}`}
+                className={`cursor-pointer transition-colors border-border ${
+                  selectedId === pos.id
+                    ? 'bg-white/[0.04] border-l-2 border-l-blue-500'
+                    : 'hover:bg-white/[0.02]'
+                }`}
                 onClick={() => setSelectedId(selectedId === pos.id ? null : pos.id)}
               >
-                <TableCell className="font-medium">{pos.asset}</TableCell>
+                <TableCell className="font-medium text-foreground">{pos.asset}</TableCell>
                 <TableCell className="text-muted-foreground text-sm">
                   {pos.venue_pair.venue_a} / {pos.venue_pair.venue_b}
                 </TableCell>
@@ -150,7 +136,7 @@ export function PaperPositions() {
                 <TableCell className={`text-right font-mono text-sm ${pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {fmtPnL(pos.total_pnl)}
                 </TableCell>
-                <TableCell className="text-right font-mono text-sm">
+                <TableCell className="text-right font-mono text-sm text-muted-foreground">
                   {(pos.hedge_mismatch * 100).toFixed(1)}%
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
@@ -161,6 +147,7 @@ export function PaperPositions() {
                     <Button
                       variant="destructive"
                       size="sm"
+                      className="h-7 text-xs"
                       disabled={closing === pos.id}
                       onClick={(e) => {
                         e.stopPropagation()
@@ -184,6 +171,17 @@ export function PaperPositions() {
           onClose={() => setSelectedId(null)}
         />
       )}
+    </div>
+  )
+}
+
+function SummaryItem({ label, value, color, mono }: { label: string; value: string; color?: string; mono?: boolean }) {
+  return (
+    <div>
+      <span className="text-muted-foreground text-xs">{label} </span>
+      <span className={`text-xs font-medium ${color ?? 'text-foreground'} ${mono ? 'font-mono' : ''}`}>
+        {value}
+      </span>
     </div>
   )
 }
