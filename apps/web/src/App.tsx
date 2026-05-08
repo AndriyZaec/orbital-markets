@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useOpportunities } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import type { Opportunity } from '@/hooks/useOpportunities'
@@ -6,6 +6,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
@@ -50,6 +51,21 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
   }
 }
 
+function useCountdown(lastUpdated: Date | null, intervalSec: number) {
+  const [remaining, setRemaining] = useState(intervalSec)
+  useEffect(() => {
+    if (!lastUpdated) return
+    const update = () => {
+      const elapsed = (Date.now() - lastUpdated.getTime()) / 1000
+      setRemaining(Math.max(0, intervalSec - elapsed))
+    }
+    update()
+    const id = setInterval(update, 1000)
+    return () => clearInterval(id)
+  }, [lastUpdated, intervalSec])
+  return remaining
+}
+
 function OrbitalLogo() {
   return (
     <div className="relative size-8 flex items-center justify-center">
@@ -67,6 +83,8 @@ export default function App() {
   const [planOppId, setPlanOppId] = useState<string | null>(null)
   const [leverage, setLeverage] = useState(1)
   const { plan, loading: planLoading, error: planError, clear: clearPlan } = usePlan(planOppId, leverage)
+  const countdown = useCountdown(lastUpdated, 10)
+  const isLive = countdown > 0
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
 
@@ -110,9 +128,19 @@ export default function App() {
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
         </nav>
-        <div className="ml-auto flex items-center gap-1.5">
-          <div className="size-1.5 rounded-full bg-yellow-400" />
-          <span className="text-xs text-muted-foreground">Paper</span>
+        <div className="ml-auto flex items-center gap-4">
+          {/* Refresh countdown */}
+          <div className="flex items-center gap-1.5">
+            <div className={`size-1.5 rounded-full ${isLive ? 'bg-green-400' : 'bg-yellow-400'}`} />
+            <span className="text-xs text-muted-foreground font-mono">
+              {isLive ? `${Math.ceil(countdown)}s` : '...'}
+            </span>
+          </div>
+          {/* Test mode badge */}
+          <div className="flex items-center gap-1.5 rounded border border-yellow-400/30 px-2 py-0.5">
+            <div className="size-1.5 rounded-full bg-yellow-400" />
+            <span className="text-[11px] text-yellow-400 font-medium">Test Mode</span>
+          </div>
         </div>
       </header>
 
@@ -196,8 +224,8 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
-                <th className="h-10 px-4 text-left align-middle font-normal whitespace-nowrap text-muted-foreground text-[13px]">Long</th>
-                <th className="h-10 px-4 text-left align-middle font-normal whitespace-nowrap text-muted-foreground text-[13px]">Short</th>
+                <TableHead className="text-left">Long</TableHead>
+                <TableHead className="text-left">Short</TableHead>
                 <SortTH field="apr" label="APR" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="apr24h" label="APR 24h" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="apr7d" label="APR 7d" current={sortField} dir={sortDir} onSort={handleSort} right />
@@ -205,7 +233,7 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                 <SortTH field="priceSpread" label="Price Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="oi" label="Open Interest" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="volume" label="Daily Volume" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <th className="w-8" />
+                <TableHead className="w-8" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -226,13 +254,13 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                     </TableCell>
                     <TableCell><VenueIcon venue={longVenue} /></TableCell>
                     <TableCell><VenueIcon venue={shortVenue} /></TableCell>
-                    <TableCell className="text-right font-mono text-foreground">{fmtPct(apr)}</TableCell>
-                    <TableCell className={`text-right font-mono ${apr24h < 0 ? 'text-red-400' : 'text-foreground'}`}>{fmtPct(apr24h)}</TableCell>
-                    <TableCell className={`text-right font-mono ${apr7d < 0 ? 'text-red-400' : 'text-foreground'}`}>{fmtPct(apr7d)}</TableCell>
-                    <TableCell className="text-right font-mono text-foreground">{fmtPct(apr * maxLev)}</TableCell>
-                    <TableCell className={`text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>{fmtPct(opp.entry_spread_estimate, 4)}</TableCell>
-                    <TableCell className="text-right font-mono text-foreground">{fmtUsd(opp.available_notional)}</TableCell>
-                    <TableCell className="text-right font-mono text-foreground">{fmtUsd(dailyVol)}</TableCell>
+                    <TC>{fmtPct(apr)}</TC>
+                    <TC negative={apr24h < 0}>{fmtPct(apr24h)}</TC>
+                    <TC negative={apr7d < 0}>{fmtPct(apr7d)}</TC>
+                    <TC>{fmtPct(apr * maxLev)}</TC>
+                    <TC negative={opp.entry_spread_estimate < 0}>{fmtPct(opp.entry_spread_estimate, 4)}</TC>
+                    <TC>{fmtUsd(opp.available_notional)}</TC>
+                    <TC>{fmtUsd(dailyVol)}</TC>
                     <TableCell>
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-50">
                         <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -303,24 +331,32 @@ function SortTH({ field, label, current, dir, onSort, right }: {
 }) {
   const active = current === field
   return (
-    <th
-      className={`h-10 px-4 align-middle font-normal whitespace-nowrap text-[13px] cursor-pointer select-none transition-colors hover:text-foreground ${right ? 'text-right' : 'text-left'} ${active ? 'text-foreground' : 'text-muted-foreground'}`}
+    <TableHead
+      className={`cursor-pointer select-none transition-colors hover:text-foreground ${active ? 'text-foreground' : ''}`}
+      style={{ textAlign: right ? 'right' : 'left' }}
       onClick={() => onSort(field)}
     >
-      <span className="inline-flex items-center gap-1">
+      <span className={`flex items-center gap-1 ${right ? 'justify-end' : ''}`}>
         {label}
-        {active && (
+        {active ? (
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
             <path d={dir === 'desc' ? 'M2 4l3 3 3-3' : 'M2 6l3-3 3 3'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
-        )}
-        {!active && (
+        ) : (
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0 opacity-30">
             <path d="M3 4l2-2 2 2M3 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         )}
       </span>
-    </th>
+    </TableHead>
+  )
+}
+
+function TC({ children, negative }: { children: React.ReactNode; negative?: boolean }) {
+  return (
+    <TableCell className={`font-mono ${negative ? 'text-red-400' : 'text-foreground'}`} style={{ textAlign: 'right' }}>
+      {children}
+    </TableCell>
   )
 }
 
