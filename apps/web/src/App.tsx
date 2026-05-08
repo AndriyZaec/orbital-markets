@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
 import type { Opportunity } from '@/hooks/useOpportunities'
@@ -85,6 +85,36 @@ export default function App() {
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
 
+  // Resizable positions panel
+  const [posHeight, setPosHeight] = useState(280)
+  const dragging = useRef(false)
+  const startY = useRef(0)
+  const startH = useRef(280)
+
+  const onResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragging.current = true
+    startY.current = e.clientY
+    startH.current = posHeight
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const delta = startY.current - ev.clientY
+      const maxH = window.innerHeight * 0.6
+      setPosHeight(Math.max(120, Math.min(maxH, startH.current + delta)))
+    }
+    const onUp = () => {
+      dragging.current = false
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [posHeight])
+
   const handleExecutePaper = async (opportunityId: string, leverage: number) => {
     try {
       const resp = await fetch('/api/v1/paper/open', {
@@ -140,7 +170,11 @@ export default function App() {
                 <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={setSelectedId} />
               )}
             </div>
-            <div className="h-[280px] shrink-0 border-t border-border flex flex-col min-h-0">
+            <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative" style={{ height: posHeight }}>
+              <div
+                className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
+                onMouseDown={onResizeStart}
+              />
               <PaperPositions />
             </div>
           </div>
