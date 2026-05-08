@@ -160,6 +160,112 @@ func (c *Client) SubmitMarketOrder(
 	return result, nil
 }
 
+// SubmitCloseOrder submits a reduce-only market order to close/unwind a position leg.
+//
+// Side is inverted: closing a long = sell, closing a short = buy.
+// No pre-trade margin check — closing reduces exposure, doesn't require new margin.
+//
+// Flow:
+//  1. Validate account stream is connected and fresh
+//  2. Build reduce-only payload with inverted side
+//  3. Sign and submit
+//  4. Return structured result (accepted ≠ filled)
+func (c *Client) SubmitCloseOrder(
+	ctx context.Context,
+	symbol string,
+	positionSide domain.Side,
+	amount float64,
+	clientOrderID string,
+) (*SubmitResult, error) {
+	// 1. Check account stream is alive (no margin check needed for close)
+	snap := c.accountState.Snapshot()
+	if !snap.Connected {
+		return &SubmitResult{
+			ClientOrderID: clientOrderID,
+			Symbol:        symbol,
+			Accepted:      false,
+			Error:         "account stream not connected",
+			SubmittedAt:   time.Now(),
+			RespondedAt:   time.Now(),
+		}, nil
+	}
+	if snap.LastUpdated.IsZero() || time.Since(snap.LastUpdated) > 30*time.Second {
+		return &SubmitResult{
+			ClientOrderID: clientOrderID,
+			Symbol:        symbol,
+			Accepted:      false,
+			Error:         fmt.Sprintf("account state stale (%.0fs)", time.Since(snap.LastUpdated).Seconds()),
+			SubmittedAt:   time.Now(),
+			RespondedAt:   time.Now(),
+		}, nil
+	}
+
+	// 2. Invert side: close long = sell, close short = buy
+	closeSide := "sell"
+	if positionSide == domain.SideShort {
+		closeSide = "buy"
+	}
+
+	now := time.Now()
+	req := MarketOrderRequest{
+		Account:       c.signer.Account(),
+		Timestamp:     now.UnixMilli(),
+		ExpiryWindow:  expiryWindowMs,
+		Symbol:        symbol,
+		Side:          closeSide,
+		Amount:        amount,
+		ReduceOnly:    true,
+		SlippagePct:   1.0, // wider slippage tolerance for close/unwind
+		ClientOrderID: clientOrderID,
+	}
+
+	// Sign
+	payloadBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal close order: %w", err)
+	}
+	sig, err := c.signer.Sign(payloadBytes)
+	if err != nil {
+		return nil, fmt.Errorf("sign close order: %w", err)
+	}
+	req.Signature = sig
+
+	c.logger.Info("pacifica live: submitting close order",
+		"symbol", symbol,
+		"close_side", closeSide,
+		"amount", amount,
+		"reduce_only", true,
+		"client_order_id", clientOrderID,
+	)
+
+	// 3. Submit
+	result, err := c.sendOrder(ctx, req)
+	if err != nil {
+		c.logger.Error("pacifica live: close submit failed",
+			"symbol", symbol,
+			"err", err,
+		)
+		return nil, fmt.Errorf("submit close order: %w", err)
+	}
+
+	// 4. Log outcome
+	if result.Accepted {
+		c.logger.Info("pacifica live: close order accepted",
+			"symbol", symbol,
+			"order_id", result.OrderID,
+			"client_order_id", clientOrderID,
+		)
+	} else {
+		c.logger.Warn("pacifica live: close order rejected",
+			"symbol", symbol,
+			"client_order_id", clientOrderID,
+			"error", result.Error,
+		)
+	}
+
+	return result, nil
+}
+
 // sendOrder sends the order via WebSocket and waits for the response.
 func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*SubmitResult, error) {
 	c.mu.Lock()
