@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useOpportunities } from '@/hooks/useOpportunities'
-import { usePlan } from '@/hooks/usePlan'
+
 import type { Opportunity } from '@/hooks/useOpportunities'
 import {
   Table,
@@ -11,7 +11,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
-import { PlanPreview } from '@/components/PlanPreview'
+
 import { PaperPositions } from '@/components/PaperPositions'
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
 import { FundingChart } from '@/components/FundingChart'
@@ -80,25 +80,12 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [planOppId, setPlanOppId] = useState<string | null>(null)
-  const [leverage, setLeverage] = useState(1)
-  const { plan, loading: planLoading, error: planError, clear: clearPlan } = usePlan(planOppId, leverage)
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
 
-  const handleOpenSpread = (oppId: string) => {
-    setPlanOppId(oppId)
-    setLeverage(1)
-  }
-
-  const handleClosePlan = () => {
-    setPlanOppId(null)
-    clearPlan()
-  }
-
-  const handleExecutePaper = async (opportunityId: string) => {
+  const handleExecutePaper = async (opportunityId: string, leverage: number) => {
     try {
       const resp = await fetch('/api/v1/paper/open', {
         method: 'POST',
@@ -110,7 +97,6 @@ export default function App() {
         alert(body.error || `Execution failed: HTTP ${resp.status}`)
         return
       }
-      handleClosePlan()
       setSelectedId(null)
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Unknown error')
@@ -163,7 +149,7 @@ export default function App() {
               opportunity={selected}
               lastUpdated={lastUpdated}
               onClose={() => setSelectedId(null)}
-              onOpenSpread={() => handleOpenSpread(selected.id)}
+              onExecute={handleExecutePaper}
             />
           )}
         </div>
@@ -173,10 +159,6 @@ export default function App() {
         <div className="flex-1 overflow-auto min-h-0"><AnalyticsDashboard /></div>
       )}
 
-      {plan && (
-        <PlanPreview plan={plan} loading={planLoading} error={planError} leverage={leverage}
-          onLeverageChange={setLeverage} onClose={handleClosePlan} onExecute={handleExecutePaper} />
-      )}
     </div>
   )
 }
