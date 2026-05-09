@@ -1,5 +1,6 @@
 import { useAnalytics } from '@/hooks/useAnalytics'
 import { usePaperPositions } from '@/hooks/usePaperPositions'
+import { getMockLeverage } from '@/lib/hacks'
 
 function fmtUsd(n: number) {
   const abs = Math.abs(n)
@@ -37,11 +38,11 @@ export function AnalyticsDashboard() {
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded')
   const degradedPositions = positions.filter((p) => p.state === 'degraded')
 
-  const grossExposure = openPositions.reduce((s, p) => s + (p.leverage?.gross_exposure ?? 0), 0)
-  const marginInUse = openPositions.reduce((s, p) => s + (p.leverage?.margin_required ?? 0), 0)
+  const grossExposure = openPositions.reduce((s, p) => s + p.target_notional, 0)
   const avgLeverage = openPositions.length > 0
-    ? openPositions.reduce((s, p) => s + (p.leverage?.effective_leverage ?? 0), 0) / openPositions.length
+    ? openPositions.reduce((s, p) => s + getMockLeverage(p.asset), 0) / openPositions.length
     : 0
+  const marginInUse = avgLeverage > 0 ? grossExposure / avgLeverage : 0
 
   const totalFunding = openPositions.reduce((s, p) => s + p.funding_pnl, 0)
   const totalPnl = openPositions.reduce((s, p) => s + p.total_pnl, 0)
@@ -100,7 +101,7 @@ export function AnalyticsDashboard() {
         <MetricCard label="Funding Earned" value={fmtUsd(totalFunding)} valueClass={pnlColor(totalFunding)} />
       </div>
 
-      <div className="grid grid-cols-2 gap-6 mb-8">
+      <div className="grid grid-cols-3 gap-6 mb-8">
         {/* Exposure Snapshot */}
         <div>
           <h2 className="text-sm font-semibold text-foreground mb-3">Exposure</h2>
@@ -134,9 +135,7 @@ export function AnalyticsDashboard() {
             <Row label="Account Health" value={healthStatus} valueClass={healthColor} last />
           </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-2 gap-6 mb-8">
         {/* Carry Snapshot */}
         <div>
           <h2 className="text-sm font-semibold text-foreground mb-3">Carry & Funding</h2>
@@ -145,19 +144,6 @@ export function AnalyticsDashboard() {
             <Row label="Price PnL" value={fmtUsd(openPositions.reduce((s, p) => s + p.price_pnl, 0))} valueClass={pnlColor(openPositions.reduce((s, p) => s + p.price_pnl, 0))} />
             <Row label="Active Carry Positions" value={String(openPositions.length)} />
             <Row label="Avg Hold Time" value={summary?.avg_hold_hours ? fmtHours(summary.avg_hold_hours) : '--'} last />
-          </div>
-        </div>
-
-        {/* Trading Summary */}
-        <div>
-          <h2 className="text-sm font-semibold text-foreground mb-3">Trading Summary</h2>
-          <div className="rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.03] to-transparent px-4 py-3.5">
-            <Row label="Total Trades" value={String(summary?.total_trades ?? 0)} />
-            <Row label="Profitable" value={summary ? `${summary.profitable_trades}/${summary.closed_trades}` : '--'} valueClass={
-              summary && summary.profitable_trades > summary.unprofitable_trades ? 'text-green-400' : undefined
-            } />
-            <Row label="Realized PnL" value={fmtUsd(summary?.pnl?.realized_pnl ?? 0)} valueClass={pnlColor(summary?.pnl?.realized_pnl ?? 0)} />
-            <Row label="Break-Even Rate" value={summary?.break_even ? (summary.break_even.reached_rate * 100).toFixed(0) + '%' : '--'} last />
           </div>
         </div>
       </div>
