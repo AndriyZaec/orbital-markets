@@ -55,7 +55,7 @@ export function FundingChart({ asset, venueA, venueB }: Props) {
           ))}
         </div>
       </div>
-      <p className="text-[11px] text-muted-foreground/50 mb-2">
+      <p className="text-[11px] text-muted-foreground/50 mb-2 h-4">
         {hovered ? (
           <span>
             {formatTime(hovered.t, tf)}

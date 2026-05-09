@@ -192,14 +192,14 @@ export default function App() {
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {activeView === 'trade' && (
             <>
-              <div className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 flex flex-col min-h-0 bg-[#080b12]">
                 {selected ? (
                   <OpportunityDetail opportunity={selected} onBack={() => setSelectedId(null)} />
                 ) : (
                   <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={setSelectedId} />
                 )}
               </div>
-              <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative" style={{ height: posHeight }}>
+              <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative bg-[#080b12]" style={{ height: posHeight }}>
                 <div
                   className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
                   onMouseDown={onResizeStart}
@@ -210,15 +210,15 @@ export default function App() {
           )}
 
           {activeView === 'analytics' && (
-            <div className="flex-1 overflow-auto min-h-0 bg-[#070a10]"><AnalyticsDashboard /></div>
+            <PageBg><AnalyticsDashboard /></PageBg>
           )}
 
           {activeView === 'rebates' && (
-            <div className="flex-1 overflow-auto min-h-0 bg-[#070a10]"><FeeRebates /></div>
+            <PageBg><FeeRebates /></PageBg>
           )}
 
           {activeView === 'agents' && (
-            <div className="flex-1 overflow-auto min-h-0 bg-[#070a10]"><ForAgents /></div>
+            <PageBg><ForAgents /></PageBg>
           )}
         </div>
 
@@ -278,8 +278,8 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
         )}
         {sorted.length > 0 && (
           <Table>
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow className="hover:bg-transparent">
+            <TableHeader className="sticky top-0 z-10">
+              <TableRow className="hover:bg-transparent bg-[#080b12]">
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
                 <TableHead className="text-left">Long</TableHead>
                 <TableHead className="text-left">Short</TableHead>
@@ -369,6 +369,19 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">
         <FundingChart asset={opp.asset} venueA={opp.venue_pair.venue_a} venueB={opp.venue_pair.venue_b} />
       </div>
+    </div>
+  )
+}
+
+function PageBg({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex-1 overflow-auto min-h-0 bg-[#070a10] relative">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -top-[200px] -right-[100px] w-[600px] h-[600px] rounded-full bg-blue-500/[0.03] blur-[120px]" />
+        <div className="absolute top-[40%] -left-[150px] w-[500px] h-[500px] rounded-full bg-cyan-400/[0.025] blur-[100px]" />
+        <div className="absolute -bottom-[100px] right-[20%] w-[400px] h-[400px] rounded-full bg-blue-600/[0.02] blur-[80px]" />
+      </div>
+      <div className="relative">{children}</div>
     </div>
   )
 }

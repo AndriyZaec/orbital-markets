@@ -128,8 +128,8 @@ export function PaperPositions() {
 
         {!loading && !error && displayed.length > 0 && (
           <Table>
-            <TableHeader>
-              <TableRow className="border-border hover:bg-transparent">
+            <TableHeader className="sticky top-0 z-10">
+              <TableRow className="border-border hover:bg-transparent bg-[#080b12]">
                 <TH>Asset</TH>
                 <TH>Direction</TH>
                 <TH right>Size</TH>
