@@ -86,7 +86,7 @@ export function ForAgents() {
       {/* Workflow */}
       <div className="mb-12">
         <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3">Agent Workflow</h2>
-        <div className="rounded-lg border border-border bg-white/[0.02] px-5 py-4">
+        <div className="rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.03] to-transparent px-5 py-4">
           <div className="flex flex-col">
             {WORKFLOW_STEPS.map((step, i) => (
               <div key={step.label} className="flex items-start gap-3 relative">
@@ -107,7 +107,7 @@ export function ForAgents() {
       {/* Why agents need Orbital */}
       <div className="mb-12">
         <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3">Why Agents Need This</h2>
-        <div className="rounded-lg border border-border bg-white/[0.02] px-5 py-4">
+        <div className="rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.03] to-transparent px-5 py-4">
           <p className="text-sm text-muted-foreground leading-relaxed">
             Raw funding rate signals are not enough to run a spread strategy. Agents also need normalized venue data, execution-aware sizing, slippage and liquidity checks, hedge integrity rules, and continuous monitoring with degradation handling. Building this per-venue, per-strategy is expensive and fragile.
           </p>
@@ -122,7 +122,7 @@ export function ForAgents() {
         <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3">What Orbital Provides</h2>
         <div className="grid grid-cols-2 gap-3">
           {CAPABILITIES.map((c) => (
-            <div key={c.title} className="rounded-lg border border-border bg-white/[0.02] px-4 py-3.5">
+            <div key={c.title} className="rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.03] to-transparent px-4 py-3.5">
               <p className="text-sm font-medium text-foreground mb-1">{c.title}</p>
               <p className="text-[11px] text-muted-foreground/60 leading-relaxed">{c.desc}</p>
             </div>
@@ -135,7 +135,7 @@ export function ForAgents() {
         <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3">Why This Matters</h2>
         <div className="grid grid-cols-2 gap-3">
           {WHY_ITEMS.map((item) => (
-            <div key={item.title} className="rounded-lg border border-blue-500/10 bg-blue-500/[0.04] px-4 py-3.5">
+            <div key={item.title} className="rounded-lg border border-blue-500/10 bg-gradient-to-b from-blue-500/[0.06] to-blue-500/[0.02] px-4 py-3.5">
               <p className="text-sm font-medium text-foreground mb-1">{item.title}</p>
               <p className="text-[11px] text-blue-300/50 leading-relaxed">{item.desc}</p>
             </div>
@@ -148,7 +148,7 @@ export function ForAgents() {
         <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-3">Roadmap</h2>
         <div className="grid grid-cols-3 gap-3">
           {ROADMAP.map((phase) => (
-            <div key={phase.phase} className="rounded-lg border border-border bg-white/[0.02] px-4 py-4">
+            <div key={phase.phase} className="rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.03] to-transparent px-4 py-4">
               <div className="flex items-center gap-2 mb-3">
                 <div className={`size-2 rounded-full ${phase.dot}`} />
                 <span className="text-sm font-semibold text-foreground">{phase.phase}</span>
@@ -167,7 +167,7 @@ export function ForAgents() {
       </div>
 
       {/* Footer CTA */}
-      <div className="rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-6 py-5 text-center">
+      <div className="rounded-lg border border-blue-500/15 bg-gradient-to-b from-blue-500/[0.08] to-blue-500/[0.02] px-6 py-5 text-center">
         <p className="text-base font-semibold text-foreground mb-1">Build agent workflows on top of Orbital</p>
         <p className="text-sm text-muted-foreground/60">
           Programmable carry execution with built-in risk controls and venue abstraction.

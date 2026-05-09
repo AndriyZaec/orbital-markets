@@ -210,15 +210,15 @@ export default function App() {
           )}
 
           {activeView === 'analytics' && (
-            <div className="flex-1 overflow-auto min-h-0"><AnalyticsDashboard /></div>
+            <div className="flex-1 overflow-auto min-h-0 bg-[#070a10]"><AnalyticsDashboard /></div>
           )}
 
           {activeView === 'rebates' && (
-            <div className="flex-1 overflow-auto min-h-0"><FeeRebates /></div>
+            <div className="flex-1 overflow-auto min-h-0 bg-[#070a10]"><FeeRebates /></div>
           )}
 
           {activeView === 'agents' && (
-            <div className="flex-1 overflow-auto min-h-0"><ForAgents /></div>
+            <div className="flex-1 overflow-auto min-h-0 bg-[#070a10]"><ForAgents /></div>
           )}
         </div>
 

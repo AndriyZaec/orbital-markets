@@ -93,11 +93,11 @@ export function FeeRebates() {
       <div className="mb-8">
         <h2 className="text-sm font-semibold text-foreground mb-3">Active Position Accruals</h2>
         {accruals.length === 0 ? (
-          <div className="flex items-center justify-center h-32 rounded-lg border border-border bg-white/[0.02] text-sm text-muted-foreground">
+          <div className="flex items-center justify-center h-32 rounded-lg border border-white/[0.06] bg-white/[0.02] text-sm text-muted-foreground">
             Open spread trades to start earning rebates
           </div>
         ) : (
-          <div className="rounded-lg border border-border overflow-hidden">
+          <div className="rounded-lg border border-white/[0.06] overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-white/[0.03] text-muted-foreground text-xs">
@@ -132,8 +132,8 @@ export function FeeRebates() {
               key={tier.name}
               className={`rounded-lg border px-4 py-4 ${
                 tier.active
-                  ? 'border-blue-500/30 bg-blue-500/[0.06]'
-                  : 'border-border bg-white/[0.02]'
+                  ? 'border-blue-500/20 bg-gradient-to-b from-blue-500/[0.08] to-blue-500/[0.02]'
+                  : 'border-white/[0.06] bg-gradient-to-b from-white/[0.03] to-transparent'
               }`}
             >
               <div className="flex items-center gap-2 mb-2">
@@ -174,8 +174,8 @@ export function FeeRebates() {
 
 function MetricCard({ label, value, valueClass = 'text-foreground' }: { label: string; value: string; valueClass?: string }) {
   return (
-    <div className="bg-white/[0.03] border border-border rounded-lg px-5 py-4">
-      <p className="text-[11px] text-muted-foreground mb-1">{label}</p>
+    <div className="bg-gradient-to-b from-white/[0.04] to-white/[0.02] border border-white/[0.06] rounded-lg px-5 py-4">
+      <p className="text-[11px] text-muted-foreground/70 mb-1">{label}</p>
       <p className={`text-lg font-mono font-semibold ${valueClass}`}>{value}</p>
     </div>
   )
