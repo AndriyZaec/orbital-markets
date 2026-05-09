@@ -22,7 +22,7 @@ function fmtPct(v: number) {
 }
 
 export function FundingChart({ asset, venueA, venueB }: Props) {
-  const [tf, setTf] = useState<Timeframe>('M')
+  const [tf, setTf] = useState<Timeframe>('W')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const { data, loading, error } = useHistory(asset, venueA, venueB, rangeMap[tf])
 
