@@ -54,7 +54,7 @@ func main() {
 	go recorder.Run(ctx)
 	go monitor.Run(ctx)
 
-	srv := api.NewServer(ctx, logger, sc, executor, store)
+	srv := api.NewServer(ctx, logger, sc, executor, store, database)
 
 	addr := envOr("ADDR", ":8080")
 	logger.Info("starting server", "addr", addr)

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,7 @@ type Server struct {
 	scanner  *scanner.Scanner
 	executor *paper.Executor
 	store    *paper.DBStore
+	db       *sql.DB
 	logger   *slog.Logger
 	mux      *http.ServeMux
 }
@@ -25,12 +27,14 @@ func NewServer(
 	sc *scanner.Scanner,
 	executor *paper.Executor,
 	store *paper.DBStore,
+	database *sql.DB,
 ) *Server {
 	s := &Server{
 		ctx:      ctx,
 		scanner:  sc,
 		executor: executor,
 		store:    store,
+		db:       database,
 		logger:   logger,
 		mux:      http.NewServeMux(),
 	}
@@ -56,6 +60,9 @@ func (s *Server) routes() {
 
 	// Analytics
 	s.mux.HandleFunc("GET /api/v1/paper/analytics", s.handlePaperAnalytics)
+
+	// Historical data
+	s.mux.HandleFunc("GET /api/v1/history", s.handleHistory)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
