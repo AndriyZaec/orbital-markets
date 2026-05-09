@@ -48,6 +48,7 @@ export function FundingChart({ asset, currentSpread }: Props) {
   )
 
   const maxAbs = Math.max(...data.map((d) => Math.abs(d.spread)), Math.abs(currentSpread) * 0.5)
+  const maxApy = Math.max(...data.map((d) => Math.abs(d.annualized)), 0.01)
   const chartW = 600
   const chartH = 140
   const barW = Math.max(2, (chartW / data.length) - 2)
@@ -57,6 +58,13 @@ export function FundingChart({ asset, currentSpread }: Props) {
   const labelStep = Math.max(1, Math.floor(data.length / labelCount))
 
   const hovered = hoveredIdx !== null ? data[hoveredIdx] : null
+
+  // APY line path
+  const apyPath = data.map((d, i) => {
+    const x = (i / data.length) * chartW + barW / 2
+    const y = midY - (d.annualized / maxApy) * (midY - 8)
+    return `${i === 0 ? 'M' : 'L'}${x},${y}`
+  }).join(' ')
 
   return (
     <div>
@@ -70,12 +78,15 @@ export function FundingChart({ asset, currentSpread }: Props) {
                 {(hovered.spread * 100).toFixed(4)}%
               </span>
               {' · '}
-              <span className={hovered.annualized >= 0 ? 'text-green-400' : 'text-red-400'}>
-                {(hovered.annualized * 100).toFixed(2)}% ann
+              <span className="text-blue-400">
+                {(hovered.annualized * 100).toFixed(2)}% APY
               </span>
             </span>
           ) : (
-            <span>Spread</span>
+            <span>
+              Spread
+              <span className="text-blue-400 ml-2">— APY</span>
+            </span>
           )}
         </div>
         <div className="flex gap-0.5 bg-white/[0.04] rounded p-0.5">
@@ -100,8 +111,10 @@ export function FundingChart({ asset, currentSpread }: Props) {
         className="w-full"
         onMouseLeave={() => setHoveredIdx(null)}
       >
+        {/* Zero line */}
         <line x1="0" y1={midY} x2={chartW} y2={midY} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
 
+        {/* Y-axis: spread scale (right, top/bottom) */}
         <text x={chartW - 2} y={12} fill="#64748b" fontSize="8" fontFamily="monospace" textAnchor="end" opacity="0.7">
           {(maxAbs * 100).toFixed(3)}%
         </text>
@@ -109,6 +122,15 @@ export function FundingChart({ asset, currentSpread }: Props) {
           -{(maxAbs * 100).toFixed(3)}%
         </text>
 
+        {/* Y-axis: APY scale (left) */}
+        <text x="2" y={12} fill="#3b82f6" fontSize="8" fontFamily="monospace" opacity="0.6">
+          {(maxApy * 100).toFixed(0)}%
+        </text>
+        <text x="2" y={chartH - 2} fill="#3b82f6" fontSize="8" fontFamily="monospace" opacity="0.6">
+          -{(maxApy * 100).toFixed(0)}%
+        </text>
+
+        {/* Spread bars */}
         {data.map((d, i) => {
           const x = (i / data.length) * chartW + 1
           const normalizedH = (Math.abs(d.spread) / maxAbs) * (midY - 4)
@@ -138,6 +160,20 @@ export function FundingChart({ asset, currentSpread }: Props) {
           )
         })}
 
+        {/* APY line overlay */}
+        <path d={apyPath} fill="none" stroke="#3b82f6" strokeWidth="1.5" opacity="0.8" />
+
+        {/* APY hover dot */}
+        {hovered && hoveredIdx !== null && (
+          <circle
+            cx={(hoveredIdx / data.length) * chartW + barW / 2}
+            cy={midY - (hovered.annualized / maxApy) * (midY - 8)}
+            r="3"
+            fill="#3b82f6"
+          />
+        )}
+
+        {/* X-axis labels */}
         {data.map((d, i) => {
           if (i % labelStep !== 0) return null
           const x = (i / data.length) * chartW + barW / 2
