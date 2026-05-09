@@ -11,8 +11,7 @@ import (
 
 const (
 	monitorInterval = 10 * time.Second
-	maxDuration     = 1 * time.Hour // paper mode max position duration
-	minEdgeClose    = 0.01          // 1% annualized — close if edge drops below
+	minEdgeClose    = 0.01 // 1% annualized — close if edge drops below
 )
 
 type Monitor struct {
@@ -74,12 +73,7 @@ func (m *Monitor) shouldClose(ctx context.Context, pos *Position) CloseReason {
 		return CloseReasonDegraded
 	}
 
-	// 2. Max duration exceeded
-	if pos.OpenedAt != nil && time.Since(*pos.OpenedAt) > maxDuration {
-		return CloseReasonMaxDuration
-	}
-
-	// 3. Edge collapse
+	// 2. Edge collapse
 	if pos.Leg1Fill == nil || pos.Leg2Fill == nil {
 		return ""
 	}

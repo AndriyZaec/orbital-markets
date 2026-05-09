@@ -107,7 +107,8 @@ In one line:
 - partial-fill-aware logic
 - retry, unwind, and degraded handling
 - per-leg tracking
-- auto-close on degraded state, edge collapse, max duration, and critical liquidation risk
+- auto-close on degraded state, edge collapse, and critical liquidation risk
+- manual close support
 
 ### Monitoring
 
