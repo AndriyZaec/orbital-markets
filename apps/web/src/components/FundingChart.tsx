@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useHistory } from '@/hooks/useHistory'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
 type Timeframe = 'D' | 'W' | 'M'
 
 const rangeMap: Record<Timeframe, string> = { D: '24h', W: '7d', M: '30d' }
+const rangeLabel: Record<Timeframe, string> = { D: '24h', W: '7 days', M: '30 days' }
 
 function formatTime(ts: string, tf: Timeframe) {
   const d = new Date(ts)
@@ -28,22 +29,18 @@ export function FundingChart({ asset, venueA, venueB }: Props) {
 
   const hovered = hoverIdx !== null ? data[hoverIdx] : null
 
+  const stats = useMemo(() => {
+    if (data.length === 0) return null
+    const avg = data.reduce((s, d) => s + d.edge, 0) / data.length
+    const current = data[data.length - 1].edge
+    return { avg, current }
+  }, [data])
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <p className="text-xs font-medium text-foreground">Historical Edge</p>
-          {hovered ? (
-            <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
-              {formatTime(hovered.t, tf)}
-              {'  '}
-              <span className="text-green-400">{fmtPct(hovered.edge)}</span>
-              <span className="text-muted-foreground/50"> ann.</span>
-            </p>
-          ) : (
-            <p className="text-[11px] text-muted-foreground/50 mt-0.5">Annualized Gross Edge</p>
-          )}
-        </div>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-xs font-semibold text-foreground">Edge Persistence</p>
         <div className="flex gap-0.5 bg-white/[0.04] rounded p-0.5">
           {(['D', 'W', 'M'] as Timeframe[]).map((t) => (
             <button
@@ -58,38 +55,69 @@ export function FundingChart({ asset, venueA, venueB }: Props) {
           ))}
         </div>
       </div>
+      <p className="text-[11px] text-muted-foreground/50 mb-2">
+        {hovered ? (
+          <span>
+            {formatTime(hovered.t, tf)}
+            {'  '}
+            <span className="text-green-400 font-mono">{fmtPct(hovered.edge)}</span>
+            <span className="text-muted-foreground/40"> annualized edge</span>
+          </span>
+        ) : (
+          <>How consistently this spread has generated edge over the last {rangeLabel[tf]}</>
+        )}
+      </p>
 
+      {/* Chart */}
       {loading ? (
-        <div className="flex items-center justify-center h-[160px] text-xs text-muted-foreground">Loading...</div>
+        <div className="flex items-center justify-center h-[140px] text-xs text-muted-foreground">Loading...</div>
       ) : error || data.length === 0 ? (
-        <div className="flex items-center justify-center h-[160px] text-xs text-muted-foreground">
+        <div className="flex items-center justify-center h-[140px] text-xs text-muted-foreground">
           {error ? `Error: ${error}` : 'No data yet — snapshots accumulate every minute'}
         </div>
       ) : (
-        <EdgeChart data={data} tf={tf} hoverIdx={hoverIdx} setHoverIdx={setHoverIdx} />
+        <EdgeChart data={data} tf={tf} hoverIdx={hoverIdx} setHoverIdx={setHoverIdx} avgEdge={stats?.avg ?? 0} />
       )}
 
-      <div className="mt-2 rounded border border-blue-500/10 bg-blue-500/[0.04] px-3 py-1.5 flex items-start gap-2">
+      {/* Stats bar */}
+      {stats && (
+        <div className="flex items-center gap-4 mt-2 text-[11px] font-mono">
+          <div className="flex items-center gap-1.5">
+            <div className="size-1.5 rounded-full bg-green-400" />
+            <span className="text-muted-foreground">Now</span>
+            <span className="text-green-400">{fmtPct(stats.current)}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="size-1.5 rounded-full bg-blue-400/60" />
+            <span className="text-muted-foreground">Avg ({rangeLabel[tf]})</span>
+            <span className="text-blue-400">{fmtPct(stats.avg)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Caption */}
+      <div className="mt-3 rounded border border-blue-500/10 bg-blue-500/[0.04] px-3 py-1.5 flex items-start gap-2">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-blue-400/50 shrink-0 mt-px">
           <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2"/>
           <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
         </svg>
         <p className="text-[11px] text-blue-300/60 leading-relaxed">
-          Shows opportunity magnitude over time. Trade direction is determined by current venue funding rates.
+          A persistent edge means the funding spread isn't a one-time spike — the opportunity has held over time, making it more reliable to trade.
         </p>
       </div>
     </div>
   )
 }
 
-function EdgeChart({ data, tf, hoverIdx, setHoverIdx }: {
+function EdgeChart({ data, tf, hoverIdx, setHoverIdx, avgEdge }: {
   data: { t: string; basis: number; edge: number }[]
   tf: Timeframe
   hoverIdx: number | null
   setHoverIdx: (i: number | null) => void
+  avgEdge: number
 }) {
   const W = 700
-  const H = 160
+  const H = 140
   const padTop = 14
   const padBottom = 6
   const barW = Math.max(1.5, (W / data.length) - 0.5)
@@ -101,6 +129,8 @@ function EdgeChart({ data, tf, hoverIdx, setHoverIdx }: {
   const labelStep = Math.max(1, Math.floor(data.length / labelCount))
 
   const yTicks = [0, 0.25, 0.5, 0.75, 1]
+
+  const avgY = padTop + chartH - (avgEdge / maxEdge) * chartH
 
   return (
     <svg
@@ -134,6 +164,9 @@ function EdgeChart({ data, tf, hoverIdx, setHoverIdx }: {
 
       {/* Zero line */}
       <line x1="0" y1={padTop + chartH} x2={W} y2={padTop + chartH} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+
+      {/* Average line */}
+      <line x1="0" y1={avgY} x2={W} y2={avgY} stroke="#3b82f6" strokeWidth="1" opacity="0.3" strokeDasharray="4,3" />
 
       {/* Bars */}
       {data.map((d, i) => {
