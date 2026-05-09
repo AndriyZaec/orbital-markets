@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useHistory } from '@/hooks/useHistory'
 
 interface Props {
@@ -132,8 +132,21 @@ function EdgeChart({ data, tf, hoverIdx, setHoverIdx, avgEdge }: {
 
   const avgY = padTop + chartH - (avgEdge / maxEdge) * chartH
 
+  const [animKey, setAnimKey] = useState(0)
+  const prevTf = useRef(tf)
+  const prevLen = useRef(data.length)
+
+  useEffect(() => {
+    if (tf !== prevTf.current || data.length !== prevLen.current) {
+      setAnimKey((k) => k + 1)
+      prevTf.current = tf
+      prevLen.current = data.length
+    }
+  }, [tf, data.length])
+
   return (
     <svg
+      key={animKey}
       viewBox={`0 0 ${W} ${H + 18}`}
       className="w-full"
       onMouseLeave={() => setHoverIdx(null)}
@@ -166,24 +179,31 @@ function EdgeChart({ data, tf, hoverIdx, setHoverIdx, avgEdge }: {
       <line x1="0" y1={padTop + chartH} x2={W} y2={padTop + chartH} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
 
       {/* Average line */}
-      <line x1="0" y1={avgY} x2={W} y2={avgY} stroke="#3b82f6" strokeWidth="1" opacity="0.3" strokeDasharray="4,3" />
+      <line x1="0" y1={avgY} x2={W} y2={avgY} stroke="#3b82f6" strokeWidth="1" strokeDasharray="4,3">
+        <animate attributeName="opacity" from="0" to="0.3" dur="0.6s" begin="0.4s" fill="freeze" />
+      </line>
 
       {/* Bars */}
       {data.map((d, i) => {
         const x = (i / data.length) * W
         const barH = (d.edge / maxEdge) * chartH
-        const y = padTop + chartH - barH
+        const baseY = padTop + chartH
+        const targetY = padTop + chartH - barH
+        const delay = (i / data.length) * 0.4
 
         return (
           <g key={i}>
             <rect
               x={x}
-              y={y}
               width={barW}
-              height={Math.max(0.5, barH)}
               fill="url(#edgeGrad)"
               opacity={hoverIdx === i ? 1 : 0.85}
-            />
+              y={baseY}
+              height={0}
+            >
+              <animate attributeName="y" from={baseY} to={targetY} dur="0.5s" begin={`${delay}s`} fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1" keyTimes="0;1" />
+              <animate attributeName="height" from="0" to={Math.max(0.5, barH)} dur="0.5s" begin={`${delay}s`} fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1" keyTimes="0;1" />
+            </rect>
             <rect
               x={x}
               y={0}
@@ -215,6 +235,7 @@ function EdgeChart({ data, tf, hoverIdx, setHoverIdx, avgEdge }: {
         const x = (i / data.length) * W + barW / 2
         return (
           <text key={i} x={Math.max(18, x)} y={H + 12} textAnchor="middle" fill="#64748b" fontSize="7" fontFamily="monospace">
+            <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="0.5s" fill="freeze" />
             {formatTime(d.t, tf)}
           </text>
         )
