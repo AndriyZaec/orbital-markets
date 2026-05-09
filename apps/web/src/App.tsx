@@ -326,7 +326,7 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
         <StatItem label="Daily Volume" value={fmtUsd(getMockDailyVolume(opp.available_notional))} mono />
       </div>
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">
-        <FundingChart asset={opp.asset} currentSpread={opp.funding_spread} />
+        <FundingChart asset={opp.asset} venueA={opp.venue_pair.venue_a} venueB={opp.venue_pair.venue_b} />
       </div>
     </div>
   )

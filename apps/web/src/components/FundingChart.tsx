@@ -1,197 +1,191 @@
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
+import { useHistory } from '@/hooks/useHistory'
 
 interface Props {
   asset: string
-  currentSpread: number
+  venueA: string
+  venueB: string
 }
 
 type Timeframe = 'D' | 'W' | 'M'
 
-function generateMockData(asset: string, timeframe: Timeframe, currentSpread: number) {
-  const seed = Array.from(asset).reduce((a, c) => a + c.charCodeAt(0), 0)
-  const rng = (i: number) => {
-    const x = Math.sin(seed * 9301 + i * 49297) * 49297
-    return x - Math.floor(x)
-  }
+const rangeMap: Record<Timeframe, string> = { D: '24h', W: '7d', M: '30d' }
 
-  const count = timeframe === 'D' ? 24 : timeframe === 'W' ? 28 : 30
-  const now = Date.now()
-  const interval = timeframe === 'D' ? 3600_000 : timeframe === 'W' ? 6 * 3600_000 : 24 * 3600_000
-
-  const points: { time: number; spread: number; annualized: number }[] = []
-  for (let i = 0; i < count; i++) {
-    const drift = (rng(i) - 0.45) * currentSpread * 3
-    const spread = currentSpread + drift * (1 - i / count * 0.3)
-    const annualized = spread * 8760
-    points.push({
-      time: now - (count - 1 - i) * interval,
-      spread,
-      annualized,
-    })
-  }
-  return points
-}
-
-function formatTimeLabel(ts: number, tf: Timeframe) {
+function formatTime(ts: string, tf: Timeframe) {
   const d = new Date(ts)
   if (tf === 'D') return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export function FundingChart({ asset, currentSpread }: Props) {
-  const [timeframe, setTimeframe] = useState<Timeframe>('W')
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+function fmtPct(v: number) {
+  return (v * 100).toFixed(2) + '%'
+}
 
-  const data = useMemo(
-    () => generateMockData(asset, timeframe, currentSpread),
-    [asset, timeframe, currentSpread]
-  )
+export function FundingChart({ asset, venueA, venueB }: Props) {
+  const [tf, setTf] = useState<Timeframe>('M')
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+  const { data, loading, error } = useHistory(asset, venueA, venueB, rangeMap[tf])
 
-  const maxAbs = Math.max(...data.map((d) => Math.abs(d.spread)), Math.abs(currentSpread) * 0.5)
-  const maxApy = Math.max(...data.map((d) => Math.abs(d.annualized)), 0.01)
-  const chartW = 600
-  const chartH = 140
-  const barW = Math.max(2, (chartW / data.length) - 2)
-  const midY = chartH / 2
-
-  const labelCount = 6
-  const labelStep = Math.max(1, Math.floor(data.length / labelCount))
-
-  const hovered = hoveredIdx !== null ? data[hoveredIdx] : null
-
-  // APY line path
-  const apyPath = data.map((d, i) => {
-    const x = (i / data.length) * chartW + barW / 2
-    const y = midY - (d.annualized / maxApy) * (midY - 8)
-    return `${i === 0 ? 'M' : 'L'}${x},${y}`
-  }).join(' ')
+  const hovered = hoverIdx !== null ? data[hoverIdx] : null
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-1">
-        <div className="text-[11px] font-mono text-muted-foreground">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <p className="text-xs font-medium text-foreground">Historical Edge</p>
           {hovered ? (
-            <span>
-              {formatTimeLabel(hovered.time, timeframe)}
-              {' · '}
-              <span className={hovered.spread >= 0 ? 'text-green-400' : 'text-red-400'}>
-                {(hovered.spread * 100).toFixed(4)}%
-              </span>
-              {' · '}
-              <span className="text-blue-400">
-                {(hovered.annualized * 100).toFixed(2)}% APY
-              </span>
-            </span>
+            <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
+              {formatTime(hovered.t, tf)}
+              {'  '}
+              <span className="text-green-400">{fmtPct(hovered.edge)}</span>
+              <span className="text-muted-foreground/50"> ann.</span>
+            </p>
           ) : (
-            <span>
-              Spread
-              <span className="text-blue-400 ml-2">— APY</span>
-            </span>
+            <p className="text-[11px] text-muted-foreground/50 mt-0.5">Annualized Gross Edge</p>
           )}
         </div>
         <div className="flex gap-0.5 bg-white/[0.04] rounded p-0.5">
-          {(['D', 'W', 'M'] as Timeframe[]).map((tf) => (
+          {(['D', 'W', 'M'] as Timeframe[]).map((t) => (
             <button
-              key={tf}
-              onClick={() => setTimeframe(tf)}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                timeframe === tf
-                  ? 'bg-white/[0.08] text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
+              key={t}
+              onClick={() => setTf(t)}
+              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                tf === t ? 'bg-white/[0.08] text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {tf}
+              {t}
             </button>
           ))}
         </div>
       </div>
 
-      <svg
-        viewBox={`0 0 ${chartW} ${chartH + 16}`}
-        className="w-full"
-        onMouseLeave={() => setHoveredIdx(null)}
-      >
-        {/* Zero line */}
-        <line x1="0" y1={midY} x2={chartW} y2={midY} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+      {loading ? (
+        <div className="flex items-center justify-center h-[160px] text-xs text-muted-foreground">Loading...</div>
+      ) : error || data.length === 0 ? (
+        <div className="flex items-center justify-center h-[160px] text-xs text-muted-foreground">
+          {error ? `Error: ${error}` : 'No data yet — snapshots accumulate every minute'}
+        </div>
+      ) : (
+        <EdgeChart data={data} tf={tf} hoverIdx={hoverIdx} setHoverIdx={setHoverIdx} />
+      )}
 
-        {/* Y-axis: spread scale (right, top/bottom) */}
-        <text x={chartW - 2} y={12} fill="#64748b" fontSize="8" fontFamily="monospace" textAnchor="end" opacity="0.7">
-          {(maxAbs * 100).toFixed(3)}%
-        </text>
-        <text x={chartW - 2} y={chartH - 2} fill="#64748b" fontSize="8" fontFamily="monospace" textAnchor="end" opacity="0.7">
-          -{(maxAbs * 100).toFixed(3)}%
-        </text>
-
-        {/* Y-axis: APY scale (left) */}
-        <text x="2" y={12} fill="#3b82f6" fontSize="8" fontFamily="monospace" opacity="0.6">
-          {(maxApy * 100).toFixed(0)}%
-        </text>
-        <text x="2" y={chartH - 2} fill="#3b82f6" fontSize="8" fontFamily="monospace" opacity="0.6">
-          -{(maxApy * 100).toFixed(0)}%
-        </text>
-
-        {/* Spread bars */}
-        {data.map((d, i) => {
-          const x = (i / data.length) * chartW + 1
-          const normalizedH = (Math.abs(d.spread) / maxAbs) * (midY - 4)
-          const isPositive = d.spread >= 0
-          const y = isPositive ? midY - normalizedH : midY
-          const isHovered = hoveredIdx === i
-
-          return (
-            <g key={i}>
-              <rect
-                x={x}
-                y={y}
-                width={barW}
-                height={Math.max(1, normalizedH)}
-                fill={isPositive ? (isHovered ? '#22c55e' : '#22c55e99') : (isHovered ? '#ef4444' : '#ef444499')}
-                rx={1}
-              />
-              <rect
-                x={x - 1}
-                y={0}
-                width={barW + 2}
-                height={chartH}
-                fill="transparent"
-                onMouseEnter={() => setHoveredIdx(i)}
-              />
-            </g>
-          )
-        })}
-
-        {/* APY line overlay */}
-        <path d={apyPath} fill="none" stroke="#3b82f6" strokeWidth="1.5" opacity="0.8" />
-
-        {/* APY hover dot */}
-        {hovered && hoveredIdx !== null && (
-          <circle
-            cx={(hoveredIdx / data.length) * chartW + barW / 2}
-            cy={midY - (hovered.annualized / maxApy) * (midY - 8)}
-            r="3"
-            fill="#3b82f6"
-          />
-        )}
-
-        {/* X-axis labels */}
-        {data.map((d, i) => {
-          if (i % labelStep !== 0) return null
-          const x = (i / data.length) * chartW + barW / 2
-          return (
-            <text
-              key={i}
-              x={Math.max(20, x)}
-              y={chartH + 12}
-              textAnchor="middle"
-              fill="#64748b"
-              fontSize="7"
-              fontFamily="monospace"
-            >
-              {formatTimeLabel(d.time, timeframe)}
-            </text>
-          )
-        })}
-      </svg>
+      <div className="mt-2 rounded border border-blue-500/10 bg-blue-500/[0.04] px-3 py-1.5 flex items-start gap-2">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-blue-400/50 shrink-0 mt-px">
+          <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2"/>
+          <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+        </svg>
+        <p className="text-[11px] text-blue-300/60 leading-relaxed">
+          Shows opportunity magnitude over time. Trade direction is determined by current venue funding rates.
+        </p>
+      </div>
     </div>
+  )
+}
+
+function EdgeChart({ data, tf, hoverIdx, setHoverIdx }: {
+  data: { t: string; basis: number; edge: number }[]
+  tf: Timeframe
+  hoverIdx: number | null
+  setHoverIdx: (i: number | null) => void
+}) {
+  const W = 700
+  const H = 160
+  const padTop = 14
+  const padBottom = 6
+  const barW = Math.max(1.5, (W / data.length) - 0.5)
+
+  const maxEdge = Math.max(...data.map((d) => d.edge), 0.001)
+  const chartH = H - padTop - padBottom
+
+  const labelCount = 7
+  const labelStep = Math.max(1, Math.floor(data.length / labelCount))
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1]
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H + 18}`}
+      className="w-full"
+      onMouseLeave={() => setHoverIdx(null)}
+    >
+      <defs>
+        <linearGradient id="edgeGrad" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0%" stopColor="#22c55e" stopOpacity="0.08" />
+          <stop offset="40%" stopColor="#22c55e" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#22c55e" stopOpacity="0.9" />
+        </linearGradient>
+      </defs>
+
+      {/* Background */}
+      <rect x="0" y={padTop} width={W} height={chartH} fill="#22c55e" opacity="0.015" rx="2" />
+
+      {/* Y grid + labels */}
+      {yTicks.map((t) => {
+        const y = padTop + chartH - t * chartH
+        return (
+          <g key={t}>
+            {t > 0 && <line x1="0" y1={y} x2={W} y2={y} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />}
+            <text x={W - 2} y={y - 3} fill="#64748b" fontSize="7" fontFamily="monospace" textAnchor="end" opacity="0.5">
+              {fmtPct(t * maxEdge)}
+            </text>
+          </g>
+        )
+      })}
+
+      {/* Zero line */}
+      <line x1="0" y1={padTop + chartH} x2={W} y2={padTop + chartH} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+
+      {/* Bars */}
+      {data.map((d, i) => {
+        const x = (i / data.length) * W
+        const barH = (d.edge / maxEdge) * chartH
+        const y = padTop + chartH - barH
+
+        return (
+          <g key={i}>
+            <rect
+              x={x}
+              y={y}
+              width={barW}
+              height={Math.max(0.5, barH)}
+              fill="url(#edgeGrad)"
+              opacity={hoverIdx === i ? 1 : 0.85}
+            />
+            <rect
+              x={x}
+              y={0}
+              width={Math.max(barW, 4)}
+              height={H}
+              fill="transparent"
+              onMouseEnter={() => setHoverIdx(i)}
+            />
+          </g>
+        )
+      })}
+
+      {/* Hover crosshair */}
+      {hoverIdx !== null && (
+        <line
+          x1={(hoverIdx / data.length) * W + barW / 2}
+          y1={0}
+          x2={(hoverIdx / data.length) * W + barW / 2}
+          y2={H}
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth="1"
+          strokeDasharray="2,2"
+        />
+      )}
+
+      {/* X-axis labels */}
+      {data.map((d, i) => {
+        if (i % labelStep !== 0) return null
+        const x = (i / data.length) * W + barW / 2
+        return (
+          <text key={i} x={Math.max(18, x)} y={H + 12} textAnchor="middle" fill="#64748b" fontSize="7" fontFamily="monospace">
+            {formatTime(d.t, tf)}
+          </text>
+        )
+      })}
+    </svg>
   )
 }
