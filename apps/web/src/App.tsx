@@ -140,10 +140,10 @@ export default function App() {
   return (
     <div className="dark h-screen bg-background flex flex-col overflow-hidden">
       <header className="h-12 border-b border-border flex items-center px-5 shrink-0">
-        <div className="flex items-center gap-2.5 mr-10">
+        <button className="flex items-center gap-2.5 mr-10 cursor-pointer" onClick={() => { setSelectedId(null); setActiveView('trade') }}>
           <OrbitalLogo />
           <span className="text-[15px] font-semibold tracking-tight text-foreground">Orbital Market</span>
-        </div>
+        </button>
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
@@ -216,9 +216,7 @@ export default function App() {
           />
         )}
 
-        {showAccounts && (
-          <ConnectAccounts onConnectionChange={setConnectedVenues} onClose={() => setShowAccounts(false)} />
-        )}
+        <ConnectAccounts open={showAccounts} onConnectionChange={setConnectedVenues} onClose={() => setShowAccounts(false)} />
       </div>
 
     </div>
