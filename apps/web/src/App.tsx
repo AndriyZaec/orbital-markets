@@ -14,12 +14,14 @@ import { OpportunityPanel } from '@/components/OpportunityPanel'
 
 import { PaperPositions } from '@/components/PaperPositions'
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
+import { FeeRebates } from '@/components/FeeRebates'
+import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { FundingChart } from '@/components/FundingChart'
 import { getMockLeverage, getMockApr24h, getMockApr7d, getMockDailyVolume } from '@/lib/hacks'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'analytics'
+type View = 'trade' | 'analytics' | 'rebates'
 type SortField = 'asset' | 'apr' | 'apr24h' | 'apr7d' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'volume'
 type SortDir = 'asc' | 'desc'
 
@@ -80,6 +82,8 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [connectedVenues, setConnectedVenues] = useState(0)
+  const [showAccounts, setShowAccounts] = useState(false)
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
@@ -143,6 +147,7 @@ export default function App() {
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
+          <NavBtn active={activeView === 'rebates'} onClick={() => setActiveView('rebates')}>Fee Rebates</NavBtn>
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {/* Refresh countdown */}
@@ -152,46 +157,69 @@ export default function App() {
               {isLive ? `${Math.ceil(countdown)}s` : '...'}
             </span>
           </div>
-          {/* Test mode badge */}
           <div className="flex items-center gap-1.5 rounded border border-yellow-400/30 px-2 py-0.5">
             <div className="size-1.5 rounded-full bg-yellow-400" />
-            <span className="text-[11px] text-yellow-400 font-medium">Test Mode</span>
+            <span className="text-[11px] text-yellow-400 font-medium">Test</span>
           </div>
+          <button
+            onClick={() => setShowAccounts((v) => !v)}
+            className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              showAccounts
+                ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
+                : connectedVenues > 0
+                  ? 'border-green-500/30 bg-green-500/[0.06] text-green-400 hover:bg-green-500/10'
+                  : 'border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08]'
+            }`}
+          >
+            <div className={`size-1.5 rounded-full ${connectedVenues > 0 ? 'bg-green-400' : 'bg-zinc-500'}`} />
+            {connectedVenues > 0 ? `${connectedVenues} Connected` : 'Connect'}
+          </button>
         </div>
       </header>
 
-      {activeView === 'trade' && (
-        <div className="flex-1 flex min-h-0">
-          <div className="flex-1 flex flex-col min-w-0 min-h-0">
-            <div className="flex-1 flex flex-col min-h-0">
-              {selected ? (
-                <OpportunityDetail opportunity={selected} onBack={() => setSelectedId(null)} />
-              ) : (
-                <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={setSelectedId} />
-              )}
-            </div>
-            <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative" style={{ height: posHeight }}>
-              <div
-                className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
-                onMouseDown={onResizeStart}
-              />
-              <PaperPositions />
-            </div>
-          </div>
-          {selected && (
-            <OpportunityPanel
-              opportunity={selected}
-              lastUpdated={lastUpdated}
-              onClose={() => setSelectedId(null)}
-              onExecute={handleExecutePaper}
-            />
+      <div className="flex-1 flex min-h-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {activeView === 'trade' && (
+            <>
+              <div className="flex-1 flex flex-col min-h-0">
+                {selected ? (
+                  <OpportunityDetail opportunity={selected} onBack={() => setSelectedId(null)} />
+                ) : (
+                  <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={setSelectedId} />
+                )}
+              </div>
+              <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative" style={{ height: posHeight }}>
+                <div
+                  className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
+                  onMouseDown={onResizeStart}
+                />
+                <PaperPositions />
+              </div>
+            </>
+          )}
+
+          {activeView === 'analytics' && (
+            <div className="flex-1 overflow-auto min-h-0"><AnalyticsDashboard /></div>
+          )}
+
+          {activeView === 'rebates' && (
+            <div className="flex-1 overflow-auto min-h-0"><FeeRebates /></div>
           )}
         </div>
-      )}
 
-      {activeView === 'analytics' && (
-        <div className="flex-1 overflow-auto min-h-0"><AnalyticsDashboard /></div>
-      )}
+        {activeView === 'trade' && selected && (
+          <OpportunityPanel
+            opportunity={selected}
+            lastUpdated={lastUpdated}
+            onClose={() => setSelectedId(null)}
+            onExecute={handleExecutePaper}
+          />
+        )}
+
+        {showAccounts && (
+          <ConnectAccounts onConnectionChange={setConnectedVenues} onClose={() => setShowAccounts(false)} />
+        )}
+      </div>
 
     </div>
   )
