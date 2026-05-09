@@ -143,7 +143,7 @@ export default function App() {
       <header className="h-12 border-b border-border flex items-center px-5 shrink-0">
         <button className="flex items-center gap-2.5 mr-10 cursor-pointer" onClick={() => { setSelectedId(null); setActiveView('trade') }}>
           <OrbitalLogo />
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">Orbital Market</span>
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">Orbital Markets</span>
         </button>
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
@@ -267,16 +267,27 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
 
   return (
     <>
+      {loading ? (
+        <div className="flex-1 flex flex-col items-center justify-center bg-[#080b12]">
+          <div className="relative size-10 animate-[loader-pulse_2s_ease-in-out_infinite]">
+            <div className="absolute inset-0 rounded-full border-2 border-slate-500/40" />
+            <div className="absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="size-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
+            </div>
+          </div>
+          <p className="text-muted-foreground text-xs mt-3">Scanning opportunities...</p>
+        </div>
+      ) : (<>
       <div className="px-5 pt-5 pb-3 shrink-0 bg-[#080b12]">
         <h2 className="text-base font-bold text-foreground">Funding Rate Arb Opportunities</h2>
       </div>
       <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
-        {loading && <p className="text-muted-foreground text-sm px-5 py-6">Loading...</p>}
         {error && <p className="text-destructive text-sm px-5 py-6">Error: {error}</p>}
         {!loading && !error && opportunities.length === 0 && (
           <p className="text-muted-foreground text-sm px-5 py-6">No opportunities detected yet. Waiting for scan...</p>
         )}
-        {sorted.length > 0 && (
+        {!loading && sorted.length > 0 && (
           <Table>
             <TableHeader className="sticky top-0 z-10">
               <TableRow className="hover:bg-transparent bg-[#080b12]">
@@ -330,6 +341,7 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
           </Table>
         )}
       </div>
+      </>)}
     </>
   )
 }

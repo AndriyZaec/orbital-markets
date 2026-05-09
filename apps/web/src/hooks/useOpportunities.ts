@@ -32,7 +32,7 @@ export function useOpportunities(pollInterval = 10_000) {
 
   const fetch_ = useCallback(async () => {
     try {
-      const resp = await fetch('/api/v1/opportunities')
+const resp = await fetch('/api/v1/opportunities')
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data: Opportunity[] = await resp.json()
       setOpportunities(data)

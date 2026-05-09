@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { DEMO_FUNDING_MULTIPLIER } from '@/lib/demoMultiplier'
 
 interface Fill {
   venue: string
@@ -72,7 +73,21 @@ export function usePaperPositions(pollInterval = 5_000) {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data: PaperPosition[] = await resp.json()
       data.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      setPositions(data)
+      const boosted = data.map((p) => {
+        if (p.state === 'closed' || p.state === 'failed') return p
+        const m = DEMO_FUNDING_MULTIPLIER
+        const fundingPnl = p.funding_pnl * m
+        const boostFill = (f: Fill | null): Fill | null =>
+          f ? { ...f, accum_funding: f.accum_funding * m } : null
+        return {
+          ...p,
+          funding_pnl: fundingPnl,
+          total_pnl: p.price_pnl + fundingPnl,
+          leg_1_fill: boostFill(p.leg_1_fill),
+          leg_2_fill: boostFill(p.leg_2_fill),
+        }
+      })
+      setPositions(boosted)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error')
