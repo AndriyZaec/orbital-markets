@@ -16,12 +16,13 @@ import { PaperPositions } from '@/components/PaperPositions'
 import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
 import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
+import { ForAgents } from '@/components/ForAgents'
 import { FundingChart } from '@/components/FundingChart'
 import { getMockLeverage, getMockApr24h, getMockApr7d, getMockDailyVolume } from '@/lib/hacks'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'analytics' | 'rebates'
+type View = 'trade' | 'analytics' | 'rebates' | 'agents'
 type SortField = 'asset' | 'apr' | 'apr24h' | 'apr7d' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'volume'
 type SortDir = 'asc' | 'desc'
 
@@ -148,6 +149,16 @@ export default function App() {
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
           <NavBtn active={activeView === 'rebates'} onClick={() => setActiveView('rebates')}>Fee Rebates</NavBtn>
+          <button
+            onClick={() => setActiveView('agents')}
+            className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-all ${
+              activeView === 'agents' ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]'
+            }`}
+          >
+            <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#9945FF] via-[#14F195] to-[#9945FF] bg-[length:200%_100%] animate-[gradient-shift_6s_ease-in-out_infinite]">
+              For Agents
+            </span>
+          </button>
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {/* Refresh countdown */}
@@ -204,6 +215,10 @@ export default function App() {
 
           {activeView === 'rebates' && (
             <div className="flex-1 overflow-auto min-h-0"><FeeRebates /></div>
+          )}
+
+          {activeView === 'agents' && (
+            <div className="flex-1 overflow-auto min-h-0"><ForAgents /></div>
           )}
         </div>
 
