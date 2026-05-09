@@ -103,7 +103,7 @@ export function PaperPositions() {
   return (
     <>
       {/* Header */}
-      <div className="px-5 py-2 flex items-center gap-3 shrink-0">
+      <div className="px-5 py-2 flex items-center gap-3 shrink-0 bg-[#080b12]">
         <h2 className="text-sm font-semibold text-foreground">Positions</h2>
         <div className="flex gap-0 ml-1">
           <TabBtn active={tab === 'open'} onClick={() => setTab('open')}>
@@ -116,7 +116,7 @@ export function PaperPositions() {
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto min-h-0">
+      <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
         {loading && <p className="text-muted-foreground text-xs px-5 py-3">Loading...</p>}
         {error && <p className="text-destructive text-xs px-5 py-3">Error: {error}</p>}
 

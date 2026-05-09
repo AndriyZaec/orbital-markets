@@ -93,8 +93,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   return (
     <div
-      className="border-l border-border bg-card flex flex-col shrink-0 transition-all duration-300 ease-in-out overflow-hidden"
-      style={{ width: open ? 340 : 0, minWidth: open ? 340 : 0, opacity: open ? 1 : 0 }}
+      className="border-l border-border bg-card flex flex-col shrink-0 w-[340px] min-w-[340px] transition-[margin] duration-300 ease-in-out overflow-hidden"
+      style={{ marginRight: open ? 0 : -340 }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">

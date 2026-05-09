@@ -188,7 +188,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 bg-[#080b12] overflow-hidden">
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {activeView === 'trade' && (
             <>
@@ -267,10 +267,10 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
 
   return (
     <>
-      <div className="px-5 pt-5 pb-3 shrink-0">
+      <div className="px-5 pt-5 pb-3 shrink-0 bg-[#080b12]">
         <h2 className="text-base font-bold text-foreground">Funding Rate Arb Opportunities</h2>
       </div>
-      <div className="flex-1 overflow-auto min-h-0">
+      <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
         {loading && <p className="text-muted-foreground text-sm px-5 py-6">Loading...</p>}
         {error && <p className="text-destructive text-sm px-5 py-6">Error: {error}</p>}
         {!loading && !error && opportunities.length === 0 && (
