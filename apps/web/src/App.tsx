@@ -237,7 +237,7 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
         )}
         {sorted.length > 0 && (
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow className="hover:bg-transparent">
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
                 <TableHead className="text-left">Long</TableHead>
