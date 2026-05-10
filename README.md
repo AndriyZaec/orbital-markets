@@ -45,8 +45,8 @@ Orbital is built to close that gap.
 
 Orbital is currently built around:
 
-- **Pacifica**
-- **Hyperliquid**
+- **Pacifica** — Solana
+- **Hyperliquid** — Hyperliquid L1
 
 The current live execution foundation is being built venue-by-venue, starting with Pacifica.
 
@@ -66,6 +66,19 @@ It optimizes for the full trade lifecycle:
 - real outcome analytics
 
 **Orbital turns funding opportunities into structured, risk-aware execution workflows.**
+
+### Solana Ecosystem Benefits
+
+Orbital is not just another trading UI.
+
+It helps the Solana ecosystem by making fragmented perp liquidity more usable:
+
+- it routes attention and eventually execution toward Solana-native trading venues
+- it gives traders a cleaner way to compare funding opportunities instead of leaving liquidity fragmented and opaque
+- it improves capital efficiency by helping users size and manage hedged positions more intelligently
+- it creates a control layer that future Solana agents, allocators, and automation systems can build on top of
+
+For the hackathon context, Orbital shows how Solana trading infrastructure can evolve from raw venue access into a higher-level execution and risk coordination layer.
 
 ## Current Product Surface
 
@@ -169,19 +182,6 @@ Its moat is the control layer between raw venue data and actual execution:
 - monitoring and analytics that improve future decisions
 
 This is the layer that traders, desks, and future agents do not want to rebuild venue by venue.
-
-## Why This Matters For Solana
-
-Orbital is not just another trading UI.
-
-It helps the Solana ecosystem by making fragmented perp liquidity more usable:
-
-- it routes attention and eventually execution toward Solana-native trading venues
-- it gives traders a cleaner way to compare funding opportunities instead of leaving liquidity fragmented and opaque
-- it improves capital efficiency by helping users size and manage hedged positions more intelligently
-- it creates a control layer that future Solana agents, allocators, and automation systems can build on top of
-
-For the hackathon context, Orbital shows how Solana trading infrastructure can evolve from raw venue access into a higher-level execution and risk coordination layer.
 
 ## Business Narrative
 
