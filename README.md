@@ -6,155 +6,130 @@
 
 Orbital Market is an execution copilot for hedged carry trades.
 
-It helps traders discover funding opportunities across venues, size them based on real execution quality, open the hedge in a safer way, and manage the position until exit.
+It helps traders and future autonomous agents discover funding opportunities across venues, size them based on real execution quality, open the hedge in a safer way, and manage the position until exit.
 
-This is not a passive yield vault.
-This is not a generic trading terminal.
-This is not a pure arbitrage dashboard.
+## The Problem
 
-Orbital is built around one hard problem: turning attractive funding spreads into trades that are actually executable and worth holding.
+Most funding-rate products stop at signal discovery.
 
-## Why This Exists
+They can show a high APY, but they do not answer the hard questions:
 
-Most funding-rate tools stop at signal discovery.
+- can this trade actually be entered at size?
+- how much slippage and fake liquidity risk is hiding underneath?
+- how long does the trade need to survive to break even?
+- what happens if one leg fills and the other does not?
+- when should the trade be closed before the thesis breaks?
 
-They tell you where the APY looks high, but not:
+Orbital is built to close that gap.
 
-- whether the trade can be entered cleanly at size
-- how much slippage and inventory risk you are taking
-- how long you need to hold to break even
-- whether the hedge is still healthy after entry
-- when you should exit before the thesis breaks
-
-Orbital is designed to close that gap.
-
-## Product
+## What Orbital Does
 
 **Three layers. One execution loop. Real carry trades.**
 
 ### Market Intelligence
-
-Funding spread discovery.
-Execution-aware edge ranking.
-Liquidity and slippage checks.
+- funding spread discovery
+- execution-aware edge ranking
+- liquidity and slippage checks
 
 ### Execution Engine
-
-Two-leg execution plans.
-Recommended notional sizing.
-Hedge integrity controls.
+- two-leg execution plans
+- recommended notional sizing
+- hedge integrity controls
 
 ### Monitoring & Analytics
+- price, funding, and total PnL
+- basis and liquidation tracking
+- paper execution and post-trade analytics
 
-Price, funding, and total PnL.
-Basis and liquidation tracking.
-Paper execution and post-trade analytics.
+## Venues
 
-## Core Workflow
+Orbital is currently built around:
 
-1. Scan venues for funding and basis opportunities.
-2. Rank opportunities by execution-aware edge, not headline APY alone.
-3. Build a fresh execution plan from live venue data.
-4. Validate slippage, liquidity quality, and hedge viability.
-5. Execute two legs with guarded sequential logic.
-6. Monitor funding carry, basis drift, liquidation proximity, and exit conditions.
+- **Pacifica**
+- **Hyperliquid**
 
-## What Makes Orbital Different
+The current live execution foundation is being built venue-by-venue, starting with Pacifica.
+
+The product architecture is intentionally adapter-based, so additional venues can be added without rewriting the execution and monitoring layers.
+
+## Why It Matters
 
 Orbital does not optimize for the prettiest spread table.
 
 It optimizes for the full trade lifecycle:
 
-- signal quality
-- sizing quality
+- better trade selection
 - safer hedge entry
-- degraded-state handling
-- break-even awareness
+- smarter sizing
+- degradation and liquidation awareness
+- break-even visibility
 - real outcome analytics
-
-In one line:
 
 **Orbital turns funding opportunities into structured, risk-aware execution workflows.**
 
-## Current Capabilities
+## Current Product Surface
 
-### Scanner
-
-- Pacifica and Hyperliquid venue adapters
-- normalized market snapshots
-- funding spread detection
-- annualized gross edge and estimated net edge
-- execution-aware ranking
-
-### Execution Preview
-
-- fresh execution plan generation
-- two-leg trade preview
-- slippage and entry cost bounds
-- leverage-aware margin and exposure view
-- recommended notional sizing
-
-### Liquidity Intelligence
-
+### Trading Core
+- Pacifica + Hyperliquid market ingestion
+- normalized scanner across 292 markets
+- execution preview for two-leg trades
+- canonical funding and edge model
 - BBO-first sizing model
-- explicit liquidity labels: `deep`, `medium`, `thin`, `toxic`
-- fake-liquidity suspicion signals
-- hard slippage blockers and warnings
+- liquidity labels: `deep`, `medium`, `thin`, `toxic`
+- fake-liquidity detection and slippage blockers
 
-### Paper Execution
-
-- execution state machine
+### Paper Trading Engine
+- paper execution state machine
 - partial-fill-aware logic
 - retry, unwind, and degraded handling
-- per-leg tracking
-- auto-close on degraded state, edge collapse, and critical liquidation risk
-- manual close support
+- auto-close on:
+  - degraded state
+  - edge collapse
+  - critical liquidation risk
+- manual close
 
 ### Monitoring
-
-- price PnL, funding PnL, total PnL
+- per-leg tracking
+- funding PnL, price PnL, total PnL
 - basis tracking
-- leverage and gross exposure
+- leverage and exposure view
 - estimated liquidation price and liquidation distance
-- per-leg funding and PnL tracking
+- liquidation risk levels: `safe`, `elevated`, `warning`, `critical`
 
 ### Analytics
-
 - DB-backed paper analytics
 - break-even tracking
 - risk-tier and asset breakdowns
-- close-reason analysis
-- research history for replay and iteration
+- historical edge persistence chart based on real recorded snapshots
 
-## Technical Design
+### Product Surfaces
+- `Fee Rebates` page for GTM narrative
+- `Connect Accounts` side panel for multi-venue ops UX
+- `For Agents` page positioning Orbital as a control layer for autonomous capital
+- demo-friendly `Account Overview` focused on health, exposure, risk, and carry
 
-### Architecture
+## Technical Highlights
 
-- `apps/api` — Go backend, scanner, paper execution, analytics, persistence
-- `apps/web` — React frontend for opportunities, plan preview, paper positions, and analytics
-- `packages/shared` — shared types/utilities
-- `services/` — reserved for additional execution and market-data services as the system evolves
+### Stack
+- `apps/api` — Go backend
+- `apps/web` — React + Tailwind frontend
+- `SQLite` + embedded migrations + `sqlc`
 
-### Backend Principles
-
-- off-chain-first execution architecture
-- normalized venue adapters
-- canonical funding and edge math
-- BBO-first liquidity model
-- SQLite-backed research and analytics layer
-- paper execution before live execution
-
-### Data Model
-
-The product is organized around three core objects:
-
+### Core Models
 - `Opportunity` — scan and ranking object
 - `ExecutionPlan` — concrete open/close plan
 - `Position` — tracked trade lifecycle object
 
+### Current Architecture
+- off-chain-first execution architecture
+- normalized venue adapters
+- canonical hourly-normalized funding model
+- BBO-first liquidity model with OI as secondary context
+- paper execution before live execution
+
 ## Execution Semantics
 
-Orbital currently models execution with the following rules:
+Orbital already models the hard parts of two-leg execution:
 
 - riskier leg first
 - leg 2 sized from actual leg 1 fill
@@ -163,64 +138,105 @@ Orbital currently models execution with the following rules:
 - retry once -> unwind -> degraded recovery policy
 - explicit degraded state in backend and UI
 
-This gives the system a realistic execution model before live capital is introduced.
+## Live Trading Progress
 
-## Risk Model
+Pacifica live execution groundwork is already in place:
 
-Orbital assumes that funding carry is not enough by itself.
+- private account streams modeled:
+  - `account_info`
+  - `account_positions`
+  - `account_margin`
+  - `account_leverage`
+  - `account_order_updates`
+  - `account_trades`
+- pre-trade account validation
+- live market-order submit path
+- fill/status confirmation model
+- live close / unwind path
 
-The engine explicitly models and surfaces:
+The next major trading milestone is completing the second venue live path and then wiring the first constrained real two-leg execution loop.
 
-- slippage
-- fake liquidity
-- basis drift
-- partial fill risk
-- leverage and liquidation proximity
-- break-even time vs holding time
+## What Makes Orbital Defensible
 
-The product is designed to answer a hard but practical question:
+Orbital is not just a funding scanner.
 
-**Is this carry trade actually worth entering, sizing, and holding?**
+Its moat is the control layer between raw venue data and actual execution:
 
-## Business Value
+- execution-aware sizing
+- fake-liquidity filtering
+- hedge integrity rules
+- degradation handling
+- monitoring and analytics that improve future decisions
 
-For users, Orbital provides:
+This is the layer that traders, desks, and future agents do not want to rebuild venue by venue.
 
-- better filtering of attractive but bad trades
-- safer execution on fragile liquidity
-- clear trade sizing instead of blind notional guesses
-- live view into whether the carry thesis is still intact
-- analytics that improve future execution decisions
+## Why This Matters For Solana
 
-For the business, Orbital can naturally monetize at the execution layer:
+Orbital is not just another trading UI.
 
-- execution fees on opened trades
-- premium analytics and monitoring
-- later, managed or semi-automated capital rotation workflows
+It helps the Solana ecosystem by making fragmented perp liquidity more usable:
 
-## Project Status
+- it routes attention and eventually execution toward Solana-native trading venues
+- it gives traders a cleaner way to compare funding opportunities instead of leaving liquidity fragmented and opaque
+- it improves capital efficiency by helping users size and manage hedged positions more intelligently
+- it creates a control layer that future Solana agents, allocators, and automation systems can build on top of
 
-Orbital already has a real vertical slice:
+For the hackathon context, Orbital shows how Solana trading infrastructure can evolve from raw venue access into a higher-level execution and risk coordination layer.
 
-- live market ingestion
+## Business Narrative
+
+Orbital can grow in three directions:
+
+1. trader-facing carry execution workflow
+2. premium analytics and monitoring
+3. future agent-ready execution and control layer
+
+The product is designed so that humans can use it today, while autonomous capital workflows can build on top of it later.
+
+## Run Locally
+
+### Backend
+
+```bash
+make api-run
+```
+
+This starts the Go API from `apps/api`, runs embedded SQLite migrations automatically, and creates/updates `apps/api/orbital.db`.
+
+### Frontend
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+The frontend runs on Vite and talks to the local API.
+
+### Build
+
+Backend:
+
+```bash
+make api-build
+```
+
+Frontend:
+
+```bash
+cd apps/web
+npm run build
+```
+
+## Status
+
+Today it already has:
+
+- live venue data
 - normalized scanner
 - execution preview
-- paper trading engine
+- paper execution engine
 - monitoring and analytics
+- early live venue plumbing
 
-The next major step is constrained live execution plumbing for supported venues.
-
-## Philosophy
-
-Orbital is not trying to be a magical arbitrage bot.
-
-It is being built as a serious operator tool for hedged carry trading:
-
-- find better trades
-- size them rationally
-- execute them with more structure
-- manage them with less guesswork
-
-## Repository Notes
-
-This repo is under active development.
+The remaining work is not product definition. It is execution hardening.
