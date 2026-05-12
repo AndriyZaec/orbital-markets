@@ -20,7 +20,8 @@ interface Opportunity {
   liq_suspect: boolean
   confidence: 'low' | 'medium' | 'high'
   risk_tier: 'conservative' | 'standard' | 'aggressive' | 'experimental'
-  executable: boolean
+  execution_status: 'executable' | 'blocked'
+  risk_flags: string[] | null
   warnings: string[] | null
 }
 

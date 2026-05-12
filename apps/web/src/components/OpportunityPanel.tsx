@@ -256,7 +256,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
           disabled={!plan?.executable || planExpired || executing || planLoading}
           onClick={handleExecute}
         >
-          {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : !opp.executable ? 'Not Executable' : 'Open Spread Trade'}
+          {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Spread Trade'}
         </Button>
       </div>
     </div>

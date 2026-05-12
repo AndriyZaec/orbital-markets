@@ -182,7 +182,7 @@ export function PaperPositions() {
                       {fmtPnL(pos.total_pnl)}
                     </TableCell>
                     <TableCell className="py-2">
-                      {liqRisk && liqRisk !== '' ? (
+                      {liqRisk ? (
                         <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${liqRiskStyle(liqRisk)}`}>
                           {liqRisk}
                         </span>
