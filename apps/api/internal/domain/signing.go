@@ -59,3 +59,22 @@ type SignedAction struct {
 	// Hyperliquid: hex-encoded EIP-712 signature (r+s+v).
 	Signature string `json:"signature"`
 }
+
+// SubmissionResult is the venue-agnostic outcome of submitting a signed action.
+type SubmissionResult struct {
+	// Correlation
+	RequestID     string `json:"request_id"`
+	ClientOrderID string `json:"client_order_id"`
+
+	// Venue
+	Venue string `json:"venue"`
+
+	// Outcome
+	OrderID  string `json:"order_id,omitempty"`
+	Accepted bool   `json:"accepted"`
+	Error    string `json:"error,omitempty"`
+
+	// Timing
+	SubmittedAt time.Time `json:"submitted_at"`
+	RespondedAt time.Time `json:"responded_at"`
+}
