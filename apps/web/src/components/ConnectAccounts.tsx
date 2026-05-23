@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
-import { useAccount as useEvmAccount, useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
+import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
 import { injected } from 'wagmi/connectors'
 import { useVenueAuthority, type SigningReadiness } from '@/hooks/useVenueAuthority'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
@@ -50,7 +50,6 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   const solWallet = useWallet()
   const { setVisible: setSolModalVisible } = useWalletModal()
-  const evmAccount = useEvmAccount()
   const { connect: evmConnect } = useEvmConnect()
   const { disconnect: evmDisconnect } = useEvmDisconnect()
 

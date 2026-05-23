@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
+import { useLiveExecution } from '@/hooks/useLiveExecution'
+import { useVenueAuthority } from '@/hooks/useVenueAuthority'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 import { getMockLeverage } from '@/lib/hacks'
 
 interface Props {
@@ -10,6 +13,7 @@ interface Props {
   lastUpdated: Date | null
   onClose: () => void
   onExecute: (opportunityId: string, leverage: number) => Promise<void>
+  onViewPositions?: () => void
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -64,7 +68,7 @@ function useExpiry(expiresAt: string | null) {
 
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
-export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExecute }: Props) {
+export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExecute, onViewPositions }: Props) {
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
@@ -83,6 +87,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
   const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageVal)
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
+  const { isFullyReady } = useVenueAuthority()
+  const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
+  const [showLiveModal, setShowLiveModal] = useState(false)
+
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
   const shortLeg = plan ? (plan.leg_1.side === 'short' ? plan.leg_1 : plan.leg_2) : null
 
@@ -93,6 +101,16 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
     } finally {
       setExecuting(false)
     }
+  }
+
+  const handleExecuteLive = () => {
+    setShowLiveModal(true)
+    executeLive(opp.id, leverageVal)
+  }
+
+  const handleCloseLiveModal = () => {
+    setShowLiveModal(false)
+    resetLive()
   }
 
   return (
@@ -258,7 +276,29 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
         >
           {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Spread Trade'}
         </Button>
+
+        <Button
+          className="w-full mt-2 font-medium"
+          size="lg"
+          variant={isFullyReady ? 'default' : 'secondary'}
+          disabled={!isFullyReady || !plan?.executable || planExpired || planLoading}
+          onClick={handleExecuteLive}
+        >
+          {isFullyReady ? 'Execute Live' : 'Connect Wallets to Go Live'}
+        </Button>
+        {!isFullyReady && (
+          <p className="text-[10px] text-muted-foreground/60 text-center mt-1.5">Connect both venue accounts to enable live execution</p>
+        )}
       </div>
+
+      {showLiveModal && (
+        <LiveExecutionModal
+          state={liveState}
+          onRetry={handleExecuteLive}
+          onClose={handleCloseLiveModal}
+          onViewPositions={() => { handleCloseLiveModal(); onViewPositions?.() }}
+        />
+      )}
     </div>
   )
 }
