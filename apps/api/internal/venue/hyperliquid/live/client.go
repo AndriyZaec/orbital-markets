@@ -32,8 +32,10 @@ type AssetMap interface {
 }
 
 // Client submits live orders to Hyperliquid via REST.
+// Signer is optional — required only for custodial SubmitMarketOrder/SubmitCloseOrder.
+// The non-custodial SubmitSignedOrder path works without a signer.
 type Client struct {
-	signer       Signer
+	signer       Signer // nil in non-custodial mode
 	assetMap     AssetMap
 	accountState *account.AccountState
 	httpClient   *http.Client
@@ -69,6 +71,11 @@ func (c *Client) SubmitMarketOrder(
 	marginRequired float64,
 	clientOrderID string,
 ) (*SubmitResult, error) {
+	// Signer required for custodial path
+	if c.signer == nil {
+		return nil, fmt.Errorf("custodial submit requires a signer — use SubmitSignedOrder for non-custodial flow")
+	}
+
 	// 1. Pre-trade validation
 	snap := c.accountState.Snapshot()
 	validation := account.ValidatePreTrade(snap, symbol, marginRequired, leverage)
@@ -109,6 +116,11 @@ func (c *Client) SubmitCloseOrder(
 	price float64,
 	clientOrderID string,
 ) (*SubmitResult, error) {
+	// Signer required for custodial path
+	if c.signer == nil {
+		return nil, fmt.Errorf("custodial submit requires a signer — use SubmitSignedOrder for non-custodial flow")
+	}
+
 	// Check connectivity only (no margin check for close)
 	snap := c.accountState.Snapshot()
 	if !snap.Connected {

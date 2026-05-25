@@ -28,8 +28,10 @@ type Signer interface {
 }
 
 // Client submits live market orders to Pacifica.
+// Signer is optional — required only for custodial SubmitMarketOrder/SubmitCloseOrder.
+// The non-custodial SubmitSignedOrder path works without a signer.
 type Client struct {
-	signer       Signer
+	signer       Signer // nil in non-custodial mode
 	accountState *account.AccountState
 	logger       *slog.Logger
 
@@ -68,6 +70,11 @@ func (c *Client) SubmitMarketOrder(
 	marginRequired float64,
 	clientOrderID string,
 ) (*SubmitResult, error) {
+	// Signer required for custodial path
+	if c.signer == nil {
+		return nil, fmt.Errorf("custodial submit requires a signer — use SubmitSignedOrder for non-custodial flow")
+	}
+
 	// 1. Pre-trade validation
 	snap := c.accountState.Snapshot()
 	validation := account.ValidatePreTrade(snap, symbol, marginRequired, leverage)
@@ -177,6 +184,11 @@ func (c *Client) SubmitCloseOrder(
 	amount float64,
 	clientOrderID string,
 ) (*SubmitResult, error) {
+	// Signer required for custodial path
+	if c.signer == nil {
+		return nil, fmt.Errorf("custodial submit requires a signer — use SubmitSignedOrder for non-custodial flow")
+	}
+
 	// 1. Check account stream is alive (no margin check needed for close)
 	snap := c.accountState.Snapshot()
 	if !snap.Connected {
