@@ -33,6 +33,7 @@ func (s OrderStatus) IsTerminal() bool {
 // SubmitResult is the venue-agnostic outcome of an order submission attempt.
 type SubmitResult struct {
 	Venue         string    `json:"venue"`
+	RequestID     string    `json:"request_id,omitempty"`
 	OrderID       string    `json:"order_id"`
 	ClientOrderID string    `json:"client_order_id"`
 	Symbol        string    `json:"symbol"`

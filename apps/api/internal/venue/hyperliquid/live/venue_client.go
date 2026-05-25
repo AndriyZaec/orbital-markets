@@ -62,6 +62,7 @@ func (a *VenueClientAdapter) WaitForFill(ctx context.Context, clientOrderID stri
 func convertSubmitResult(r *SubmitResult) *venue.SubmitResult {
 	return &venue.SubmitResult{
 		Venue:         "hyperliquid",
+		RequestID:     r.RequestID,
 		OrderID:       r.OrderID,
 		ClientOrderID: r.ClientOrderID,
 		Symbol:        r.Symbol,

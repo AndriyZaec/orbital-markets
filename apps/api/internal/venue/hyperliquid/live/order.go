@@ -53,12 +53,14 @@ const (
 	OrderStatusFilled      OrderStatus = "filled"
 	OrderStatusRejected    OrderStatus = "rejected"
 	OrderStatusCancelled   OrderStatus = "cancelled"
+	OrderStatusExpired     OrderStatus = "expired"
 	OrderStatusTimeout     OrderStatus = "timeout"
 )
 
 func (s OrderStatus) IsTerminal() bool {
 	switch s {
-	case OrderStatusFilled, OrderStatusRejected, OrderStatusCancelled, OrderStatusTimeout:
+	case OrderStatusFilled, OrderStatusRejected, OrderStatusCancelled,
+		OrderStatusExpired, OrderStatusTimeout:
 		return true
 	}
 	return false

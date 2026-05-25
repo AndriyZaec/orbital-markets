@@ -61,6 +61,7 @@ func (a *VenueClientAdapter) WaitForFill(ctx context.Context, clientOrderID stri
 func convertSubmitResult(venueName string, r *SubmitResult) *venue.SubmitResult {
 	return &venue.SubmitResult{
 		Venue:         venueName,
+		RequestID:     r.RequestID,
 		OrderID:       r.OrderID,
 		ClientOrderID: r.ClientOrderID,
 		Symbol:        r.Symbol,
