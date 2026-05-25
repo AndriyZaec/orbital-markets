@@ -27,10 +27,10 @@ func (s *SigningRequestStore) Store(req *SigningRequest) {
 	s.requests[req.ID] = req
 }
 
-// Validate checks that a signed action matches a stored signing request.
-// Returns the original request if valid, or an error describing the mismatch.
-// Does not consume the request — call Consume after successful submission.
-func (s *SigningRequestStore) Validate(signed SignedAction) (*SigningRequest, error) {
+// ValidateAndConsume atomically validates a signed action against a stored
+// signing request and removes it from the store. This prevents double-submit:
+// a second request with the same ID will fail with "unknown request id".
+func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -70,14 +70,10 @@ func (s *SigningRequestStore) Validate(signed SignedAction) (*SigningRequest, er
 		return nil, fmt.Errorf("empty signer address")
 	}
 
-	return req, nil
-}
+	// Consume atomically — no second submit possible
+	delete(s.requests, signed.RequestID)
 
-// Consume removes a signing request after successful submission.
-func (s *SigningRequestStore) Consume(requestID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.requests, requestID)
+	return req, nil
 }
 
 // Cleanup removes expired requests older than maxAge beyond their expiry.

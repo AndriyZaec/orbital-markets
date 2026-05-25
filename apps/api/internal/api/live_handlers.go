@@ -200,8 +200,8 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Validate against stored signing request
-	sigReq, err := s.live.signingStore.Validate(signed)
+	// 1. Validate against stored signing request (atomic — prevents double-submit)
+	sigReq, err := s.live.signingStore.ValidateAndConsume(signed)
 	if err != nil {
 		s.logger.Warn("live submit: validation failed",
 			"request_id", signed.RequestID,
@@ -259,10 +259,18 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Consume the signing request on successful submission (accepted or rejected by venue)
-	s.live.signingStore.Consume(signed.RequestID)
+	if result == nil {
+		s.logger.Error("live submit: nil result without error",
+			"request_id", signed.RequestID,
+			"venue", signed.Venue,
+		)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "submission returned no result",
+		})
+		return
+	}
 
-	// 4. Log outcome
+	// 3. Log outcome
 	if result.Accepted {
 		s.logger.Info("live submit: order accepted",
 			"venue", result.Venue,
