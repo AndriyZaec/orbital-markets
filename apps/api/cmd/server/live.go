@@ -68,13 +68,11 @@ func startLive(
 
 	// --- Hyperliquid ---
 
-	// Account state
+	// Account state + subscriber (REST polling — HL has no WS for account state)
 	hlState := hlaccount.NewAccountState()
-	// No HL account subscriber exists yet — state stays disconnected until one is built.
-	// The pre-trade validator will block custodial submissions when state is not connected,
-	// which is the correct behavior. The non-custodial SubmitSignedOrder path
-	// does not run pre-trade validation (the frontend is responsible).
-	logger.Warn("live execution: hyperliquid account subscriber not yet implemented — account state will show disconnected")
+	hlAcctSub := hlaccount.NewSubscriber(logger, hlState, hlWSAddress)
+	go hlAcctSub.Run(ctx)
+	logger.Info("live execution: hyperliquid account subscriber started", "address", hlWSAddress)
 
 	// Order/fill tracker — needs the operator's address to subscribe to WS streams
 	hlTracker := hllive.NewTracker(logger, hlWSAddress)
