@@ -20,16 +20,18 @@ const (
 // LiveExecutor orchestrates real two-leg spread execution across venues.
 type LiveExecutor struct {
 	venues map[string]venue.VenueClient // keyed by venue name
+	store  *Store                       // nil = no persistence
 	logger *slog.Logger
 }
 
-func NewLiveExecutor(logger *slog.Logger, venues ...venue.VenueClient) *LiveExecutor {
+func NewLiveExecutor(logger *slog.Logger, store *Store, venues ...venue.VenueClient) *LiveExecutor {
 	m := make(map[string]venue.VenueClient, len(venues))
 	for _, v := range venues {
 		m[v.Name()] = v
 	}
 	return &LiveExecutor{
 		venues: m,
+		store:  store,
 		logger: logger,
 	}
 }
@@ -59,6 +61,17 @@ func (e *LiveExecutor) Execute(
 		State:         ExecStateFailed,
 		StartedAt:     started,
 	}
+
+	// Persist the full result when execution completes (any return path)
+	defer func() {
+		if e.store != nil {
+			e.store.PersistFullResult(
+				context.Background(), result,
+				plan.Leg1.Venue, plan.Leg2.Venue,
+				plan.Notional, plan.Leverage.Leverage,
+			)
+		}
+	}()
 
 	// 1. Admission gate
 	admission := domain.CheckLiveAdmission(opp, plan.Leverage.Leverage)
