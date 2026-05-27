@@ -55,7 +55,7 @@ func main() {
 	go monitor.Run(ctx)
 
 	// Live execution deps (non-custodial signing flow)
-	liveDeps := startLive(ctx, logger, pac, hl)
+	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps)
 

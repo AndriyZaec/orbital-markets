@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"os"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
@@ -28,6 +30,8 @@ import (
 func startLive(
 	ctx context.Context,
 	logger *slog.Logger,
+	database *sql.DB,
+	market executor.MarketSource,
 	pac *pacifica.Adapter,
 	hl *hyperliquid.Adapter,
 ) *api.LiveDeps {
@@ -86,6 +90,12 @@ func startLive(
 	// Live client — nil signer (non-custodial mode)
 	hlClient := hllive.NewClient(logger, nil, hlAssetMap, hlState, hlTracker)
 	logger.Info("live execution: hyperliquid live client ready (non-custodial)")
+
+	// --- Live position store + monitor ---
+	liveStore := executor.NewStore(database, logger)
+	liveMonitor := executor.NewMonitor(logger, liveStore, market)
+	go liveMonitor.Run(ctx)
+	logger.Info("live execution: live position monitor started")
 
 	// --- Signing store ---
 	signingStore := domain.NewSigningRequestStore()

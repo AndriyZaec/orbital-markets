@@ -133,77 +133,67 @@ func (s *Store) InsertEvent(ctx context.Context, positionID, event string, state
 	}
 }
 
-// GetPosition returns a live position by ID.
-func (s *Store) GetPosition(ctx context.Context, id string) (*LivePosition, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, plan_id, opportunity_id, asset,
-			venue_a, venue_b, state,
-			notional, leverage,
-			entry_spread, hedge_mismatch,
-			started_at, opened_at, completed_at, updated_at
-		FROM live_positions WHERE id = ?`, id)
+// livePositionCols is the column list for live_positions queries.
+const livePositionCols = `id, plan_id, opportunity_id, asset,
+	venue_a, venue_b, state,
+	notional, leverage,
+	entry_spread, hedge_mismatch,
+	current_spread, current_basis, entry_basis, basis_change,
+	price_pnl, funding_pnl, total_pnl,
+	leg1_current_price, leg2_current_price,
+	leg1_liq_price, leg2_liq_price,
+	leg1_liq_dist, leg2_liq_dist,
+	leg1_liq_risk, leg2_liq_risk,
+	hold_hours,
+	started_at, opened_at, completed_at, monitor_at, updated_at`
 
+func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, error) {
 	var p LivePosition
-	var openedAt, completedAt sql.NullString
-	err := row.Scan(
+	var openedAt, completedAt, monitorAt sql.NullString
+	err := scanner.Scan(
 		&p.ID, &p.PlanID, &p.OpportunityID, &p.Asset,
 		&p.VenueA, &p.VenueB, &p.State,
 		&p.Notional, &p.Leverage,
 		&p.EntrySpread, &p.HedgeMismatch,
-		&p.StartedAt, &openedAt, &completedAt, &p.UpdatedAt,
+		&p.CurrentSpread, &p.CurrentBasis, &p.EntryBasis, &p.BasisChange,
+		&p.PricePnL, &p.FundingPnL, &p.TotalPnL,
+		&p.Leg1CurPrice, &p.Leg2CurPrice,
+		&p.Leg1LiqPrice, &p.Leg2LiqPrice,
+		&p.Leg1LiqDist, &p.Leg2LiqDist,
+		&p.Leg1LiqRisk, &p.Leg2LiqRisk,
+		&p.HoldHours,
+		&p.StartedAt, &openedAt, &completedAt, &monitorAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	p.OpenedAt = openedAt.String
 	p.CompletedAt = completedAt.String
+	p.MonitorAt = monitorAt.String
 	return &p, nil
+}
+
+// GetPosition returns a live position by ID.
+func (s *Store) GetPosition(ctx context.Context, id string) (*LivePosition, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions WHERE id = ?`, id)
+	return scanLivePosition(row)
 }
 
 // ListPositions returns all live positions, newest first.
 func (s *Store) ListPositions(ctx context.Context) ([]LivePosition, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, plan_id, opportunity_id, asset,
-			venue_a, venue_b, state,
-			notional, leverage,
-			entry_spread, hedge_mismatch,
-			started_at, opened_at, completed_at, updated_at
-		FROM live_positions ORDER BY started_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var positions []LivePosition
-	for rows.Next() {
-		var p LivePosition
-		var openedAt, completedAt sql.NullString
-		if err := rows.Scan(
-			&p.ID, &p.PlanID, &p.OpportunityID, &p.Asset,
-			&p.VenueA, &p.VenueB, &p.State,
-			&p.Notional, &p.Leverage,
-			&p.EntrySpread, &p.HedgeMismatch,
-			&p.StartedAt, &openedAt, &completedAt, &p.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		p.OpenedAt = openedAt.String
-		p.CompletedAt = completedAt.String
-		positions = append(positions, p)
-	}
-	return positions, rows.Err()
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions ORDER BY started_at DESC`)
 }
 
 // ListOpenPositions returns positions in open or degraded state.
 func (s *Store) ListOpenPositions(ctx context.Context) ([]LivePosition, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, plan_id, opportunity_id, asset,
-			venue_a, venue_b, state,
-			notional, leverage,
-			entry_spread, hedge_mismatch,
-			started_at, opened_at, completed_at, updated_at
-		FROM live_positions WHERE state IN ('open', 'degraded')
-		ORDER BY started_at DESC`)
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions WHERE state IN ('open', 'degraded') ORDER BY started_at DESC`)
+}
+
+func (s *Store) queryPositions(ctx context.Context, query string) ([]LivePosition, error) {
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -211,20 +201,11 @@ func (s *Store) ListOpenPositions(ctx context.Context) ([]LivePosition, error) {
 
 	var positions []LivePosition
 	for rows.Next() {
-		var p LivePosition
-		var openedAt, completedAt sql.NullString
-		if err := rows.Scan(
-			&p.ID, &p.PlanID, &p.OpportunityID, &p.Asset,
-			&p.VenueA, &p.VenueB, &p.State,
-			&p.Notional, &p.Leverage,
-			&p.EntrySpread, &p.HedgeMismatch,
-			&p.StartedAt, &openedAt, &completedAt, &p.UpdatedAt,
-		); err != nil {
+		p, err := scanLivePosition(rows)
+		if err != nil {
 			return nil, err
 		}
-		p.OpenedAt = openedAt.String
-		p.CompletedAt = completedAt.String
-		positions = append(positions, p)
+		positions = append(positions, *p)
 	}
 	return positions, rows.Err()
 }
@@ -281,6 +262,75 @@ func (s *Store) GetEvents(ctx context.Context, positionID string) ([]LiveEvent, 
 	return events, rows.Err()
 }
 
+// MonitorUpdate holds the fields written by the live monitor on each tick.
+type MonitorUpdate struct {
+	CurrentSpread  float64
+	CurrentBasis   float64
+	EntryBasis     float64
+	BasisChange    float64
+	PricePnL       float64
+	FundingPnL     float64
+	TotalPnL       float64
+	Leg1CurPrice   float64
+	Leg2CurPrice   float64
+	Leg1LiqPrice   float64
+	Leg2LiqPrice   float64
+	Leg1LiqDist    float64
+	Leg2LiqDist    float64
+	Leg1LiqRisk    string
+	Leg2LiqRisk    string
+	HoldHours      float64
+}
+
+// UpdateMonitoring writes monitoring-derived fields to a live position.
+func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m MonitorUpdate) {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE live_positions SET
+			current_spread = ?,
+			current_basis = ?,
+			entry_basis = ?,
+			basis_change = ?,
+			price_pnl = ?,
+			funding_pnl = ?,
+			total_pnl = ?,
+			leg1_current_price = ?,
+			leg2_current_price = ?,
+			leg1_liq_price = ?,
+			leg2_liq_price = ?,
+			leg1_liq_dist = ?,
+			leg2_liq_dist = ?,
+			leg1_liq_risk = ?,
+			leg2_liq_risk = ?,
+			hold_hours = ?,
+			monitor_at = ?,
+			updated_at = ?
+		WHERE id = ?`,
+		m.CurrentSpread,
+		m.CurrentBasis,
+		m.EntryBasis,
+		m.BasisChange,
+		m.PricePnL,
+		m.FundingPnL,
+		m.TotalPnL,
+		m.Leg1CurPrice,
+		m.Leg2CurPrice,
+		m.Leg1LiqPrice,
+		m.Leg2LiqPrice,
+		m.Leg1LiqDist,
+		m.Leg2LiqDist,
+		m.Leg1LiqRisk,
+		m.Leg2LiqRisk,
+		m.HoldHours,
+		now,
+		now,
+		positionID,
+	)
+	if err != nil {
+		s.logger.Error("live store: update monitoring", "err", err, "id", positionID)
+	}
+}
+
 // LivePosition is the read model for a live position.
 type LivePosition struct {
 	ID             string  `json:"id"`
@@ -294,9 +344,26 @@ type LivePosition struct {
 	Leverage       float64 `json:"leverage"`
 	EntrySpread    float64 `json:"entry_spread"`
 	HedgeMismatch  float64 `json:"hedge_mismatch"`
+	CurrentSpread  float64 `json:"current_spread"`
+	CurrentBasis   float64 `json:"current_basis"`
+	EntryBasis     float64 `json:"entry_basis"`
+	BasisChange    float64 `json:"basis_change"`
+	PricePnL       float64 `json:"price_pnl"`
+	FundingPnL     float64 `json:"funding_pnl"`
+	TotalPnL       float64 `json:"total_pnl"`
+	Leg1CurPrice   float64 `json:"leg1_current_price"`
+	Leg2CurPrice   float64 `json:"leg2_current_price"`
+	Leg1LiqPrice   float64 `json:"leg1_liq_price"`
+	Leg2LiqPrice   float64 `json:"leg2_liq_price"`
+	Leg1LiqDist    float64 `json:"leg1_liq_dist"`
+	Leg2LiqDist    float64 `json:"leg2_liq_dist"`
+	Leg1LiqRisk    string  `json:"leg1_liq_risk"`
+	Leg2LiqRisk    string  `json:"leg2_liq_risk"`
+	HoldHours      float64 `json:"hold_hours"`
 	StartedAt      string  `json:"started_at"`
 	OpenedAt       string  `json:"opened_at,omitempty"`
 	CompletedAt    string  `json:"completed_at,omitempty"`
+	MonitorAt      string  `json:"monitor_at,omitempty"`
 	UpdatedAt      string  `json:"updated_at"`
 }
 
