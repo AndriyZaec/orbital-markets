@@ -103,5 +103,5 @@ func startLive(
 
 	logger.Info("live execution: runtime started — live endpoints enabled")
 
-	return api.NewLiveDeps(signingStore, pacClient, pacTracker, hlClient, hlAssetMap)
+	return api.NewLiveDeps(signingStore, liveStore, pacClient, pacTracker, hlClient, hlAssetMap)
 }

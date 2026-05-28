@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
@@ -19,16 +20,18 @@ import (
 // live venue clients configured.
 type LiveDeps struct {
 	signingStore *domain.SigningRequestStore
+	liveStore    *executor.Store
 	pacClient    *paclive.Client
 	pacTracker   *paclive.Tracker
 	hlClient     *hllive.Client
 	hlAssetMap   hllive.AssetMap
 }
 
-// NewLiveDeps creates a LiveDeps with the signing store (required)
+// NewLiveDeps creates a LiveDeps with the signing store and live position store (required)
 // and optional venue clients. Venue clients can be nil until configured.
 func NewLiveDeps(
 	signingStore *domain.SigningRequestStore,
+	liveStore *executor.Store,
 	pacClient *paclive.Client,
 	pacTracker *paclive.Tracker,
 	hlClient *hllive.Client,
@@ -36,6 +39,7 @@ func NewLiveDeps(
 ) *LiveDeps {
 	return &LiveDeps{
 		signingStore: signingStore,
+		liveStore:    liveStore,
 		pacClient:    pacClient,
 		pacTracker:   pacTracker,
 		hlClient:     hlClient,
@@ -102,6 +106,8 @@ func (s *Server) routes() {
 	// Live execution (non-custodial signing flow)
 	s.mux.HandleFunc("POST /api/v1/live/prepare", s.handleLivePrepare)
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
+	s.mux.HandleFunc("GET /api/v1/live/positions", s.handleLivePositions)
+	s.mux.HandleFunc("GET /api/v1/live/positions/", s.handleLivePosition)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
