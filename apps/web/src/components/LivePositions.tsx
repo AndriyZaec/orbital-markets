@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState } from 'react'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import type { LivePosition } from '@/hooks/useLivePositions'
+import { useKillSwitch } from '@/hooks/useKillSwitch'
 import {
   Table,
   TableBody,
@@ -83,47 +84,22 @@ function VenueIcon({ venue }: { venue: string }) {
   return <span className="text-[10px] text-muted-foreground uppercase">{venue.slice(0, 3)}</span>
 }
 
-interface KillResult {
-  targeted: number
-  closed: number
-  failed: number
-  already_closed: number
-  position_results: { id: string; asset: string; action: string; error?: string }[]
-}
-
 export function LivePositions() {
   const { positions, loading, error, refetch } = useLivePositions()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [tab, setTab] = useState<'open' | 'closed'>('open')
 
-  // Kill switch state
+  // Kill switch
   const [killOpen, setKillOpen] = useState(false)
-  const [killLoading, setKillLoading] = useState(false)
-  const [killResult, setKillResult] = useState<KillResult | null>(null)
-  const [killError, setKillError] = useState<string | null>(null)
+  const kill = useKillSwitch()
 
-  const handleKill = useCallback(async () => {
-    setKillLoading(true)
-    setKillError(null)
-    setKillResult(null)
-    try {
-      const resp = await fetch('/api/v1/live/kill', { method: 'POST' })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const data: KillResult = await resp.json()
-      setKillResult(data)
-      refetch()
-    } catch (e) {
-      setKillError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      setKillLoading(false)
-    }
-  }, [refetch])
-
-  const closeKillDialog = useCallback(() => {
+  const closeKillDialog = () => {
     setKillOpen(false)
-    setKillResult(null)
-    setKillError(null)
-  }, [])
+    if (kill.state.phase === 'done' || kill.state.phase === 'error') {
+      kill.reset()
+      refetch()
+    }
+  }
 
   const selected = positions.find((p) => p.id === selectedId) ?? null
 
@@ -173,59 +149,103 @@ export function LivePositions() {
           <DialogHeader>
             <DialogTitle className="text-red-400">Close all live positions?</DialogTitle>
             <DialogDescription>
-              This will attempt to close all {openPositions.length} open live position{openPositions.length !== 1 ? 's' : ''} across connected venues. This action cannot be undone.
+              This will submit close orders for all {openPositions.length} open live position{openPositions.length !== 1 ? 's' : ''} across connected venues.
+              Your wallet will prompt you to sign each close order.
             </DialogDescription>
           </DialogHeader>
 
-          {/* Result display */}
-          {killResult && (
+          {/* Progress display */}
+          {kill.state.phase !== 'idle' && kill.state.phase !== 'error' && (
             <div className="rounded-md border border-border bg-black/20 p-3 text-xs space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Targeted:</span>
-                <span className="text-foreground font-medium">{killResult.targeted}</span>
-                <span className="text-muted-foreground ml-2">Closed:</span>
-                <span className="text-green-400 font-medium">{killResult.closed}</span>
-                {killResult.failed > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-muted-foreground">Positions:</span>
+                <span className="text-foreground font-medium">{kill.state.targeted}</span>
+                {kill.state.totalRequests > 0 && (
+                  <>
+                    <span className="text-muted-foreground ml-2">Orders:</span>
+                    <span className="text-foreground font-medium">
+                      {kill.state.submitted}/{kill.state.totalRequests}
+                    </span>
+                  </>
+                )}
+                {kill.state.succeeded > 0 && (
+                  <>
+                    <span className="text-muted-foreground ml-2">Accepted:</span>
+                    <span className="text-green-400 font-medium">{kill.state.succeeded}</span>
+                  </>
+                )}
+                {kill.state.failed > 0 && (
                   <>
                     <span className="text-muted-foreground ml-2">Failed:</span>
-                    <span className="text-red-400 font-medium">{killResult.failed}</span>
+                    <span className="text-red-400 font-medium">{kill.state.failed}</span>
                   </>
                 )}
               </div>
-              {killResult.position_results.map((pr) => (
-                <div key={pr.id} className="flex items-center gap-2 text-[11px]">
-                  <span className="font-medium text-foreground">{pr.asset}</span>
-                  <span className={pr.action === 'closed' ? 'text-green-400' : pr.action === 'error' ? 'text-red-400' : 'text-muted-foreground'}>
-                    {pr.action}
-                  </span>
-                  {pr.error && <span className="text-red-400/70">{pr.error}</span>}
+
+              {/* Phase indicator */}
+              {kill.state.phase === 'preparing' && (
+                <p className="text-yellow-400 text-[11px]">Preparing close orders...</p>
+              )}
+              {kill.state.phase === 'signing' && (
+                <p className="text-yellow-400 text-[11px]">
+                  Signing order {kill.state.signed + 1} of {kill.state.totalRequests} — check your wallet
+                </p>
+              )}
+              {kill.state.phase === 'submitting' && (
+                <p className="text-yellow-400 text-[11px]">
+                  Submitting order {kill.state.submitted + 1} of {kill.state.totalRequests}...
+                </p>
+              )}
+              {kill.state.phase === 'done' && kill.state.failed === 0 && (
+                <p className="text-green-400 text-[11px]">All close orders submitted successfully.</p>
+              )}
+              {kill.state.phase === 'done' && kill.state.failed > 0 && (
+                <p className="text-yellow-400 text-[11px]">
+                  Completed with {kill.state.failed} failure{kill.state.failed !== 1 ? 's' : ''}.
+                </p>
+              )}
+
+              {/* Per-position info */}
+              {kill.state.positions.length > 0 && (
+                <div className="pt-1 space-y-0.5">
+                  {kill.state.positions.map((p) => (
+                    <div key={p.id} className="flex items-center gap-2 text-[11px]">
+                      <span className="font-medium text-foreground">{p.asset}</span>
+                      <span className="text-muted-foreground">{p.legs_to_close} leg{p.legs_to_close !== 1 ? 's' : ''}</span>
+                      {p.error && <span className="text-red-400/70">{p.error}</span>}
+                    </div>
+                  ))}
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* Errors */}
+          {kill.state.errors.length > 0 && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400 space-y-1">
+              {kill.state.errors.map((e, i) => (
+                <p key={i}>{e}</p>
               ))}
             </div>
           )}
 
-          {killError && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
-              {killError}
-            </div>
-          )}
-
           <DialogFooter>
-            {!killResult ? (
+            {kill.state.phase === 'idle' && (
               <>
-                <Button variant="outline" size="sm" onClick={closeKillDialog} disabled={killLoading}>
+                <Button variant="outline" size="sm" onClick={closeKillDialog}>
                   Cancel
                 </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleKill}
-                  disabled={killLoading}
-                >
-                  {killLoading ? 'Closing...' : 'Close All Positions'}
+                <Button variant="destructive" size="sm" onClick={kill.execute}>
+                  Close All Positions
                 </Button>
               </>
-            ) : (
+            )}
+            {(kill.state.phase === 'preparing' || kill.state.phase === 'signing' || kill.state.phase === 'submitting') && (
+              <Button variant="outline" size="sm" disabled>
+                {kill.state.phase === 'preparing' ? 'Preparing...' : 'Closing positions...'}
+              </Button>
+            )}
+            {(kill.state.phase === 'done' || kill.state.phase === 'error') && (
               <Button variant="outline" size="sm" onClick={closeKillDialog}>
                 Done
               </Button>
