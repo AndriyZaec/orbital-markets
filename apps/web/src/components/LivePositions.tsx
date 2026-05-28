@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import {
@@ -9,6 +9,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { LivePositionDetail } from '@/components/LivePositionDetail'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
@@ -74,10 +83,47 @@ function VenueIcon({ venue }: { venue: string }) {
   return <span className="text-[10px] text-muted-foreground uppercase">{venue.slice(0, 3)}</span>
 }
 
+interface KillResult {
+  targeted: number
+  closed: number
+  failed: number
+  already_closed: number
+  position_results: { id: string; asset: string; action: string; error?: string }[]
+}
+
 export function LivePositions() {
-  const { positions, loading, error } = useLivePositions()
+  const { positions, loading, error, refetch } = useLivePositions()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [tab, setTab] = useState<'open' | 'closed'>('open')
+
+  // Kill switch state
+  const [killOpen, setKillOpen] = useState(false)
+  const [killLoading, setKillLoading] = useState(false)
+  const [killResult, setKillResult] = useState<KillResult | null>(null)
+  const [killError, setKillError] = useState<string | null>(null)
+
+  const handleKill = useCallback(async () => {
+    setKillLoading(true)
+    setKillError(null)
+    setKillResult(null)
+    try {
+      const resp = await fetch('/api/v1/live/kill', { method: 'POST' })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const data: KillResult = await resp.json()
+      setKillResult(data)
+      refetch()
+    } catch (e) {
+      setKillError(e instanceof Error ? e.message : 'Unknown error')
+    } finally {
+      setKillLoading(false)
+    }
+  }, [refetch])
+
+  const closeKillDialog = useCallback(() => {
+    setKillOpen(false)
+    setKillResult(null)
+    setKillError(null)
+  }, [])
 
   const selected = positions.find((p) => p.id === selectedId) ?? null
 
@@ -106,7 +152,87 @@ export function LivePositions() {
             Closed{closedPositions.length > 0 && <span className="ml-1 text-muted-foreground">({closedPositions.length})</span>}
           </TabBtn>
         </div>
+
+        {/* Kill switch — only visible when there are open positions */}
+        {openPositions.length > 0 && (
+          <div className="ml-auto">
+            <Button
+              variant="destructive"
+              size="xs"
+              onClick={() => setKillOpen(true)}
+            >
+              Emergency Close All
+            </Button>
+          </div>
+        )}
       </div>
+
+      {/* Kill switch confirmation dialog */}
+      <Dialog open={killOpen} onOpenChange={setKillOpen}>
+        <DialogContent className="sm:max-w-md bg-[#0d1117] border-red-500/20">
+          <DialogHeader>
+            <DialogTitle className="text-red-400">Close all live positions?</DialogTitle>
+            <DialogDescription>
+              This will attempt to close all {openPositions.length} open live position{openPositions.length !== 1 ? 's' : ''} across connected venues. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Result display */}
+          {killResult && (
+            <div className="rounded-md border border-border bg-black/20 p-3 text-xs space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Targeted:</span>
+                <span className="text-foreground font-medium">{killResult.targeted}</span>
+                <span className="text-muted-foreground ml-2">Closed:</span>
+                <span className="text-green-400 font-medium">{killResult.closed}</span>
+                {killResult.failed > 0 && (
+                  <>
+                    <span className="text-muted-foreground ml-2">Failed:</span>
+                    <span className="text-red-400 font-medium">{killResult.failed}</span>
+                  </>
+                )}
+              </div>
+              {killResult.position_results.map((pr) => (
+                <div key={pr.id} className="flex items-center gap-2 text-[11px]">
+                  <span className="font-medium text-foreground">{pr.asset}</span>
+                  <span className={pr.action === 'closed' ? 'text-green-400' : pr.action === 'error' ? 'text-red-400' : 'text-muted-foreground'}>
+                    {pr.action}
+                  </span>
+                  {pr.error && <span className="text-red-400/70">{pr.error}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {killError && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
+              {killError}
+            </div>
+          )}
+
+          <DialogFooter>
+            {!killResult ? (
+              <>
+                <Button variant="outline" size="sm" onClick={closeKillDialog} disabled={killLoading}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleKill}
+                  disabled={killLoading}
+                >
+                  {killLoading ? 'Closing...' : 'Close All Positions'}
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" onClick={closeKillDialog}>
+                Done
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Table */}
       <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
