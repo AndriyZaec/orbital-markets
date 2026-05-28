@@ -9,6 +9,7 @@ const (
 	ExecStateOpen     ExecState = "open"     // both legs filled, hedge intact
 	ExecStateDegraded ExecState = "degraded" // hedge incomplete, leg 1 may be unwound
 	ExecStateFailed   ExecState = "failed"   // nothing opened or fully unwound
+	ExecStateClosing  ExecState = "closing"  // close orders submitted, awaiting fills
 	ExecStateClosed   ExecState = "closed"   // position was closed (normal or emergency)
 )
 

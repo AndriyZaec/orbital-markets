@@ -362,16 +362,25 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleLiveKill is the emergency kill switch — closes all open live positions.
+// handleLiveKill is the emergency kill switch — prepares close orders for all open live positions.
 //
 // POST /api/v1/live/kill
 //
-// Marks all open/degraded positions as closed in the DB and records
-// an emergency_close event. Idempotent — repeated calls are safe.
+// Input:
 //
-// In non-custodial mode, this is a state-level kill: it stops the monitor
-// from tracking these positions. Actual venue close orders require the
-// frontend signing flow (separate concern).
+//	{
+//	  "account_pacifica": "...",
+//	  "account_hyperliquid": "..."
+//	}
+//
+// Flow:
+//  1. Find all open/degraded positions
+//  2. For each position, get fills to know what legs to close
+//  3. Build close signing requests for each filled leg
+//  4. Store signing requests, mark positions as "closing"
+//  5. Return all signing requests — frontend signs + submits each via /api/v1/live/submit
+//
+// Idempotent — repeated calls regenerate signing requests for positions still open.
 func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	if s.live == nil || s.live.liveStore == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -380,9 +389,160 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req struct {
+		AccountPacifica    string `json:"account_pacifica"`
+		AccountHyperliquid string `json:"account_hyperliquid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.AccountPacifica == "" || req.AccountHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "account_pacifica and account_hyperliquid required",
+		})
+		return
+	}
+
 	s.logger.Warn("kill switch: activated")
 
-	result := s.live.liveStore.EmergencyCloseAll(r.Context())
+	ctx := r.Context()
+	positions, err := s.live.liveStore.ListOpenPositions(ctx)
+	if err != nil {
+		s.logger.Error("kill switch: list positions", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "failed to list open positions",
+		})
+		return
+	}
 
-	writeJSON(w, http.StatusOK, result)
+	if len(positions) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"targeted":         0,
+			"signing_requests": []any{},
+			"positions":        []any{},
+		})
+		return
+	}
+
+	type positionClose struct {
+		ID    string `json:"id"`
+		Asset string `json:"asset"`
+		State string `json:"state"`
+		Legs  int    `json:"legs_to_close"`
+		Error string `json:"error,omitempty"`
+	}
+
+	var signingRequests []*domain.SigningRequest
+	var posResults []positionClose
+
+	for _, pos := range positions {
+		pc := positionClose{
+			ID:    pos.ID,
+			Asset: pos.Asset,
+			State: pos.State,
+		}
+
+		fills, err := s.live.liveStore.GetFills(ctx, pos.ID)
+		if err != nil {
+			s.logger.Error("kill switch: get fills", "err", err, "id", pos.ID)
+			pc.Error = "failed to get fills"
+			posResults = append(posResults, pc)
+			continue
+		}
+
+		legsClosed := 0
+		for _, fill := range fills {
+			if !fill.Filled || fill.FilledAmount <= 0 {
+				continue
+			}
+
+			cloid := fmt.Sprintf("kill-%s-leg%d-%d", pos.ID[:8], fill.Leg, time.Now().UnixNano())
+
+			sigReq, err := s.buildCloseSigningRequest(
+				fill,
+				cloid,
+				req.AccountPacifica,
+				req.AccountHyperliquid,
+			)
+			if err != nil {
+				s.logger.Error("kill switch: build close payload",
+					"err", err, "id", pos.ID, "leg", fill.Leg, "venue", fill.Venue)
+				pc.Error = fmt.Sprintf("leg %d: %s", fill.Leg, err)
+				continue
+			}
+
+			s.live.signingStore.Store(sigReq)
+			signingRequests = append(signingRequests, sigReq)
+			legsClosed++
+
+			s.logger.Info("kill switch: close payload ready",
+				"position", pos.ID,
+				"leg", fill.Leg,
+				"venue", fill.Venue,
+				"symbol", fill.Symbol,
+				"amount", fill.FilledAmount,
+			)
+		}
+
+		pc.Legs = legsClosed
+
+		// Mark position as closing
+		if legsClosed > 0 {
+			s.live.liveStore.MarkClosing(ctx, pos.ID)
+			s.live.liveStore.InsertEvent(ctx, pos.ID, "emergency_close_initiated",
+				executor.ExecStateClosing,
+				fmt.Sprintf("kill switch: %d close orders prepared", legsClosed))
+		}
+
+		posResults = append(posResults, pc)
+	}
+
+	s.logger.Warn("kill switch: close payloads ready",
+		"positions", len(positions),
+		"signing_requests", len(signingRequests),
+	)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"targeted":         len(positions),
+		"signing_requests": signingRequests,
+		"positions":        posResults,
+	})
+}
+
+// buildCloseSigningRequest builds a close signing request for a single filled leg.
+func (s *Server) buildCloseSigningRequest(
+	fill executor.LiveFill,
+	clientOrderID string,
+	accountPacifica string,
+	accountHyperliquid string,
+) (*domain.SigningRequest, error) {
+	positionSide := domain.Side(fill.Side)
+	price := fill.AvgFillPrice // use fill price as reference for slippage calc
+
+	switch fill.Venue {
+	case "pacifica":
+		return paclive.BuildClosePayload(
+			accountPacifica,
+			fill.Symbol,
+			positionSide,
+			fill.FilledAmount,
+			price,
+			clientOrderID,
+		)
+	case "hyperliquid":
+		if s.live.hlAssetMap == nil {
+			return nil, fmt.Errorf("hyperliquid asset map not configured")
+		}
+		return hllive.BuildClosePayload(
+			s.live.hlAssetMap,
+			fill.Symbol,
+			positionSide,
+			fill.FilledAmount,
+			price,
+			clientOrderID,
+		)
+	default:
+		return nil, fmt.Errorf("unsupported venue: %s", fill.Venue)
+	}
 }

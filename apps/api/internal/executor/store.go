@@ -133,97 +133,32 @@ func (s *Store) InsertEvent(ctx context.Context, positionID, event string, state
 	}
 }
 
-// KillResult is the outcome of an emergency close-all operation.
-type KillResult struct {
-	Targeted        int                `json:"targeted"`
-	Closed          int                `json:"closed"`
-	Failed          int                `json:"failed"`
-	AlreadyClosed   int                `json:"already_closed"`
-	PositionResults []KillPositionResult `json:"position_results"`
-}
-
-// KillPositionResult is the outcome for a single position in a kill-all.
-type KillPositionResult struct {
-	ID      string `json:"id"`
-	Asset   string `json:"asset"`
-	State   string `json:"state"`
-	Action  string `json:"action"` // "closed", "already_closed", "error"
-	Error   string `json:"error,omitempty"`
-}
-
-// EmergencyCloseAll marks all open/degraded positions as closed and records
-// an emergency_close event for each. Returns a structured result.
-//
-// This is a state-level kill switch — it marks positions as closed in the DB
-// so the monitor stops tracking them. In non-custodial mode, actual venue
-// close orders require the frontend signing flow (separate concern).
-func (s *Store) EmergencyCloseAll(ctx context.Context) KillResult {
-	positions, err := s.ListOpenPositions(ctx)
-	if err != nil {
-		s.logger.Error("kill switch: list open positions", "err", err)
-		return KillResult{}
-	}
-
-	result := KillResult{
-		Targeted: len(positions),
-	}
-
-	for _, pos := range positions {
-		pr := KillPositionResult{
-			ID:    pos.ID,
-			Asset: pos.Asset,
-			State: pos.State,
-		}
-
-		// Skip if already in a terminal state
-		if pos.State == string(ExecStateClosed) || pos.State == string(ExecStateFailed) {
-			pr.Action = "already_closed"
-			result.AlreadyClosed++
-			result.PositionResults = append(result.PositionResults, pr)
-			continue
-		}
-
-		// Mark as closed
-		now := time.Now().Format(time.RFC3339)
-		_, err := s.db.ExecContext(ctx, `
-			UPDATE live_positions SET
-				state = ?,
-				completed_at = COALESCE(completed_at, ?),
-				updated_at = ?
-			WHERE id = ?`,
-			string(ExecStateClosed),
-			now,
-			now,
-			pos.ID,
-		)
-		if err != nil {
-			s.logger.Error("kill switch: close position", "err", err, "id", pos.ID)
-			pr.Action = "error"
-			pr.Error = err.Error()
-			result.Failed++
-		} else {
-			// Record emergency close event
-			s.InsertEvent(ctx, pos.ID, "emergency_close", ExecStateClosed, "kill switch activated")
-			pr.Action = "closed"
-			result.Closed++
-
-			s.logger.Info("kill switch: position closed",
-				"id", pos.ID,
-				"asset", pos.Asset,
-				"prev_state", pos.State,
-			)
-		}
-
-		result.PositionResults = append(result.PositionResults, pr)
-	}
-
-	s.logger.Warn("kill switch: complete",
-		"targeted", result.Targeted,
-		"closed", result.Closed,
-		"failed", result.Failed,
+// MarkClosing transitions an open/degraded position to "closing" state.
+func (s *Store) MarkClosing(ctx context.Context, positionID string) error {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE live_positions SET state = ?, updated_at = ?
+		WHERE id = ? AND state IN ('open', 'degraded')`,
+		string(ExecStateClosing), now, positionID,
 	)
+	if err != nil {
+		s.logger.Error("live store: mark closing", "err", err, "id", positionID)
+	}
+	return err
+}
 
-	return result
+// MarkClosed transitions a position to terminal "closed" state.
+func (s *Store) MarkClosed(ctx context.Context, positionID string) error {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE live_positions SET state = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+		WHERE id = ?`,
+		string(ExecStateClosed), now, now, positionID,
+	)
+	if err != nil {
+		s.logger.Error("live store: mark closed", "err", err, "id", positionID)
+	}
+	return err
 }
 
 // livePositionCols is the column list for live_positions queries.
