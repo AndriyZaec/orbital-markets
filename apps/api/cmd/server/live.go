@@ -21,11 +21,10 @@ import (
 // Returns nil if required config is missing — the server starts without live endpoints.
 //
 // Required env:
-//   - PACIFICA_API_KEY — auth token for Pacifica private WS streams
+//   - PACIFICA_ACCOUNT — Solana pubkey for Pacifica account state + order tracking
 //   - HL_WS_ADDRESS   — Ethereum address for Hyperliquid WS subscriptions (orderUpdates, userFills)
 //
-// User wallet addresses are NOT server config — they come per-request
-// via the /api/v1/live/prepare body (account_pacifica, account_hyperliquid).
+// These identify which accounts to monitor for pre-trade state and fill tracking.
 // Signing happens on the frontend. The backend never holds private keys.
 func startLive(
 	ctx context.Context,
@@ -35,13 +34,13 @@ func startLive(
 	pac *pacifica.Adapter,
 	hl *hyperliquid.Adapter,
 ) *api.LiveDeps {
-	pacAPIKey := os.Getenv("PACIFICA_API_KEY")
+	pacAccount := os.Getenv("PACIFICA_ACCOUNT")
 	hlWSAddress := os.Getenv("HL_WS_ADDRESS")
 
-	if pacAPIKey == "" || hlWSAddress == "" {
+	if pacAccount == "" || hlWSAddress == "" {
 		var missing []string
-		if pacAPIKey == "" {
-			missing = append(missing, "PACIFICA_API_KEY")
+		if pacAccount == "" {
+			missing = append(missing, "PACIFICA_ACCOUNT")
 		}
 		if hlWSAddress == "" {
 			missing = append(missing, "HL_WS_ADDRESS")
@@ -60,10 +59,11 @@ func startLive(
 	// Order/fill tracker (also serves as StreamHandler for private WS)
 	pacTracker := paclive.NewTracker(logger)
 
-	// Account subscriber — feeds state + forwards order/trade updates to tracker
-	pacSub := pacaccount.NewSubscriber(logger, pacState, pacAPIKey, pacTracker)
+	// Account subscriber — feeds state + forwards order/trade updates to tracker.
+	// Uses account address (no API key needed — Pacifica account subs are by pubkey).
+	pacSub := pacaccount.NewSubscriber(logger, pacState, pacAccount, pacTracker)
 	go pacSub.Run(ctx)
-	logger.Info("live execution: pacifica account subscriber started")
+	logger.Info("live execution: pacifica account subscriber started", "account", pacAccount)
 
 	// Live client — nil signer (non-custodial mode).
 	// Only SubmitSignedOrder is usable; custodial SubmitMarketOrder will error.

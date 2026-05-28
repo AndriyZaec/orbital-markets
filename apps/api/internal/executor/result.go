@@ -9,6 +9,7 @@ const (
 	ExecStateOpen     ExecState = "open"     // both legs filled, hedge intact
 	ExecStateDegraded ExecState = "degraded" // hedge incomplete, leg 1 may be unwound
 	ExecStateFailed   ExecState = "failed"   // nothing opened or fully unwound
+	ExecStateClosed   ExecState = "closed"   // position was closed (normal or emergency)
 )
 
 // LegResult captures the outcome of one leg's live execution.
