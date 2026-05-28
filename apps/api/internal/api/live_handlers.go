@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -286,4 +287,69 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// handleLivePositions returns all live positions, newest first.
+//
+// GET /api/v1/live/positions
+func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil || s.live.liveStore == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "live execution not configured",
+		})
+		return
+	}
+
+	positions, err := s.live.liveStore.ListPositions(r.Context())
+	if err != nil {
+		s.logger.Error("live positions: list failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "failed to list live positions",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, positions)
+}
+
+// handleLivePosition returns a single live position with fills and events.
+//
+// GET /api/v1/live/positions/{id}
+func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil || s.live.liveStore == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "live execution not configured",
+		})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/live/positions/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+
+	pos, err := s.live.liveStore.GetPosition(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
+		return
+	}
+
+	fills, err := s.live.liveStore.GetFills(r.Context(), id)
+	if err != nil {
+		s.logger.Error("live position: get fills", "err", err, "id", id)
+		fills = nil
+	}
+
+	events, err := s.live.liveStore.GetEvents(r.Context(), id)
+	if err != nil {
+		s.logger.Error("live position: get events", "err", err, "id", id)
+		events = nil
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"position": pos,
+		"fills":    fills,
+		"events":   events,
+	})
 }
