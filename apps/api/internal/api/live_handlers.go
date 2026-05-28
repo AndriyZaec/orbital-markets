@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
@@ -309,6 +310,9 @@ func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if positions == nil {
+		positions = []executor.LivePosition{}
+	}
 	writeJSON(w, http.StatusOK, positions)
 }
 
@@ -338,13 +342,17 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 	fills, err := s.live.liveStore.GetFills(r.Context(), id)
 	if err != nil {
 		s.logger.Error("live position: get fills", "err", err, "id", id)
-		fills = nil
+	}
+	if fills == nil {
+		fills = []executor.LiveFill{}
 	}
 
 	events, err := s.live.liveStore.GetEvents(r.Context(), id)
 	if err != nil {
 		s.logger.Error("live position: get events", "err", err, "id", id)
-		events = nil
+	}
+	if events == nil {
+		events = []executor.LiveEvent{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
