@@ -361,3 +361,28 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 		"events":   events,
 	})
 }
+
+// handleLiveKill is the emergency kill switch — closes all open live positions.
+//
+// POST /api/v1/live/kill
+//
+// Marks all open/degraded positions as closed in the DB and records
+// an emergency_close event. Idempotent — repeated calls are safe.
+//
+// In non-custodial mode, this is a state-level kill: it stops the monitor
+// from tracking these positions. Actual venue close orders require the
+// frontend signing flow (separate concern).
+func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil || s.live.liveStore == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "live execution not configured",
+		})
+		return
+	}
+
+	s.logger.Warn("kill switch: activated")
+
+	result := s.live.liveStore.EmergencyCloseAll(r.Context())
+
+	writeJSON(w, http.StatusOK, result)
+}
