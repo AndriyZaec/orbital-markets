@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 const (
-	privateWSURL = "wss://ws.pacifica.fi/ws"
+	privateWSURL   = "wss://ws.pacifica.fi/ws"
 	reconnectDelay = 5 * time.Second
 )
 
@@ -21,30 +22,33 @@ type StreamHandler interface {
 	HandleTrade(data json.RawMessage)
 }
 
-// Subscriber connects to Pacifica's private WebSocket and keeps AccountState updated.
-// Requires an API key or auth token for private streams.
+// Subscriber connects to Pacifica's WebSocket and keeps AccountState updated.
+//
+// Pacifica account subscriptions require the account's public key (not an API key).
+// Each subscription message includes the account address.
+// No separate auth/login step is needed — subscriptions are public by account address.
 type Subscriber struct {
 	state   *AccountState
-	apiKey  string
-	handler StreamHandler // optional: receives order/trade updates
+	account string         // Solana public key (base58)
+	handler StreamHandler  // optional: receives order/trade updates
 	logger  *slog.Logger
 }
 
 func NewSubscriber(
 	logger *slog.Logger,
 	state *AccountState,
-	apiKey string,
+	account string,
 	handler StreamHandler,
 ) *Subscriber {
 	return &Subscriber{
 		state:   state,
-		apiKey:  apiKey,
+		account: account,
 		handler: handler,
 		logger:  logger,
 	}
 }
 
-// Run connects and listens to private account streams until ctx is cancelled.
+// Run connects and listens to account streams until ctx is cancelled.
 func (s *Subscriber) Run(ctx context.Context) {
 	for {
 		err := s.connectAndListen(ctx)
@@ -61,7 +65,6 @@ func (s *Subscriber) Run(ctx context.Context) {
 	}
 }
 
-// wsMessage is the raw envelope from private streams.
 type wsMessage struct {
 	Channel string          `json:"channel"`
 	Data    json.RawMessage `json:"data"`
@@ -74,17 +77,8 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	// Authenticate
-	if err := conn.WriteJSON(map[string]any{
-		"method": "auth",
-		"params": map[string]string{
-			"token": s.apiKey,
-		},
-	}); err != nil {
-		return fmt.Errorf("auth: %w", err)
-	}
-
-	// Subscribe to private account channels
+	// Subscribe to account channels — each needs the account address.
+	// No separate auth step is required.
 	channels := []string{
 		"account_info",
 		"account_positions",
@@ -96,14 +90,20 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 	for _, ch := range channels {
 		if err := conn.WriteJSON(map[string]any{
 			"method": "subscribe",
-			"params": map[string]string{"source": ch},
+			"params": map[string]string{
+				"source":  ch,
+				"account": s.account,
+			},
 		}); err != nil {
 			return fmt.Errorf("subscribe %s: %w", ch, err)
 		}
 	}
 
 	s.state.SetConnected(true)
-	s.logger.Info("pacifica account ws connected", "channels", len(channels))
+	s.logger.Info("pacifica account ws connected",
+		"channels", len(channels),
+		"account", s.account,
+	)
 
 	for {
 		select {
@@ -133,7 +133,7 @@ func (s *Subscriber) handleMessage(msg wsMessage) {
 	case "account_positions":
 		s.handlePositions(msg.Data)
 	case "account_margin":
-		s.handleMargin(msg.Data)
+		s.handleMarginMode(msg.Data)
 	case "account_leverage":
 		s.handleLeverage(msg.Data)
 	case "account_order_updates":
@@ -144,65 +144,113 @@ func (s *Subscriber) handleMessage(msg wsMessage) {
 		if s.handler != nil {
 			s.handler.HandleTrade(msg.Data)
 		}
+	case "subscribe":
+		// Subscription confirmation — ignore
 	}
 }
 
 // handleAccountInfo processes account equity and balance updates.
-// Expected format (approximate — adapt when Pacifica docs confirm):
 //
-//	{"equity": "12345.67", "available": "8000.00", "withdrawable": "7500.00"}
+// Pacifica format:
+//
+//	{
+//	  "ae": "2000",      // account equity
+//	  "as": "1500",      // available to spend
+//	  "aw": "1400",      // available to withdraw
+//	  "b":  "2000",      // account balance
+//	  "mu": "500",       // total margin used
+//	  "cm": "400",       // maintenance margin (cross mode)
+//	  "t":  1234567890   // timestamp ms
+//	}
 func (s *Subscriber) handleAccountInfo(data json.RawMessage) {
 	var info struct {
-		Equity       json.Number `json:"equity"`
-		Available    json.Number `json:"available"`
-		Withdrawable json.Number `json:"withdrawable"`
+		AE string `json:"ae"` // account equity
+		AS string `json:"as"` // available to spend
+		AW string `json:"aw"` // available to withdraw
+		MU string `json:"mu"` // total margin used
+		CM string `json:"cm"` // maintenance margin
 	}
 	if err := json.Unmarshal(data, &info); err != nil {
 		s.logger.Warn("pacifica: parse account_info", "err", err)
 		return
 	}
 
-	equity, _ := info.Equity.Float64()
-	available, _ := info.Available.Float64()
-	withdrawable, _ := info.Withdrawable.Float64()
+	equity := parseFloat(info.AE)
+	available := parseFloat(info.AS)
+	withdrawable := parseFloat(info.AW)
+	marginUsed := parseFloat(info.MU)
+	maintenance := parseFloat(info.CM)
 
-	snap := s.state.Snapshot()
-	s.state.UpdateEquity(equity, available, withdrawable, snap.TotalMarginUsed, snap.MaintenanceMargin)
+	s.state.UpdateEquity(equity, available, withdrawable, marginUsed, maintenance)
 }
 
-// handleMargin processes margin usage updates.
-func (s *Subscriber) handleMargin(data json.RawMessage) {
-	var margin struct {
-		TotalUsed   json.Number `json:"total_used"`
-		Maintenance json.Number `json:"maintenance"`
+// handleMarginMode processes per-symbol margin mode changes (isolated/cross).
+//
+// Pacifica format:
+//
+//	{
+//	  "u": "42trU9A5...",  // account
+//	  "s": "ETH",          // symbol
+//	  "i": true,           // isolated mode (true = isolated, false = cross)
+//	  "t": 1234567890      // timestamp ms
+//	}
+//
+// Note: this is NOT account-level margin totals — those come from account_info.
+func (s *Subscriber) handleMarginMode(data json.RawMessage) {
+	var update struct {
+		S string `json:"s"` // symbol
+		I bool   `json:"i"` // isolated mode
 	}
-	if err := json.Unmarshal(data, &margin); err != nil {
+	if err := json.Unmarshal(data, &update); err != nil {
 		s.logger.Warn("pacifica: parse account_margin", "err", err)
 		return
 	}
 
-	totalUsed, _ := margin.TotalUsed.Float64()
-	maintenance, _ := margin.Maintenance.Float64()
+	mode := MarginModeCross
+	if update.I {
+		mode = MarginModeIsolated
+	}
 
+	// Update the symbol config's margin mode, preserving existing leverage
 	snap := s.state.Snapshot()
-	s.state.UpdateEquity(
-		snap.Equity, snap.AvailableToSpend, snap.AvailableToWithdraw,
-		totalUsed, maintenance,
-	)
+	existing, ok := snap.SymbolConfigs[update.S]
+	lev := 1.0
+	if ok {
+		lev = existing.Leverage
+	}
+
+	s.state.UpdateSymbolConfig(SymbolConfig{
+		Symbol:     update.S,
+		Leverage:   lev,
+		MarginMode: mode,
+	})
 }
 
-// handlePositions processes full position snapshot.
+// handlePositions processes position snapshot/updates.
+//
+// Pacifica format (array):
+//
+//	[{
+//	  "s": "BTC",           // symbol
+//	  "d": "bid",           // side (bid = long, ask = short)
+//	  "a": "0.00022",       // position amount
+//	  "p": "87185",         // average entry price
+//	  "m": "0",             // position margin
+//	  "f": "-0.00023989",   // position funding fee
+//	  "i": false,           // isolated mode
+//	  "l": null,            // liquidation price (null if N/A)
+//	  "t": 1764133203991    // timestamp ms
+//	}]
 func (s *Subscriber) handlePositions(data json.RawMessage) {
 	var positions []struct {
-		Symbol        string      `json:"symbol"`
-		Side          string      `json:"side"`
-		Size          json.Number `json:"size"`
-		EntryPrice    json.Number `json:"entry_price"`
-		MarkPrice     json.Number `json:"mark_price"`
-		UnrealizedPnL json.Number `json:"unrealized_pnl"`
-		Leverage      json.Number `json:"leverage"`
-		MarginUsed    json.Number `json:"margin_used"`
-		LiqPrice      json.Number `json:"liq_price"`
+		S string      `json:"s"` // symbol
+		D string      `json:"d"` // side: "bid" or "ask"
+		A string      `json:"a"` // amount
+		P string      `json:"p"` // entry price
+		M string      `json:"m"` // margin
+		F string      `json:"f"` // funding fee
+		I bool        `json:"i"` // isolated
+		L *string     `json:"l"` // liquidation price (nullable)
 	}
 	if err := json.Unmarshal(data, &positions); err != nil {
 		s.logger.Warn("pacifica: parse account_positions", "err", err)
@@ -211,55 +259,78 @@ func (s *Subscriber) handlePositions(data json.RawMessage) {
 
 	var parsed []AccountPosition
 	for _, p := range positions {
-		size, _ := p.Size.Float64()
-		entry, _ := p.EntryPrice.Float64()
-		mark, _ := p.MarkPrice.Float64()
-		pnl, _ := p.UnrealizedPnL.Float64()
-		lev, _ := p.Leverage.Float64()
-		margin, _ := p.MarginUsed.Float64()
-		liq, _ := p.LiqPrice.Float64()
+		amount := parseFloat(p.A)
+		if amount == 0 {
+			continue
+		}
+
+		// Pacifica uses "bid" for long, "ask" for short
+		side := "long"
+		if p.D == "ask" {
+			side = "short"
+		}
+
+		var liqPrice float64
+		if p.L != nil {
+			liqPrice = parseFloat(*p.L)
+		}
 
 		parsed = append(parsed, AccountPosition{
-			Symbol:        p.Symbol,
-			Side:          p.Side,
-			Size:          size,
-			EntryPrice:    entry,
-			MarkPrice:     mark,
-			UnrealizedPnL: pnl,
-			Leverage:      lev,
-			MarginUsed:    margin,
-			LiqPrice:      liq,
+			Symbol:        p.S,
+			Side:          side,
+			Size:          amount,
+			EntryPrice:    parseFloat(p.P),
+			MarkPrice:     0, // not in position updates — comes from market data
+			UnrealizedPnL: 0, // not directly in this message
+			Leverage:      0, // comes from account_leverage channel
+			MarginUsed:    parseFloat(p.M),
+			LiqPrice:      liqPrice,
 		})
 	}
 
 	s.state.UpdatePositions(parsed)
 }
 
-// handleLeverage processes per-symbol leverage/margin mode updates.
+// handleLeverage processes per-symbol leverage updates.
+//
+// Pacifica format (single object, not array):
+//
+//	{
+//	  "u": "42trU9A5...",  // account
+//	  "s": "BTC",          // symbol
+//	  "l": "12",           // leverage as string
+//	  "t": 1234567890      // timestamp ms
+//	}
 func (s *Subscriber) handleLeverage(data json.RawMessage) {
-	var configs []struct {
-		Symbol     string      `json:"symbol"`
-		Leverage   json.Number `json:"leverage"`
-		MarginMode string      `json:"margin_mode"`
+	var update struct {
+		S string `json:"s"` // symbol
+		L string `json:"l"` // leverage (string)
 	}
-	if err := json.Unmarshal(data, &configs); err != nil {
+	if err := json.Unmarshal(data, &update); err != nil {
 		s.logger.Warn("pacifica: parse account_leverage", "err", err)
 		return
 	}
 
-	for _, c := range configs {
-		lev, _ := c.Leverage.Float64()
-		mode := MarginModeUnknown
-		switch c.MarginMode {
-		case "cross":
-			mode = MarginModeCross
-		case "isolated":
-			mode = MarginModeIsolated
-		}
-		s.state.UpdateSymbolConfig(SymbolConfig{
-			Symbol:     c.Symbol,
-			Leverage:   lev,
-			MarginMode: mode,
-		})
+	lev := parseFloat(update.L)
+	if lev <= 0 {
+		lev = 1
 	}
+
+	// Preserve existing margin mode
+	snap := s.state.Snapshot()
+	mode := MarginModeUnknown
+	if existing, ok := snap.SymbolConfigs[update.S]; ok {
+		mode = existing.MarginMode
+	}
+
+	s.state.UpdateSymbolConfig(SymbolConfig{
+		Symbol:     update.S,
+		Leverage:   lev,
+		MarginMode: mode,
+	})
+}
+
+func parseFloat(s string) float64 {
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
 }

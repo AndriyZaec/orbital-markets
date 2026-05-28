@@ -9,31 +9,37 @@ import (
 )
 
 const (
-	defaultOpenSlippagePct  = 0.5 // 0.5% for open
-	defaultCloseSlippagePct = 1.0 // 1.0% for close/unwind
+	defaultOpenSlippagePct  = "0.5" // 0.5% for open
+	defaultCloseSlippagePct = "1.0" // 1.0% for close/unwind
 )
 
 // PacificaUnsignedOrder is the order payload the frontend must sign.
-// This is the exact structure serialized to JSON for signing.
-// Matches Pacifica's create_market_order WS message params,
-// minus the signature field which the frontend will produce.
+//
+// Signing protocol:
+//  1. Build header: {"timestamp": ms, "expiry_window": ms, "type": "create_market_order"}
+//  2. Build data: {"symbol", "side", "amount", "reduce_only", "slippage_percent", "client_order_id"}
+//  3. Merge: {header..., "data": data}
+//  4. Sort keys recursively, compact JSON, UTF-8 encode
+//  5. Sign with Solana signMessage → base58 signature
+//
+// The frontend receives this struct as UnsignedPayload, constructs the
+// canonical signing message using the same algorithm, and returns a base58 signature.
 type PacificaUnsignedOrder struct {
-	Account       string  `json:"account"`
-	Timestamp     int64   `json:"timestamp"`
-	ExpiryWindow  int64   `json:"expiry_window"`
-	Symbol        string  `json:"symbol"`
-	Side          string  `json:"side"` // "buy" or "sell"
-	Amount        float64 `json:"amount"`
-	ReduceOnly    bool    `json:"reduce_only"`
-	SlippagePct   float64 `json:"slippage_percent"`
-	ClientOrderID string  `json:"client_order_id"`
+	Timestamp     int64  `json:"timestamp"`
+	ExpiryWindow  int64  `json:"expiry_window"`
+	Symbol        string `json:"symbol"`
+	Side          string `json:"side"` // "bid" or "ask"
+	Amount        string `json:"amount"`
+	ReduceOnly    bool   `json:"reduce_only"`
+	SlippagePct   string `json:"slippage_percent"`
+	ClientOrderID string `json:"client_order_id"`
 }
 
 // PacificaSubmitMeta holds venue-specific metadata needed to submit
 // the signed order but not included in the signed payload.
 type PacificaSubmitMeta struct {
-	WSURL  string `json:"ws_url"`
-	Method string `json:"method"` // "create_market_order"
+	WSURL      string `json:"ws_url"`
+	ActionType string `json:"action_type"` // "create_market_order"
 }
 
 // BuildOpenPayload constructs an unsigned signing request for a Pacifica open order.
@@ -45,20 +51,14 @@ func BuildOpenPayload(
 	price float64,
 	clientOrderID string,
 ) (*domain.SigningRequest, error) {
-	pacSide := "buy"
-	if side == domain.SideShort {
-		pacSide = "sell"
-	}
-
 	return buildPayload(
-		account,
 		symbol,
-		pacSide,
-		amount,
+		sideToVenue(side),
+		fmt.Sprintf("%g", amount),
 		price,
 		false,
 		defaultOpenSlippagePct,
-		clientOrderID,
+		ensureUUID(clientOrderID),
 		"open",
 	)
 }
@@ -73,40 +73,37 @@ func BuildClosePayload(
 	price float64,
 	clientOrderID string,
 ) (*domain.SigningRequest, error) {
-	// Invert: close long = sell, close short = buy
-	closeSide := "sell"
+	// Invert: close long = ask, close short = bid
+	closeSide := "ask"
 	if positionSide == domain.SideShort {
-		closeSide = "buy"
+		closeSide = "bid"
 	}
 
 	return buildPayload(
-		account,
 		symbol,
 		closeSide,
-		amount,
+		fmt.Sprintf("%g", amount),
 		price,
 		true,
 		defaultCloseSlippagePct,
-		clientOrderID,
+		ensureUUID(clientOrderID),
 		"close",
 	)
 }
 
 func buildPayload(
-	account string,
 	symbol string,
 	side string,
-	amount float64,
+	amount string,
 	price float64,
 	reduceOnly bool,
-	slippagePct float64,
+	slippagePct string,
 	clientOrderID string,
 	action string,
 ) (*domain.SigningRequest, error) {
 	now := time.Now()
 
 	unsigned := PacificaUnsignedOrder{
-		Account:       account,
 		Timestamp:     now.UnixMilli(),
 		ExpiryWindow:  expiryWindowMs,
 		Symbol:        symbol,
@@ -123,8 +120,8 @@ func buildPayload(
 	}
 
 	meta := PacificaSubmitMeta{
-		WSURL:  tradingWSURL,
-		Method: "create_market_order",
+		WSURL:      tradingWSURL,
+		ActionType: "create_market_order",
 	}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
@@ -138,7 +135,7 @@ func buildPayload(
 		Action:          action,
 		Symbol:          symbol,
 		Side:            side,
-		Amount:          amount,
+		Amount:          0, // not used for display in non-custodial flow
 		Price:           price,
 		ReduceOnly:      reduceOnly,
 		UnsignedPayload: unsignedBytes,
@@ -155,7 +152,7 @@ func AttachSignature(
 	signed domain.SignedAction,
 ) MarketOrderRequest {
 	return MarketOrderRequest{
-		Account:       unsigned.Account,
+		Account:       signed.SignerAddress,
 		Signature:     signed.Signature,
 		Timestamp:     unsigned.Timestamp,
 		ExpiryWindow:  unsigned.ExpiryWindow,
@@ -167,3 +164,8 @@ func AttachSignature(
 		ClientOrderID: unsigned.ClientOrderID,
 	}
 }
+
+// sideToVenue is duplicated from client.go to avoid circular dependency.
+// Both files are in the same package so this is just a local alias.
+// Keeping one definition — using the one in client.go.
+// This file uses the function defined in client.go.
