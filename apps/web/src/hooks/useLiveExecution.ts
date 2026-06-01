@@ -3,43 +3,89 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
 import { signRequest, type Signers } from '@/lib/signing'
-import type {
-  SigningRequest,
-  SignedAction,
-  SubmissionResult,
-  PrepareResponse,
-} from '@/types/signing'
+import type { SigningRequest, SignedAction } from '@/types/signing'
 
+// Two-phase non-custodial open (Option A):
+//   prepare -> sign leg-1 open + leg-1 unwind -> advance (submit leg 1, wait fill)
+//           -> sign leg-2 (sized from actual fill) -> advance (submit leg 2, verify)
+// On any post-leg-1 failure the backend fires the pre-signed unwind.
 export type ExecutionPhase =
   | 'idle'
   | 'preparing'
-  | 'awaiting_signature_1'
-  | 'awaiting_signature_2'
-  | 'submitting_1'
-  | 'submitting_2'
-  | 'confirmed'
-  | 'failed'
+  | 'awaiting_leg1' // signing leg-1 open + unwind
+  | 'submitting_leg1' // backend submitting leg 1 + waiting for fill
+  | 'awaiting_leg2' // signing leg-2 (sized from actual fill)
+  | 'submitting_leg2' // backend submitting leg 2 + verifying hedge
+  | 'open' // success
+  | 'degraded' // hedge broken; leg 1 unwound
+  | 'aborted' // leg 1 underfilled or user-aborted; leg 1 unwound
+  | 'failed' // leg 1 never opened, or signing failed before any submission
+
+export interface LegFillView {
+  filled_amount: number
+  avg_price: number
+  status: string
+  fill_ratio?: number
+}
 
 export interface LiveExecutionState {
   phase: ExecutionPhase
-  signingRequests: SigningRequest[]
-  results: SubmissionResult[]
+  asset: string | null
+  sessionId: string | null
+  riskierVenue: string | null
+  hedgeVenue: string | null
+  // current step's signing requests (display + signing)
+  leg1Requests: SigningRequest[] // [open, unwind]
+  leg2Request: SigningRequest | null
+  leg1Fill: LegFillView | null
+  leg2Fill: LegFillView | null
+  mismatch: number | null
+  positionId: string | null
+  unwound: boolean
   error: string | null
-  failedVenue: string | null
+  reason: string | null
   expiresAt: string | null
   currentVenue: string | null
-  asset: string | null
 }
 
 const INITIAL_STATE: LiveExecutionState = {
   phase: 'idle',
-  signingRequests: [],
-  results: [],
+  asset: null,
+  sessionId: null,
+  riskierVenue: null,
+  hedgeVenue: null,
+  leg1Requests: [],
+  leg2Request: null,
+  leg1Fill: null,
+  leg2Fill: null,
+  mismatch: null,
+  positionId: null,
+  unwound: false,
   error: null,
-  failedVenue: null,
+  reason: null,
   expiresAt: null,
   currentVenue: null,
-  asset: null,
+}
+
+interface PrepareResp {
+  session_id: string
+  asset: string
+  riskier_venue: string
+  hedge_venue: string
+  expires_at: string
+  signing_requests: SigningRequest[] // [leg1 open, leg1 unwind]
+}
+
+interface AdvanceResp {
+  session_id: string
+  status: 'awaiting_leg2_sign' | 'open' | 'degraded' | 'aborted' | 'failed'
+  leg1_fill?: LegFillView
+  leg2_fill?: LegFillView
+  signing_requests?: SigningRequest[] // [leg2 open]
+  mismatch?: number
+  position_id?: string
+  reason?: string
+  unwound?: boolean
 }
 
 export function useLiveExecution() {
@@ -65,28 +111,29 @@ export function useLiveExecution() {
       : null,
   }), [solWallet.signMessage, solWallet.publicKey, hyperliquidAddress, signTypedDataAsync])
 
-  const submitSigned = async (signed: SignedAction): Promise<SubmissionResult> => {
-    const resp = await fetch('/api/v1/live/submit', {
+  const postAdvance = async (body: Record<string, unknown>): Promise<AdvanceResp> => {
+    const resp = await fetch('/api/v1/live/advance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(signed),
+      body: JSON.stringify(body),
     })
     if (!resp.ok) {
-      const body = await resp.json().catch(() => ({}))
-      throw new Error(body.error || `Submit failed: HTTP ${resp.status}`)
+      const b = await resp.json().catch(() => ({}))
+      throw new Error(b.error || `Advance failed: HTTP ${resp.status}`)
     }
     return resp.json()
   }
 
   const executeLive = useCallback(async (opportunityId: string, leverage: number) => {
     if (!pacificaAddress || !hyperliquidAddress) {
-      setState((s) => ({ ...s, phase: 'failed', error: 'Both venue accounts must be connected' }))
+      setState({ ...INITIAL_STATE, phase: 'failed', error: 'Both venue accounts must be connected' })
       return
     }
 
     setState({ ...INITIAL_STATE, phase: 'preparing' })
 
     try {
+      // 1. Prepare — get session + leg-1 open & unwind signing requests.
       const prepResp = await fetch('/api/v1/live/prepare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -98,78 +145,110 @@ export function useLiveExecution() {
         }),
       })
       if (!prepResp.ok) {
-        const body = await prepResp.json().catch(() => ({}))
-        throw new Error(body.error || `Prepare failed: HTTP ${prepResp.status}`)
+        const b = await prepResp.json().catch(() => ({}))
+        throw new Error(b.error || `Prepare failed: HTTP ${prepResp.status}`)
+      }
+      const prep: PrepareResp = await prepResp.json()
+      const leg1Requests = prep.signing_requests || []
+      if (leg1Requests.length < 2) {
+        throw new Error('Expected leg-1 open and unwind signing requests')
       }
 
-      const prepared: PrepareResponse = await prepResp.json()
-      const requests = prepared.signing_requests
-
-      if (requests.length < 2) {
-        throw new Error('Expected 2 signing requests from backend')
-      }
-
-      const expiresAt = requests[0].expires_at
       setState((s) => ({
         ...s,
-        phase: 'awaiting_signature_1',
-        signingRequests: requests,
-        expiresAt,
-        currentVenue: requests[0].venue,
-        asset: prepared.asset,
+        phase: 'awaiting_leg1',
+        asset: prep.asset,
+        sessionId: prep.session_id,
+        riskierVenue: prep.riskier_venue,
+        hedgeVenue: prep.hedge_venue,
+        leg1Requests,
+        expiresAt: prep.expires_at,
+        currentVenue: prep.riskier_venue,
       }))
 
       const signers = buildSigners()
 
-      // Sign & submit leg 1
-      let signed1: SignedAction
+      // 2. Sign BOTH leg-1 requests up front. If either fails, submit nothing.
+      let signedLeg1: SignedAction[]
       try {
-        signed1 = await signRequest(requests[0], signers)
+        signedLeg1 = []
+        for (const req of leg1Requests) {
+          signedLeg1.push(await signRequest(req, signers))
+        }
       } catch (e) {
-        throw Object.assign(new Error(`Signing failed for ${requests[0].venue}: ${e instanceof Error ? e.message : 'Unknown error'}`), { venue: requests[0].venue })
+        // Signing-failure rule: nothing submitted, abort cleanly.
+        setState((s) => ({
+          ...s,
+          phase: 'failed',
+          error: `Leg 1 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+        }))
+        return
       }
 
-      setState((s) => ({ ...s, phase: 'submitting_1' }))
-      const result1 = await submitSigned(signed1)
-      if (!result1.accepted) {
-        throw Object.assign(new Error(result1.error || `${requests[0].venue} leg rejected`), { venue: requests[0].venue })
+      // 3. Advance step 1 — backend arms unwind, submits leg 1, waits for fill.
+      setState((s) => ({ ...s, phase: 'submitting_leg1' }))
+      const adv1 = await postAdvance({ session_id: prep.session_id, signed_actions: signedLeg1 })
+
+      if (adv1.status === 'aborted' || adv1.status === 'failed' || adv1.status === 'degraded') {
+        setState((s) => ({
+          ...s,
+          phase: adv1.status as ExecutionPhase,
+          leg1Fill: adv1.leg1_fill ?? null,
+          reason: adv1.reason ?? null,
+          unwound: adv1.unwound ?? false,
+        }))
+        return
       }
 
-      // Sign & submit leg 2
+      // status === 'awaiting_leg2_sign'
+      const leg2Reqs = adv1.signing_requests || []
+      if (leg2Reqs.length < 1) {
+        throw new Error('Expected leg-2 signing request from backend')
+      }
+      const leg2Req = leg2Reqs[0]
+
       setState((s) => ({
         ...s,
-        phase: 'awaiting_signature_2',
-        currentVenue: requests[1].venue,
-        results: [result1],
+        phase: 'awaiting_leg2',
+        leg1Fill: adv1.leg1_fill ?? null,
+        leg2Request: leg2Req,
+        currentVenue: leg2Req.venue,
+        expiresAt: leg2Req.expires_at,
       }))
 
-      let signed2: SignedAction
+      // 4. Sign leg 2. If it fails, tell the backend to abort -> fires armed unwind.
+      let signedLeg2: SignedAction
       try {
-        signed2 = await signRequest(requests[1], signers)
+        signedLeg2 = await signRequest(leg2Req, signers)
       } catch (e) {
-        throw Object.assign(new Error(`Signing failed for ${requests[1].venue}: ${e instanceof Error ? e.message : 'Unknown error'}`), { venue: requests[1].venue })
+        const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+        setState((s) => ({
+          ...s,
+          phase: 'aborted',
+          reason: `Leg 2 signing failed: ${e instanceof Error ? e.message : 'unknown error'}. Leg 1 unwound.`,
+          unwound: abortResp?.unwound ?? true,
+        }))
+        return
       }
 
-      setState((s) => ({ ...s, phase: 'submitting_2' }))
-      const result2 = await submitSigned(signed2)
-      if (!result2.accepted) {
-        throw Object.assign(new Error(result2.error || `${requests[1].venue} leg rejected`), { venue: requests[1].venue })
-      }
+      // 5. Advance step 2 — submit leg 2, verify hedge.
+      setState((s) => ({ ...s, phase: 'submitting_leg2' }))
+      const adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedLeg2] })
 
       setState((s) => ({
         ...s,
-        phase: 'confirmed',
-        results: [result1, result2],
-        currentVenue: null,
+        phase: (adv2.status === 'open' ? 'open' : adv2.status) as ExecutionPhase,
+        leg2Fill: adv2.leg2_fill ?? null,
+        mismatch: adv2.mismatch ?? null,
+        positionId: adv2.position_id ?? null,
+        reason: adv2.reason ?? null,
+        unwound: adv2.unwound ?? false,
       }))
     } catch (e) {
-      const err = e as Error & { venue?: string }
       setState((s) => ({
         ...s,
         phase: 'failed',
-        error: err.message,
-        failedVenue: err.venue ?? null,
-        currentVenue: null,
+        error: e instanceof Error ? e.message : 'Unknown error',
       }))
     }
   }, [pacificaAddress, hyperliquidAddress, buildSigners])
