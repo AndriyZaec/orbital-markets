@@ -21,6 +21,7 @@ import (
 type LiveDeps struct {
 	signingStore *domain.SigningRequestStore
 	liveStore    *executor.Store
+	sessions     *SessionManager
 	pacClient    *paclive.Client
 	pacTracker   *paclive.Tracker
 	hlClient     *hllive.Client
@@ -40,6 +41,7 @@ func NewLiveDeps(
 	return &LiveDeps{
 		signingStore: signingStore,
 		liveStore:    liveStore,
+		sessions:     NewSessionManager(),
 		pacClient:    pacClient,
 		pacTracker:   pacTracker,
 		hlClient:     hlClient,
@@ -105,6 +107,7 @@ func (s *Server) routes() {
 
 	// Live execution (non-custodial signing flow)
 	s.mux.HandleFunc("POST /api/v1/live/prepare", s.handleLivePrepare)
+	s.mux.HandleFunc("POST /api/v1/live/advance", s.handleLiveAdvance)
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
 	s.mux.HandleFunc("GET /api/v1/live/positions", s.handleLivePositions)
 	s.mux.HandleFunc("GET /api/v1/live/positions/", s.handleLivePosition)
