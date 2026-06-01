@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
@@ -34,6 +36,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	s.live.sessions.cleanup() // evict stale sessions opportunistically
 
 	var req struct {
 		OpportunityID      string  `json:"opportunity_id"`
@@ -98,87 +101,124 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Build signing requests for each leg
+	// 4. Riskier leg first (higher slippage = thinner book → submit first).
+	leg1, leg2 := orderLegsByRisk(plan)
+
+	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
+	// Both are on the riskier leg's venue/wallet and signed together up front,
+	// so the backend holds a signature-free escape the moment leg 1 fills.
 	now := time.Now()
-	leg1ID := fmt.Sprintf("orbital-leg1-%d", now.UnixNano())
-	leg2ID := fmt.Sprintf("orbital-leg2-%d", now.UnixNano()+1)
+	leg1OpenCloid := fmt.Sprintf("orbital-l1open-%d", now.UnixNano())
+	leg1UnwindCloid := fmt.Sprintf("orbital-l1unwind-%d", now.UnixNano()+1)
 
-	sigReq1, err := s.buildLegSigningRequest(
-		plan.Leg1, plan.Notional, leg1ID,
-		req.AccountPacifica, req.AccountHyperliquid,
+	leg1Open, err := s.buildOpenSigningRequest(
+		leg1, plan.Notional, leg1OpenCloid, req.AccountPacifica,
 	)
 	if err != nil {
-		s.logger.Error("live prepare: build leg1 signing request", "err", err)
+		s.logger.Error("live prepare: build leg1 open", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("leg1 payload build failed: %s", err),
+			"error": fmt.Sprintf("leg1 open payload build failed: %s", err),
 		})
 		return
 	}
 
-	sigReq2, err := s.buildLegSigningRequest(
-		plan.Leg2, plan.Notional, leg2ID,
-		req.AccountPacifica, req.AccountHyperliquid,
+	leg1Unwind, err := s.buildUnwindSigningRequest(
+		leg1, plan.Notional, leg1UnwindCloid, req.AccountPacifica,
 	)
 	if err != nil {
-		s.logger.Error("live prepare: build leg2 signing request", "err", err)
+		s.logger.Error("live prepare: build leg1 unwind", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("leg2 payload build failed: %s", err),
+			"error": fmt.Sprintf("leg1 unwind payload build failed: %s", err),
 		})
 		return
 	}
 
-	// 5. Store signing requests
-	s.live.signingStore.Store(sigReq1)
-	s.live.signingStore.Store(sigReq2)
+	s.live.signingStore.Store(leg1Open)
+	s.live.signingStore.Store(leg1Unwind)
 
-	s.logger.Info("live prepare: signing requests ready",
+	// 6. Create the orchestration session.
+	sessionID := uuid.New().String()
+	sess := &LiveSession{
+		ID:                 sessionID,
+		Plan:               plan,
+		Leg1:               leg1,
+		Leg2:               leg2,
+		AccountPacifica:    req.AccountPacifica,
+		AccountHyperliquid: req.AccountHyperliquid,
+		State:              sessAwaitingLeg1Signs,
+		Leg1OpenReqID:      leg1Open.ID,
+		Leg1UnwindReqID:    leg1Unwind.ID,
+		CreatedAt:          now,
+	}
+	s.live.sessions.put(sess)
+
+	s.logger.Info("live prepare: session ready",
+		"session_id", sessionID,
 		"asset", opp.Asset,
-		"leg1_venue", sigReq1.Venue,
-		"leg2_venue", sigReq2.Venue,
+		"riskier_venue", leg1.venue,
+		"hedge_venue", leg2.venue,
 		"plan_id", plan.ID,
 	)
 
-	// 6. Return both signing requests + plan context
+	// 7. Return session + leg-1 open and unwind signing requests.
 	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":       sessionID,
 		"plan_id":          plan.ID,
 		"asset":            plan.Asset,
 		"notional":         plan.Notional,
 		"leverage":         plan.Leverage,
-		"signing_requests": []*domain.SigningRequest{sigReq1, sigReq2},
+		"riskier_venue":    leg1.venue,
+		"hedge_venue":      leg2.venue,
+		"expires_at":       leg1Open.ExpiresAt,
+		"signing_requests": []*domain.SigningRequest{leg1Open, leg1Unwind},
 	})
 }
 
-func (s *Server) buildLegSigningRequest(
-	leg domain.Leg,
-	notional float64,
-	clientOrderID string,
-	accountPacifica string,
-	accountHyperliquid string,
+// orderLegsByRisk resolves riskier-first ordering: the leg with higher slippage
+// (thinner book) is submitted first. Mirrors executor.orderLegs.
+func orderLegsByRisk(plan *domain.ExecutionPlan) (legPlan, legPlan) {
+	a := legPlan{venue: plan.Leg1.Venue, symbol: plan.Leg1.Asset, side: plan.Leg1.Side, price: plan.Leg1.ExpectedPrice}
+	b := legPlan{venue: plan.Leg2.Venue, symbol: plan.Leg2.Asset, side: plan.Leg2.Side, price: plan.Leg2.ExpectedPrice}
+	if plan.Leg1.Slippage >= plan.Leg2.Slippage {
+		return a, b
+	}
+	return b, a
+}
+
+// buildOpenSigningRequest builds an open-order signing request for one leg.
+// accountPacifica is only used for Pacifica; Hyperliquid derives the account
+// from the signature at submit time.
+func (s *Server) buildOpenSigningRequest(
+	leg legPlan, amount float64, clientOrderID, accountPacifica string,
 ) (*domain.SigningRequest, error) {
-	switch leg.Venue {
+	switch leg.venue {
 	case "pacifica":
-		return paclive.BuildOpenPayload(
-			accountPacifica,
-			leg.Asset,
-			leg.Side,
-			notional,
-			leg.ExpectedPrice,
-			clientOrderID,
-		)
+		return paclive.BuildOpenPayload(accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	case "hyperliquid":
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
 		}
-		return hllive.BuildOpenPayload(
-			s.live.hlAssetMap,
-			leg.Asset,
-			leg.Side,
-			notional,
-			leg.ExpectedPrice,
-			clientOrderID,
-		)
+		return hllive.BuildOpenPayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	default:
-		return nil, fmt.Errorf("unsupported venue: %s", leg.Venue)
+		return nil, fmt.Errorf("unsupported venue: %s", leg.venue)
+	}
+}
+
+// buildUnwindSigningRequest builds a reduce-only close signing request for one leg.
+// Side is the position side; the close payload inverts it internally.
+func (s *Server) buildUnwindSigningRequest(
+	leg legPlan, amount float64, clientOrderID, accountPacifica string,
+) (*domain.SigningRequest, error) {
+	switch leg.venue {
+	case "pacifica":
+		return paclive.BuildClosePayload(accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+	case "hyperliquid":
+		if s.live.hlAssetMap == nil {
+			return nil, fmt.Errorf("hyperliquid asset map not configured")
+		}
+		return hllive.BuildClosePayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+	default:
+		return nil, fmt.Errorf("unsupported venue: %s", leg.venue)
 	}
 }
 
@@ -217,37 +257,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Submit through venue-specific path
-	var result *domain.SubmissionResult
-
-	switch signed.Venue {
-	case "pacifica":
-		if s.live.pacClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "pacifica live client not configured",
-			})
-			return
-		}
-		result, err = s.live.pacClient.SubmitSignedOrder(
-			r.Context(), signed, sigReq, s.live.pacTracker,
-		)
-
-	case "hyperliquid":
-		if s.live.hlClient == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "hyperliquid live client not configured",
-			})
-			return
-		}
-		result, err = s.live.hlClient.SubmitSignedOrder(
-			r.Context(), signed, sigReq,
-		)
-
-	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unsupported venue: %s", signed.Venue),
-		})
-		return
-	}
+	result, err := s.submitSignedAction(r.Context(), signed, sigReq)
 
 	if err != nil {
 		s.logger.Error("live submit: submission error",
@@ -463,7 +473,6 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				fill,
 				cloid,
 				req.AccountPacifica,
-				req.AccountHyperliquid,
 			)
 			if err != nil {
 				s.logger.Error("kill switch: build close payload",
@@ -511,11 +520,12 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildCloseSigningRequest builds a close signing request for a single filled leg.
+// accountPacifica is only used for Pacifica; Hyperliquid derives the account from
+// the signature at submit time.
 func (s *Server) buildCloseSigningRequest(
 	fill executor.LiveFill,
 	clientOrderID string,
 	accountPacifica string,
-	accountHyperliquid string,
 ) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
