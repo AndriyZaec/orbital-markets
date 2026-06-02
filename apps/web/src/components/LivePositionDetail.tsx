@@ -1,4 +1,5 @@
 import type { LivePosition } from '@/hooks/useLivePositions'
+import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
 import { Badge } from '@/components/ui/badge'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
@@ -49,7 +50,7 @@ function stateColor(state: string) {
     case 'degraded': return 'text-orange-400'
     case 'failed': return 'text-red-400'
     case 'closed': return 'text-muted-foreground'
-    case 'pending': case 'closing': return 'text-yellow-400'
+    case 'closing': return 'text-yellow-400'
     default: return 'text-yellow-400'
   }
 }
@@ -72,13 +73,23 @@ function pnlColor(n: number) {
 
 const venueLogos: Record<string, string> = { pacifica: pacificaLogo, hyperliquid: hlLogo }
 
+function needsAttention(state: string) {
+  return state === 'degraded' || state === 'failed' || state === 'closing'
+}
+
 export function LivePositionDetail({ position: pos, onClose }: Props) {
-  const basisDeteriorating = pos.basis_change < 0
+  const { data, loading } = useLivePositionDetail(pos.id)
+  const fills = data?.fills ?? []
+  const events = data?.events ?? []
+
+  // Extract reason from the last 'complete' event
+  const completeEvent = [...events].reverse().find(e => e.event === 'complete')
+  const reason = completeEvent?.detail
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-card border border-border rounded-lg w-[560px] max-h-[90vh] overflow-y-auto shadow-2xl"
+        className="bg-card border border-border rounded-lg w-[580px] max-h-[90vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -91,76 +102,76 @@ export function LivePositionDetail({ position: pos, onClose }: Props) {
               <span className="text-[9px] text-blue-400 font-medium">LIVE</span>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors"
-          >
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
               <path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
           </button>
         </div>
 
-        {/* Spread Health */}
-        <div className="px-5 py-4 border-b border-border">
-          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Spread Health</p>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <p className="text-[10px] text-muted-foreground mb-0.5">Entry Spread</p>
-              <p className="text-sm font-mono text-foreground">{fmtPct(pos.entry_spread)}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-muted-foreground mb-0.5">Current Spread</p>
-              <p className={`text-sm font-mono ${pos.current_spread < 0 ? 'text-red-400' : 'text-foreground'}`}>{fmtPct(pos.current_spread)}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-muted-foreground mb-0.5">Basis Change</p>
-              <p className={`text-sm font-mono ${basisDeteriorating ? 'text-red-400' : pnlColor(pos.basis_change)}`}>{fmtPct(pos.basis_change)}</p>
-            </div>
+        {/* Reason banner for non-open states */}
+        {needsAttention(pos.state) && reason && (
+          <div className={`px-5 py-3 border-b ${
+            pos.state === 'degraded' ? 'border-orange-500/20 bg-orange-500/[0.04]'
+            : 'border-red-500/20 bg-red-500/[0.04]'
+          }`}>
+            <p className={`text-[11px] font-medium mb-1 ${pos.state === 'degraded' ? 'text-orange-400' : 'text-red-400'}`}>
+              {pos.state === 'degraded' ? 'Manual action may be required' : 'Execution failed'}
+            </p>
+            <p className="text-[10px] text-muted-foreground">{reason}</p>
           </div>
+        )}
+
+        {/* Leg Fills */}
+        <div className="px-5 py-4 border-b border-border">
+          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Leg Fills</p>
+          {loading && <p className="text-[10px] text-muted-foreground">Loading...</p>}
+          {!loading && fills.length === 0 && (
+            <p className="text-[10px] text-muted-foreground">No fills recorded.</p>
+          )}
+          {fills.length > 0 && (
+            <div className="space-y-2">
+              {fills.map((f) => (
+                <FillCard key={f.id} fill={f} />
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Leg Summary */}
-        <div className="px-5 py-4 border-b border-border">
-          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Leg Summary</p>
-          <div className="grid grid-cols-2 gap-3">
-            <LegCard
-              label="Leg 1"
-              venue={pos.venue_a}
-              currentPrice={pos.leg1_current_price}
-              liqPrice={pos.leg1_liq_price}
-              liqDist={pos.leg1_liq_dist}
-              liqRisk={pos.leg1_liq_risk}
-            />
-            <LegCard
-              label="Leg 2"
-              venue={pos.venue_b}
-              currentPrice={pos.leg2_current_price}
-              liqPrice={pos.leg2_liq_price}
-              liqDist={pos.leg2_liq_dist}
-              liqRisk={pos.leg2_liq_risk}
-            />
+        {/* Spread Health — only for open positions with monitoring data */}
+        {pos.state === 'open' && (pos.current_spread !== 0 || pos.entry_spread !== 0) && (
+          <div className="px-5 py-4 border-b border-border">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Spread Health</p>
+            <div className="grid grid-cols-3 gap-4">
+              <InfoItem label="Entry Spread" value={fmtPct(pos.entry_spread)} />
+              <InfoItem label="Current Spread" value={fmtPct(pos.current_spread)} warn={pos.current_spread < 0} />
+              <InfoItem label="Basis Change" value={fmtPct(pos.basis_change)} warn={pos.basis_change < 0} />
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* PnL */}
-        <div className="px-5 py-4 border-b border-border">
-          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p>
-              <p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{fmtPnL(pos.price_pnl)}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-muted-foreground mb-0.5">Funding PnL</p>
-              <p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{fmtPnL(pos.funding_pnl)}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p>
-              <p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{fmtPnL(pos.total_pnl)}</p>
+        {/* Leg Monitoring — only for open positions with monitoring data */}
+        {pos.state === 'open' && (pos.leg1_current_price > 0 || pos.leg2_current_price > 0) && (
+          <div className="px-5 py-4 border-b border-border">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Leg Status</p>
+            <div className="grid grid-cols-2 gap-3">
+              <LegCard label="Leg 1" venue={pos.venue_a} currentPrice={pos.leg1_current_price} liqPrice={pos.leg1_liq_price} liqDist={pos.leg1_liq_dist} liqRisk={pos.leg1_liq_risk} />
+              <LegCard label="Leg 2" venue={pos.venue_b} currentPrice={pos.leg2_current_price} liqPrice={pos.leg2_liq_price} liqDist={pos.leg2_liq_dist} liqRisk={pos.leg2_liq_risk} />
             </div>
           </div>
-        </div>
+        )}
+
+        {/* PnL — only for open positions */}
+        {pos.state === 'open' && (pos.price_pnl !== 0 || pos.funding_pnl !== 0) && (
+          <div className="px-5 py-4 border-b border-border">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
+            <div className="grid grid-cols-3 gap-4">
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{fmtPnL(pos.price_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Funding PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{fmtPnL(pos.funding_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{fmtPnL(pos.total_pnl)}</p></div>
+            </div>
+          </div>
+        )}
 
         {/* Position Info */}
         <div className="px-5 py-4 border-b border-border">
@@ -168,10 +179,22 @@ export function LivePositionDetail({ position: pos, onClose }: Props) {
           <div className="grid grid-cols-2 gap-y-3 gap-x-6">
             <InfoItem label="Notional" value={fmtUsd(pos.notional)} />
             <InfoItem label="Leverage" value={`${pos.leverage}x`} />
-            <InfoItem label="Hedge Mismatch" value={fmtPct(pos.hedge_mismatch)} warn={pos.hedge_mismatch > 0.02} />
-            <InfoItem label="Hold Time" value={pos.hold_hours > 0 ? fmtHours(pos.hold_hours) : '—'} />
+            <InfoItem label="Venues" value={`${pos.venue_a} / ${pos.venue_b}`} />
+            {pos.hold_hours > 0 && <InfoItem label="Hold Time" value={fmtHours(pos.hold_hours)} />}
           </div>
         </div>
+
+        {/* Event Timeline */}
+        {events.length > 0 && (
+          <div className="px-5 py-4 border-b border-border">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Event Timeline</p>
+            <div className="space-y-1.5">
+              {events.map((ev) => (
+                <EventRow key={ev.id} event={ev} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Timestamps */}
         <div className="px-5 py-4">
@@ -181,9 +204,67 @@ export function LivePositionDetail({ position: pos, onClose }: Props) {
             <InfoItem label="Opened" value={fmtTime(pos.opened_at)} />
             <InfoItem label="Last Updated" value={fmtTime(pos.updated_at)} />
             {pos.completed_at && <InfoItem label="Completed" value={fmtTime(pos.completed_at)} />}
+            {pos.monitor_at && <InfoItem label="Last Monitor" value={fmtTime(pos.monitor_at)} />}
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function FillCard({ fill }: { fill: LiveFillDetail }) {
+  const logo = venueLogos[fill.venue]
+  const isGood = fill.filled
+  const isBad = !fill.accepted || (fill.error && fill.error.length > 0)
+
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 ${
+      isGood ? 'border-green-500/15 bg-green-500/[0.02]'
+      : isBad ? 'border-red-500/15 bg-red-500/[0.02]'
+      : 'border-border bg-white/[0.02]'
+    }`}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[10px] text-muted-foreground font-medium">Leg {fill.leg}</span>
+        {logo && <img src={logo} alt={fill.venue} className="size-3.5 rounded-sm" />}
+        <span className="text-[11px] text-foreground capitalize">{fill.venue}</span>
+        <span className={`ml-auto text-[10px] font-medium ${
+          fill.filled ? 'text-green-400' : fill.accepted ? 'text-yellow-400' : 'text-red-400'
+        }`}>
+          {fill.filled ? 'Filled' : fill.accepted ? 'Accepted' : 'Rejected'}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
+        <span><span className="text-muted-foreground">Side: </span><span className={`font-medium ${fill.side === 'long' ? 'text-green-400' : 'text-red-400'}`}>{fill.side}</span></span>
+        <span><span className="text-muted-foreground">Size: </span><span className="font-mono text-foreground">{fill.filled_amount > 0 ? fill.filled_amount.toPrecision(4) : '—'}</span></span>
+        <span><span className="text-muted-foreground">Req: </span><span className="font-mono text-foreground">{fill.requested_amount > 0 ? fill.requested_amount.toPrecision(4) : '—'}</span></span>
+        <span><span className="text-muted-foreground">Avg Price: </span><span className="font-mono text-foreground">{fill.avg_fill_price > 0 ? fmtPrice(fill.avg_fill_price) : '—'}</span></span>
+        <span><span className="text-muted-foreground">Fill: </span><span className="font-mono text-foreground">{fmtPct(fill.fill_ratio, 1)}</span></span>
+        {fill.fee > 0 && <span><span className="text-muted-foreground">Fee: </span><span className="font-mono text-foreground">${fill.fee.toFixed(4)}</span></span>}
+      </div>
+      {fill.order_id && (
+        <p className="text-[9px] text-muted-foreground/50 font-mono mt-1 truncate">OID: {fill.order_id}</p>
+      )}
+      {fill.client_order_id && (
+        <p className="text-[9px] text-muted-foreground/50 font-mono truncate">CLOID: {fill.client_order_id}</p>
+      )}
+      {fill.error && (
+        <p className="text-[10px] text-red-400/70 mt-1">{fill.error}</p>
+      )}
+    </div>
+  )
+}
+
+function EventRow({ event: ev }: { event: LiveEventDetail }) {
+  const isComplete = ev.event === 'complete'
+  const isError = ev.state === 'degraded' || ev.state === 'failed'
+
+  return (
+    <div className="flex items-start gap-2 text-[10px]">
+      <span className="text-muted-foreground/60 font-mono shrink-0 w-[130px]">{fmtTime(ev.at)}</span>
+      <span className={`font-medium shrink-0 w-[100px] ${
+        isComplete && isError ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-foreground'
+      }`}>{ev.event}</span>
+      {ev.detail && <span className="text-muted-foreground truncate">{ev.detail}</span>}
     </div>
   )
 }
@@ -200,18 +281,9 @@ function LegCard({ label, venue, currentPrice, liqPrice, liqDist, liqRisk }: {
         <span className="text-xs text-foreground capitalize">{venue}</span>
       </div>
       <div className="flex flex-col gap-1.5 text-[11px]">
-        <div className="flex justify-between">
-          <span className="text-muted-foreground">Price</span>
-          <span className="font-mono text-foreground">{fmtPrice(currentPrice)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted-foreground">Liq Price</span>
-          <span className="font-mono text-foreground">{fmtPrice(liqPrice)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted-foreground">Liq Dist</span>
-          <span className="font-mono text-foreground">{liqDist > 0 ? fmtPct(liqDist, 2) : '—'}</span>
-        </div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Price</span><span className="font-mono text-foreground">{fmtPrice(currentPrice)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Liq Price</span><span className="font-mono text-foreground">{fmtPrice(liqPrice)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Liq Dist</span><span className="font-mono text-foreground">{liqDist > 0 ? fmtPct(liqDist, 2) : '—'}</span></div>
         {liqRisk && (
           <div className="flex justify-between items-center">
             <span className="text-muted-foreground">Risk</span>
