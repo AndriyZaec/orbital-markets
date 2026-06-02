@@ -86,7 +86,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [connectedVenues, setConnectedVenues] = useState(0)
   const [showAccounts, setShowAccounts] = useState(false)
-  const [positionMode, setPositionMode] = useState<'paper' | 'live'>('paper')
+  const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('live')
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
@@ -206,28 +206,13 @@ export default function App() {
                   className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
                   onMouseDown={onResizeStart}
                 />
-                <div className="flex items-center gap-0 px-5 pt-1.5 pb-0 shrink-0 bg-[#080b12]">
-                  <button
-                    onClick={() => setPositionMode('paper')}
-                    className={`text-[11px] font-medium px-2 py-1 rounded-l border transition-colors ${
-                      positionMode === 'paper'
-                        ? 'bg-white/[0.06] text-foreground border-border'
-                        : 'bg-transparent text-muted-foreground border-border hover:text-foreground'
-                    }`}
-                  >Paper</button>
-                  <button
-                    onClick={() => setPositionMode('live')}
-                    className={`text-[11px] font-medium px-2 py-1 rounded-r border border-l-0 transition-colors flex items-center gap-1.5 ${
-                      positionMode === 'live'
-                        ? 'bg-white/[0.06] text-foreground border-border'
-                        : 'bg-transparent text-muted-foreground border-border hover:text-foreground'
-                    }`}
-                  >
-                    {positionMode === 'live' && <div className="size-1.5 rounded-full bg-green-400 animate-pulse" />}
-                    Live
-                  </button>
-                </div>
-                {positionMode === 'paper' ? <PaperPositions /> : <LivePositions />}
+                {tradingMode === 'paper' ? <PaperPositions /> : <LivePositions />}
+                <button
+                  onClick={() => setTradingMode(tradingMode === 'live' ? 'paper' : 'live')}
+                  className="absolute bottom-1.5 right-3 text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                >
+                  {tradingMode === 'live' ? 'paper mode' : 'live mode'}
+                </button>
               </div>
             </>
           )}
@@ -249,9 +234,10 @@ export default function App() {
           <OpportunityPanel
             opportunity={selected}
             lastUpdated={lastUpdated}
+            mode={tradingMode}
             onClose={() => setSelectedId(null)}
             onExecute={handleExecutePaper}
-            onViewPositions={() => { setSelectedId(null); setPositionMode('live') }}
+            onViewPositions={() => setSelectedId(null)}
           />
         )}
 

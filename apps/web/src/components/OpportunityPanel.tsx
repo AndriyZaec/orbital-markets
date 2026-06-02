@@ -11,6 +11,7 @@ import { getMockLeverage } from '@/lib/hacks'
 interface Props {
   opportunity: Opportunity
   lastUpdated: Date | null
+  mode: 'paper' | 'live'
   onClose: () => void
   onExecute: (opportunityId: string, leverage: number) => Promise<void>
   onViewPositions?: () => void
@@ -68,7 +69,7 @@ function useExpiry(expiresAt: string | null) {
 
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
-export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExecute, onViewPositions }: Props) {
+export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions }: Props) {
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
@@ -268,26 +269,30 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
           )}
         </div>
 
-        <Button
-          className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
-          size="lg"
-          disabled={!plan?.executable || planExpired || executing || planLoading}
-          onClick={handleExecute}
-        >
-          {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Spread Trade'}
-        </Button>
-
-        <Button
-          className="w-full mt-2 font-medium"
-          size="lg"
-          variant={isFullyReady ? 'default' : 'secondary'}
-          disabled={!isFullyReady || !plan?.executable || planExpired || planLoading}
-          onClick={handleExecuteLive}
-        >
-          {isFullyReady ? 'Execute Live' : 'Connect Wallets to Go Live'}
-        </Button>
-        {!isFullyReady && (
-          <p className="text-[10px] text-muted-foreground/60 text-center mt-1.5">Connect both venue accounts to enable live execution</p>
+        {mode === 'paper' ? (
+          <Button
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
+            size="lg"
+            disabled={!plan?.executable || planExpired || executing || planLoading}
+            onClick={handleExecute}
+          >
+            {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+          </Button>
+        ) : (
+          <>
+            <Button
+              className="w-full font-medium"
+              size="lg"
+              variant={isFullyReady ? 'default' : 'secondary'}
+              disabled={!isFullyReady || !plan?.executable || planExpired || planLoading}
+              onClick={handleExecuteLive}
+            >
+              {isFullyReady ? 'Execute Live' : 'Connect Wallets to Go Live'}
+            </Button>
+            {!isFullyReady && (
+              <p className="text-[10px] text-muted-foreground/60 text-center mt-1.5">Connect both venue accounts to enable live execution</p>
+            )}
+          </>
         )}
       </div>
 
