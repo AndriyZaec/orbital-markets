@@ -226,6 +226,10 @@ func (s *Server) buildUnwindSigningRequest(
 //
 // POST /api/v1/live/submit
 //
+// Restricted to close/unwind actions only. Live opens must go through the
+// session flow (prepare → advance → advance) which enforces the two-leg
+// state machine. This endpoint serves the kill switch and manual close paths.
+//
 // Input: SignedAction JSON
 // Returns: SubmissionResult or error.
 func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +256,19 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 		)
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": fmt.Sprintf("validation failed: %s", err),
+		})
+		return
+	}
+
+	// 1b. Reject open actions — live opens must go through /live/advance.
+	if sigReq.Action == "open" || (!sigReq.ReduceOnly && sigReq.Action != "close") {
+		s.logger.Warn("live submit: rejected non-close action",
+			"request_id", signed.RequestID,
+			"action", sigReq.Action,
+			"reduce_only", sigReq.ReduceOnly,
+		)
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "live opens must use /api/v1/live/prepare and /api/v1/live/advance",
 		})
 		return
 	}
