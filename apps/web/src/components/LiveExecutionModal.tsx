@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { LiveExecutionState, ExecutionPhase, LegFillView } from '@/hooks/useLiveExecution'
+import type { LiveExecutionState, ExecutionPhase, LegFillView, UnwindStatus } from '@/hooks/useLiveExecution'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -34,7 +34,7 @@ function useCountdownToExpiry(expiresAt: string | null) {
 
 type LegStatus = 'pending' | 'signing' | 'submitting' | 'accepted' | 'failed' | 'unwound' | 'skipped'
 
-function leg1Status(phase: ExecutionPhase): LegStatus {
+function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatus {
   switch (phase) {
     case 'preparing': return 'pending'
     case 'awaiting_leg1': return 'signing'
@@ -43,7 +43,10 @@ function leg1Status(phase: ExecutionPhase): LegStatus {
     case 'submitting_leg2':
     case 'open': return 'accepted'
     case 'degraded':
-    case 'aborted': return 'unwound'
+    case 'aborted':
+      if (unwindStatus === 'confirmed') return 'unwound'
+      if (unwindStatus === 'unconfirmed' || unwindStatus === 'submit_failed') return 'failed'
+      return 'failed'
     case 'failed': return 'failed'
     default: return 'pending'
   }
@@ -120,6 +123,22 @@ function LegCard({
   )
 }
 
+function UnwindNotice({ status }: { status: UnwindStatus }) {
+  if (!status) return null
+  switch (status) {
+    case 'confirmed':
+      return <p className="text-[10px] text-muted-foreground mt-1">Leg 1 was unwound via the pre-signed order.</p>
+    case 'unconfirmed':
+      return <p className="text-[10px] text-red-400/80 mt-1">Leg 1 unwind was submitted but fill was not confirmed. Manual close or kill switch may be required.</p>
+    case 'submit_failed':
+      return <p className="text-[10px] text-red-400 mt-1">Leg 1 unwind failed to submit. Manual close or kill switch is required.</p>
+    case 'not_armed':
+      return <p className="text-[10px] text-muted-foreground mt-1">No unwind was armed for this session.</p>
+    default:
+      return null
+  }
+}
+
 const PHASE_HINT: Partial<Record<ExecutionPhase, string>> = {
   preparing: 'Preparing execution plan...',
   awaiting_leg1: 'Sign the riskier leg + its safety unwind in your wallet',
@@ -174,7 +193,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
         <div className="flex-1 overflow-auto px-5 py-4">
           {state.phase !== 'idle' && (
             <div className="flex flex-col gap-3 mb-4">
-              <LegCard label="Leg 1 · Riskier" venue={leg1Venue} status={leg1Status(state.phase)} amount={leg1Amount} fill={state.leg1Fill} />
+              <LegCard label="Leg 1 · Riskier" venue={leg1Venue} status={leg1Status(state.phase, state.unwindStatus)} amount={leg1Amount} fill={state.leg1Fill} />
               <LegCard label="Leg 2 · Hedge" venue={leg2Venue} status={leg2Status(state.phase)} amount={leg2Amount} fill={state.leg2Fill} />
             </div>
           )}
@@ -206,9 +225,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
                 {state.phase === 'degraded' ? 'Hedge not established' : 'Open aborted'}
               </p>
               {state.reason && <p className="text-[11px] text-orange-400/70">{state.reason}</p>}
-              {state.unwound && (
-                <p className="text-[10px] text-muted-foreground mt-1">Leg 1 was unwound via the pre-signed order.</p>
-              )}
+              <UnwindNotice status={state.unwindStatus} />
             </div>
           )}
           {state.phase === 'failed' && (

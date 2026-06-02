@@ -139,15 +139,18 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	// Wait for leg 1 fill.
 	fill, err := s.waitForLegFill(ctx, openReq)
 	if err != nil || fill == nil {
-		unwound := s.fireUnwind(ctx, sess)
-		sess.State = sessAborted
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
 		s.live.sessions.remove(sess.ID)
-		s.persistSession(ctx, sess, executor.ExecStateFailed, "leg 1 fill wait failed; unwind fired")
-		s.logger.Error("live advance: leg 1 fill wait failed", "session_id", sess.ID, "err", err, "unwound", unwound)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id": sess.ID, "status": string(sessAborted),
-			"reason": "leg 1 fill could not be confirmed", "unwound": unwound,
-		})
+		reason := "leg 1 fill could not be confirmed" + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		s.logger.Error("live advance: leg 1 fill wait failed", "session_id", sess.ID, "err", err, "unwind_status", ur.Status)
+		resp := map[string]any{
+			"session_id": sess.ID, "status": string(sessState), "reason": reason,
+		}
+		for k, v := range unwindJSON(ur) { resp[k] = v }
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	sess.Leg1Fill = fill
@@ -159,16 +162,19 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 
 	// Minimum hedgeable fill check.
 	if fillRatio < minHedgeableFillPct {
-		unwound := s.fireUnwind(ctx, sess)
-		sess.State = sessAborted
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
 		s.live.sessions.remove(sess.ID)
-		reason := fmt.Sprintf("leg 1 underfilled %.1f%% (< %.0f%%); unwind fired", fillRatio*100, minHedgeableFillPct*100)
-		s.persistSession(ctx, sess, executor.ExecStateFailed, reason)
-		s.logger.Warn("live advance: leg 1 underfilled", "session_id", sess.ID, "fill_ratio", fillRatio, "unwound", unwound)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id": sess.ID, "status": string(sessAborted),
-			"leg1_fill": fillView(fill, fillRatio), "reason": reason, "unwound": unwound,
-		})
+		reason := fmt.Sprintf("leg 1 underfilled %.1f%% (< %.0f%%)", fillRatio*100, minHedgeableFillPct*100) + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		s.logger.Warn("live advance: leg 1 underfilled", "session_id", sess.ID, "fill_ratio", fillRatio, "unwind_status", ur.Status)
+		resp := map[string]any{
+			"session_id": sess.ID, "status": string(sessState),
+			"leg1_fill": fillView(fill, fillRatio), "reason": reason,
+		}
+		for k, v := range unwindJSON(ur) { resp[k] = v }
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -176,15 +182,18 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	leg2Cloid := fmt.Sprintf("orbital-l2open-%d", time.Now().UnixNano())
 	leg2Open, err := s.buildOpenSigningRequest(sess.Leg2, fill.FilledAmount, leg2Cloid, sess.AccountPacifica)
 	if err != nil {
-		unwound := s.fireUnwind(ctx, sess)
-		sess.State = sessDegraded
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
 		s.live.sessions.remove(sess.ID)
-		s.persistSession(ctx, sess, executor.ExecStateDegraded, "leg 2 payload build failed; unwind fired")
-		s.logger.Error("live advance: leg 2 build failed", "session_id", sess.ID, "err", err, "unwound", unwound)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id": sess.ID, "status": string(sessDegraded),
-			"reason": "could not build hedge order; leg 1 unwound", "unwound": unwound,
-		})
+		reason := "could not build hedge order" + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		s.logger.Error("live advance: leg 2 build failed", "session_id", sess.ID, "err", err, "unwind_status", ur.Status)
+		resp := map[string]any{
+			"session_id": sess.ID, "status": string(sessState), "reason": reason,
+		}
+		for k, v := range unwindJSON(ur) { resp[k] = v }
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -220,44 +229,54 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 
 	leg2Req, err := s.live.signingStore.ValidateAndConsume(*openSigned)
 	if err != nil {
-		unwound := s.fireUnwind(ctx, sess)
-		sess.State = sessDegraded
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
 		s.live.sessions.remove(sess.ID)
-		s.persistSession(ctx, sess, executor.ExecStateDegraded, "leg 2 validation failed; unwind fired")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id": sess.ID, "status": string(sessDegraded),
-			"reason": "leg 2 validation failed; leg 1 unwound", "unwound": unwound,
-		})
+		reason := "leg 2 validation failed" + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		resp := map[string]any{
+			"session_id": sess.ID, "status": string(sessState), "reason": reason,
+		}
+		for k, v := range unwindJSON(ur) { resp[k] = v }
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
 	// Submit leg 2.
 	sub, err := s.submitSignedAction(ctx, *openSigned, leg2Req)
 	if err != nil || sub == nil || !sub.Accepted {
-		unwound := s.fireUnwind(ctx, sess)
-		sess.State = sessDegraded
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
 		s.live.sessions.remove(sess.ID)
-		reason := "leg 2 submit rejected; leg 1 unwound"
-		s.persistSession(ctx, sess, executor.ExecStateDegraded, reason)
-		s.logger.Error("live advance: leg 2 not accepted", "session_id", sess.ID, "unwound", unwound)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id": sess.ID, "status": string(sessDegraded),
-			"leg1_fill": fillView(sess.Leg1Fill, 0), "reason": reason, "unwound": unwound,
-		})
+		reason := "leg 2 submit rejected" + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		s.logger.Error("live advance: leg 2 not accepted", "session_id", sess.ID, "unwind_status", ur.Status)
+		resp := map[string]any{
+			"session_id": sess.ID, "status": string(sessState),
+			"leg1_fill": fillView(sess.Leg1Fill, 0), "reason": reason,
+		}
+		for k, v := range unwindJSON(ur) { resp[k] = v }
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
 	// Wait for leg 2 fill.
 	fill2, err := s.waitForLegFill(ctx, leg2Req)
 	if err != nil || fill2 == nil {
-		unwound := s.fireUnwind(ctx, sess)
-		sess.State = sessDegraded
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
 		s.live.sessions.remove(sess.ID)
-		s.persistSession(ctx, sess, executor.ExecStateDegraded, "leg 2 fill wait failed; unwind fired")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"session_id": sess.ID, "status": string(sessDegraded),
-			"leg1_fill": fillView(sess.Leg1Fill, 0), "reason": "leg 2 fill not confirmed; leg 1 unwound", "unwound": unwound,
-		})
+		reason := "leg 2 fill not confirmed" + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		resp := map[string]any{
+			"session_id": sess.ID, "status": string(sessState),
+			"leg1_fill": fillView(sess.Leg1Fill, 0), "reason": reason,
+		}
+		for k, v := range unwindJSON(ur) { resp[k] = v }
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	sess.Leg2Fill = fill2
@@ -283,50 +302,75 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 
 	// Mismatch too high (or leg 2 unfilled) — unwind leg 1, degrade.
-	unwound := s.fireUnwind(ctx, sess)
+	ur := s.fireUnwind(ctx, sess)
 	sess.State = sessDegraded
 	s.live.sessions.remove(sess.ID)
-	reason := fmt.Sprintf("hedge mismatch %.2f%% (> %.0f%%); leg 1 unwound", mismatch*100, maxHedgeMismatchPct*100)
+	reason := fmt.Sprintf("hedge mismatch %.2f%% (> %.0f%%)", mismatch*100, maxHedgeMismatchPct*100) + unwindReasonSuffix(ur)
 	posID := s.persistSession(ctx, sess, executor.ExecStateDegraded, reason)
-	s.logger.Warn("live advance: hedge mismatch, degraded", "session_id", sess.ID, "mismatch", mismatch, "unwound", unwound)
-	writeJSON(w, http.StatusOK, map[string]any{
+	s.logger.Warn("live advance: hedge mismatch, degraded", "session_id", sess.ID, "mismatch", mismatch, "unwind_status", ur.Status)
+	resp := map[string]any{
 		"session_id": sess.ID, "status": string(sessDegraded),
 		"leg1_fill": fillView(sess.Leg1Fill, 0), "leg2_fill": fillView(fill2, 0),
-		"mismatch": mismatch, "reason": reason, "position_id": posID, "unwound": unwound,
-	})
+		"mismatch": mismatch, "reason": reason, "position_id": posID,
+	}
+	for k, v := range unwindJSON(ur) { resp[k] = v }
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // abortAfterLeg1 fires the armed unwind when the user aborts before signing leg 2.
 func (s *Server) abortAfterLeg1(w http.ResponseWriter, r *http.Request, sess *LiveSession, reason string) {
 	ctx := r.Context()
-	unwound := s.fireUnwind(ctx, sess)
-	sess.State = sessAborted
+	ur := s.fireUnwind(ctx, sess)
+	sessState, persistState := terminalStateAfterUnwind(ur)
+	sess.State = sessState
 	s.live.sessions.remove(sess.ID)
-	s.persistSession(ctx, sess, executor.ExecStateFailed, reason+"; leg 1 unwound")
-	s.logger.Warn("live advance: aborted after leg 1", "session_id", sess.ID, "unwound", unwound)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id": sess.ID, "status": string(sessAborted),
-		"reason": reason, "unwound": unwound,
-	})
+	fullReason := reason + unwindReasonSuffix(ur)
+	s.persistSession(ctx, sess, persistState, fullReason)
+	s.logger.Warn("live advance: aborted after leg 1", "session_id", sess.ID, "unwind_status", ur.Status)
+	resp := map[string]any{
+		"session_id": sess.ID, "status": string(sessState), "reason": fullReason,
+	}
+	for k, v := range unwindJSON(ur) { resp[k] = v }
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// fireUnwind submits the pre-signed reduce-only leg-1 unwind and best-effort
-// waits for its fill. Reduce-only auto-caps to the actual open size.
-func (s *Server) fireUnwind(ctx context.Context, sess *LiveSession) bool {
+// unwindStatus describes how far the armed reduce-only unwind progressed.
+type unwindStatus string
+
+const (
+	unwindNotArmed    unwindStatus = "not_armed"     // no pre-signed unwind was available
+	unwindSubmitFail  unwindStatus = "submit_failed" // unwind order rejected or errored
+	unwindUnconfirmed unwindStatus = "unconfirmed"   // accepted by venue but fill not confirmed
+	unwindConfirmed   unwindStatus = "confirmed"     // fill confirmed — position is flat
+)
+
+// unwindResult carries the outcome of a fireUnwind call.
+type unwindResult struct {
+	Status unwindStatus
+}
+
+func (u unwindResult) Confirmed() bool { return u.Status == unwindConfirmed }
+
+// fireUnwind submits the pre-signed reduce-only leg-1 unwind and waits for fill.
+// Reduce-only auto-caps to the actual open size.
+func (s *Server) fireUnwind(ctx context.Context, sess *LiveSession) unwindResult {
 	if sess.ArmedUnwindSigned == nil || sess.ArmedUnwindReq == nil {
 		s.logger.Warn("live advance: no armed unwind to fire", "session_id", sess.ID)
-		return false
+		return unwindResult{Status: unwindNotArmed}
 	}
 	sub, err := s.submitSignedAction(ctx, *sess.ArmedUnwindSigned, sess.ArmedUnwindReq)
-	ok := err == nil && sub != nil && sub.Accepted
-	if !ok {
+	if err != nil || sub == nil || !sub.Accepted {
 		s.logger.Error("live advance: unwind submit failed", "session_id", sess.ID, "err", err)
-		return false
+		return unwindResult{Status: unwindSubmitFail}
 	}
-	// Best-effort fill confirmation; ignore result.
-	_, _ = s.waitForLegFill(ctx, sess.ArmedUnwindReq)
-	s.logger.Info("live advance: armed unwind fired", "session_id", sess.ID)
-	return true
+	fill, err := s.waitForLegFill(ctx, sess.ArmedUnwindReq)
+	if err != nil || fill == nil || !fill.Filled {
+		s.logger.Warn("live advance: unwind submitted but fill not confirmed", "session_id", sess.ID)
+		return unwindResult{Status: unwindUnconfirmed}
+	}
+	s.logger.Info("live advance: armed unwind confirmed", "session_id", sess.ID,
+		"filled", fill.FilledAmount)
+	return unwindResult{Status: unwindConfirmed}
 }
 
 // submitSignedAction routes a signed action to the right venue client.
@@ -436,6 +480,39 @@ func legResultFrom(leg legPlan, fill *normFill, clientOrderID string, requestedA
 		}
 	}
 	return lr
+}
+
+// unwindJSON returns the API-facing fields for an unwind result.
+func unwindJSON(ur unwindResult) map[string]any {
+	return map[string]any{
+		"unwound":       ur.Confirmed(),
+		"unwind_status": string(ur.Status),
+	}
+}
+
+// terminalStateAfterUnwind chooses the right session+persistence state.
+// Only a confirmed unwind can yield a clean abort; everything else is degraded.
+func terminalStateAfterUnwind(ur unwindResult) (sessionState, executor.ExecState) {
+	if ur.Confirmed() {
+		return sessAborted, executor.ExecStateFailed
+	}
+	return sessDegraded, executor.ExecStateDegraded
+}
+
+// unwindReasonSuffix appends the unwind status to a reason string.
+func unwindReasonSuffix(ur unwindResult) string {
+	switch ur.Status {
+	case unwindConfirmed:
+		return "; leg 1 unwound (confirmed)"
+	case unwindUnconfirmed:
+		return "; leg 1 unwind submitted but fill NOT confirmed — manual action may be required"
+	case unwindSubmitFail:
+		return "; leg 1 unwind submit failed — manual action required"
+	case unwindNotArmed:
+		return "; no unwind was armed"
+	default:
+		return ""
+	}
 }
 
 func findSigned(actions []domain.SignedAction, reqID string) *domain.SignedAction {

@@ -28,13 +28,14 @@ export interface LegFillView {
   fill_ratio?: number
 }
 
+export type UnwindStatus = 'not_armed' | 'submit_failed' | 'unconfirmed' | 'confirmed' | null
+
 export interface LiveExecutionState {
   phase: ExecutionPhase
   asset: string | null
   sessionId: string | null
   riskierVenue: string | null
   hedgeVenue: string | null
-  // current step's signing requests (display + signing)
   leg1Requests: SigningRequest[] // [open, unwind]
   leg2Request: SigningRequest | null
   leg1Fill: LegFillView | null
@@ -42,6 +43,7 @@ export interface LiveExecutionState {
   mismatch: number | null
   positionId: string | null
   unwound: boolean
+  unwindStatus: UnwindStatus
   error: string | null
   reason: string | null
   expiresAt: string | null
@@ -61,6 +63,7 @@ const INITIAL_STATE: LiveExecutionState = {
   mismatch: null,
   positionId: null,
   unwound: false,
+  unwindStatus: null,
   error: null,
   reason: null,
   expiresAt: null,
@@ -86,6 +89,7 @@ interface AdvanceResp {
   position_id?: string
   reason?: string
   unwound?: boolean
+  unwind_status?: 'not_armed' | 'submit_failed' | 'unconfirmed' | 'confirmed'
 }
 
 export function useLiveExecution() {
@@ -196,6 +200,7 @@ export function useLiveExecution() {
           leg1Fill: adv1.leg1_fill ?? null,
           reason: adv1.reason ?? null,
           unwound: adv1.unwound ?? false,
+          unwindStatus: (adv1.unwind_status ?? null) as UnwindStatus,
         }))
         return
       }
@@ -225,8 +230,9 @@ export function useLiveExecution() {
         setState((s) => ({
           ...s,
           phase: 'aborted',
-          reason: `Leg 2 signing failed: ${e instanceof Error ? e.message : 'unknown error'}. Leg 1 unwound.`,
-          unwound: abortResp?.unwound ?? true,
+          reason: `Leg 2 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+          unwound: abortResp?.unwound ?? false,
+          unwindStatus: (abortResp?.unwind_status ?? 'unconfirmed') as UnwindStatus,
         }))
         return
       }
@@ -243,6 +249,7 @@ export function useLiveExecution() {
         positionId: adv2.position_id ?? null,
         reason: adv2.reason ?? null,
         unwound: adv2.unwound ?? false,
+        unwindStatus: (adv2.unwind_status ?? null) as UnwindStatus,
       }))
     } catch (e) {
       setState((s) => ({
