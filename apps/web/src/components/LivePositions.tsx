@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useKillSwitch } from '@/hooks/useKillSwitch'
+import { useVenueAuthority } from '@/hooks/useVenueAuthority'
 import {
   Table,
   TableBody,
@@ -84,8 +85,13 @@ function VenueIcon({ venue }: { venue: string }) {
   return <span className="text-[10px] text-muted-foreground uppercase">{venue.slice(0, 3)}</span>
 }
 
-export function LivePositions() {
+interface LivePositionsProps {
+  onConnectWallets?: () => void
+}
+
+export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
   const { positions, loading, error, refetch } = useLivePositions()
+  const { isFullyReady } = useVenueAuthority()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [tab, setTab] = useState<'open' | 'closed'>('open')
 
@@ -260,9 +266,25 @@ export function LivePositions() {
         {error && <p className="text-destructive text-xs px-5 py-3">Error: {error}</p>}
 
         {!loading && !error && displayed.length === 0 && (
-          <p className="text-muted-foreground text-xs px-5 py-3">
-            {positions.length === 0 ? 'No live positions.' : `No ${tab} live positions.`}
-          </p>
+          <div className="flex flex-col items-center justify-center py-8 gap-3">
+            {!isFullyReady ? (
+              <>
+                <p className="text-muted-foreground text-xs">Connect both wallets to start live trading</p>
+                {onConnectWallets && (
+                  <button
+                    onClick={onConnectWallets}
+                    className="text-xs font-medium px-3 py-1.5 rounded-md border border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08] transition-colors"
+                  >
+                    Connect Wallets
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="text-muted-foreground text-xs">
+                {positions.length === 0 ? 'No live positions yet.' : `No ${tab} live positions.`}
+              </p>
+            )}
+          </div>
         )}
 
         {!loading && !error && displayed.length > 0 && (

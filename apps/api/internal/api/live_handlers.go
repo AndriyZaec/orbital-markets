@@ -87,7 +87,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Live admission gate
+	// 3. Start account subscribers if not already running (lazy — first prepare triggers them)
+	s.live.EnsureAccountStreams(req.AccountPacifica, req.AccountHyperliquid)
+
+	// 4. Live admission gate
 	admission := domain.CheckLiveAdmission(*opp, plan.Leverage.Leverage)
 	if !admission.Allowed {
 		s.logger.Warn("live prepare: admission denied",

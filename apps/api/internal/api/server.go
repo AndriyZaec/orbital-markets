@@ -7,47 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
-	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
-	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
-
-// LiveDeps holds optional dependencies for live (non-custodial) execution.
-// When nil, live endpoints return 503. This lets the server start without
-// live venue clients configured.
-type LiveDeps struct {
-	signingStore *domain.SigningRequestStore
-	liveStore    *executor.Store
-	sessions     *SessionManager
-	pacClient    *paclive.Client
-	pacTracker   *paclive.Tracker
-	hlClient     *hllive.Client
-	hlAssetMap   hllive.AssetMap
-}
-
-// NewLiveDeps creates a LiveDeps with the signing store and live position store (required)
-// and optional venue clients. Venue clients can be nil until configured.
-func NewLiveDeps(
-	signingStore *domain.SigningRequestStore,
-	liveStore *executor.Store,
-	pacClient *paclive.Client,
-	pacTracker *paclive.Tracker,
-	hlClient *hllive.Client,
-	hlAssetMap hllive.AssetMap,
-) *LiveDeps {
-	return &LiveDeps{
-		signingStore: signingStore,
-		liveStore:    liveStore,
-		sessions:     NewSessionManager(),
-		pacClient:    pacClient,
-		pacTracker:   pacTracker,
-		hlClient:     hlClient,
-		hlAssetMap:   hlAssetMap,
-	}
-}
 
 type Server struct {
 	ctx       context.Context // server-lifetime context, not per-request

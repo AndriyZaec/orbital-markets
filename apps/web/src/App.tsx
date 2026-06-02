@@ -202,7 +202,7 @@ export default function App() {
                   className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
                   onMouseDown={onResizeStart}
                 />
-                {tradingMode === 'paper' ? <PaperPositions /> : <LivePositions />}
+                {tradingMode === 'paper' ? <PaperPositions /> : <LivePositions onConnectWallets={() => setShowAccounts(true)} />}
                 <button
                   onClick={() => setTradingMode(tradingMode === 'live' ? 'paper' : 'live')}
                   className="absolute bottom-1.5 right-3 text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
