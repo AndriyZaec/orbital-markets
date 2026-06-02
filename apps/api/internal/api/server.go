@@ -50,34 +50,44 @@ func NewLiveDeps(
 }
 
 type Server struct {
-	ctx      context.Context // server-lifetime context, not per-request
-	scanner  *scanner.Scanner
-	executor *paper.Executor
-	store    *paper.DBStore
-	db       *sql.DB
-	live     *LiveDeps // nil = live endpoints disabled
-	logger   *slog.Logger
-	mux      *http.ServeMux
+	ctx       context.Context // server-lifetime context, not per-request
+	scanner   *scanner.Scanner
+	executor  *paper.Executor
+	store     *paper.DBStore
+	db        *sql.DB
+	liveStore *executor.Store // always available when DB exists — read-only live position access
+	live      *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	logger    *slog.Logger
+	mux       *http.ServeMux
 }
 
 func NewServer(
 	ctx context.Context,
 	logger *slog.Logger,
 	sc *scanner.Scanner,
-	executor *paper.Executor,
+	exec *paper.Executor,
 	store *paper.DBStore,
 	database *sql.DB,
 	live *LiveDeps,
 ) *Server {
+	// Live position store is always available for reads, even without venue clients.
+	var ls *executor.Store
+	if live != nil && live.liveStore != nil {
+		ls = live.liveStore
+	} else {
+		ls = executor.NewStore(database, logger)
+	}
+
 	s := &Server{
-		ctx:      ctx,
-		scanner:  sc,
-		executor: executor,
-		store:    store,
-		db:       database,
-		live:     live,
-		logger:   logger,
-		mux:      http.NewServeMux(),
+		ctx:       ctx,
+		scanner:   sc,
+		executor:  exec,
+		store:     store,
+		db:        database,
+		liveStore: ls,
+		live:      live,
+		logger:    logger,
+		mux:       http.NewServeMux(),
 	}
 	s.routes()
 	return s

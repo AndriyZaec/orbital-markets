@@ -321,14 +321,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 //
 // GET /api/v1/live/positions
 func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
-	if s.live == nil || s.live.liveStore == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "live execution not configured",
-		})
-		return
-	}
-
-	positions, err := s.live.liveStore.ListPositions(r.Context())
+	positions, err := s.liveStore.ListPositions(r.Context())
 	if err != nil {
 		s.logger.Error("live positions: list failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -347,26 +340,19 @@ func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
 //
 // GET /api/v1/live/positions/{id}
 func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
-	if s.live == nil || s.live.liveStore == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "live execution not configured",
-		})
-		return
-	}
-
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/live/positions/")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
 		return
 	}
 
-	pos, err := s.live.liveStore.GetPosition(r.Context(), id)
+	pos, err := s.liveStore.GetPosition(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
 		return
 	}
 
-	fills, err := s.live.liveStore.GetFills(r.Context(), id)
+	fills, err := s.liveStore.GetFills(r.Context(), id)
 	if err != nil {
 		s.logger.Error("live position: get fills", "err", err, "id", id)
 	}
@@ -374,7 +360,7 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 		fills = []executor.LiveFill{}
 	}
 
-	events, err := s.live.liveStore.GetEvents(r.Context(), id)
+	events, err := s.liveStore.GetEvents(r.Context(), id)
 	if err != nil {
 		s.logger.Error("live position: get events", "err", err, "id", id)
 	}
