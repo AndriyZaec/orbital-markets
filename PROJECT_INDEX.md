@@ -215,5 +215,4 @@ cd apps/web && npm run build
 | `.claude/PROGRESS.md` | Progress log and immediate priorities |
 | `.claude/SESSION_HANDOFF.md` | Current handoff for new sessions |
 | `.claude/SPEC_GAP_ANALYSIS.md` | Gap analysis against engine spec |
-| `.claude/HACKS.md` | Resolved mock data and remaining placeholder fields |
 | `.claude/UI_CHANGELOG.md` | UI evolution notes |
