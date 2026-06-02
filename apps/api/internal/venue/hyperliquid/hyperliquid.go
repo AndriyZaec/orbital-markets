@@ -30,7 +30,8 @@ type metaResponse struct {
 }
 
 type metaAsset struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	MaxLeverage int    `json:"maxLeverage"`
 }
 
 type assetCtx struct {
@@ -79,6 +80,7 @@ type assetState struct {
 	bidSize      float64
 	askPrice     float64
 	askSize      float64
+	maxLeverage  int
 	timestamp    time.Time
 }
 
@@ -131,6 +133,7 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			AskPrice:     s.askPrice,
 			AskSize:      s.askSize,
 			OpenInterest: s.openInterest,
+			MaxLeverage:  s.maxLeverage,
 			Timestamp:    ts,
 		})
 	}
@@ -229,6 +232,9 @@ func (a *Adapter) pollREST(ctx context.Context) {
 		state.indexPrice = parseFloat(c.OraclePx)
 		state.fundingRate = parseFloat(c.Funding)
 		state.openInterest = parseFloat(c.OpenInterest)
+		if meta.Universe[i].MaxLeverage > 0 {
+			state.maxLeverage = meta.Universe[i].MaxLeverage
+		}
 	}
 
 	if a.assetMap.Len() > 0 {

@@ -1,6 +1,5 @@
 import { useAnalytics } from '@/hooks/useAnalytics'
 import { usePaperPositions } from '@/hooks/usePaperPositions'
-import { getMockLeverage } from '@/lib/hacks'
 
 function fmtUsd(n: number) {
   const abs = Math.abs(n)
@@ -40,7 +39,7 @@ export function AnalyticsDashboard() {
 
   const grossExposure = openPositions.reduce((s, p) => s + p.target_notional, 0)
   const avgLeverage = openPositions.length > 0
-    ? openPositions.reduce((s, p) => s + getMockLeverage(p.asset), 0) / openPositions.length
+    ? openPositions.reduce((s, p) => s + (p.leverage?.leverage || p.leverage?.effective_leverage || 1), 0) / openPositions.length
     : 0
   const marginInUse = avgLeverage > 0 ? grossExposure / avgLeverage : 0
 

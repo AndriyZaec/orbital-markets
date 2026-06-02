@@ -19,12 +19,11 @@ import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { ForAgents } from '@/components/ForAgents'
 import { FundingChart } from '@/components/FundingChart'
-import { getMockLeverage, getMockApr24h, getMockApr7d, getMockDailyVolume } from '@/lib/hacks'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
 type View = 'trade' | 'analytics' | 'rebates' | 'agents'
-type SortField = 'asset' | 'apr' | 'apr24h' | 'apr7d' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'volume'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi'
 type SortDir = 'asc' | 'desc'
 
 function fmtPct(n: number, decimals = 2) {
@@ -46,12 +45,9 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
   switch (field) {
     case 'asset': return opp.asset
     case 'apr': return opp.annualized_gross_edge
-    case 'apr24h': return getMockApr24h(opp.annualized_gross_edge)
-    case 'apr7d': return getMockApr7d(opp.annualized_gross_edge)
-    case 'aprMaxLev': return opp.annualized_gross_edge * getMockLeverage(opp.asset)
+    case 'aprMaxLev': return opp.annualized_gross_edge * (opp.max_leverage || 1)
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
-    case 'volume': return getMockDailyVolume(opp.available_notional)
   }
 }
 
@@ -305,12 +301,9 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                 <TableHead className="text-left">Long</TableHead>
                 <TableHead className="text-left">Short</TableHead>
                 <SortTH field="apr" label="APR" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="apr24h" label="APR 24h" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="apr7d" label="APR 7d" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="aprMaxLev" label="APR x Max Leverage" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="aprMaxLev" label="APR x Max Lev" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="priceSpread" label="Price Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="oi" label="Open Interest" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="volume" label="Daily Volume" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <TableHead className="w-8" />
               </TableRow>
             </TableHeader>
@@ -319,11 +312,8 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                 const isLongA = opp.direction === 'long_a_short_b'
                 const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
                 const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-                const maxLev = getMockLeverage(opp.asset)
+                const maxLev = opp.max_leverage || 1
                 const apr = opp.annualized_gross_edge
-                const apr24h = getMockApr24h(apr)
-                const apr7d = getMockApr7d(apr)
-                const dailyVol = getMockDailyVolume(opp.available_notional)
 
                 return (
                   <TableRow key={opp.id} className="cursor-pointer" onClick={() => onSelect(opp.id)}>
@@ -333,12 +323,9 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                     <TableCell><VenueIcon venue={longVenue} /></TableCell>
                     <TableCell><VenueIcon venue={shortVenue} /></TableCell>
                     <TC>{fmtPct(apr)}</TC>
-                    <TC negative={apr24h < 0}>{fmtPct(apr24h)}</TC>
-                    <TC negative={apr7d < 0}>{fmtPct(apr7d)}</TC>
                     <TC>{fmtPct(apr * maxLev)}</TC>
                     <TC negative={opp.entry_spread_estimate < 0}>{fmtPct(opp.entry_spread_estimate, 4)}</TC>
                     <TC>{fmtUsd(opp.available_notional)}</TC>
-                    <TC>{fmtUsd(dailyVol)}</TC>
                     <TableCell>
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-50">
                         <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -362,7 +349,7 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const maxLev = getMockLeverage(opp.asset)
+  const maxLev = opp.max_leverage || 1
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -381,12 +368,9 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
         <StatItem label="Max Leverage" value={`${maxLev}x`} />
         <StatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
         <StatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
-        <StatItem label="APR 24h" value={fmtPct(getMockApr24h(opp.annualized_gross_edge))} mono />
-        <StatItem label="APR 7d" value={fmtPct(getMockApr7d(opp.annualized_gross_edge))} mono />
         <StatItem label="APR x Max Lev" value={fmtPct(opp.annualized_gross_edge * maxLev)} mono />
         <StatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
         <StatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
-        <StatItem label="Daily Volume" value={fmtUsd(getMockDailyVolume(opp.available_notional))} mono />
       </div>
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">
         <FundingChart asset={opp.asset} venueA={opp.venue_pair.venue_a} venueB={opp.venue_pair.venue_b} />

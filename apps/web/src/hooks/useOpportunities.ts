@@ -16,6 +16,7 @@ interface Opportunity {
   estimated_net_edge: number
   available_notional: number
   recommended_notional: number
+  max_leverage: number
   liquidity: 'deep' | 'medium' | 'thin' | 'toxic'
   liq_suspect: boolean
   confidence: 'low' | 'medium' | 'high'

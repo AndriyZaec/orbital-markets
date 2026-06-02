@@ -181,7 +181,6 @@ React 19, Vite 8, TypeScript 6, Tailwind 4, shadcn/ui, Solana wallet adapter, wa
 | `useHistory` | Fetches historical snapshot series |
 | `lib/signing/*` | Pacifica and Hyperliquid signing helpers |
 | `types/signing.ts` | Frontend signing contracts |
-| `lib/hacks.ts` | Documented demo/mock metrics still needing real API backing |
 
 ## Venue Support
 
@@ -216,5 +215,5 @@ cd apps/web && npm run build
 | `.claude/PROGRESS.md` | Progress log and immediate priorities |
 | `.claude/SESSION_HANDOFF.md` | Current handoff for new sessions |
 | `.claude/SPEC_GAP_ANALYSIS.md` | Gap analysis against engine spec |
-| `.claude/HACKS.md` | Known mock/demo data to replace |
+| `.claude/HACKS.md` | Resolved mock data and remaining placeholder fields |
 | `.claude/UI_CHANGELOG.md` | UI evolution notes |

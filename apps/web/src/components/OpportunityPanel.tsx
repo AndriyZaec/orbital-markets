@@ -6,7 +6,6 @@ import { useVenueAuthority } from '@/hooks/useVenueAuthority'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
-import { getMockLeverage } from '@/lib/hacks'
 
 interface Props {
   opportunity: Opportunity
@@ -76,7 +75,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const maxLev = getMockLeverage(opp.asset)
+  const maxLev = opp.max_leverage || 1
 
   const [leverageVal, setLeverageVal] = useState(maxLev)
   const [longSlippage, setLongSlippage] = useState(1)

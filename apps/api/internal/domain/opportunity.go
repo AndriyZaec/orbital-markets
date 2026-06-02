@@ -60,6 +60,7 @@ type Opportunity struct {
 	// Sizing
 	AvailableNotional   float64 `json:"available_notional"`
 	RecommendedNotional float64 `json:"recommended_notional"`
+	MaxLeverage         int     `json:"max_leverage"`
 
 	// Classification
 	Liquidity       LiquidityTier `json:"liquidity"`
