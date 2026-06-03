@@ -320,6 +320,43 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleLiveBalances returns current available balance per venue from account state.
+//
+// GET /api/v1/live/balances
+//
+// Returns {"pacifica": {...}, "hyperliquid": {...}} with equity, available, connected.
+// Returns zeros/disconnected if account streams haven't started yet (wallets not connected).
+func (s *Server) handleLiveBalances(w http.ResponseWriter, _ *http.Request) {
+	type venueBalance struct {
+		Venue     string  `json:"venue"`
+		Equity    float64 `json:"equity"`
+		Available float64 `json:"available"`
+		Connected bool    `json:"connected"`
+	}
+
+	var pac, hl venueBalance
+	pac.Venue = "pacifica"
+	hl.Venue = "hyperliquid"
+
+	if s.live != nil && s.live.pacState != nil {
+		snap := s.live.pacState.Snapshot()
+		pac.Equity = snap.Equity
+		pac.Available = snap.AvailableToSpend
+		pac.Connected = snap.Connected
+	}
+	if s.live != nil && s.live.hlState != nil {
+		snap := s.live.hlState.Snapshot()
+		hl.Equity = snap.Margin.AccountEquity
+		hl.Available = snap.Margin.AvailableBalance
+		hl.Connected = snap.Connected
+	}
+
+	writeJSON(w, http.StatusOK, map[string]venueBalance{
+		"pacifica":    pac,
+		"hyperliquid": hl,
+	})
+}
+
 // handleLivePositions returns all live positions, newest first.
 //
 // GET /api/v1/live/positions
