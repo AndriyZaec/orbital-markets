@@ -378,6 +378,99 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleLiveClose prepares close signing requests for a single live position.
+//
+// POST /api/v1/live/close/{id}
+//
+// Input: { "account_pacifica": "...", "account_hyperliquid": "..." }
+//
+// Returns signing requests for each filled leg. Frontend signs + submits
+// each via /api/v1/live/submit (close/reduce-only actions are allowed).
+func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "live execution not configured",
+		})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/live/close/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "position id required"})
+		return
+	}
+
+	var req struct {
+		AccountPacifica    string `json:"account_pacifica"`
+		AccountHyperliquid string `json:"account_hyperliquid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.AccountPacifica == "" || req.AccountHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "account_pacifica and account_hyperliquid required",
+		})
+		return
+	}
+
+	pos, err := s.liveStore.GetPosition(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
+		return
+	}
+
+	if pos.State != string(executor.ExecStateOpen) && pos.State != string(executor.ExecStateDegraded) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": fmt.Sprintf("position is %s, not closeable", pos.State),
+		})
+		return
+	}
+
+	fills, err := s.liveStore.GetFills(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get fills"})
+		return
+	}
+
+	var signingRequests []*domain.SigningRequest
+	for _, fill := range fills {
+		if !fill.Filled || fill.FilledAmount <= 0 {
+			continue
+		}
+		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
+		sigReq, err := s.buildCloseSigningRequest(fill, cloid, req.AccountPacifica)
+		if err != nil {
+			s.logger.Error("live close: build close payload", "err", err, "id", id, "leg", fill.Leg)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("leg %d close payload failed: %s", fill.Leg, err),
+			})
+			return
+		}
+		s.live.signingStore.Store(sigReq)
+		signingRequests = append(signingRequests, sigReq)
+	}
+
+	if len(signingRequests) == 0 {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no filled legs to close"})
+		return
+	}
+
+	s.liveStore.MarkClosing(r.Context(), id)
+	s.liveStore.InsertEvent(r.Context(), id, "close_initiated",
+		executor.ExecStateClosing,
+		fmt.Sprintf("%d close orders prepared", len(signingRequests)))
+
+	s.logger.Info("live close: signing requests ready",
+		"id", id, "asset", pos.Asset, "legs", len(signingRequests))
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"position_id":      id,
+		"signing_requests": signingRequests,
+	})
+}
+
 // handleLiveKill is the emergency kill switch — prepares close orders for all open live positions.
 //
 // POST /api/v1/live/kill

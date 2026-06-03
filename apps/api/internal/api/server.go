@@ -84,6 +84,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
 	s.mux.HandleFunc("GET /api/v1/live/positions", s.handleLivePositions)
 	s.mux.HandleFunc("GET /api/v1/live/positions/", s.handleLivePosition)
+	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
 	s.mux.HandleFunc("POST /api/v1/live/kill", s.handleLiveKill)
 }
 
