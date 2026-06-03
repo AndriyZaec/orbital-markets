@@ -3,6 +3,7 @@ import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useVenueAuthority } from '@/hooks/useVenueAuthority'
+import { useLiveBalances } from '@/hooks/useLiveBalances'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
@@ -30,6 +31,14 @@ function fmtPrice(n: number) {
   if (n >= 1000) return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   if (n >= 1) return '$' + n.toFixed(4)
   return '$' + n.toPrecision(4)
+}
+
+function fmtBalance(balances: ReturnType<typeof useLiveBalances>, venue: string) {
+  const key = venue.toLowerCase() as 'pacifica' | 'hyperliquid'
+  const b = balances[key]
+  if (!b || !b.connected) return '--'
+  if (b.available <= 0) return '$0.00'
+  return fmtUsd(b.available)
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -89,6 +98,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
   const { isFullyReady } = useVenueAuthority()
   const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
+  const balances = useLiveBalances()
   const [showLiveModal, setShowLiveModal] = useState(false)
 
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
@@ -173,8 +183,8 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
         {/* Available balance */}
         <div className="px-5 py-3 border-b border-border">
           <p className="text-[11px] text-muted-foreground mb-1.5">Available balance</p>
-          <Row label={longVenue} value="--" capitalize />
-          <Row label={shortVenue} value="--" capitalize />
+          <Row label={longVenue} value={fmtBalance(balances, longVenue)} capitalize />
+          <Row label={shortVenue} value={fmtBalance(balances, shortVenue)} capitalize />
         </div>
 
         {/* Long Section */}
