@@ -1,12 +1,16 @@
+import { useState } from 'react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
+import { useLiveClose } from '@/hooks/useLiveClose'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
 interface Props {
   position: LivePosition
   onClose: () => void
+  onRefresh?: () => void
 }
 
 function fmtPrice(n: number) {
@@ -77,10 +81,29 @@ function needsAttention(state: string) {
   return state === 'degraded' || state === 'failed' || state === 'closing'
 }
 
-export function LivePositionDetail({ position: pos, onClose }: Props) {
+export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props) {
   const { data, loading } = useLivePositionDetail(pos.id)
   const fills = data?.fills ?? []
   const events = data?.events ?? []
+  const liveClose = useLiveClose()
+  const [confirmClose, setConfirmClose] = useState(false)
+
+  const canClose = pos.state === 'open' || pos.state === 'degraded'
+  const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
+  const closeDone = liveClose.state.phase === 'done'
+
+  const handleClose = () => {
+    setConfirmClose(false)
+    liveClose.closePosition(pos.id)
+  }
+
+  const handleDismiss = () => {
+    if (closeDone) {
+      liveClose.reset()
+      onRefresh?.()
+    }
+    onClose()
+  }
 
   // Extract reason from the last 'complete' event
   const completeEvent = [...events].reverse().find(e => e.event === 'complete')
@@ -193,6 +216,46 @@ export function LivePositionDetail({ position: pos, onClose }: Props) {
                 <EventRow key={ev.id} event={ev} />
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Close action */}
+        {(canClose || isClosing || closeDone) && (
+          <div className="px-5 py-4 border-b border-border">
+            {/* Confirm prompt */}
+            {canClose && !confirmClose && !isClosing && !closeDone && (
+              <Button variant="destructive" size="sm" className="w-full" onClick={() => setConfirmClose(true)}>
+                Close Position
+              </Button>
+            )}
+            {confirmClose && !isClosing && (
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] text-muted-foreground flex-1">Close both legs? Your wallet will sign each close order.</p>
+                <Button variant="outline" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
+                <Button variant="destructive" size="xs" onClick={handleClose}>Confirm</Button>
+              </div>
+            )}
+            {/* Progress */}
+            {isClosing && (
+              <p className="text-[11px] text-yellow-400">
+                {liveClose.state.phase === 'preparing' ? 'Preparing close orders...' :
+                 liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} — check your wallet` :
+                 `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
+              </p>
+            )}
+            {/* Result */}
+            {closeDone && liveClose.state.failed === 0 && (
+              <p className="text-[11px] text-green-400">Close orders submitted successfully.</p>
+            )}
+            {closeDone && liveClose.state.failed > 0 && (
+              <div className="text-[11px] space-y-1">
+                <p className="text-yellow-400">{liveClose.state.succeeded} accepted, {liveClose.state.failed} failed</p>
+                {liveClose.state.errors.map((e, i) => <p key={i} className="text-red-400/70">{e}</p>)}
+              </div>
+            )}
+            {liveClose.state.phase === 'error' && (
+              <p className="text-[11px] text-red-400">{liveClose.state.errors[0]}</p>
+            )}
           </div>
         )}
 

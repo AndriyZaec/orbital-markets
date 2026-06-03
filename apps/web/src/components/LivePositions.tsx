@@ -356,7 +356,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
       </div>
 
       {selected && (
-        <LivePositionDetail position={selected} onClose={() => setSelectedId(null)} />
+        <LivePositionDetail position={selected} onClose={() => setSelectedId(null)} onRefresh={refetch} />
       )}
     </>
   )
