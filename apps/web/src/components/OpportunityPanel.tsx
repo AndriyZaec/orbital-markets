@@ -33,6 +33,17 @@ function fmtPrice(n: number) {
   return '$' + n.toPrecision(4)
 }
 
+const MAINTENANCE_MARGIN = 0.03
+
+function estLiqPrice(entryPrice: number, side: 'long' | 'short', leverage: number): string {
+  if (leverage <= 1 || entryPrice <= 0) return 'N/A (1x)'
+  if (side === 'long') {
+    const liq = entryPrice * (1 - 1 / leverage + MAINTENANCE_MARGIN)
+    return liq > 0 ? fmtPrice(liq) : '--'
+  }
+  return fmtPrice(entryPrice * (1 + 1 / leverage - MAINTENANCE_MARGIN))
+}
+
 function fmtBalance(balances: ReturnType<typeof useLiveBalances>, venue: string) {
   const key = venue.toLowerCase() as 'pacifica' | 'hyperliquid'
   const b = balances[key]
@@ -207,7 +218,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
                 <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
                 <Row label="Position Size" value={plan && longLeg ? fmtUsd(longLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value="--" />
+                <Row label="Est. Liquidation Price" value={longLeg ? estLiqPrice(longLeg.expected_price, 'long', leverageVal) : '--'} />
                 <Row label="Est. Entry Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={longLeg ? fmtPct(longLeg.slippage + longLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
@@ -235,7 +246,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
                 <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
                 <Row label="Position Size" value={plan && shortLeg ? fmtUsd(shortLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value="--" />
+                <Row label="Est. Liquidation Price" value={shortLeg ? estLiqPrice(shortLeg.expected_price, 'short', leverageVal) : '--'} />
                 <Row label="Est. Entry Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={shortLeg ? fmtPct(shortLeg.slippage + shortLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
