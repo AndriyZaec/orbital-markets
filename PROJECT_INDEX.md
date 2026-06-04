@@ -63,9 +63,11 @@ Go 1.25, SQLite, embedded migrations, sqlc, HTTP, WebSocket venue integrations.
 | GET | `/api/v1/paper/analytics` | Paper analytics |
 | GET | `/api/v1/history` | Historical market snapshot data |
 | POST | `/api/v1/live/prepare` | Build live signing requests for a selected opportunity |
+| POST | `/api/v1/live/advance` | Advance the non-custodial live-open session state machine |
 | POST | `/api/v1/live/submit` | Validate and submit a signed venue action |
 | GET | `/api/v1/live/positions` | List persisted live positions |
 | GET | `/api/v1/live/positions/{id}` | Live position detail with fills/events |
+| POST | `/api/v1/live/close/{id}` | Build reduce-only close signing requests for one live position |
 | POST | `/api/v1/live/kill` | Emergency close signing-request preparation for live positions |
 
 ### Domain Models
@@ -107,30 +109,47 @@ Go 1.25, SQLite, embedded migrations, sqlc, HTTP, WebSocket venue integrations.
 | Area | Status |
 |---|---|
 | Pacifica live open/close | Implemented via signed payloads and live client submit path |
-| Pacifica private account streams | Implemented for account state, margin, leverage, order/trade updates |
+| Pacifica private account streams | Started from connected wallet accounts during live prepare |
 | Hyperliquid live open/close | Implemented via EIP-712 signed payloads and live client submit path |
-| Hyperliquid account state | Implemented via clearinghouse polling |
+| Hyperliquid account state | Started from connected wallet accounts via clearinghouse polling |
 | Hyperliquid fill tracking | Implemented via order/fill tracker |
-| Shared live executor | Implemented as backend state machine, but must be aligned with signed API flow |
+| Session live open flow | Implemented via prepare -> advance -> advance |
 | Live persistence | Implemented tables/store for positions, fills, events |
 | Live monitor | Implemented against persisted live positions |
-| Live API/UI | Implemented prepare/submit/positions/kill surfaces |
+| Live API/UI | Implemented prepare/advance/positions/detail/close/kill surfaces |
+| Account balance readiness | Shows disconnected/empty state before wallet-triggered streams, real values after streams start |
 
-### Current First-Live Gap
+### Current Closed Beta Live Flow
 
-The remaining blocker is orchestration correctness, not basic venue plumbing.
+The live open path for the internal closed beta is canonical:
 
-The non-custodial live signing flow must be reconciled with the core execution semantics:
+1. `POST /api/v1/live/prepare`
+2. frontend signs leg-1 open and leg-1 reduce-only unwind
+3. `POST /api/v1/live/advance`
+4. backend submits leg 1, waits for fill, and returns leg-2 signing request sized from actual leg-1 fill
+5. frontend signs leg 2
+6. `POST /api/v1/live/advance`
+7. backend submits leg 2, verifies hedge mismatch, and persists the terminal outcome
 
-- riskier leg first
-- leg 2 sized from actual leg 1 fill
-- 50% minimum hedgeable fill
-- 5% max hedge mismatch
-- 5s max wait between legs
-- retry once -> unwind -> degraded
-- no submission if required signing fails before the execution attempt starts
+`POST /api/v1/live/submit` is guarded against sessionless live-open usage and remains available for close/reduce-only signed actions.
 
-Until this is resolved, live execution should be treated as built but not first-live validated.
+Normal close path:
+
+1. open live position detail
+2. click `Close Position`
+3. backend builds reduce-only close signing requests from persisted fills
+4. frontend signs and submits each close action through `/api/v1/live/submit`
+
+Emergency path:
+
+- `POST /api/v1/live/kill` prepares close signing requests for open/degraded positions
+
+Known beta limitations:
+
+- sessions are in-memory
+- retry-once before unwind is deferred
+- leg-2 residuals may require operator recovery
+- venue tracker and reduce-only behavior still need real live validation
 
 ### DB Migrations
 
@@ -159,7 +178,7 @@ React 19, Vite 8, TypeScript 6, Tailwind 4, shadcn/ui, Solana wallet adapter, wa
 | `PaperPositions` | Paper position list and manual close actions |
 | `PositionDetail` | Paper position fill, PnL, basis, liquidation, event detail |
 | `LivePositions` | Live position list |
-| `LivePositionDetail` | Live position fills/events and monitoring detail |
+| `LivePositionDetail` | Live position fills/events, monitoring detail, and per-position close flow |
 | `AnalyticsDashboard` | Paper analytics and account overview style metrics |
 | `FundingChart` | Historical basis and annualized edge chart from backend snapshots |
 | `FeeRebates` | GTM/demo narrative surface |
@@ -175,6 +194,8 @@ React 19, Vite 8, TypeScript 6, Tailwind 4, shadcn/ui, Solana wallet adapter, wa
 | `usePaperPositions` | Polls paper positions and closes paper positions |
 | `useLivePositions` | Polls live positions |
 | `useLiveExecution` | Frontend live prepare/sign/submit orchestration |
+| `useLivePositionDetail` | Fetches live position detail with fills and events |
+| `useLiveClose` | Builds/signs/submits per-position reduce-only live close actions |
 | `useKillSwitch` | Emergency close signing/submission flow |
 | `useVenueAuthority` | Connected Solana/EVM account authority state |
 | `useAnalytics` | Polls paper analytics |
@@ -213,6 +234,7 @@ cd apps/web && npm run build
 | `.claude/EXECUTION.md` | Execution state machine and signing rules |
 | `.claude/RISK_MODEL.md` | Risk model and guardrails |
 | `.claude/PROGRESS.md` | Progress log and immediate priorities |
+| `.claude/CLOSED_BETA_RUNBOOK.md` | Minimal internal live test runbook |
 | `.claude/SESSION_HANDOFF.md` | Current handoff for new sessions |
 | `.claude/SPEC_GAP_ANALYSIS.md` | Gap analysis against engine spec |
 | `.claude/UI_CHANGELOG.md` | UI evolution notes |
