@@ -1,0 +1,5 @@
+# Local dev secrets for `wrangler dev`. Copy to .dev.vars (gitignored)
+# and fill in real values. Production uses `wrangler secret put`.
+
+JWT_SECRET=dev-secret-change-me
+COOKIE_DOMAIN=.localhost

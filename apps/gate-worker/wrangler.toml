@@ -1,0 +1,21 @@
+name = "orbital-gate"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+# Public Worker URL is disabled; this Worker is only invoked via route bindings
+# attached to your domain (configured in the CF dashboard per DEPLOY.md).
+workers_dev = false
+
+# KV namespace ID below is a placeholder. Override locally via wrangler.local.toml
+# (gitignored) or via CF dashboard for the deployed environment.
+[[kv_namespaces]]
+binding = "BETA_INVITES"
+id = "00000000000000000000000000000000"
+
+# Secrets — set via `wrangler secret put` (never committed):
+#   JWT_SECRET        shared with apps/api (HS256 cookie signing)
+#   COOKIE_DOMAIN     e.g. ".your-domain.example" — sets the __beta cookie scope
+
+# Routes are configured manually in the CF dashboard per DEPLOY.md:
+#   app.<domain>/gate/*          → this Worker (redeem endpoint)
+#   app.<domain>/*               → this Worker (edge gate, falls through to Pages origin)
