@@ -86,6 +86,34 @@ type MarketSnapshot struct {
 	TsUnix       int64
 }
 
+type MarketSnapshots1h struct {
+	Venue      string
+	Asset      string
+	BucketUnix int64
+	Open       float64
+	High       float64
+	Low        float64
+	Close      float64
+	FundingAvg float64
+	OiAvg      float64
+	BidAvg     float64
+	AskAvg     float64
+}
+
+type MarketSnapshots5m struct {
+	Venue      string
+	Asset      string
+	BucketUnix int64
+	Open       float64
+	High       float64
+	Low        float64
+	Close      float64
+	FundingAvg float64
+	OiAvg      float64
+	BidAvg     float64
+	AskAvg     float64
+}
+
 type PaperEvent struct {
 	ID         int64
 	PositionID string
