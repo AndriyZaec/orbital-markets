@@ -3,21 +3,21 @@ INSERT INTO market_snapshots (
     venue, asset, market_key,
     mark_price, index_price, funding_rate,
     bid_price, ask_price, open_interest,
-    timestamp
+    ts_unix
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetLatestSnapshot :one
 SELECT * FROM market_snapshots
 WHERE venue = ? AND asset = ?
-ORDER BY timestamp DESC
+ORDER BY ts_unix DESC
 LIMIT 1;
 
 -- name: ListSnapshotsByAsset :many
 SELECT * FROM market_snapshots
-WHERE asset = ? AND timestamp >= ? AND timestamp <= ?
-ORDER BY timestamp;
+WHERE asset = ? AND ts_unix >= ? AND ts_unix <= ?
+ORDER BY ts_unix;
 
 -- name: ListSnapshotsByVenueAsset :many
 SELECT * FROM market_snapshots
-WHERE venue = ? AND asset = ? AND timestamp >= ? AND timestamp <= ?
-ORDER BY timestamp;
+WHERE venue = ? AND asset = ? AND ts_unix >= ? AND ts_unix <= ?
+ORDER BY ts_unix;

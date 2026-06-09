@@ -75,7 +75,7 @@ func (r *Recorder) record(ctx context.Context) {
 			BidPrice:     md.BidPrice,
 			AskPrice:     md.AskPrice,
 			OpenInterest: md.OpenInterest,
-			Timestamp:    md.Timestamp.Format(time.RFC3339),
+			TsUnix:       md.Timestamp.Unix(),
 		})
 		if err != nil {
 			r.logger.Error("record snapshot", "venue", md.Venue, "asset", md.Asset, "err", err)

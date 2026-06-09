@@ -8,6 +8,70 @@ import (
 	"database/sql"
 )
 
+type LiveEvent struct {
+	ID         int64
+	PositionID string
+	Event      string
+	State      string
+	Detail     string
+	At         string
+}
+
+type LiveFill struct {
+	ID              int64
+	PositionID      string
+	Leg             int64
+	Venue           string
+	Symbol          string
+	Side            string
+	OrderID         string
+	ClientOrderID   string
+	RequestedAmount float64
+	FilledAmount    float64
+	AvgFillPrice    float64
+	FillRatio       float64
+	Fee             float64
+	Accepted        int64
+	Filled          int64
+	Error           string
+	FilledAt        string
+}
+
+type LivePosition struct {
+	ID               string
+	PlanID           string
+	OpportunityID    string
+	Asset            string
+	VenueA           string
+	VenueB           string
+	State            string
+	Notional         float64
+	Leverage         float64
+	EntrySpread      float64
+	HedgeMismatch    float64
+	StartedAt        string
+	OpenedAt         sql.NullString
+	CompletedAt      sql.NullString
+	UpdatedAt        string
+	CurrentSpread    float64
+	CurrentBasis     float64
+	EntryBasis       float64
+	BasisChange      float64
+	PricePnl         float64
+	FundingPnl       float64
+	TotalPnl         float64
+	Leg1CurrentPrice float64
+	Leg2CurrentPrice float64
+	Leg1LiqPrice     float64
+	Leg2LiqPrice     float64
+	Leg1LiqDist      float64
+	Leg2LiqDist      float64
+	Leg1LiqRisk      string
+	Leg2LiqRisk      string
+	HoldHours        float64
+	MonitorAt        sql.NullString
+}
+
 type MarketSnapshot struct {
 	ID           int64
 	Venue        string
@@ -19,7 +83,7 @@ type MarketSnapshot struct {
 	BidPrice     float64
 	AskPrice     float64
 	OpenInterest float64
-	Timestamp    string
+	TsUnix       int64
 }
 
 type PaperEvent struct {

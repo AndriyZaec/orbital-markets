@@ -51,10 +51,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	queries := sqlc.New(s.db)
 
 	snapsA, err := queries.ListSnapshotsByVenueAsset(r.Context(), sqlc.ListSnapshotsByVenueAssetParams{
-		Venue:       venueA,
-		Asset:       asset,
-		Timestamp:   start.Format(time.RFC3339),
-		Timestamp_2: now.Format(time.RFC3339),
+		Venue:    venueA,
+		Asset:    asset,
+		TsUnix:   start.Unix(),
+		TsUnix_2: now.Unix(),
 	})
 	if err != nil {
 		s.logger.Error("history: fetch venue_a", "err", err)
@@ -63,10 +63,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snapsB, err := queries.ListSnapshotsByVenueAsset(r.Context(), sqlc.ListSnapshotsByVenueAssetParams{
-		Venue:       venueB,
-		Asset:       asset,
-		Timestamp:   start.Format(time.RFC3339),
-		Timestamp_2: now.Format(time.RFC3339),
+		Venue:    venueB,
+		Asset:    asset,
+		TsUnix:   start.Unix(),
+		TsUnix_2: now.Unix(),
 	})
 	if err != nil {
 		s.logger.Error("history: fetch venue_b", "err", err)
@@ -103,14 +103,11 @@ func pairSnapshots(a, b []sqlc.MarketSnapshot) []historyPoint {
 	j := 0
 
 	for _, sa := range a {
-		ta, err := time.Parse(time.RFC3339, sa.Timestamp)
-		if err != nil {
-			continue
-		}
+		ta := time.Unix(sa.TsUnix, 0).UTC()
 
 		for j+1 < len(b) {
-			tb1, _ := time.Parse(time.RFC3339, b[j].Timestamp)
-			tb2, _ := time.Parse(time.RFC3339, b[j+1].Timestamp)
+			tb1 := time.Unix(b[j].TsUnix, 0)
+			tb2 := time.Unix(b[j+1].TsUnix, 0)
 			if math.Abs(float64(tb2.Sub(ta))) < math.Abs(float64(tb1.Sub(ta))) {
 				j++
 			} else {
@@ -118,10 +115,7 @@ func pairSnapshots(a, b []sqlc.MarketSnapshot) []historyPoint {
 			}
 		}
 
-		tb, err := time.Parse(time.RFC3339, b[j].Timestamp)
-		if err != nil {
-			continue
-		}
+		tb := time.Unix(b[j].TsUnix, 0)
 		if math.Abs(float64(ta.Sub(tb))) > float64(tolerance) {
 			continue
 		}
