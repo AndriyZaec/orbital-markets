@@ -34,8 +34,9 @@ func main() {
 
 	sc := scanner.New(logger, pac, hl)
 
-	// Snapshot recorder
+	// Snapshot recorder + retention janitor
 	recorder := db.NewRecorder(database, sc, logger)
+	janitor := db.NewJanitor(database, dbPath, logger)
 
 	// Paper trading (SQLite-backed)
 	store := paper.NewDBStore(database)
@@ -52,6 +53,7 @@ func main() {
 	go hl.Run(ctx)
 	go sc.Run(ctx, 30*time.Second)
 	go recorder.Run(ctx)
+	go janitor.Run(ctx)
 	go monitor.Run(ctx)
 
 	// Live execution deps (non-custodial signing flow)
