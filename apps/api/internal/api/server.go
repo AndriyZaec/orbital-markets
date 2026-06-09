@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api/middleware"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
@@ -22,6 +23,7 @@ type Server struct {
 	live      *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
 	logger    *slog.Logger
 	mux       *http.ServeMux
+	handler   http.Handler // mux wrapped in middleware (recovery → logging → auth)
 }
 
 func NewServer(
@@ -32,6 +34,7 @@ func NewServer(
 	store *paper.DBStore,
 	database *sql.DB,
 	live *LiveDeps,
+	jwtSecret string,
 ) *Server {
 	// Live position store is always available for reads, even without venue clients.
 	var ls *executor.Store
@@ -53,11 +56,19 @@ func NewServer(
 		mux:       http.NewServeMux(),
 	}
 	s.routes()
+
+	// Middleware order on the request path: recovery → logging → auth → mux.
+	// Recovery is outermost so panics inside logging/auth still return 500.
+	s.handler = middleware.Recovery(logger)(
+		middleware.Logging(logger)(
+			middleware.Auth(jwtSecret, logger)(s.mux),
+		),
+	)
 	return s
 }
 
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	return s.handler
 }
 
 func (s *Server) routes() {
