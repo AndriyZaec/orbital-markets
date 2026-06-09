@@ -1,0 +1,61 @@
+# Fly.io configuration for the Orbital API.
+#
+# Replace <your-fly-app> below after `flyctl launch --no-deploy` assigns or
+# confirms a name. Region `iad` chosen for low latency to Hyperliquid infra;
+# change if you have a measurement that suggests otherwise.
+#
+# No secrets in this file. Use `flyctl secrets set` for JWT_SECRET and any
+# venue API keys / RPC URLs.
+
+app = "<your-fly-app>"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ADDR = ":8080"
+  DB_PATH = "/data/orbital.db"
+  ENV = "production"
+
+[[mounts]]
+  source = "orbital_data"
+  destination = "/data"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 150
+
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "10s"
+    method = "get"
+    path = "/api/v1/health"
+    protocol = "http"
+
+[deploy]
+  strategy = "rolling"
+  wait_timeout = "5m"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpus = 1
