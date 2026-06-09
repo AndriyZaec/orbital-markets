@@ -15,7 +15,7 @@ const planTTL = 10 * time.Second
 // leverage is clamped to allowed range (1x-5x). Pass 0 for default (1x).
 func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string, leverage float64) (*domain.ExecutionPlan, error) {
 	// Find the opportunity
-	opp := s.findOpportunity(opportunityID)
+	opp := s.FindOpportunity(opportunityID)
 	if opp == nil {
 		return nil, fmt.Errorf("opportunity not found: %s", opportunityID)
 	}
@@ -128,7 +128,8 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string, leverage 
 	return plan, nil
 }
 
-func (s *Scanner) findOpportunity(id string) *domain.Opportunity {
+// FindOpportunity returns a copy of the opportunity with the given ID, or nil.
+func (s *Scanner) FindOpportunity(id string) *domain.Opportunity {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i := range s.opps {

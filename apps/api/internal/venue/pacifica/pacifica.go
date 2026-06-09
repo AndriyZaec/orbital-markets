@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -15,8 +16,9 @@ import (
 )
 
 const (
-	wsURL     = "wss://ws.pacifica.fi/ws"
-	venueName = "pacifica"
+	wsURL      = "wss://ws.pacifica.fi/ws"
+	infoURL    = "https://api.pacifica.fi/api/v1/info"
+	venueName  = "pacifica"
 )
 
 // wsMessage wraps both prices and bbo channel messages.
@@ -54,6 +56,7 @@ type assetState struct {
 	bidSize      float64 // notional
 	askPrice     float64
 	askSize      float64 // notional
+	maxLeverage  int
 	timestamp    time.Time
 }
 
@@ -92,14 +95,57 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			AskPrice:     s.askPrice,
 			AskSize:      s.askSize,
 			OpenInterest: s.openInterest,
+			MaxLeverage:  s.maxLeverage,
 			Timestamp:    s.timestamp,
 		})
 	}
 	return out, nil
 }
 
+// fetchSymbolInfo loads per-symbol metadata (max leverage) from the REST API.
+func (a *Adapter) fetchSymbolInfo() {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(infoURL)
+	if err != nil {
+		a.logger.Warn("pacifica: fetch symbol info", "err", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			Symbol      string `json:"symbol"`
+			MaxLeverage int    `json:"max_leverage"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		a.logger.Warn("pacifica: parse symbol info", "err", err)
+		return
+	}
+	if !result.Success || len(result.Data) == 0 {
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, s := range result.Data {
+		if s.MaxLeverage <= 0 {
+			continue
+		}
+		state, exists := a.assets[s.Symbol]
+		if !exists {
+			state = &assetState{}
+			a.assets[s.Symbol] = state
+		}
+		state.maxLeverage = s.MaxLeverage
+	}
+	a.logger.Info("pacifica: symbol info loaded", "symbols", len(result.Data))
+}
+
 // Connect starts the WebSocket connection and processes messages until ctx is cancelled.
 func (a *Adapter) Connect(ctx context.Context) error {
+	a.fetchSymbolInfo()
 	for {
 		err := a.connectAndListen(ctx)
 		if ctx.Err() != nil {

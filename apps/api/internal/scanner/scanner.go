@@ -195,29 +195,54 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 	confidence := classifyConfidence(a, b, now)
 	riskTier := classifyRisk(annualizedGross, entrySpread)
 	slippageLevel := domain.ClassifySlippage(entrySpread)
+	liqCheck := CheckLiquidity(a, b, annualizedGross, now)
 
-	// Slippage warnings
+	// Separate blockers (hard) from risk flags (informational)
+	blocked := false
+	var riskFlags []string
+
+	// Blockers — technically invalid, cannot execute
+	hasBidAskMissing := (a.BidPrice == 0 || a.AskPrice == 0) || (b.BidPrice == 0 || b.AskPrice == 0)
+	if hasBidAskMissing {
+		warnings = append(warnings, "missing bid/ask data")
+		blocked = true
+	}
+	if confidence == domain.ConfidenceLow {
+		warnings = append(warnings, "low confidence: insufficient market data")
+		blocked = true
+	}
+	if !domain.SlippageExecutable(slippageLevel) {
+		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: exceeds 5%% threshold", entrySpread*100))
+		blocked = true
+	}
+	if liqCheck.Blocking {
+		for _, r := range liqCheck.Reasons {
+			warnings = append(warnings, r)
+		}
+		blocked = true
+	}
+
+	// Risk flags — non-blocking concerns, still executable
 	switch slippageLevel {
 	case domain.SlippageWarn:
-		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: elevated slippage", entrySpread*100))
+		riskFlags = append(riskFlags, fmt.Sprintf("elevated slippage: %.2f%%", entrySpread*100))
 	case domain.SlippageHigh:
-		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: high slippage", entrySpread*100))
-	case domain.SlippageBlock:
-		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: exceeds 5%% threshold, not executable", entrySpread*100))
+		riskFlags = append(riskFlags, fmt.Sprintf("high slippage: %.2f%%", entrySpread*100))
+	}
+	if liqCheck.Suspect && !liqCheck.Blocking {
+		riskFlags = append(riskFlags, liqCheck.Reasons...)
+	}
+	if riskTier == domain.RiskExperimental {
+		riskFlags = append(riskFlags, "experimental risk tier")
+	}
+	if confidence == domain.ConfidenceMedium {
+		riskFlags = append(riskFlags, "medium confidence: partial data freshness")
 	}
 
-	// Fake-liquidity detection
-	liqCheck := CheckLiquidity(a, b, annualizedGross, now)
-	if liqCheck.Suspect {
-		warnings = append(warnings, liqCheck.Reasons...)
+	executionStatus := "executable"
+	if blocked {
+		executionStatus = "blocked"
 	}
-
-	// Blockers: low confidence, missing bid/ask, slippage > 5%, or blocking liquidity signal
-	hasBidAskWarning := (a.BidPrice == 0 || a.AskPrice == 0) || (b.BidPrice == 0 || b.AskPrice == 0)
-	executable := confidence != domain.ConfidenceLow &&
-		!hasBidAskWarning &&
-		domain.SlippageExecutable(slippageLevel) &&
-		!liqCheck.Blocking
 
 	id := fmt.Sprintf("%s-%s-%s-%s", asset, a.Venue, b.Venue, direction)
 
@@ -240,8 +265,23 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		Liquidity:           sizing.Liquidity,
 		Confidence:          confidence,
 		RiskTier:            riskTier,
-		LiqSuspect:          liqCheck.Suspect,
-		Executable:          executable,
-		Warnings:            warnings,
+		MaxLeverage:     minLeverage(a.MaxLeverage, b.MaxLeverage),
+		LiqSuspect:      liqCheck.Suspect,
+		ExecutionStatus: executionStatus,
+		RiskFlags:       riskFlags,
+		Warnings:        warnings,
 	}
+}
+
+func minLeverage(a, b int) int {
+	if a <= 0 {
+		return b
+	}
+	if b <= 0 {
+		return a
+	}
+	if a < b {
+		return a
+	}
+	return b
 }

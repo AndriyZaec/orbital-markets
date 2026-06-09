@@ -11,7 +11,6 @@ import {
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { PositionDetail } from '@/components/PositionDetail'
-import { getMockLeverage } from '@/lib/hacks'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -173,7 +172,7 @@ export function PaperPositions() {
                       </div>
                     </TableCell>
                     <TC>{fmtUsd(pos.target_notional)}</TC>
-                    <TC>{(pos.leverage.leverage || pos.leverage.effective_leverage || getMockLeverage(pos.asset))}x</TC>
+                    <TC>{(pos.leverage.leverage || pos.leverage.effective_leverage || 1)}x</TC>
                     <TC>{fmtPct(pos.entry_spread)}</TC>
                     <TC>{fmtPct(pos.current_spread)}</TC>
                     <TC negative={pos.funding_pnl < 0}>{fmtPnL(pos.funding_pnl)}</TC>
@@ -182,7 +181,7 @@ export function PaperPositions() {
                       {fmtPnL(pos.total_pnl)}
                     </TableCell>
                     <TableCell className="py-2">
-                      {liqRisk && liqRisk !== '' ? (
+                      {liqRisk ? (
                         <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${liqRiskStyle(liqRisk)}`}>
                           {liqRisk}
                         </span>

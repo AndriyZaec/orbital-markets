@@ -1,68 +1,42 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
+import { useWallet } from '@solana/wallet-adapter-react'
+import { useWalletModal } from '@solana/wallet-adapter-react-ui'
+import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
+import { injected } from 'wagmi/connectors'
+import { useVenueAuthority, type SigningReadiness } from '@/hooks/useVenueAuthority'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import nadoLogo from '@/assets/nado.jpg'
 import gmtradeLogo from '@/assets/gm-trade.png'
 import driftLogo from '@/assets/drift.png'
 
-type ConnectionStatus = 'disconnected' | 'ready' | 'coming_soon'
-
-interface Venue {
+interface VenueDef {
   id: string
   name: string
   logo: string | null
   description: string
-  initialStatus: ConnectionStatus
   chain: string
+  comingSoon: boolean
 }
 
-const VENUES: Venue[] = [
-  {
-    id: 'pacifica',
-    name: 'Pacifica',
-    logo: pacificaLogo,
-    description: 'Solana-native perp DEX with on-chain settlement',
-    initialStatus: 'disconnected',
-    chain: 'Solana',
-  },
-  {
-    id: 'hyperliquid',
-    name: 'Hyperliquid',
-    logo: hlLogo,
-    description: 'High-performance L1 perp exchange',
-    initialStatus: 'disconnected',
-    chain: 'Hyperliquid L1',
-  },
-  {
-    id: 'drift',
-    name: 'Drift',
-    logo: driftLogo,
-    description: 'Solana perp and spot DEX with cross-margin',
-    initialStatus: 'coming_soon',
-    chain: 'Solana',
-  },
-  {
-    id: 'nado',
-    name: 'Nado',
-    logo: nadoLogo,
-    description: 'High-performance DEX built on the Ink Network',
-    initialStatus: 'coming_soon',
-    chain: 'Ink',
-  },
-  {
-    id: 'gmtrade',
-    name: 'GMTrade',
-    logo: gmtradeLogo,
-    description: 'Solana-based perpetual trading platform',
-    initialStatus: 'coming_soon',
-    chain: 'Solana',
-  },
+const VENUES: VenueDef[] = [
+  { id: 'pacifica', name: 'Pacifica', logo: pacificaLogo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana', comingSoon: false },
+  { id: 'hyperliquid', name: 'Hyperliquid', logo: hlLogo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1', comingSoon: false },
+  { id: 'drift', name: 'Drift', logo: driftLogo, description: 'Solana perp and spot DEX with cross-margin', chain: 'Solana', comingSoon: true },
+  { id: 'nado', name: 'Nado', logo: nadoLogo, description: 'High-performance DEX built on the Ink Network', chain: 'Ink', comingSoon: true },
+  { id: 'gmtrade', name: 'GMTrade', logo: gmtradeLogo, description: 'Solana-based perpetual trading platform', chain: 'Solana', comingSoon: true },
 ]
 
-const STATUS_CONFIG: Record<ConnectionStatus, { label: string; dot: string; text: string }> = {
-  disconnected: { label: 'Not Connected', dot: 'bg-zinc-500', text: 'text-muted-foreground' },
+const READINESS_CONFIG: Record<SigningReadiness, { label: string; dot: string; text: string }> = {
+  not_connected: { label: 'Not Connected', dot: 'bg-zinc-500', text: 'text-muted-foreground' },
+  connected_cannot_sign: { label: 'No Signer', dot: 'bg-yellow-400', text: 'text-yellow-400' },
   ready: { label: 'Ready', dot: 'bg-green-400', text: 'text-green-400' },
-  coming_soon: { label: 'Coming Soon', dot: 'bg-yellow-400/60', text: 'text-yellow-400/60' },
+  error: { label: 'Error', dot: 'bg-red-400', text: 'text-red-400' },
+}
+
+function truncateAddress(addr: string): string {
+  if (addr.length <= 12) return addr
+  return addr.slice(0, 6) + '...' + addr.slice(-4)
 }
 
 interface Props {
@@ -72,23 +46,40 @@ interface Props {
 }
 
 export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
-  const [statuses, setStatuses] = useState<Record<string, ConnectionStatus>>(() =>
-    Object.fromEntries(VENUES.map((v) => [v.id, v.initialStatus]))
-  )
+  const { venueAuthorities, pacifica, hyperliquid } = useVenueAuthority()
 
-  const connectedCount = Object.values(statuses).filter((s) => s === 'ready').length
-  const totalSupported = VENUES.filter((v) => v.initialStatus !== 'coming_soon').length
+  const solWallet = useWallet()
+  const { setVisible: setSolModalVisible } = useWalletModal()
+  const { connect: evmConnect } = useEvmConnect()
+  const { disconnect: evmDisconnect } = useEvmDisconnect()
+
+  const connectedCount = venueAuthorities.filter((v) => v.readiness === 'ready').length
+  const totalSupported = VENUES.filter((v) => !v.comingSoon).length
 
   useEffect(() => {
     onConnectionChange?.(connectedCount)
   }, [connectedCount, onConnectionChange])
 
   const handleConnect = (venueId: string) => {
-    setStatuses((prev) => ({ ...prev, [venueId]: 'ready' }))
+    if (venueId === 'pacifica') {
+      setSolModalVisible(true)
+    } else if (venueId === 'hyperliquid') {
+      evmConnect({ connector: injected() })
+    }
   }
 
   const handleDisconnect = (venueId: string) => {
-    setStatuses((prev) => ({ ...prev, [venueId]: 'disconnected' }))
+    if (venueId === 'pacifica') {
+      solWallet.disconnect()
+    } else if (venueId === 'hyperliquid') {
+      evmDisconnect()
+    }
+  }
+
+  const getVenueState = (venueId: string) => {
+    if (venueId === 'pacifica') return pacifica
+    if (venueId === 'hyperliquid') return hyperliquid
+    return null
   }
 
   return (
@@ -110,17 +101,17 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       {/* Status summary */}
       <div className="px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-muted-foreground">Status</span>
+          <span className="text-muted-foreground">Signing Status</span>
           <span className={`font-medium ${connectedCount === totalSupported ? 'text-green-400' : connectedCount > 0 ? 'text-yellow-400' : 'text-muted-foreground'}`}>
-            {connectedCount === totalSupported ? 'Operational' : connectedCount > 0 ? 'Partial' : 'No accounts'}
+            {connectedCount === totalSupported ? 'All Ready' : connectedCount > 0 ? 'Partial' : 'No accounts'}
           </span>
         </div>
         <div className="flex items-center justify-between text-[11px] mt-1.5">
-          <span className="text-muted-foreground">Sync</span>
+          <span className="text-muted-foreground">Live Execution</span>
           <div className="flex items-center gap-1.5">
-            <div className={`size-1.5 rounded-full ${connectedCount > 0 ? 'bg-green-400' : 'bg-zinc-500'}`} />
-            <span className={`font-medium ${connectedCount > 0 ? 'text-green-400' : 'text-muted-foreground'}`}>
-              {connectedCount > 0 ? 'Live' : 'Idle'}
+            <div className={`size-1.5 rounded-full ${connectedCount === totalSupported ? 'bg-green-400' : 'bg-zinc-500'}`} />
+            <span className={`font-medium ${connectedCount === totalSupported ? 'text-green-400' : 'text-muted-foreground'}`}>
+              {connectedCount === totalSupported ? 'Enabled' : 'Disabled'}
             </span>
           </div>
         </div>
@@ -131,10 +122,13 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
         <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mb-2 px-1">Venues</p>
         <div className="flex flex-col gap-2">
           {VENUES.map((venue) => {
-            const status = statuses[venue.id]
-            const cfg = STATUS_CONFIG[status]
-            const isComingSoon = status === 'coming_soon'
-            const isReady = status === 'ready'
+            const authority = getVenueState(venue.id)
+            const isComingSoon = venue.comingSoon
+            const readiness = authority?.readiness ?? 'not_connected'
+            const isReady = readiness === 'ready'
+            const cfg = isComingSoon
+              ? { label: 'Coming Soon', dot: 'bg-yellow-400/60', text: 'text-yellow-400/60' }
+              : READINESS_CONFIG[readiness]
 
             return (
               <div
@@ -160,7 +154,11 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       <span className="text-xs font-semibold text-foreground">{venue.name}</span>
                       <span className="text-[9px] px-1 py-px rounded bg-white/[0.06] text-muted-foreground/70 font-medium">{venue.chain}</span>
                     </div>
-                    <p className="text-[10px] text-muted-foreground/50 leading-snug mt-0.5 truncate">{venue.description}</p>
+                    {isReady && authority?.address ? (
+                      <p className="text-[10px] text-green-400/70 font-mono leading-snug mt-0.5 truncate">{truncateAddress(authority.address)}</p>
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground/50 leading-snug mt-0.5 truncate">{venue.description}</p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center justify-between">
@@ -202,7 +200,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
-            Orbital uses delegated access. Your credentials are never stored. Revoke anytime.
+            Non-custodial signing. Your keys never leave your browser. Revoke anytime.
           </p>
         </div>
       </div>

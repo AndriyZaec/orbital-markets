@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
+import { useLiveExecution } from '@/hooks/useLiveExecution'
+import { useVenueAuthority } from '@/hooks/useVenueAuthority'
+import { useLiveBalances } from '@/hooks/useLiveBalances'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { getMockLeverage } from '@/lib/hacks'
+import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 
 interface Props {
   opportunity: Opportunity
   lastUpdated: Date | null
+  mode: 'paper' | 'live'
   onClose: () => void
   onExecute: (opportunityId: string, leverage: number) => Promise<void>
+  onViewPositions?: () => void
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -26,6 +31,25 @@ function fmtPrice(n: number) {
   if (n >= 1000) return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   if (n >= 1) return '$' + n.toFixed(4)
   return '$' + n.toPrecision(4)
+}
+
+const MAINTENANCE_MARGIN = 0.03
+
+function estLiqPrice(entryPrice: number, side: 'long' | 'short', leverage: number): string {
+  if (leverage <= 1 || entryPrice <= 0) return 'N/A (1x)'
+  if (side === 'long') {
+    const liq = entryPrice * (1 - 1 / leverage + MAINTENANCE_MARGIN)
+    return liq > 0 ? fmtPrice(liq) : '--'
+  }
+  return fmtPrice(entryPrice * (1 + 1 / leverage - MAINTENANCE_MARGIN))
+}
+
+function fmtBalance(balances: ReturnType<typeof useLiveBalances>, venue: string) {
+  const key = venue.toLowerCase() as 'pacifica' | 'hyperliquid'
+  const b = balances[key]
+  if (!b || !b.connected) return '--'
+  if (b.available <= 0) return '$0.00'
+  return fmtUsd(b.available)
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -64,14 +88,14 @@ function useExpiry(expiresAt: string | null) {
 
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
-export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExecute }: Props) {
+export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions }: Props) {
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const maxLev = getMockLeverage(opp.asset)
+  const maxLev = opp.max_leverage || 1
 
   const [leverageVal, setLeverageVal] = useState(maxLev)
   const [longSlippage, setLongSlippage] = useState(1)
@@ -83,6 +107,11 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
   const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageVal)
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
+  const { isFullyReady } = useVenueAuthority()
+  const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
+  const balances = useLiveBalances()
+  const [showLiveModal, setShowLiveModal] = useState(false)
+
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
   const shortLeg = plan ? (plan.leg_1.side === 'short' ? plan.leg_1 : plan.leg_2) : null
 
@@ -93,6 +122,16 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
     } finally {
       setExecuting(false)
     }
+  }
+
+  const handleExecuteLive = () => {
+    setShowLiveModal(true)
+    executeLive(opp.id, leverageVal)
+  }
+
+  const handleCloseLiveModal = () => {
+    setShowLiveModal(false)
+    resetLive()
   }
 
   return (
@@ -155,8 +194,8 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
         {/* Available balance */}
         <div className="px-5 py-3 border-b border-border">
           <p className="text-[11px] text-muted-foreground mb-1.5">Available balance</p>
-          <Row label={longVenue} value="--" capitalize />
-          <Row label={shortVenue} value="--" capitalize />
+          <Row label={longVenue} value={fmtBalance(balances, longVenue)} capitalize />
+          <Row label={shortVenue} value={fmtBalance(balances, shortVenue)} capitalize />
         </div>
 
         {/* Long Section */}
@@ -179,7 +218,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
                 <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
                 <Row label="Position Size" value={plan && longLeg ? fmtUsd(longLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value="--" />
+                <Row label="Est. Liquidation Price" value={longLeg ? estLiqPrice(longLeg.expected_price, 'long', leverageVal) : '--'} />
                 <Row label="Est. Entry Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={longLeg ? fmtPct(longLeg.slippage + longLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
@@ -207,7 +246,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
                 <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
                 <Row label="Position Size" value={plan && shortLeg ? fmtUsd(shortLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value="--" />
+                <Row label="Est. Liquidation Price" value={shortLeg ? estLiqPrice(shortLeg.expected_price, 'short', leverageVal) : '--'} />
                 <Row label="Est. Entry Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={shortLeg ? fmtPct(shortLeg.slippage + shortLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
@@ -250,15 +289,41 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, onClose, onExe
           )}
         </div>
 
-        <Button
-          className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
-          size="lg"
-          disabled={!plan?.executable || planExpired || executing || planLoading}
-          onClick={handleExecute}
-        >
-          {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : !opp.executable ? 'Not Executable' : 'Open Spread Trade'}
-        </Button>
+        {mode === 'paper' ? (
+          <Button
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
+            size="lg"
+            disabled={!plan?.executable || planExpired || executing || planLoading}
+            onClick={handleExecute}
+          >
+            {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+          </Button>
+        ) : (
+          <>
+            <Button
+              className="w-full font-medium"
+              size="lg"
+              variant={isFullyReady ? 'default' : 'secondary'}
+              disabled={!isFullyReady || !plan?.executable || planExpired || planLoading}
+              onClick={handleExecuteLive}
+            >
+              {isFullyReady ? 'Execute Live' : 'Connect Wallets to Go Live'}
+            </Button>
+            {!isFullyReady && (
+              <p className="text-[10px] text-muted-foreground/60 text-center mt-1.5">Connect both venue accounts to enable live execution</p>
+            )}
+          </>
+        )}
       </div>
+
+      {showLiveModal && (
+        <LiveExecutionModal
+          state={liveState}
+          onRetry={handleExecuteLive}
+          onClose={handleCloseLiveModal}
+          onViewPositions={() => { handleCloseLiveModal(); onViewPositions?.() }}
+        />
+      )}
     </div>
   )
 }

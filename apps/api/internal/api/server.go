@@ -7,36 +7,50 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 )
 
 type Server struct {
-	ctx      context.Context // server-lifetime context, not per-request
-	scanner  *scanner.Scanner
-	executor *paper.Executor
-	store    *paper.DBStore
-	db       *sql.DB
-	logger   *slog.Logger
-	mux      *http.ServeMux
+	ctx       context.Context // server-lifetime context, not per-request
+	scanner   *scanner.Scanner
+	executor  *paper.Executor
+	store     *paper.DBStore
+	db        *sql.DB
+	liveStore *executor.Store // always available when DB exists — read-only live position access
+	live      *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	logger    *slog.Logger
+	mux       *http.ServeMux
 }
 
 func NewServer(
 	ctx context.Context,
 	logger *slog.Logger,
 	sc *scanner.Scanner,
-	executor *paper.Executor,
+	exec *paper.Executor,
 	store *paper.DBStore,
 	database *sql.DB,
+	live *LiveDeps,
 ) *Server {
+	// Live position store is always available for reads, even without venue clients.
+	var ls *executor.Store
+	if live != nil && live.liveStore != nil {
+		ls = live.liveStore
+	} else {
+		ls = executor.NewStore(database, logger)
+	}
+
 	s := &Server{
-		ctx:      ctx,
-		scanner:  sc,
-		executor: executor,
-		store:    store,
-		db:       database,
-		logger:   logger,
-		mux:      http.NewServeMux(),
+		ctx:       ctx,
+		scanner:   sc,
+		executor:  exec,
+		store:     store,
+		db:        database,
+		liveStore: ls,
+		live:      live,
+		logger:    logger,
+		mux:       http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -63,6 +77,16 @@ func (s *Server) routes() {
 
 	// Historical data
 	s.mux.HandleFunc("GET /api/v1/history", s.handleHistory)
+
+	// Live execution (non-custodial signing flow)
+	s.mux.HandleFunc("POST /api/v1/live/prepare", s.handleLivePrepare)
+	s.mux.HandleFunc("POST /api/v1/live/advance", s.handleLiveAdvance)
+	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
+	s.mux.HandleFunc("GET /api/v1/live/balances", s.handleLiveBalances)
+	s.mux.HandleFunc("GET /api/v1/live/positions", s.handleLivePositions)
+	s.mux.HandleFunc("GET /api/v1/live/positions/", s.handleLivePosition)
+	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
+	s.mux.HandleFunc("POST /api/v1/live/kill", s.handleLiveKill)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

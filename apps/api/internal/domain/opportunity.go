@@ -60,12 +60,14 @@ type Opportunity struct {
 	// Sizing
 	AvailableNotional   float64 `json:"available_notional"`
 	RecommendedNotional float64 `json:"recommended_notional"`
+	MaxLeverage         int     `json:"max_leverage"`
 
 	// Classification
-	Liquidity      LiquidityTier `json:"liquidity"`
-	Confidence     Confidence    `json:"confidence"`
-	RiskTier       RiskTier      `json:"risk_tier"`
-	LiqSuspect     bool          `json:"liq_suspect"`
-	Executable     bool          `json:"executable"`
-	Warnings       []string      `json:"warnings,omitempty"`
+	Liquidity       LiquidityTier `json:"liquidity"`
+	Confidence      Confidence    `json:"confidence"`
+	RiskTier        RiskTier      `json:"risk_tier"`
+	LiqSuspect      bool          `json:"liq_suspect"`
+	ExecutionStatus string        `json:"execution_status"` // "executable" or "blocked"
+	RiskFlags       []string      `json:"risk_flags,omitempty"`
+	Warnings        []string      `json:"warnings,omitempty"`
 }

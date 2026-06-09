@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -76,110 +77,194 @@ func (t *Tracker) Register(submitResult *SubmitResult, requestedAmount float64) 
 
 // HandleOrderUpdate processes an order status update from account_order_updates.
 //
-// Expected fields: order_id, client_order_id, status, error
+// Pacifica format (array of updates):
+//
+//	[{
+//	  "i":  1559665358,        // order ID (integer)
+//	  "I":  "uuid" or null,    // client order ID (nullable)
+//	  "s":  "BTC",             // symbol
+//	  "d":  "bid",             // side
+//	  "a":  "0.00012",         // original amount
+//	  "f":  "0.00012",         // filled amount
+//	  "os": "filled",          // order status
+//	  "oe": "fulfill_limit",   // order event
+//	  "ot": "limit",           // order type
+//	  "p":  "89501",           // avg filled price
+//	  "r":  false,             // reduce_only
+//	  "ct": 1765017049008,     // created timestamp ms
+//	  "ut": 1765017219639,     // updated timestamp ms
+//	}]
 func (t *Tracker) HandleOrderUpdate(data json.RawMessage) {
-	var update struct {
-		OrderID       string `json:"order_id"`
-		ClientOrderID string `json:"client_order_id"`
-		Status        string `json:"status"`
-		Error         string `json:"error"`
+	var updates []struct {
+		I  int64   `json:"i"`  // order ID
+		CI *string `json:"I"`  // client order ID (nullable)
+		S  string  `json:"s"`  // symbol
+		OS string  `json:"os"` // order status
+		F  string  `json:"f"`  // filled amount
+		A  string  `json:"a"`  // original amount
+		P  string  `json:"p"`  // avg fill price
 	}
-	if err := json.Unmarshal(data, &update); err != nil {
-		t.logger.Warn("tracker: parse order update", "err", err)
+	if err := json.Unmarshal(data, &updates); err != nil {
+		t.logger.Warn("pacifica tracker: parse order update", "err", err)
 		return
 	}
 
-	t.mu.RLock()
-	order, exists := t.orders[update.ClientOrderID]
-	t.mu.RUnlock()
-	if !exists {
-		return // not our order
+	for _, u := range updates {
+		// Find tracked order by client order ID
+		var cloid string
+		if u.CI != nil {
+			cloid = *u.CI
+		}
+		if cloid == "" {
+			continue // can't correlate without client order ID
+		}
+
+		t.mu.RLock()
+		order, exists := t.orders[cloid]
+		t.mu.RUnlock()
+		if !exists {
+			continue
+		}
+
+		order.mu.Lock()
+
+		// Backfill venue order ID
+		oid := fmt.Sprintf("%d", u.I)
+		if order.orderID == "" && u.I > 0 {
+			order.orderID = oid
+		}
+
+		// Map Pacifica order status to Orbital status
+		switch u.OS {
+		case "filled":
+			order.status = OrderStatusFilled
+		case "cancelled", "canceled":
+			filledAmt := parseFloat(u.F)
+			if filledAmt > 0 {
+				order.status = OrderStatusPartialFill
+			} else {
+				order.status = OrderStatusCancelled
+			}
+		case "rejected":
+			order.status = OrderStatusRejected
+		case "expired":
+			order.status = OrderStatusExpired
+		case "open", "partial_fill":
+			filledAmt := parseFloat(u.F)
+			if filledAmt > 0 && order.requestedAmt > 0 &&
+				filledAmt/order.requestedAmt >= fillFullThreshold {
+				order.status = OrderStatusFilled
+			} else if filledAmt > 0 {
+				order.status = OrderStatusPartialFill
+			}
+		}
+
+		order.lastUpdate = time.Now()
+		order.mu.Unlock()
+
+		t.logger.Info("pacifica tracker: order update",
+			"cloid", cloid,
+			"oid", oid,
+			"status", u.OS,
+			"filled", u.F,
+			"orbital_status", order.status,
+		)
 	}
-
-	order.mu.Lock()
-	defer order.mu.Unlock()
-
-	if order.orderID == "" && update.OrderID != "" {
-		order.orderID = update.OrderID
-	}
-
-	switch update.Status {
-	case "rejected":
-		order.status = OrderStatusRejected
-		order.error = update.Error
-	case "cancelled":
-		order.status = OrderStatusCancelled
-	case "expired":
-		order.status = OrderStatusExpired
-	}
-
-	order.lastUpdate = time.Now()
-
-	t.logger.Info("tracker: order update",
-		"client_order_id", update.ClientOrderID,
-		"status", update.Status,
-	)
 }
 
 // HandleTrade processes a fill event from account_trades.
 //
-// Expected fields: order_id, client_order_id, price, amount, fee, timestamp
+// Pacifica format (array of trades):
+//
+//	[{
+//	  "h":  80063441,      // history ID
+//	  "i":  1559912767,    // order ID
+//	  "I":  "uuid"/null,   // client order ID
+//	  "s":  "BTC",         // symbol
+//	  "p":  "89477",       // fill price
+//	  "a":  "0.00036",     // trade amount
+//	  "f":  "0.012885",    // fee
+//	  "n":  "-0.022965",   // realized PnL
+//	  "t":  1765018588190, // timestamp ms
+//	}]
 func (t *Tracker) HandleTrade(data json.RawMessage) {
-	var trade struct {
-		OrderID       string      `json:"order_id"`
-		ClientOrderID string      `json:"client_order_id"`
-		Price         json.Number `json:"price"`
-		Amount        json.Number `json:"amount"`
-		Fee           json.Number `json:"fee"`
-		Timestamp     int64       `json:"timestamp"`
+	var trades []struct {
+		I  int64   `json:"i"`  // order ID
+		CI *string `json:"I"`  // client order ID (nullable)
+		S  string  `json:"s"`  // symbol
+		P  string  `json:"p"`  // price
+		A  string  `json:"a"`  // amount
+		F  string  `json:"f"`  // fee
+		T  int64   `json:"t"`  // timestamp ms
 	}
-	if err := json.Unmarshal(data, &trade); err != nil {
-		t.logger.Warn("tracker: parse trade", "err", err)
+	if err := json.Unmarshal(data, &trades); err != nil {
+		t.logger.Warn("pacifica tracker: parse trade", "err", err)
 		return
 	}
 
-	t.mu.RLock()
-	order, exists := t.orders[trade.ClientOrderID]
-	t.mu.RUnlock()
-	if !exists {
-		return
+	for _, tr := range trades {
+		var cloid string
+		if tr.CI != nil {
+			cloid = *tr.CI
+		}
+		if cloid == "" {
+			// Try to find by order ID
+			oid := fmt.Sprintf("%d", tr.I)
+			t.mu.RLock()
+			for _, o := range t.orders {
+				if o.orderID == oid {
+					cloid = o.clientOrderID
+					break
+				}
+			}
+			t.mu.RUnlock()
+		}
+		if cloid == "" {
+			continue
+		}
+
+		t.mu.RLock()
+		order, exists := t.orders[cloid]
+		t.mu.RUnlock()
+		if !exists {
+			continue
+		}
+
+		price := parseFloat(tr.P)
+		amount := parseFloat(tr.A)
+		fee := parseFloat(tr.F)
+
+		order.mu.Lock()
+		fill := tradeUpdate{
+			Price:  price,
+			Amount: amount,
+			Fee:    fee,
+			At:     time.UnixMilli(tr.T),
+		}
+		order.fills = append(order.fills, fill)
+		order.totalFee += fee
+		order.lastUpdate = time.Now()
+
+		// Check if fully filled
+		filledTotal := 0.0
+		for _, f := range order.fills {
+			filledTotal += f.Amount
+		}
+		if order.requestedAmt > 0 && filledTotal/order.requestedAmt >= fillFullThreshold {
+			order.status = OrderStatusFilled
+		} else if filledTotal > 0 {
+			order.status = OrderStatusPartialFill
+		}
+		order.mu.Unlock()
+
+		t.logger.Info("pacifica tracker: fill",
+			"cloid", cloid,
+			"price", price,
+			"amount", amount,
+			"total_filled", filledTotal,
+			"status", order.status,
+		)
 	}
-
-	price, _ := trade.Price.Float64()
-	amount, _ := trade.Amount.Float64()
-	fee, _ := trade.Fee.Float64()
-
-	order.mu.Lock()
-	defer order.mu.Unlock()
-
-	fill := tradeUpdate{
-		Price:  price,
-		Amount: amount,
-		Fee:    fee,
-		At:     time.UnixMilli(trade.Timestamp),
-	}
-	order.fills = append(order.fills, fill)
-	order.totalFee += fee
-	order.lastUpdate = time.Now()
-
-	// Check if fully filled
-	filledTotal := 0.0
-	for _, f := range order.fills {
-		filledTotal += f.Amount
-	}
-	if order.requestedAmt > 0 && filledTotal/order.requestedAmt >= fillFullThreshold {
-		order.status = OrderStatusFilled
-	} else {
-		order.status = OrderStatusPartialFill
-	}
-
-	t.logger.Info("tracker: fill",
-		"client_order_id", trade.ClientOrderID,
-		"price", price,
-		"amount", amount,
-		"total_filled", filledTotal,
-		"status", order.status,
-	)
 }
 
 // WaitForFill blocks until the order reaches a terminal state or times out.
@@ -281,4 +366,9 @@ func (t *Tracker) Cleanup(maxAge time.Duration) {
 		}
 		order.mu.Unlock()
 	}
+}
+
+func parseFloat(s string) float64 {
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
 }

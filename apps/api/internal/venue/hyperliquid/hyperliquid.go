@@ -30,7 +30,8 @@ type metaResponse struct {
 }
 
 type metaAsset struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	MaxLeverage int    `json:"maxLeverage"`
 }
 
 type assetCtx struct {
@@ -79,22 +80,31 @@ type assetState struct {
 	bidSize      float64
 	askPrice     float64
 	askSize      float64
+	maxLeverage  int
 	timestamp    time.Time
 }
 
 type Adapter struct {
-	mu     sync.RWMutex
-	assets map[string]*assetState
-	logger *slog.Logger
-	client *http.Client
+	mu       sync.RWMutex
+	assets   map[string]*assetState
+	assetMap *AssetMap
+	logger   *slog.Logger
+	client   *http.Client
 }
 
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
-		assets: make(map[string]*assetState),
-		logger: logger,
-		client: &http.Client{Timeout: 10 * time.Second},
+		assets:   make(map[string]*assetState),
+		assetMap: NewAssetMap(),
+		logger:   logger,
+		client:   &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+// AssetMap returns the live symbol -> asset index resolver.
+// Safe to call before Run() — returns an empty but valid map.
+func (a *Adapter) AssetMap() *AssetMap {
+	return a.assetMap
 }
 
 func (a *Adapter) Name() string {
@@ -123,6 +133,7 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			AskPrice:     s.askPrice,
 			AskSize:      s.askSize,
 			OpenInterest: s.openInterest,
+			MaxLeverage:  s.maxLeverage,
 			Timestamp:    ts,
 		})
 	}
@@ -200,6 +211,9 @@ func (a *Adapter) pollREST(ctx context.Context) {
 			"universe", len(meta.Universe), "ctxs", len(ctxs))
 	}
 
+	// Update the asset index map before locking for state updates.
+	a.assetMap.Update(meta.Universe)
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -218,6 +232,13 @@ func (a *Adapter) pollREST(ctx context.Context) {
 		state.indexPrice = parseFloat(c.OraclePx)
 		state.fundingRate = parseFloat(c.Funding)
 		state.openInterest = parseFloat(c.OpenInterest)
+		if meta.Universe[i].MaxLeverage > 0 {
+			state.maxLeverage = meta.Universe[i].MaxLeverage
+		}
+	}
+
+	if a.assetMap.Len() > 0 {
+		a.logger.Debug("hyperliquid asset map updated", "symbols", a.assetMap.Len())
 	}
 }
 

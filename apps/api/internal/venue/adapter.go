@@ -18,6 +18,7 @@ type MarketData struct {
 	AskPrice     float64   `json:"ask_price"`
 	AskSize      float64   `json:"ask_size"`
 	OpenInterest float64   `json:"open_interest"`
+	MaxLeverage  int       `json:"max_leverage"`
 	Timestamp    time.Time `json:"timestamp"`
 }
 

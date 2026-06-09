@@ -193,6 +193,26 @@ Orbital can grow in three directions:
 
 The product is designed so that humans can use it today, while autonomous capital workflows can build on top of it later.
 
+## Roadmap
+
+### Core execution roadmap
+- finish constrained live execution for the first supported venue pair
+- harden recovery, unwind, and degraded-state handling
+- persist and monitor live positions with the same discipline as paper execution
+
+### Product improvements we can learn from the market
+Without changing Orbital's core thesis, there are several things worth borrowing from broader competitors:
+
+- stronger connected-account and signer UX
+- more operational portfolio and account surfaces
+- cleaner onboarding into venue-linked execution
+- better capital mobility and funding/deposit workflows
+- a clearer agent-facing control layer once live execution is stable
+
+Our direction remains the same:
+
+**win on execution quality and risk discipline first, then expand product surface.**
+
 ## Run Locally
 
 ### Backend
