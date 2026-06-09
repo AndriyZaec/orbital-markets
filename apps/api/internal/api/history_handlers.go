@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"time"
@@ -22,11 +23,35 @@ type historyResponse struct {
 	Points []historyPoint `json:"points"`
 }
 
-var rangeMap = map[string]time.Duration{
-	"1h":  1 * time.Hour,
-	"24h": 24 * time.Hour,
-	"7d":  7 * 24 * time.Hour,
-	"30d": 30 * 24 * time.Hour,
+// historyRow is the common shape paired across sources (raw, 5m, 1h).
+type historyRow struct {
+	TsUnix      int64
+	MarkPrice   float64
+	FundingRate float64
+}
+
+type historySource int
+
+const (
+	sourceRaw historySource = iota
+	source5m
+	source1h
+)
+
+// rangeSpec maps a range token to its window duration and source table.
+//
+// Source selection mirrors the retention windows: raw holds 7d, 5m holds 30d,
+// 1h holds 1y. Anything longer than the source can supply would return empty.
+var rangeSpec = map[string]struct {
+	dur    time.Duration
+	source historySource
+}{
+	"1h":  {1 * time.Hour, sourceRaw},
+	"24h": {24 * time.Hour, sourceRaw},
+	"7d":  {7 * 24 * time.Hour, sourceRaw},
+	"30d": {30 * 24 * time.Hour, source5m},
+	"90d": {90 * 24 * time.Hour, source1h},
+	"1y":  {365 * 24 * time.Hour, source1h},
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -40,41 +65,31 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dur, ok := rangeMap[rangeStr]
+	spec, ok := rangeSpec[rangeStr]
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "range must be one of: 1h, 24h, 7d, 30d"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "range must be one of: 1h, 24h, 7d, 30d, 90d, 1y"})
 		return
 	}
 
 	now := time.Now().UTC()
-	start := now.Add(-dur)
+	start := now.Add(-spec.dur)
 	queries := sqlc.New(s.db)
 
-	snapsA, err := queries.ListSnapshotsByVenueAsset(r.Context(), sqlc.ListSnapshotsByVenueAssetParams{
-		Venue:    venueA,
-		Asset:    asset,
-		TsUnix:   start.Unix(),
-		TsUnix_2: now.Unix(),
-	})
+	rowsA, err := fetchHistoryRows(r.Context(), queries, spec.source, venueA, asset, start.Unix(), now.Unix())
 	if err != nil {
 		s.logger.Error("history: fetch venue_a", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
 		return
 	}
 
-	snapsB, err := queries.ListSnapshotsByVenueAsset(r.Context(), sqlc.ListSnapshotsByVenueAssetParams{
-		Venue:    venueB,
-		Asset:    asset,
-		TsUnix:   start.Unix(),
-		TsUnix_2: now.Unix(),
-	})
+	rowsB, err := fetchHistoryRows(r.Context(), queries, spec.source, venueB, asset, start.Unix(), now.Unix())
 	if err != nil {
 		s.logger.Error("history: fetch venue_b", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
 		return
 	}
 
-	points := pairSnapshots(snapsA, snapsB)
+	points := pairHistoryRows(rowsA, rowsB, spec.source)
 
 	if len(points) > 200 {
 		step := len(points) / 200
@@ -93,12 +108,71 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func pairSnapshots(a, b []sqlc.MarketSnapshot) []historyPoint {
+func fetchHistoryRows(ctx context.Context, q *sqlc.Queries, src historySource, venue, asset string, startUnix, endUnix int64) ([]historyRow, error) {
+	switch src {
+	case source5m:
+		rows, err := q.List5mByVenueAsset(ctx, sqlc.List5mByVenueAssetParams{
+			Venue:        venue,
+			Asset:        asset,
+			BucketUnix:   startUnix,
+			BucketUnix_2: endUnix,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]historyRow, len(rows))
+		for i, r := range rows {
+			out[i] = historyRow{TsUnix: r.BucketUnix, MarkPrice: r.Close, FundingRate: r.FundingAvg}
+		}
+		return out, nil
+	case source1h:
+		rows, err := q.List1hByVenueAsset(ctx, sqlc.List1hByVenueAssetParams{
+			Venue:        venue,
+			Asset:        asset,
+			BucketUnix:   startUnix,
+			BucketUnix_2: endUnix,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]historyRow, len(rows))
+		for i, r := range rows {
+			out[i] = historyRow{TsUnix: r.BucketUnix, MarkPrice: r.Close, FundingRate: r.FundingAvg}
+		}
+		return out, nil
+	default:
+		rows, err := q.ListSnapshotsByVenueAsset(ctx, sqlc.ListSnapshotsByVenueAssetParams{
+			Venue:    venue,
+			Asset:    asset,
+			TsUnix:   startUnix,
+			TsUnix_2: endUnix,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]historyRow, len(rows))
+		for i, r := range rows {
+			out[i] = historyRow{TsUnix: r.TsUnix, MarkPrice: r.MarkPrice, FundingRate: r.FundingRate}
+		}
+		return out, nil
+	}
+}
+
+func pairHistoryRows(a, b []historyRow, src historySource) []historyPoint {
 	if len(a) == 0 || len(b) == 0 {
 		return nil
 	}
 
-	const tolerance = 2 * time.Minute
+	// Tolerance scales with source granularity so paired points actually land in
+	// the same bucket: 2m for 1-min raw, ~½ bucket for aggregated sources.
+	tolerance := 2 * time.Minute
+	switch src {
+	case source5m:
+		tolerance = 3 * time.Minute
+	case source1h:
+		tolerance = 30 * time.Minute
+	}
+
 	var points []historyPoint
 	j := 0
 
