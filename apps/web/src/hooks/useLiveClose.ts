@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
@@ -57,7 +58,7 @@ export function useLiveClose() {
     setState({ ...INITIAL, phase: 'preparing' })
 
     try {
-      const resp = await fetch(`/api/v1/live/close/${positionId}`, {
+      const resp = await apiFetch(`/api/v1/live/close/${positionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -91,7 +92,7 @@ export function useLiveClose() {
           const signed: SignedAction = await signRequest(req, signers)
 
           setState(s => ({ ...s, phase: 'submitting', submitted: i }))
-          const submitResp = await fetch('/api/v1/live/submit', {
+          const submitResp = await apiFetch('/api/v1/live/submit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(signed),

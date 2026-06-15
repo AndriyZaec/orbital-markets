@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 
 interface VenueBalance {
   venue: string
@@ -22,7 +23,7 @@ export function useLiveBalances(pollInterval = 5_000) {
 
   const fetch_ = useCallback(async () => {
     try {
-      const resp = await fetch('/api/v1/live/balances')
+      const resp = await apiFetch('/api/v1/live/balances')
       if (!resp.ok) return
       const data: Balances = await resp.json()
       setBalances(data)

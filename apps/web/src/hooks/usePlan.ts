@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { apiFetch } from '@/lib/api'
 
 interface Leg {
   venue: string
@@ -50,7 +51,7 @@ export function usePlan(opportunityId: string | null, leverage: number = 1) {
   const fetchPlan = useCallback(async (oppId: string, lev: number) => {
     try {
       setLoading(true)
-      const resp = await fetch('/api/v1/plan', {
+      const resp = await apiFetch('/api/v1/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ opportunity_id: oppId, leverage: lev }),

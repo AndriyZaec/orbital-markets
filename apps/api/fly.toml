@@ -7,7 +7,6 @@
 # No secrets in this file. Use `flyctl secrets set` for JWT_SECRET and any
 # venue API keys / RPC URLs.
 
-app = "<your-fly-app>"
 primary_region = "iad"
 
 [build]

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 
 interface PnLBlock {
   price_pnl: number
@@ -81,7 +82,7 @@ export function useAnalytics(pollInterval = 15_000) {
 
   const fetch_ = useCallback(async () => {
     try {
-      const resp = await fetch('/api/v1/paper/analytics')
+      const resp = await apiFetch('/api/v1/paper/analytics')
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const json: Analytics = await resp.json()
       setData(json)

@@ -64,7 +64,7 @@ func main() {
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
-	go sc.Run(ctx, 30*time.Second)
+	go sc.Run(ctx, 60*time.Second)
 	go recorder.Run(ctx)
 	go janitor.Run(ctx)
 	go rollup.Run(ctx)

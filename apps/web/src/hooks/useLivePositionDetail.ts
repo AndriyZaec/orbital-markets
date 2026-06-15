@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 
 export interface LiveFillDetail {
   id: number
@@ -44,7 +45,7 @@ export function useLivePositionDetail(positionId: string | null) {
     if (!positionId) return
     setLoading(true)
     try {
-      const resp = await fetch(`/api/v1/live/positions/${positionId}`)
+      const resp = await apiFetch(`/api/v1/live/positions/${positionId}`)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const d: LivePositionDetailData = await resp.json()
       setData(d)

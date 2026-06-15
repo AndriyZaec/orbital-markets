@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 
 interface Fill {
   venue: string
@@ -68,7 +69,7 @@ export function usePaperPositions(pollInterval = 5_000) {
 
   const fetchPositions = useCallback(async () => {
     try {
-      const resp = await fetch('/api/v1/paper/positions')
+      const resp = await apiFetch('/api/v1/paper/positions')
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data: PaperPosition[] = await resp.json()
       data.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -88,7 +89,7 @@ export function usePaperPositions(pollInterval = 5_000) {
   }, [fetchPositions, pollInterval])
 
   const closePosition = useCallback(async (posId: string) => {
-    const resp = await fetch(`/api/v1/paper/close/${posId}`, { method: 'POST' })
+    const resp = await apiFetch(`/api/v1/paper/close/${posId}`, { method: 'POST' })
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}))
       throw new Error(body.error || `HTTP ${resp.status}`)
