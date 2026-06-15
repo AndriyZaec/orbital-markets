@@ -60,15 +60,17 @@ function writeKV(code: string, user: string, remote: boolean): void {
     user_label: user,
     created_at: Math.floor(Date.now() / 1000),
   });
+  // Use the root-installed wrangler with the gitignored config that holds the
+  // real KV namespace ID; the committed wrangler.toml only has a placeholder.
   const args = [
-    '--dir', '../..', 'exec', 'wrangler',
     'kv', 'key', 'put',
+    '--config', 'wrangler.local.toml',
     '--binding=BETA_INVITES',
     remote ? '--remote' : '--local',
     `invite:${code}`,
     value,
   ];
-  const res = spawnSync('pnpm', args, { stdio: 'inherit' });
+  const res = spawnSync('../../node_modules/.bin/wrangler', args, { stdio: 'inherit' });
   if (res.status !== 0) {
     console.error('wrangler kv put failed');
     process.exit(res.status ?? 1);

@@ -52,7 +52,14 @@ export default {
       if (url.pathname.startsWith('/api/')) {
         return new Response('Not Found', { status: 404 });
       }
-      return Response.redirect(new URL(GATE_PATH, url.origin).toString(), 302);
+      // Only redirect document navigations. Asset fetches (JS/CSS/img/etc.)
+      // must pass through so the gate page can load its own bundle.
+      const dest = request.headers.get('sec-fetch-dest');
+      const accept = request.headers.get('accept') ?? '';
+      const isDocument = dest === 'document' || (dest === null && accept.includes('text/html'));
+      if (isDocument) {
+        return Response.redirect(new URL(GATE_PATH, url.origin).toString(), 302);
+      }
     }
 
     return fetch(request);
