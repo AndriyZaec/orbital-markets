@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --dir ../.. exec wrangler dev --cwd .",
-    "deploy": "pnpm --dir ../.. exec wrangler deploy --cwd .",
-    "tail": "pnpm --dir ../.. exec wrangler tail --cwd .",
+    "dev": "../../node_modules/.bin/wrangler dev --config wrangler.local.toml",
+    "deploy": "../../node_modules/.bin/wrangler deploy --config wrangler.local.toml",
+    "tail": "../../node_modules/.bin/wrangler tail --config wrangler.local.toml",
+    "secret": "../../node_modules/.bin/wrangler secret",
     "mint": "tsx scripts/mint-invite.ts",
     "typecheck": "tsc --noEmit"
   },
