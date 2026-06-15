@@ -2,12 +2,12 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { apiFetch } from '@/lib/api'
 import { Gate } from '@/components/Gate'
 
-// Centralizes gate detection: a single probe to /api/v1/health (which the API
-// middleware always allows through). If the probe succeeds the visitor either
-// has a valid __beta cookie or the API is in dev no-auth mode — either way,
-// render the app. If it fails, render the Gate page so the user can redeem
-// an invite. Re-probes on tab focus so a cookie redeemed in another tab is
-// picked up without a manual refresh.
+// Centralizes gate detection: a single probe to a gated endpoint
+// (/api/v1/opportunities). 200 means the __beta cookie is valid (or dev
+// no-auth mode); 404 means the auth middleware rejected the request, so we
+// render the gate. /api/v1/health is unsuitable as a probe because it always
+// returns 200 for CF / Fly health checks. Re-probes on tab focus so a cookie
+// redeemed in another tab is picked up without a manual refresh.
 
 type Status = 'checking' | 'open' | 'gated'
 
@@ -19,7 +19,7 @@ export function GateProvider({ children }: { children: ReactNode }) {
 
     async function probe() {
       try {
-        const resp = await apiFetch('/api/v1/health')
+        const resp = await apiFetch('/api/v1/opportunities')
         if (cancelled) return
         setStatus(resp.ok ? 'open' : 'gated')
       } catch {
