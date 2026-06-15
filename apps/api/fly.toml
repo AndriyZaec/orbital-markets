@@ -17,6 +17,7 @@ primary_region = 'iad'
   ADDR = ':8080'
   DB_PATH = '/data/orbital.db'
   ENV = 'production'
+  ALLOWED_ORIGIN = 'https://app.orbitalmarkets.xyz'
 
 [[mounts]]
   source = 'orbital_data'

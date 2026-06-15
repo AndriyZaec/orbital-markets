@@ -73,7 +73,7 @@ func main() {
 	// Live execution deps (non-custodial signing flow)
 	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
 
-	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret)
+	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
 
 	addr := envOr("ADDR", ":8080")
 	logger.Info("starting server", "addr", addr, "env", env)

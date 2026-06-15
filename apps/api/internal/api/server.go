@@ -35,6 +35,7 @@ func NewServer(
 	database *sql.DB,
 	live *LiveDeps,
 	jwtSecret string,
+	corsOrigin string,
 ) *Server {
 	// Live position store is always available for reads, even without venue clients.
 	var ls *executor.Store
@@ -57,11 +58,13 @@ func NewServer(
 	}
 	s.routes()
 
-	// Middleware order on the request path: recovery → logging → auth → mux.
-	// Recovery is outermost so panics inside logging/auth still return 500.
+	// Middleware order on the request path: recovery → logging → CORS → auth → mux.
+	// CORS sits before auth so preflight OPTIONS can succeed without a cookie.
 	s.handler = middleware.Recovery(logger)(
 		middleware.Logging(logger)(
-			middleware.Auth(jwtSecret, logger)(s.mux),
+			middleware.CORS(corsOrigin)(
+				middleware.Auth(jwtSecret, logger)(s.mux),
+			),
 		),
 	)
 	return s
