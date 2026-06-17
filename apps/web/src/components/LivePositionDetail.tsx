@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
 import { useLiveClose } from '@/hooks/useLiveClose'
@@ -92,17 +92,14 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
+  // Refresh the parent list once a close transitions to done.
+  useEffect(() => {
+    if (closeDone) onRefresh?.()
+  }, [closeDone, onRefresh])
+
   const handleClose = () => {
     setConfirmClose(false)
     liveClose.closePosition(pos.id)
-  }
-
-  const handleDismiss = () => {
-    if (closeDone) {
-      liveClose.reset()
-      onRefresh?.()
-    }
-    onClose()
   }
 
   // Extract reason from the last 'complete' event

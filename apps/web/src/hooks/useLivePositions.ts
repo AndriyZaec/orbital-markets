@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 
 export interface LivePosition {
   id: string
@@ -42,7 +43,7 @@ export function useLivePositions(pollInterval = 5_000) {
 
   const fetch_ = useCallback(async () => {
     try {
-      const resp = await fetch('/api/v1/live/positions')
+      const resp = await apiFetch('/api/v1/live/positions')
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data: LivePosition[] = await resp.json()
       data.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())

@@ -19,8 +19,20 @@ import (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// Database
-	dbPath := envOr("DB_PATH", "orbital.db")
+	env := os.Getenv("ENV")
+	prod := env == "production"
+
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if prod && jwtSecret == "" {
+		logger.Error("JWT_SECRET required when ENV=production")
+		os.Exit(1)
+	}
+
+	defaultDB := "orbital.db"
+	if prod {
+		defaultDB = "/data/orbital.db" // Fly volume mount
+	}
+	dbPath := envOr("DB_PATH", defaultDB)
 	database, err := db.Open(dbPath)
 	if err != nil {
 		logger.Error("failed to open database", "err", err)
@@ -34,8 +46,10 @@ func main() {
 
 	sc := scanner.New(logger, pac, hl)
 
-	// Snapshot recorder
+	// Snapshot recorder + retention janitor + rollup aggregator
 	recorder := db.NewRecorder(database, sc, logger)
+	janitor := db.NewJanitor(database, dbPath, logger)
+	rollup := db.NewRollup(database, logger)
 
 	// Paper trading (SQLite-backed)
 	store := paper.NewDBStore(database)
@@ -50,27 +64,37 @@ func main() {
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
-	go sc.Run(ctx, 30*time.Second)
+	go sc.Run(ctx, 60*time.Second)
 	go recorder.Run(ctx)
+	go janitor.Run(ctx)
+	go rollup.Run(ctx)
 	go monitor.Run(ctx)
 
 	// Live execution deps (non-custodial signing flow)
 	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
 
-	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps)
+	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
 
 	addr := envOr("ADDR", ":8080")
-	logger.Info("starting server", "addr", addr)
+	logger.Info("starting server", "addr", addr, "env", env)
 
 	httpSrv := &http.Server{
-		Addr:    addr,
-		Handler: srv.Handler(),
+		Addr:              addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down")
-		httpSrv.Shutdown(context.Background())
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelShutdown()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("shutdown", "err", err)
+		}
 	}()
 
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {

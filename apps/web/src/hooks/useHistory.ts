@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 
 export interface HistoryPoint {
   t: string
@@ -22,7 +23,7 @@ export function useHistory(asset: string, venueA: string, venueB: string, range_
     try {
       setLoading(true)
       const params = new URLSearchParams({ asset, venue_a: venueA, venue_b: venueB, range: range_ })
-      const resp = await fetch(`/api/v1/history?${params}`)
+      const resp = await apiFetch(`/api/v1/history?${params}`)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const json: HistoryData = await resp.json()
       setData(json.points ?? [])

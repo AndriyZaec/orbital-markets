@@ -1,0 +1,20 @@
+{
+  "name": "orbital-gate-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "../../node_modules/.bin/wrangler dev --config wrangler.local.toml",
+    "deploy": "../../node_modules/.bin/wrangler deploy --config wrangler.local.toml",
+    "tail": "../../node_modules/.bin/wrangler tail --config wrangler.local.toml",
+    "secret": "../../node_modules/.bin/wrangler secret",
+    "mint": "tsx scripts/mint-invite.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "@types/node": "^25.9.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

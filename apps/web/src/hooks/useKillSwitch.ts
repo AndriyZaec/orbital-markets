@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
@@ -69,7 +70,7 @@ export function useKillSwitch() {
   }), [solWallet.signMessage, solWallet.publicKey, hyperliquidAddress, signTypedDataAsync])
 
   const submitSigned = async (signed: SignedAction): Promise<SubmissionResult> => {
-    const resp = await fetch('/api/v1/live/submit', {
+    const resp = await apiFetch('/api/v1/live/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(signed),
@@ -91,7 +92,7 @@ export function useKillSwitch() {
 
     try {
       // 1. Get close signing requests from backend
-      const resp = await fetch('/api/v1/live/kill', {
+      const resp = await apiFetch('/api/v1/live/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

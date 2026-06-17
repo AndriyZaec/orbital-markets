@@ -11,6 +11,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:8080',
+      // For local gate-worker testing only; in prod the Worker is bound to
+      // app.<domain>/gate/* directly, no proxy involved.
+      '/gate': 'http://localhost:8787',
     },
   },
 })

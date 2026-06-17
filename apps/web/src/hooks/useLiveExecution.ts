@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { apiFetch } from '@/lib/api'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
@@ -116,7 +117,7 @@ export function useLiveExecution() {
   }), [solWallet.signMessage, solWallet.publicKey, hyperliquidAddress, signTypedDataAsync])
 
   const postAdvance = async (body: Record<string, unknown>): Promise<AdvanceResp> => {
-    const resp = await fetch('/api/v1/live/advance', {
+    const resp = await apiFetch('/api/v1/live/advance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -138,7 +139,7 @@ export function useLiveExecution() {
 
     try {
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
-      const prepResp = await fetch('/api/v1/live/prepare', {
+      const prepResp = await apiFetch('/api/v1/live/prepare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -10,9 +10,9 @@ import (
 )
 
 const getLatestSnapshot = `-- name: GetLatestSnapshot :one
-SELECT id, venue, asset, market_key, mark_price, index_price, funding_rate, bid_price, ask_price, open_interest, timestamp FROM market_snapshots
+SELECT id, venue, asset, market_key, mark_price, index_price, funding_rate, bid_price, ask_price, open_interest, ts_unix FROM market_snapshots
 WHERE venue = ? AND asset = ?
-ORDER BY timestamp DESC
+ORDER BY ts_unix DESC
 LIMIT 1
 `
 
@@ -35,7 +35,7 @@ func (q *Queries) GetLatestSnapshot(ctx context.Context, arg GetLatestSnapshotPa
 		&i.BidPrice,
 		&i.AskPrice,
 		&i.OpenInterest,
-		&i.Timestamp,
+		&i.TsUnix,
 	)
 	return i, err
 }
@@ -45,7 +45,7 @@ INSERT INTO market_snapshots (
     venue, asset, market_key,
     mark_price, index_price, funding_rate,
     bid_price, ask_price, open_interest,
-    timestamp
+    ts_unix
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
@@ -59,7 +59,7 @@ type InsertSnapshotParams struct {
 	BidPrice     float64
 	AskPrice     float64
 	OpenInterest float64
-	Timestamp    string
+	TsUnix       int64
 }
 
 func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) error {
@@ -73,25 +73,25 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 		arg.BidPrice,
 		arg.AskPrice,
 		arg.OpenInterest,
-		arg.Timestamp,
+		arg.TsUnix,
 	)
 	return err
 }
 
 const listSnapshotsByAsset = `-- name: ListSnapshotsByAsset :many
-SELECT id, venue, asset, market_key, mark_price, index_price, funding_rate, bid_price, ask_price, open_interest, timestamp FROM market_snapshots
-WHERE asset = ? AND timestamp >= ? AND timestamp <= ?
-ORDER BY timestamp
+SELECT id, venue, asset, market_key, mark_price, index_price, funding_rate, bid_price, ask_price, open_interest, ts_unix FROM market_snapshots
+WHERE asset = ? AND ts_unix >= ? AND ts_unix <= ?
+ORDER BY ts_unix
 `
 
 type ListSnapshotsByAssetParams struct {
-	Asset       string
-	Timestamp   string
-	Timestamp_2 string
+	Asset    string
+	TsUnix   int64
+	TsUnix_2 int64
 }
 
 func (q *Queries) ListSnapshotsByAsset(ctx context.Context, arg ListSnapshotsByAssetParams) ([]MarketSnapshot, error) {
-	rows, err := q.db.QueryContext(ctx, listSnapshotsByAsset, arg.Asset, arg.Timestamp, arg.Timestamp_2)
+	rows, err := q.db.QueryContext(ctx, listSnapshotsByAsset, arg.Asset, arg.TsUnix, arg.TsUnix_2)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (q *Queries) ListSnapshotsByAsset(ctx context.Context, arg ListSnapshotsByA
 			&i.BidPrice,
 			&i.AskPrice,
 			&i.OpenInterest,
-			&i.Timestamp,
+			&i.TsUnix,
 		); err != nil {
 			return nil, err
 		}
@@ -126,24 +126,24 @@ func (q *Queries) ListSnapshotsByAsset(ctx context.Context, arg ListSnapshotsByA
 }
 
 const listSnapshotsByVenueAsset = `-- name: ListSnapshotsByVenueAsset :many
-SELECT id, venue, asset, market_key, mark_price, index_price, funding_rate, bid_price, ask_price, open_interest, timestamp FROM market_snapshots
-WHERE venue = ? AND asset = ? AND timestamp >= ? AND timestamp <= ?
-ORDER BY timestamp
+SELECT id, venue, asset, market_key, mark_price, index_price, funding_rate, bid_price, ask_price, open_interest, ts_unix FROM market_snapshots
+WHERE venue = ? AND asset = ? AND ts_unix >= ? AND ts_unix <= ?
+ORDER BY ts_unix
 `
 
 type ListSnapshotsByVenueAssetParams struct {
-	Venue       string
-	Asset       string
-	Timestamp   string
-	Timestamp_2 string
+	Venue    string
+	Asset    string
+	TsUnix   int64
+	TsUnix_2 int64
 }
 
 func (q *Queries) ListSnapshotsByVenueAsset(ctx context.Context, arg ListSnapshotsByVenueAssetParams) ([]MarketSnapshot, error) {
 	rows, err := q.db.QueryContext(ctx, listSnapshotsByVenueAsset,
 		arg.Venue,
 		arg.Asset,
-		arg.Timestamp,
-		arg.Timestamp_2,
+		arg.TsUnix,
+		arg.TsUnix_2,
 	)
 	if err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (q *Queries) ListSnapshotsByVenueAsset(ctx context.Context, arg ListSnapsho
 			&i.BidPrice,
 			&i.AskPrice,
 			&i.OpenInterest,
-			&i.Timestamp,
+			&i.TsUnix,
 		); err != nil {
 			return nil, err
 		}

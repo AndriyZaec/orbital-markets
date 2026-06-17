@@ -31,3 +31,15 @@ dist/
 *.dll
 *.so
 *.dylib
+
+# Deploy secrets / local overrides
+.env.deploy
+.env.deploy.local
+apps/api/DEPLOY.md
+apps/gate-worker/.dev.vars
+apps/gate-worker/wrangler.local.toml
+apps/gate-worker/scripts/output/
+waitlist-export-*.csv
+invites-*.txt
+*.pem
+*.key

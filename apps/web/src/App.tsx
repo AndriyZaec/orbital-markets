@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { apiFetch } from '@/lib/api'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
 import type { Opportunity } from '@/hooks/useOpportunities'
@@ -120,7 +121,7 @@ export default function App() {
 
   const handleExecutePaper = async (opportunityId: string, leverage: number) => {
     try {
-      const resp = await fetch('/api/v1/paper/open', {
+      const resp = await apiFetch('/api/v1/paper/open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ opportunity_id: opportunityId, leverage }),
