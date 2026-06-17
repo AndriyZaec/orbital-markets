@@ -1,0 +1,44 @@
+name: Deploy API
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/deploy-api.yml'
+    tags:
+      - 'v*'           # any version tag (v0.1.0, v1.0.0-rc1, etc.)
+      - 'api-v*'       # API-specific tag if you want to ship API in isolation
+  workflow_dispatch:  # manual trigger from the Actions tab
+
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Build sanity check
+        working-directory: apps/api
+        run: go build ./...
+
+      - name: Test
+        working-directory: apps/api
+        run: go test ./...
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly
+        working-directory: apps/api
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
