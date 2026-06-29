@@ -24,8 +24,18 @@ import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
 type View = 'trade' | 'analytics' | 'rebates' | 'agents'
-type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'fundingSpread' | 'pacificaRate' | 'hlRate'
 type SortDir = 'asc' | 'desc'
+
+// Per-venue raw funding rate (single funding period, signed).
+// venue_a / venue_b naming is opaque; we look up by venue name so columns
+// stay aligned to the actual venue regardless of which slot it lands in.
+function fundingForVenue(opp: Opportunity, venue: string): number | null {
+  const v = venue.toLowerCase()
+  if (opp.venue_pair.venue_a.toLowerCase() === v) return opp.funding_rate_a
+  if (opp.venue_pair.venue_b.toLowerCase() === v) return opp.funding_rate_b
+  return null
+}
 
 function fmtPct(n: number, decimals = 2) {
   return (n * 100).toFixed(decimals) + '%'
@@ -49,6 +59,9 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
     case 'aprMaxLev': return opp.annualized_gross_edge * (opp.max_leverage || 1)
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
+    case 'fundingSpread': return Math.abs(opp.funding_spread)
+    case 'pacificaRate': return fundingForVenue(opp, 'pacifica') ?? 0
+    case 'hlRate': return fundingForVenue(opp, 'hyperliquid') ?? 0
   }
 }
 
@@ -301,6 +314,9 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
                 <TableHead className="text-left">Long</TableHead>
                 <TableHead className="text-left">Short</TableHead>
+                <SortTH field="pacificaRate" label="Pacifica Funding (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="hlRate" label="HL Funding (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="fundingSpread" label="Funding Spread (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="apr" label="APR" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="aprMaxLev" label="APR x Max Lev" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="priceSpread" label="Price Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
@@ -323,6 +339,13 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                     </TableCell>
                     <TableCell><VenueIcon venue={longVenue} /></TableCell>
                     <TableCell><VenueIcon venue={shortVenue} /></TableCell>
+                    <TC negative={(fundingForVenue(opp, 'pacifica') ?? 0) < 0}>
+                      {fundingForVenue(opp, 'pacifica') !== null ? fmtRate(fundingForVenue(opp, 'pacifica')!) : '—'}
+                    </TC>
+                    <TC negative={(fundingForVenue(opp, 'hyperliquid') ?? 0) < 0}>
+                      {fundingForVenue(opp, 'hyperliquid') !== null ? fmtRate(fundingForVenue(opp, 'hyperliquid')!) : '—'}
+                    </TC>
+                    <TC>{fmtRate(Math.abs(opp.funding_spread))}</TC>
                     <TC>{fmtPct(apr)}</TC>
                     <TC>{fmtPct(apr * maxLev)}</TC>
                     <TC negative={opp.entry_spread_estimate < 0}>{fmtPct(opp.entry_spread_estimate, 4)}</TC>
