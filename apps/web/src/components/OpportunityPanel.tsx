@@ -191,6 +191,22 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
           )}
         </div>
 
+        {/* Entry Type */}
+        <div className="px-5 py-4 border-b border-border">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-muted-foreground">Entry Type</span>
+            <span className="text-[10px] text-muted-foreground/70">Market only in v1</span>
+          </div>
+          <div className="flex items-center gap-0">
+            <EntryTypeBtn label="Market" active first />
+            <EntryTypeBtn label="Limit" disabled />
+            <EntryTypeBtn label="TWAP" disabled last />
+          </div>
+          <p className="text-[11px] text-muted-foreground/70 mt-2">
+            Both legs execute as market orders. Limit and TWAP coming soon.
+          </p>
+        </div>
+
         {/* Available balance */}
         <div className="px-5 py-3 border-b border-border">
           <p className="text-[11px] text-muted-foreground mb-1.5">Available balance</p>
@@ -334,6 +350,30 @@ function Row({ label, value, capitalize }: { label: string; value: string; capit
       <span className="text-sm text-muted-foreground">{label}</span>
       <span className={`text-sm font-mono text-foreground ${capitalize ? 'capitalize' : ''}`}>{value}</span>
     </div>
+  )
+}
+
+function EntryTypeBtn({ label, active, disabled, first, last }: {
+  label: string; active?: boolean; disabled?: boolean; first?: boolean; last?: boolean
+}) {
+  const radius = first ? 'rounded-l' : last ? 'rounded-r' : ''
+  const border = first ? 'border' : 'border border-l-0'
+  const state = active
+    ? 'bg-white/[0.08] text-foreground'
+    : disabled
+      ? 'bg-white/[0.02] text-muted-foreground/40 cursor-not-allowed'
+      : 'bg-white/[0.02] text-muted-foreground hover:text-foreground'
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-disabled={disabled}
+      aria-pressed={active}
+      className={`flex-1 px-3 py-1.5 text-xs font-medium border-border transition-colors ${border} ${radius} ${state}`}
+    >
+      {label}
+      {disabled && <span className="ml-1 text-[9px] uppercase tracking-wide opacity-60">soon</span>}
+    </button>
   )
 }
 
