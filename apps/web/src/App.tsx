@@ -132,12 +132,16 @@ export default function App() {
     document.addEventListener('mouseup', onUp)
   }, [posHeight])
 
-  const handleExecutePaper = async (opportunityId: string, leverage: number) => {
+  const handleExecutePaper = async (opportunityId: string, leverage: number, requestedNotional?: number) => {
     try {
+      const body: Record<string, unknown> = { opportunity_id: opportunityId, leverage }
+      if (typeof requestedNotional === 'number' && requestedNotional > 0) {
+        body.requested_notional = requestedNotional
+      }
       const resp = await apiFetch('/api/v1/paper/open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ opportunity_id: opportunityId, leverage }),
+        body: JSON.stringify(body),
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))

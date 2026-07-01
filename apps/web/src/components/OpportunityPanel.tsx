@@ -13,7 +13,7 @@ interface Props {
   lastUpdated: Date | null
   mode: 'paper' | 'live'
   onClose: () => void
-  onExecute: (opportunityId: string, leverage: number) => Promise<void>
+  onExecute: (opportunityId: string, leverage: number, requestedNotional?: number) => Promise<void>
   onViewPositions?: () => void
 }
 
@@ -103,8 +103,23 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const [longOpen, setLongOpen] = useState(true)
   const [shortOpen, setShortOpen] = useState(true)
 
+  // Position size = notional PER LEG. Seeded from the opportunity's recommended
+  // notional; user can override. The raw text is kept as a string so partial
+  // input ("", "1000.") is not fought by number coercion. `notionalNum` is the
+  // parsed numeric value sent to the backend (0 = fall back to recommended).
+  const [notionalInput, setNotionalInput] = useState<string>(() =>
+    opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '',
+  )
+  useEffect(() => {
+    // Re-seed when the selected opportunity changes.
+    setNotionalInput(opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '')
+  }, [opp.id, opp.recommended_notional])
+  const notionalNum = Number(notionalInput)
+  const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
+  const notionalForPlan = notionalValid ? notionalNum : undefined
+
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageVal)
+  const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageVal, notionalForPlan)
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
   const { isFullyReady } = useVenueAuthority()
@@ -118,7 +133,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const handleExecute = async () => {
     setExecuting(true)
     try {
-      await onExecute(opp.id, leverageVal)
+      await onExecute(opp.id, leverageVal, notionalForPlan)
     } finally {
       setExecuting(false)
     }
@@ -126,7 +141,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
   const handleExecuteLive = () => {
     setShowLiveModal(true)
-    executeLive(opp.id, leverageVal)
+    executeLive(opp.id, leverageVal, notionalForPlan)
   }
 
   const handleCloseLiveModal = () => {
@@ -158,14 +173,37 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
         {/* Position Size + Currency */}
         <div className="px-5 py-4 border-b border-border">
           <div className="flex gap-2">
-            <div className="flex-1 rounded border border-border bg-white/[0.03] px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">Position Size</p>
-              <p className="text-sm font-mono text-foreground">{plan ? fmtUsd(plan.notional) : '--'}</p>
-            </div>
+            <label className={`flex-1 rounded border bg-white/[0.03] px-3 py-2 focus-within:border-blue-500/50 transition-colors ${notionalInput !== '' && !notionalValid ? 'border-red-500/50' : 'border-border'}`}>
+              <p className="text-[11px] text-muted-foreground">Position Size (per leg)</p>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={notionalInput}
+                onChange={(e) => setNotionalInput(e.target.value.replace(/[^\d.]/g, ''))}
+                placeholder={opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '0'}
+                className="w-full bg-transparent text-sm font-mono text-foreground outline-none"
+              />
+            </label>
             <div className="w-20 rounded border border-border bg-white/[0.03] px-3 py-2 text-center">
               <p className="text-[11px] text-muted-foreground">Currency</p>
               <p className="text-sm text-foreground">USD</p>
             </div>
+          </div>
+          <div className="mt-1.5 flex items-center justify-between text-[11px]">
+            {notionalInput !== '' && !notionalValid ? (
+              <span className="text-red-400">Enter a positive amount</span>
+            ) : (
+              <span className="text-muted-foreground/70">Same notional on both legs</span>
+            )}
+            {opp.recommended_notional > 0 && (
+              <button
+                type="button"
+                onClick={() => setNotionalInput(String(Math.round(opp.recommended_notional)))}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Recommended: {fmtUsd(opp.recommended_notional)}
+              </button>
+            )}
           </div>
         </div>
 
@@ -309,7 +347,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!plan?.executable || planExpired || executing || planLoading}
+            disabled={!plan?.executable || planExpired || executing || planLoading || !notionalValid}
             onClick={handleExecute}
           >
             {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
@@ -320,7 +358,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               className="w-full font-medium"
               size="lg"
               variant={isFullyReady ? 'default' : 'secondary'}
-              disabled={!isFullyReady || !plan?.executable || planExpired || planLoading}
+              disabled={!isFullyReady || !plan?.executable || planExpired || planLoading || !notionalValid}
               onClick={handleExecuteLive}
             >
               {isFullyReady ? 'Execute Live' : 'Connect Wallets to Go Live'}
