@@ -42,19 +42,29 @@ interface ExecutionPlan {
   expires_at: string
 }
 
-export function usePlan(opportunityId: string | null, leverage: number = 1) {
+export function usePlan(
+  opportunityId: string | null,
+  leverage: number = 1,
+  requestedNotional?: number,
+) {
   const [plan, setPlan] = useState<ExecutionPlan | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const fetchPlan = useCallback(async (oppId: string, lev: number) => {
+  const fetchPlan = useCallback(async (oppId: string, lev: number, notional?: number) => {
     try {
       setLoading(true)
+      const body: Record<string, unknown> = { opportunity_id: oppId, leverage: lev }
+      // Only send requested_notional when a positive value is set; otherwise
+      // let the backend fall back to the opportunity's recommended notional.
+      if (typeof notional === 'number' && notional > 0) {
+        body.requested_notional = notional
+      }
       const resp = await apiFetch('/api/v1/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ opportunity_id: oppId, leverage: lev }),
+        body: JSON.stringify(body),
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
@@ -78,13 +88,13 @@ export function usePlan(opportunityId: string | null, leverage: number = 1) {
       return
     }
 
-    fetchPlan(opportunityId, leverage)
+    fetchPlan(opportunityId, leverage, requestedNotional)
 
-    intervalRef.current = setInterval(() => fetchPlan(opportunityId, leverage), 10_000)
+    intervalRef.current = setInterval(() => fetchPlan(opportunityId, leverage, requestedNotional), 10_000)
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [opportunityId, leverage, fetchPlan])
+  }, [opportunityId, leverage, requestedNotional, fetchPlan])
 
   const clear = useCallback(() => {
     setPlan(null)
