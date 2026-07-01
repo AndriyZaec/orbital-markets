@@ -10,8 +10,9 @@ import (
 
 func (s *Server) handlePaperOpen(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OpportunityID string  `json:"opportunity_id"`
-		Leverage      float64 `json:"leverage"`
+		OpportunityID     string   `json:"opportunity_id"`
+		Leverage          float64  `json:"leverage"`
+		RequestedNotional *float64 `json:"requested_notional,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -21,8 +22,16 @@ func (s *Server) handlePaperOpen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "opportunity_id required"})
 		return
 	}
+	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
+		return
+	}
+	var notional float64
+	if req.RequestedNotional != nil {
+		notional = *req.RequestedNotional
+	}
 
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return

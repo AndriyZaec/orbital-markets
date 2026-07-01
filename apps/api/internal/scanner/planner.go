@@ -13,7 +13,14 @@ const planTTL = 10 * time.Second
 
 // BuildPlan creates an ExecutionPlan from a given opportunity ID using fresh market data.
 // leverage is clamped to allowed range (1x-5x). Pass 0 for default (1x).
-func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string, leverage float64) (*domain.ExecutionPlan, error) {
+// requestedNotional is the user-entered notional per leg; pass 0 to fall back to
+// the opportunity's recommended notional. If > 0 it is used verbatim for both legs.
+func (s *Scanner) BuildPlan(
+	ctx context.Context,
+	opportunityID string,
+	leverage float64,
+	requestedNotional float64,
+) (*domain.ExecutionPlan, error) {
 	// Find the opportunity
 	opp := s.FindOpportunity(opportunityID)
 	if opp == nil {
@@ -95,6 +102,9 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string, leverage 
 		domain.SlippageExecutable(slippageLevel)
 
 	notional := opp.RecommendedNotional
+	if requestedNotional > 0 {
+		notional = requestedNotional
+	}
 
 	if leverage <= 0 {
 		leverage = domain.DefaultLeverage

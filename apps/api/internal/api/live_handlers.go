@@ -39,10 +39,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	s.live.sessions.cleanup() // evict stale sessions opportunistically
 
 	var req struct {
-		OpportunityID      string  `json:"opportunity_id"`
-		Leverage           float64 `json:"leverage"`
-		AccountPacifica    string  `json:"account_pacifica"`
-		AccountHyperliquid string  `json:"account_hyperliquid"`
+		OpportunityID      string   `json:"opportunity_id"`
+		Leverage           float64  `json:"leverage"`
+		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
+		AccountPacifica    string   `json:"account_pacifica"`
+		AccountHyperliquid string   `json:"account_hyperliquid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -61,9 +62,17 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_hyperliquid required"})
 		return
 	}
+	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
+		return
+	}
+	var notional float64
+	if req.RequestedNotional != nil {
+		notional = *req.RequestedNotional
+	}
 
 	// 1. Build a fresh execution plan
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
