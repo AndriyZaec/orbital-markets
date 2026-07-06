@@ -278,9 +278,6 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
             </table>
           </div>
         )}
-        <p className="text-[11px] text-muted-foreground/70 mt-2">
-          Recent live position activity. A full trade ledger / export is still future work.
-        </p>
       </Section>
     </div>
   )
