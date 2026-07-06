@@ -16,6 +16,13 @@ type Leg struct {
 	ExpectedPrice float64 `json:"expected_price"`
 	Slippage      float64 `json:"slippage"`
 	Fee           float64 `json:"fee"`
+
+	// Estimated liquidation for this leg at the plan's leverage.
+	// LiquidationPrice = 0 means not practically liquidatable (1x). See
+	// domain/liquidation.go — this is an approximation, not venue-exact math.
+	LiquidationPrice    float64      `json:"liquidation_price"`
+	LiquidationDistance float64      `json:"liquidation_distance"`
+	LiquidationRisk     LiqRiskLevel `json:"liquidation_risk,omitempty"`
 }
 
 type Bounds struct {

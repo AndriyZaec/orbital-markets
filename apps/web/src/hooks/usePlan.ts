@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
 
+type LiqRiskLevel = 'safe' | 'elevated' | 'warning' | 'critical' | ''
+
 interface Leg {
   venue: string
   asset: string
@@ -8,6 +10,11 @@ interface Leg {
   expected_price: number
   slippage: number
   fee: number
+  // Backend-computed estimated liquidation. liquidation_price = 0 => not
+  // practically liquidatable (1x). liquidation_risk is '' at 1x.
+  liquidation_price: number
+  liquidation_distance: number
+  liquidation_risk?: LiqRiskLevel
 }
 
 interface Bounds {

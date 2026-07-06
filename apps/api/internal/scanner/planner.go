@@ -111,6 +111,16 @@ func (s *Scanner) BuildPlan(
 	}
 	levConfig := domain.ComputeLeverage(notional, leverage)
 
+	// Attach estimated liquidation to each leg at the plan's leverage.
+	// We use ExpectedPrice as the reference "current" price — plan is built
+	// from a fresh snapshot, so at plan time entry ≈ current.
+	leg1.LiquidationPrice = domain.LiquidationPrice(leg1.ExpectedPrice, leg1.Side, leverage)
+	leg1.LiquidationDistance = domain.LiquidationDistance(leg1.ExpectedPrice, leg1.LiquidationPrice, leg1.Side)
+	leg1.LiquidationRisk = domain.ClassifyLiqRisk(leg1.LiquidationDistance, leg1.LiquidationPrice)
+	leg2.LiquidationPrice = domain.LiquidationPrice(leg2.ExpectedPrice, leg2.Side, leverage)
+	leg2.LiquidationDistance = domain.LiquidationDistance(leg2.ExpectedPrice, leg2.LiquidationPrice, leg2.Side)
+	leg2.LiquidationRisk = domain.ClassifyLiqRisk(leg2.LiquidationDistance, leg2.LiquidationPrice)
+
 	plan := &domain.ExecutionPlan{
 		ID:            fmt.Sprintf("plan-%s-%d", opp.ID, now.UnixMilli()),
 		OpportunityID: opp.ID,
