@@ -30,6 +30,38 @@ function fmtPct(n: number) {
 const OPEN_STATES = new Set(['opening', 'open', 'monitoring', 'closing'])
 const DEGRADED_STATES = new Set(['degraded', 'broken_hedge', 'partial', 'stuck', 'error'])
 
+// State-to-human action label for the activity feed. Falls back to the raw
+// state so unknown states still render legibly instead of blanking.
+function actionLabel(state: string): string {
+  switch (state.toLowerCase()) {
+    case 'opening': return 'Opening'
+    case 'open': return 'Opened'
+    case 'monitoring': return 'Monitoring'
+    case 'closing': return 'Closing'
+    case 'closed': return 'Closed'
+    case 'degraded': return 'Degraded'
+    case 'broken_hedge': return 'Broken hedge'
+    case 'partial': return 'Partial fill'
+    case 'stuck': return 'Stuck'
+    case 'error': return 'Error'
+    default: return state
+  }
+}
+
+function fmtRelative(iso: string): string {
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return '--'
+  const diff = Date.now() - t
+  const sec = Math.round(diff / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.round(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const d = Math.round(hr / 24)
+  return `${d}d ago`
+}
+
 function categorize(p: LivePosition) {
   const s = p.state.toLowerCase()
   if (DEGRADED_STATES.has(s) || p.hedge_mismatch > 0.01) return 'degraded'
