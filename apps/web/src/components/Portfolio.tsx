@@ -198,10 +198,56 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
         )}
       </Section>
 
-      {/* Trade history placeholder */}
-      <Section title="Trade History">
-        <p className="text-[12px] text-muted-foreground/80">
-          Detailed trade history coming after live cohort data accumulates.
+      {/* Recent activity — sourced from live positions we already fetched.
+          Honest label: we don't have a per-fill event log yet; each row is
+          the most recent state change on a live position. */}
+      <Section title="Recent Activity">
+        {positions.length === 0 ? (
+          <p className="text-[12px] text-muted-foreground">No live activity yet.</p>
+        ) : (
+          <div className="rounded border border-border overflow-hidden">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-muted-foreground text-left bg-white/[0.02]">
+                  <th className="px-3 py-2 font-medium">When</th>
+                  <th className="px-3 py-2 font-medium">Asset</th>
+                  <th className="px-3 py-2 font-medium">Action</th>
+                  <th className="px-3 py-2 font-medium">Venues</th>
+                  <th className="px-3 py-2 font-medium text-right">Notional</th>
+                  <th className="px-3 py-2 font-medium text-right">P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.slice(0, 10).map((p) => {
+                  const closed = !!p.completed_at
+                  const action = closed ? 'Closed' : actionLabel(p.state)
+                  const ts = closed ? p.completed_at! : p.updated_at || p.opened_at || p.started_at
+                  const isTerminal = closed
+                  return (
+                    <tr key={p.id} className="border-t border-border">
+                      <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">{fmtRelative(ts)}</td>
+                      <td className="px-3 py-2 font-medium text-foreground">{p.asset}</td>
+                      <td className={`px-3 py-2 ${isTerminal ? 'text-muted-foreground' : 'text-foreground'}`}>{action}</td>
+                      <td className="px-3 py-2 text-muted-foreground capitalize">
+                        {p.venue_a} · {p.venue_b}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-foreground">{fmtUsd(p.notional)}</td>
+                      <td
+                        className={`px-3 py-2 text-right font-mono ${
+                          p.total_pnl > 0 ? 'text-green-400' : p.total_pnl < 0 ? 'text-red-400' : 'text-muted-foreground'
+                        }`}
+                      >
+                        {fmtUsd(p.total_pnl)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="text-[11px] text-muted-foreground/70 mt-2">
+          Recent live position activity. A full trade ledger / export is still future work.
         </p>
       </Section>
     </div>

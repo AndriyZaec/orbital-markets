@@ -173,7 +173,7 @@ export default function App() {
         </button>
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
-          <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
+          <NavBtn active={activeView === 'portfolio'} onClick={() => setActiveView('portfolio')}>Portfolio</NavBtn>
           <NavBtn active={activeView === 'rebates'} onClick={() => setActiveView('rebates')}>Fee Rebates</NavBtn>
           <button
             onClick={() => setActiveView('agents')}
@@ -241,8 +241,13 @@ export default function App() {
             </>
           )}
 
-          {activeView === 'analytics' && (
-            <PageBg><AnalyticsDashboard /></PageBg>
+          {activeView === 'portfolio' && (
+            <PageBg>
+              <Portfolio
+                onConnectWallets={() => setShowAccounts(true)}
+                onViewPositions={() => setActiveView('trade')}
+              />
+            </PageBg>
           )}
 
           {activeView === 'rebates' && (
