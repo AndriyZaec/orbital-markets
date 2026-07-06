@@ -129,7 +129,12 @@ export function useLiveExecution() {
     return resp.json()
   }
 
-  const executeLive = useCallback(async (opportunityId: string, leverage: number, requestedNotional?: number) => {
+  const executeLive = useCallback(async (
+    opportunityId: string,
+    leverageLong: number,
+    leverageShort: number,
+    requestedNotional?: number,
+  ) => {
     if (!pacificaAddress || !hyperliquidAddress) {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Both venue accounts must be connected' })
       return
@@ -144,7 +149,9 @@ export function useLiveExecution() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           opportunity_id: opportunityId,
-          leverage,
+          leverage: leverageLong, // shared-fallback field
+          leverage_long: leverageLong,
+          leverage_short: leverageShort,
           ...(typeof requestedNotional === 'number' && requestedNotional > 0
             ? { requested_notional: requestedNotional }
             : {}),

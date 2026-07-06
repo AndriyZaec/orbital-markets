@@ -13,7 +13,12 @@ interface Props {
   lastUpdated: Date | null
   mode: 'paper' | 'live'
   onClose: () => void
-  onExecute: (opportunityId: string, leverage: number, requestedNotional?: number) => Promise<void>
+  onExecute: (
+    opportunityId: string,
+    leverageLong: number,
+    leverageShort: number,
+    requestedNotional?: number,
+  ) => Promise<void>
   onViewPositions?: () => void
 }
 
@@ -35,9 +40,9 @@ function fmtPrice(n: number) {
 
 // Format a backend-provided estimated liquidation price for a leg.
 // Backend returns liquidation_price = 0 for 1x (not practically liquidatable).
-function fmtLiqPrice(leg: { liquidation_price: number } | null, leverage: number): string {
+function fmtLiqPrice(leg: { liquidation_price: number; leverage: number } | null): string {
   if (!leg) return '--'
-  if (leverage <= 1 || leg.liquidation_price <= 0) return 'N/A (1x)'
+  if (leg.leverage <= 1 || leg.liquidation_price <= 0) return 'N/A (1x)'
   return fmtPrice(leg.liquidation_price)
 }
 
@@ -94,7 +99,9 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
   const maxLev = opp.max_leverage || 1
 
-  const [leverageVal, setLeverageVal] = useState(maxLev)
+  // Per-leg leverage. Notional is shared across legs; leverage is not.
+  const [leverageLong, setLeverageLong] = useState(maxLev)
+  const [leverageShort, setLeverageShort] = useState(maxLev)
   const [longSlippage, setLongSlippage] = useState(1)
   const [shortSlippage, setShortSlippage] = useState(1)
   const [longOpen, setLongOpen] = useState(true)
@@ -116,7 +123,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const notionalForPlan = notionalValid ? notionalNum : undefined
 
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageVal, notionalForPlan)
+  const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageLong, leverageShort, notionalForPlan)
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
   const { isFullyReady } = useVenueAuthority()
@@ -130,7 +137,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const handleExecute = async () => {
     setExecuting(true)
     try {
-      await onExecute(opp.id, leverageVal, notionalForPlan)
+      await onExecute(opp.id, leverageLong, leverageShort, notionalForPlan)
     } finally {
       setExecuting(false)
     }
@@ -138,7 +145,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
   const handleExecuteLive = () => {
     setShowLiveModal(true)
-    executeLive(opp.id, leverageVal, notionalForPlan)
+    executeLive(opp.id, leverageLong, leverageShort, notionalForPlan)
   }
 
   const handleCloseLiveModal = () => {
@@ -204,26 +211,32 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
           </div>
         </div>
 
-        {/* Leverage */}
+        {/* Leverage — per leg */}
         <div className="px-5 py-4 border-b border-border">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-muted-foreground">Leverage</span>
-            <span className="text-sm font-mono text-foreground">{leverageVal}x</span>
+            <span className="text-sm text-muted-foreground">Leverage (per leg)</span>
+            {plan && (
+              <span className="text-[11px] text-muted-foreground/70">
+                Total margin {fmtUsd(plan.leverage.margin_required)} · Exposure {fmtUsd(plan.leverage.gross_exposure)}
+              </span>
+            )}
           </div>
-          <input
-            type="range"
-            min={1}
+          <LeverageRow
+            label={`Long · ${longVenue}`}
+            value={leverageLong}
             max={maxLev}
-            value={leverageVal}
-            onChange={(e) => setLeverageVal(Number(e.target.value))}
-            className="w-full h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer accent-green-400 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-background"
+            onChange={setLeverageLong}
+            margin={longLeg?.margin_required}
+            accent="green"
           />
-          {plan && (
-            <div className="flex items-center justify-between mt-2 text-[11px] text-muted-foreground">
-              <span>Margin: {fmtUsd(plan.leverage.margin_required)}</span>
-              <span>Exposure: {fmtUsd(plan.leverage.gross_exposure)}</span>
-            </div>
-          )}
+          <LeverageRow
+            label={`Short · ${shortVenue}`}
+            value={leverageShort}
+            max={maxLev}
+            onChange={setLeverageShort}
+            margin={shortLeg?.margin_required}
+            accent="red"
+          />
         </div>
 
         {/* Entry Type */}
@@ -266,10 +279,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               </div>
               <SlippageSelector value={longSlippage} onChange={setLongSlippage} />
               <div className="mt-3 flex flex-col gap-0">
-                <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
+                <Row label="Required Margin" value={longLeg ? `${fmtUsd(longLeg.margin_required)} · ${longLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && longLeg ? fmtUsd(longLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value={fmtLiqPrice(longLeg, leverageVal)} />
+                <Row label="Est. Liquidation Price" value={fmtLiqPrice(longLeg)} />
                 <Row label="Est. Entry Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={longLeg ? fmtPct(longLeg.slippage + longLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
@@ -294,10 +307,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               </div>
               <SlippageSelector value={shortSlippage} onChange={setShortSlippage} />
               <div className="mt-3 flex flex-col gap-0">
-                <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
+                <Row label="Required Margin" value={shortLeg ? `${fmtUsd(shortLeg.margin_required)} · ${shortLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && shortLeg ? fmtUsd(shortLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value={fmtLiqPrice(shortLeg, leverageVal)} />
+                <Row label="Est. Liquidation Price" value={fmtLiqPrice(shortLeg)} />
                 <Row label="Est. Entry Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={shortLeg ? fmtPct(shortLeg.slippage + shortLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
@@ -384,6 +397,38 @@ function Row({ label, value, capitalize }: { label: string; value: string; capit
     <div className="flex items-center justify-between py-1.5">
       <span className="text-sm text-muted-foreground">{label}</span>
       <span className={`text-sm font-mono text-foreground ${capitalize ? 'capitalize' : ''}`}>{value}</span>
+    </div>
+  )
+}
+
+function LeverageRow({ label, value, max, onChange, margin, accent }: {
+  label: string
+  value: number
+  max: number
+  onChange: (v: number) => void
+  margin?: number
+  accent: 'green' | 'red'
+}) {
+  const dot = accent === 'green' ? 'bg-green-400' : 'bg-red-400'
+  return (
+    <div className="mt-2 first:mt-0">
+      <div className="flex items-center justify-between mb-1">
+        <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+          <span className={`size-1.5 rounded-full ${dot}`} />
+          {label}
+        </span>
+        <span className="text-[12px] font-mono text-foreground">
+          {value}x{typeof margin === 'number' ? ` · ${fmtUsd(margin)} margin` : ''}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={1}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer accent-green-400 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-background"
+      />
     </div>
   )
 }

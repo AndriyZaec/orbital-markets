@@ -40,7 +40,9 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		OpportunityID      string   `json:"opportunity_id"`
-		Leverage           float64  `json:"leverage"`
+		Leverage           float64  `json:"leverage"` // shared fallback
+		LeverageLong       *float64 `json:"leverage_long,omitempty"`
+		LeverageShort      *float64 `json:"leverage_short,omitempty"`
 		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
 		AccountPacifica    string   `json:"account_pacifica"`
 		AccountHyperliquid string   `json:"account_hyperliquid"`
@@ -70,9 +72,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	if req.RequestedNotional != nil {
 		notional = *req.RequestedNotional
 	}
+	levLong, levShort, err := resolveLegLeverage(req.Leverage, req.LeverageLong, req.LeverageShort)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	// 1. Build a fresh execution plan
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, levLong, levShort, notional)
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})

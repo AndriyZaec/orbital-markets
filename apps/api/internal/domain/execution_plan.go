@@ -17,7 +17,12 @@ type Leg struct {
 	Slippage      float64 `json:"slippage"`
 	Fee           float64 `json:"fee"`
 
-	// Estimated liquidation for this leg at the plan's leverage.
+	// Per-leg leverage and derived margin. Each leg can carry its own leverage;
+	// notional stays equal on both legs. MarginRequired = Notional / Leverage.
+	Leverage       float64 `json:"leverage"`
+	MarginRequired float64 `json:"margin_required"`
+
+	// Estimated liquidation for this leg at this leg's leverage.
 	// LiquidationPrice = 0 means not practically liquidatable (1x). See
 	// domain/liquidation.go — this is an approximation, not venue-exact math.
 	LiquidationPrice    float64      `json:"liquidation_price"`

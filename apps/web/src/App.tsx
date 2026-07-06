@@ -15,7 +15,7 @@ import { OpportunityPanel } from '@/components/OpportunityPanel'
 
 import { PaperPositions } from '@/components/PaperPositions'
 import { LivePositions } from '@/components/LivePositions'
-import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
+import { Portfolio } from '@/components/Portfolio'
 import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { ForAgents } from '@/components/ForAgents'
@@ -23,7 +23,7 @@ import { FundingChart } from '@/components/FundingChart'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'analytics' | 'rebates' | 'agents'
+type View = 'trade' | 'portfolio' | 'rebates' | 'agents'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'fundingSpread' | 'pacificaRate' | 'hlRate'
 type SortDir = 'asc' | 'desc'
 
@@ -132,9 +132,19 @@ export default function App() {
     document.addEventListener('mouseup', onUp)
   }, [posHeight])
 
-  const handleExecutePaper = async (opportunityId: string, leverage: number, requestedNotional?: number) => {
+  const handleExecutePaper = async (
+    opportunityId: string,
+    leverageLong: number,
+    leverageShort: number,
+    requestedNotional?: number,
+  ) => {
     try {
-      const body: Record<string, unknown> = { opportunity_id: opportunityId, leverage }
+      const body: Record<string, unknown> = {
+        opportunity_id: opportunityId,
+        leverage: leverageLong,
+        leverage_long: leverageLong,
+        leverage_short: leverageShort,
+      }
       if (typeof requestedNotional === 'number' && requestedNotional > 0) {
         body.requested_notional = requestedNotional
       }

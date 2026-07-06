@@ -10,6 +10,10 @@ interface Leg {
   expected_price: number
   slippage: number
   fee: number
+  // Per-leg leverage / margin. Notional is equal on both legs and lives on the
+  // plan; leverage & margin are per-leg since the user picks them per-leg.
+  leverage: number
+  margin_required: number
   // Backend-computed estimated liquidation. liquidation_price = 0 => not
   // practically liquidatable (1x). liquidation_risk is '' at 1x.
   liquidation_price: number
@@ -51,7 +55,8 @@ interface ExecutionPlan {
 
 export function usePlan(
   opportunityId: string | null,
-  leverage: number = 1,
+  leverageLong: number = 1,
+  leverageShort: number = 1,
   requestedNotional?: number,
 ) {
   const [plan, setPlan] = useState<ExecutionPlan | null>(null)
@@ -59,12 +64,17 @@ export function usePlan(
   const [error, setError] = useState<string | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const fetchPlan = useCallback(async (oppId: string, lev: number, notional?: number) => {
+  const fetchPlan = useCallback(async (oppId: string, levLong: number, levShort: number, notional?: number) => {
     try {
       setLoading(true)
-      const body: Record<string, unknown> = { opportunity_id: oppId, leverage: lev }
-      // Only send requested_notional when a positive value is set; otherwise
-      // let the backend fall back to the opportunity's recommended notional.
+      // `leverage` is kept as a shared fallback for older backends; per-leg
+      // fields are the source of truth today.
+      const body: Record<string, unknown> = {
+        opportunity_id: oppId,
+        leverage: levLong,
+        leverage_long: levLong,
+        leverage_short: levShort,
+      }
       if (typeof notional === 'number' && notional > 0) {
         body.requested_notional = notional
       }
@@ -95,13 +105,16 @@ export function usePlan(
       return
     }
 
-    fetchPlan(opportunityId, leverage, requestedNotional)
+    fetchPlan(opportunityId, leverageLong, leverageShort, requestedNotional)
 
-    intervalRef.current = setInterval(() => fetchPlan(opportunityId, leverage, requestedNotional), 10_000)
+    intervalRef.current = setInterval(
+      () => fetchPlan(opportunityId, leverageLong, leverageShort, requestedNotional),
+      10_000,
+    )
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [opportunityId, leverage, requestedNotional, fetchPlan])
+  }, [opportunityId, leverageLong, leverageShort, requestedNotional, fetchPlan])
 
   const clear = useCallback(() => {
     setPlan(null)
