@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
-import { useLiveBalances } from '@/hooks/useLiveBalances'
 import { useLivePositions, type LivePosition } from '@/hooks/useLivePositions'
-import { useVenueAuthority } from '@/hooks/useVenueAuthority'
+import { useVenueReadiness, type VenueReadiness } from '@/hooks/useVenueReadiness'
 
 // Portfolio is the primary account/position surface for closed-beta users.
 // It reuses live balance / live position / venue-authority hooks — no new
@@ -70,13 +69,13 @@ function categorize(p: LivePosition) {
 }
 
 export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
-  const balances = useLiveBalances()
   const { positions, loading: positionsLoading, error: positionsError } = useLivePositions()
-  const { pacifica, hyperliquid, isFullyReady } = useVenueAuthority()
+  // One typed readiness layer, shared with the header and ConnectAccounts.
+  const { pacifica, hyperliquid, aggregate: readiness } = useVenueReadiness()
 
-  const connectedVenues = [balances.pacifica, balances.hyperliquid].filter((b) => b.connected).length
-  const totalEquity = balances.pacifica.equity + balances.hyperliquid.equity
-  const totalAvailable = balances.pacifica.available + balances.hyperliquid.available
+  const connectedVenues = [pacifica, hyperliquid].filter((v) => v.walletConnected).length
+  const totalEquity = (pacifica.equity ?? 0) + (hyperliquid.equity ?? 0)
+  const totalAvailable = (pacifica.available ?? 0) + (hyperliquid.available ?? 0)
 
   const { openCount, degradedCount, openNotional, unrealizedPnl } = useMemo(() => {
     let openCount = 0
@@ -97,14 +96,15 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
 
   const recentPositions = positions.slice(0, 5)
 
-  // Overall health: degraded > warnings > ok > offline (no venues)
+  // Overall health: degraded positions win, else fall back to trading
+  // readiness (same aggregate as the header and Execute Live).
   let health: { label: string; color: string; dot: string }
-  if (connectedVenues === 0) {
-    health = { label: 'Offline', color: 'text-muted-foreground', dot: 'bg-muted-foreground' }
-  } else if (degradedCount > 0) {
+  if (degradedCount > 0) {
     health = { label: `${degradedCount} degraded`, color: 'text-red-400', dot: 'bg-red-400' }
-  } else if (!isFullyReady) {
-    health = { label: 'Wallets not fully ready', color: 'text-yellow-400', dot: 'bg-yellow-400' }
+  } else if (readiness.statusLabel === 'Not connected') {
+    health = { label: 'Not connected', color: 'text-muted-foreground', dot: 'bg-muted-foreground' }
+  } else if (!readiness.allReady) {
+    health = { label: readiness.statusLabel, color: 'text-yellow-400', dot: 'bg-yellow-400' }
   } else if (openCount > 0) {
     health = { label: 'Trading', color: 'text-green-400', dot: 'bg-green-400' }
   } else {
@@ -138,34 +138,24 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
         />
       </div>
 
-      {/* Connected accounts */}
-      <Section title="Connected Accounts">
+      {/* Connected accounts — summary only. Full diagnostics live in Connect Accounts. */}
+      <Section
+        title="Connected Accounts"
+        action={
+          !readiness.allReady && (
+            <button
+              onClick={onConnectWallets}
+              className="text-[12px] text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              Open Connect Accounts →
+            </button>
+          )
+        }
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <VenueCard
-            name="Pacifica"
-            connected={balances.pacifica.connected}
-            equity={balances.pacifica.equity}
-            available={balances.pacifica.available}
-            readiness={pacifica.readiness}
-            address={pacifica.address}
-          />
-          <VenueCard
-            name="Hyperliquid"
-            connected={balances.hyperliquid.connected}
-            equity={balances.hyperliquid.equity}
-            available={balances.hyperliquid.available}
-            readiness={hyperliquid.readiness}
-            address={hyperliquid.address}
-          />
+          <VenueCard readiness={pacifica} />
+          <VenueCard readiness={hyperliquid} />
         </div>
-        {!isFullyReady && (
-          <button
-            onClick={onConnectWallets}
-            className="mt-3 text-[12px] text-blue-400 hover:text-blue-300 transition-colors"
-          >
-            Connect wallets →
-          </button>
-        )}
       </Section>
 
       {/* Live positions */}
@@ -315,51 +305,47 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   )
 }
 
-function VenueCard({
-  name,
-  connected,
-  equity,
-  available,
-  readiness,
-  address,
-}: {
-  name: string
-  connected: boolean
-  equity: number
-  available: number
-  readiness: string
-  address: string | null
-}) {
-  const short = address ? `${address.slice(0, 4)}…${address.slice(-4)}` : null
-  const ready = readiness === 'ready'
+// Compact status → label/color map. Portfolio deliberately doesn't drill into
+// individual wallet/signer/balance rows here — that's ConnectAccounts's job.
+// This card summarizes; the "Open Connect Accounts" link handles diagnosis.
+const STATUS_VIEW: Record<
+  VenueReadiness['status'],
+  { label: string; color: string; dot: string }
+> = {
+  ready:             { label: 'Ready',           color: 'text-green-400',        dot: 'bg-green-400' },
+  disconnected:      { label: 'Not connected',   color: 'text-muted-foreground', dot: 'bg-muted-foreground' },
+  wallet_connected:  { label: 'Wallet only',     color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  signer_missing:    { label: 'Signer missing',  color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  balance_pending:   { label: 'Balance pending', color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  account_stale:     { label: 'Data stale',      color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  error:             { label: 'Error',           color: 'text-red-400',          dot: 'bg-red-400' },
+}
+
+function VenueCard({ readiness }: { readiness: VenueReadiness }) {
+  const view = STATUS_VIEW[readiness.status]
+  const showBalances = readiness.walletConnected
   return (
     <div className="rounded border border-border bg-white/[0.02] px-3 py-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-foreground">{name}</span>
-        <span
-          className={`text-[11px] flex items-center gap-1.5 ${
-            ready ? 'text-green-400' : connected ? 'text-yellow-400' : 'text-muted-foreground'
-          }`}
-        >
-          <span
-            className={`size-1.5 rounded-full ${
-              ready ? 'bg-green-400' : connected ? 'bg-yellow-400' : 'bg-muted-foreground'
-            }`}
-          />
-          {ready ? 'Ready' : connected ? 'Wallet not signing' : 'Not connected'}
+        <span className="text-sm font-medium text-foreground">{readiness.label}</span>
+        <span className={`text-[11px] flex items-center gap-1.5 ${view.color}`}>
+          <span className={`size-1.5 rounded-full ${view.dot}`} />
+          {view.label}
         </span>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
         <div>
           <p className="text-muted-foreground">Equity</p>
-          <p className="font-mono text-foreground">{connected ? fmtUsd(equity) : '--'}</p>
+          <p className="font-mono text-foreground">{showBalances ? fmtUsd(readiness.equity ?? 0) : '--'}</p>
         </div>
         <div>
           <p className="text-muted-foreground">Available</p>
-          <p className="font-mono text-foreground">{connected ? fmtUsd(available) : '--'}</p>
+          <p className="font-mono text-foreground">{showBalances ? fmtUsd(readiness.available ?? 0) : '--'}</p>
         </div>
       </div>
-      {short && <p className="mt-2 text-[11px] font-mono text-muted-foreground/70">{short}</p>}
+      {readiness.shortAddress && (
+        <p className="mt-2 text-[11px] font-mono text-muted-foreground/70">{readiness.shortAddress}</p>
+      )}
     </div>
   )
 }

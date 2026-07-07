@@ -16,6 +16,7 @@ import { OpportunityPanel } from '@/components/OpportunityPanel'
 import { PaperPositions } from '@/components/PaperPositions'
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
+import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { ForAgents } from '@/components/ForAgents'
@@ -94,8 +95,11 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [connectedVenues, setConnectedVenues] = useState(0)
   const [showAccounts, setShowAccounts] = useState(false)
+  // Header account status is driven by the same typed readiness layer used
+  // by Connect Accounts and Execute Live — one source of truth for the
+  // "is this trader actually ready to trade" signal.
+  const { aggregate: accountsAggregate } = useVenueReadiness()
   const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('live')
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
@@ -198,19 +202,11 @@ export default function App() {
             <div className="size-1.5 rounded-full bg-yellow-400" />
             <span className="text-[11px] text-yellow-400 font-medium">Test</span>
           </div>
-          <button
+          <AccountsHeaderButton
+            aggregate={accountsAggregate}
+            open={showAccounts}
             onClick={() => setShowAccounts((v) => !v)}
-            className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-              showAccounts
-                ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
-                : connectedVenues > 0
-                  ? 'border-green-500/30 bg-green-500/[0.06] text-green-400 hover:bg-green-500/10'
-                  : 'border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08]'
-            }`}
-          >
-            <div className={`size-1.5 rounded-full ${connectedVenues > 0 ? 'bg-green-400' : 'bg-zinc-500'}`} />
-            {connectedVenues > 0 ? `${connectedVenues} Connected` : 'Connect'}
-          </button>
+          />
         </div>
       </header>
 
@@ -270,7 +266,7 @@ export default function App() {
           />
         )}
 
-        <ConnectAccounts open={showAccounts} onConnectionChange={setConnectedVenues} onClose={() => setShowAccounts(false)} />
+        <ConnectAccounts open={showAccounts} onClose={() => setShowAccounts(false)} />
       </div>
 
     </div>
@@ -436,6 +432,57 @@ function PageBg({ children }: { children: React.ReactNode }) {
 }
 
 /* ── Shared ────────────────────────────────────────────── */
+
+// Header button for opening Connect Accounts. Copy reflects trading readiness
+// (Ready / N issue(s) / Not connected) rather than raw wallet counts, matching
+// the same aggregate signal used by ConnectAccounts and Execute Live.
+function AccountsHeaderButton({
+  aggregate,
+  open,
+  onClick,
+}: {
+  aggregate: {
+    allReady: boolean
+    readyCount: number
+    totalCount: number
+    statusLabel: 'Ready' | 'Needs attention' | 'Not connected'
+    blockingReasons: string[]
+  }
+  open: boolean
+  onClick: () => void
+}) {
+  const notConnected = aggregate.statusLabel === 'Not connected'
+  const ready = aggregate.allReady
+
+  let label: string
+  if (ready) label = 'Accounts: Ready'
+  else if (notConnected) label = 'Accounts: Not connected'
+  else {
+    const n = aggregate.blockingReasons.length
+    label = `Accounts: ${n} issue${n === 1 ? '' : 's'}`
+  }
+
+  const tone = open
+    ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
+    : ready
+      ? 'border-green-500/30 bg-green-500/[0.06] text-green-400 hover:bg-green-500/10'
+      : notConnected
+        ? 'border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08]'
+        : 'border-yellow-500/30 bg-yellow-500/[0.06] text-yellow-400 hover:bg-yellow-500/10'
+
+  const dot = ready ? 'bg-green-400' : notConnected ? 'bg-zinc-500' : 'bg-yellow-400'
+
+  return (
+    <button
+      onClick={onClick}
+      title={!ready && aggregate.blockingReasons.length > 0 ? aggregate.blockingReasons.join('\n') : undefined}
+      className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${tone}`}
+    >
+      <div className={`size-1.5 rounded-full ${dot}`} />
+      {label}
+    </button>
+  )
+}
 
 function NavBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
