@@ -1,8 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
-import { injected } from 'wagmi/connectors'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
@@ -98,8 +97,14 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   const solWallet = useWallet()
   const { setVisible: setSolModalVisible } = useWalletModal()
-  const { connect: evmConnect } = useEvmConnect()
+  // `connectors` is EIP-6963-populated: each installed EVM wallet announces
+  // itself as a separate entry, so the user can pick one instead of being
+  // silently routed to whatever won window.ethereum.
+  const { connect: evmConnect, connectors: evmConnectors } = useEvmConnect()
   const { disconnect: evmDisconnect } = useEvmDisconnect()
+
+  // Which venue is currently showing its wallet picker (inline in the card).
+  const [pickerOpen, setPickerOpen] = useState<string | null>(null)
 
   useEffect(() => {
     // Preserve existing parent contract: this counts fully-ready venues.
@@ -109,9 +114,24 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const handleConnect = (venueId: string) => {
     if (venueId === 'pacifica') {
       setSolModalVisible(true)
-    } else if (venueId === 'hyperliquid') {
-      evmConnect({ connector: injected() })
+      return
     }
+    if (venueId === 'hyperliquid') {
+      // If exactly one EVM connector is installed, skip the picker; else open
+      // the inline picker so the user chooses which wallet to connect.
+      if (evmConnectors.length === 1) {
+        evmConnect({ connector: evmConnectors[0] })
+        return
+      }
+      setPickerOpen((v) => (v === 'hyperliquid' ? null : 'hyperliquid'))
+    }
+  }
+
+  const handlePickEvmConnector = (connectorUid: string) => {
+    const c = evmConnectors.find((x) => x.uid === connectorUid)
+    if (!c) return
+    evmConnect({ connector: c })
+    setPickerOpen(null)
   }
 
   const handleDisconnect = (venueId: string) => {
@@ -273,6 +293,32 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     </button>
                   )}
                 </div>
+
+                {/* Inline EVM wallet picker for Hyperliquid — shows installed
+                    wallets announced via EIP-6963. Sits under the Connect
+                    button rather than in a separate modal to keep the
+                    Connect Accounts panel self-contained. */}
+                {venue.id === 'hyperliquid' && pickerOpen === 'hyperliquid' && (
+                  <div className="mt-2 rounded border border-border bg-white/[0.02] p-2 flex flex-col gap-1">
+                    <p className="text-[10px] text-muted-foreground/70 px-1">Choose a wallet</p>
+                    {evmConnectors.length === 0 ? (
+                      <p className="text-[10px] text-muted-foreground/60 px-1 py-1">
+                        No EVM wallets detected. Install MetaMask, Rabby, or another EVM wallet.
+                      </p>
+                    ) : (
+                      evmConnectors.map((c) => (
+                        <button
+                          key={c.uid}
+                          onClick={() => handlePickEvmConnector(c.uid)}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded text-[11px] font-medium bg-white/[0.04] hover:bg-white/[0.08] text-foreground transition-colors"
+                        >
+                          {c.icon && <img src={c.icon} alt="" className="size-4" />}
+                          <span className="truncate">{c.name}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             )
           })}
