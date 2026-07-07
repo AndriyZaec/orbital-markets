@@ -154,8 +154,12 @@ function buildReadiness(args: {
     accountFresh,
     ageSeconds: typeof balance.age_seconds === 'number' ? balance.age_seconds : null,
     lastUpdated: balance.last_updated ?? null,
-    equity: balance.connected ? balance.equity : null,
-    available: balance.connected ? balance.available : null,
+    // Only surface a numeric balance when the wallet itself is connected.
+    // Backend subscribers keep running after wallet disconnect and can
+    // report `connected: true` with 0/0; the wallet is the authoritative
+    // signal for "does this user actually have this account right now".
+    equity: walletConnected && balance.connected ? balance.equity : null,
+    available: walletConnected && balance.connected ? balance.available : null,
     status,
     blockingReasons,
   }

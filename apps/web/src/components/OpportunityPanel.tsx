@@ -3,7 +3,6 @@ import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
-import { useLiveBalances } from '@/hooks/useLiveBalances'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
@@ -46,12 +45,13 @@ function fmtLiqPrice(leg: { liquidation_price: number; leverage: number } | null
   return fmtPrice(leg.liquidation_price)
 }
 
-function fmtBalance(balances: ReturnType<typeof useLiveBalances>, venue: string) {
-  const key = venue.toLowerCase() as 'pacifica' | 'hyperliquid'
-  const b = balances[key]
-  if (!b || !b.connected) return '--'
-  if (b.available <= 0) return '$0.00'
-  return fmtUsd(b.available)
+// Show a real number only when the venue is actually connected AND we have
+// a positive balance. When disconnected (or before first snapshot) render
+// "--" so we don't misleadingly show $0.00.
+function fmtVenueBalance(available: number | null): string {
+  if (available === null || !Number.isFinite(available)) return '--'
+  if (available <= 0) return '--'
+  return fmtUsd(available)
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -128,8 +128,19 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
-  const { aggregate: readinessAggregate, refreshBalances } = useVenueReadiness()
+  const {
+    aggregate: readinessAggregate,
+    pacifica: pacReadiness,
+    hyperliquid: hlReadiness,
+    refreshBalances,
+  } = useVenueReadiness()
   const isFullyReady = readinessAggregate.allReady
+  const balanceByVenue = (venue: string): number | null => {
+    const v = venue.toLowerCase()
+    if (v === 'pacifica') return pacReadiness.available
+    if (v === 'hyperliquid') return hlReadiness.available
+    return null
+  }
 
   // Opening the trade panel is a user intent to trade — nudge a balance
   // refresh so the readiness gate reflects current state rather than the
@@ -138,7 +149,6 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
     refreshBalances().catch(() => {})
   }, [refreshBalances])
   const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
-  const balances = useLiveBalances()
   const [showLiveModal, setShowLiveModal] = useState(false)
 
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
@@ -272,8 +282,8 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
         {/* Available balance */}
         <div className="px-5 py-3 border-b border-border">
           <p className="text-[11px] text-muted-foreground mb-1.5">Available balance</p>
-          <Row label={longVenue} value={fmtBalance(balances, longVenue)} capitalize />
-          <Row label={shortVenue} value={fmtBalance(balances, shortVenue)} capitalize />
+          <Row label={longVenue} value={fmtVenueBalance(balanceByVenue(longVenue))} capitalize />
+          <Row label={shortVenue} value={fmtVenueBalance(balanceByVenue(shortVenue))} capitalize />
         </div>
 
         {/* Long Section */}

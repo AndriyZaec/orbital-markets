@@ -198,9 +198,12 @@ export default function App() {
               {isLive ? `${Math.ceil(countdown)}s` : '...'}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 rounded border border-yellow-400/30 px-2 py-0.5">
+          <div
+            title="Closed beta — real venues, real signatures."
+            className="flex items-center gap-1.5 rounded border border-yellow-400/30 px-2 py-0.5"
+          >
             <div className="size-1.5 rounded-full bg-yellow-400" />
-            <span className="text-[11px] text-yellow-400 font-medium">Test</span>
+            <span className="text-[11px] text-yellow-400 font-medium">Beta</span>
           </div>
           <AccountsHeaderButton
             aggregate={accountsAggregate}
@@ -433,9 +436,10 @@ function PageBg({ children }: { children: React.ReactNode }) {
 
 /* ── Shared ────────────────────────────────────────────── */
 
-// Header button for opening Connect Accounts. Copy reflects trading readiness
-// (Ready / N issue(s) / Not connected) rather than raw wallet counts, matching
-// the same aggregate signal used by ConnectAccounts and Execute Live.
+// Header button for opening Connect Accounts. Label is always "Accounts" —
+// the dot color / border color carry the state (green ready, yellow needs
+// attention, neutral not connected). Detailed reasons live inside the panel
+// itself and in the hover tooltip; the header avoids duplicating them.
 function AccountsHeaderButton({
   aggregate,
   open,
@@ -443,8 +447,6 @@ function AccountsHeaderButton({
 }: {
   aggregate: {
     allReady: boolean
-    readyCount: number
-    totalCount: number
     statusLabel: 'Ready' | 'Needs attention' | 'Not connected'
     blockingReasons: string[]
   }
@@ -453,14 +455,6 @@ function AccountsHeaderButton({
 }) {
   const notConnected = aggregate.statusLabel === 'Not connected'
   const ready = aggregate.allReady
-
-  let label: string
-  if (ready) label = 'Accounts: Ready'
-  else if (notConnected) label = 'Accounts: Not connected'
-  else {
-    const n = aggregate.blockingReasons.length
-    label = `Accounts: ${n} issue${n === 1 ? '' : 's'}`
-  }
 
   const tone = open
     ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
@@ -472,14 +466,23 @@ function AccountsHeaderButton({
 
   const dot = ready ? 'bg-green-400' : notConnected ? 'bg-zinc-500' : 'bg-yellow-400'
 
+  // Tooltip: state on the first line, reasons below when not ready.
+  const title = ready
+    ? 'Accounts ready'
+    : notConnected
+      ? 'No accounts connected'
+      : aggregate.blockingReasons.length > 0
+        ? `Needs attention\n${aggregate.blockingReasons.join('\n')}`
+        : 'Needs attention'
+
   return (
     <button
       onClick={onClick}
-      title={!ready && aggregate.blockingReasons.length > 0 ? aggregate.blockingReasons.join('\n') : undefined}
+      title={title}
       className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${tone}`}
     >
       <div className={`size-1.5 rounded-full ${dot}`} />
-      {label}
+      Accounts
     </button>
   )
 }

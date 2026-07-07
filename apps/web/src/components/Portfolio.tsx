@@ -12,8 +12,9 @@ interface Props {
   onViewPositions: () => void
 }
 
-function fmtUsd(n: number, decimals = 2) {
-  if (!Number.isFinite(n)) return '--'
+// null-safe so disconnected/unknown values render as "--" instead of "$0.00".
+function fmtUsd(n: number | null | undefined, decimals = 2) {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '--'
   const sign = n < 0 ? '-' : ''
   const abs = Math.abs(n)
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
@@ -73,9 +74,16 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
   // One typed readiness layer, shared with the header and ConnectAccounts.
   const { pacifica, hyperliquid, aggregate: readiness } = useVenueReadiness()
 
-  const connectedVenues = [pacifica, hyperliquid].filter((v) => v.walletConnected).length
-  const totalEquity = (pacifica.equity ?? 0) + (hyperliquid.equity ?? 0)
-  const totalAvailable = (pacifica.available ?? 0) + (hyperliquid.available ?? 0)
+  // Sum only venues that actually report a value. If NEITHER venue has
+  // reported equity, keep the tile as "--" rather than showing $0.00.
+  const equityValues = [pacifica.equity, hyperliquid.equity].filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  )
+  const availableValues = [pacifica.available, hyperliquid.available].filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  )
+  const totalEquity = equityValues.length > 0 ? equityValues.reduce((a, b) => a + b, 0) : null
+  const totalAvailable = availableValues.length > 0 ? availableValues.reduce((a, b) => a + b, 0) : null
 
   const { openCount, degradedCount, openNotional, unrealizedPnl } = useMemo(() => {
     let openCount = 0
@@ -127,8 +135,8 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
 
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Tile label="Total Equity" value={connectedVenues > 0 ? fmtUsd(totalEquity) : '--'} hint="Across connected venues" />
-        <Tile label="Available" value={connectedVenues > 0 ? fmtUsd(totalAvailable) : '--'} hint="Free margin" />
+        <Tile label="Total Equity" value={fmtUsd(totalEquity)} hint="Across connected venues" />
+        <Tile label="Available" value={fmtUsd(totalAvailable)} hint="Free margin" />
         <Tile label="Open Notional" value={openCount > 0 ? fmtUsd(openNotional) : '--'} hint={`${openCount} open · ${degradedCount} degraded`} />
         <Tile
           label="Unrealized P&L"
@@ -323,7 +331,9 @@ const STATUS_VIEW: Record<
 
 function VenueCard({ readiness }: { readiness: VenueReadiness }) {
   const view = STATUS_VIEW[readiness.status]
-  const showBalances = readiness.walletConnected
+  // Show a real number only when we actually have one from the backend.
+  // On disconnect (or before the first snapshot) equity/available are null;
+  // render "--" rather than an ambiguous $0.00.
   return (
     <div className="rounded border border-border bg-white/[0.02] px-3 py-3">
       <div className="flex items-center justify-between">
@@ -336,11 +346,11 @@ function VenueCard({ readiness }: { readiness: VenueReadiness }) {
       <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
         <div>
           <p className="text-muted-foreground">Equity</p>
-          <p className="font-mono text-foreground">{showBalances ? fmtUsd(readiness.equity ?? 0) : '--'}</p>
+          <p className="font-mono text-foreground">{fmtUsd(readiness.equity)}</p>
         </div>
         <div>
           <p className="text-muted-foreground">Available</p>
-          <p className="font-mono text-foreground">{showBalances ? fmtUsd(readiness.available ?? 0) : '--'}</p>
+          <p className="font-mono text-foreground">{fmtUsd(readiness.available)}</p>
         </div>
       </div>
       {readiness.shortAddress && (
