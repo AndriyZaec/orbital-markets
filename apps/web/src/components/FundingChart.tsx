@@ -70,7 +70,7 @@ export function FundingChart({ asset, venueA, venueB }: Props) {
 
       {/* Chart */}
       {loading ? (
-        <div className="flex items-center justify-center h-[140px] text-xs text-muted-foreground">Loading...</div>
+        <ChartLoading />
       ) : error || data.length === 0 ? (
         <div className="flex items-center justify-center h-[140px] text-xs text-muted-foreground">
           {error ? `Error: ${error}` : 'No data yet — snapshots accumulate every minute'}
@@ -79,8 +79,9 @@ export function FundingChart({ asset, venueA, venueB }: Props) {
         <EdgeChart data={data} tf={tf} hoverIdx={hoverIdx} setHoverIdx={setHoverIdx} avgEdge={stats?.avg ?? 0} />
       )}
 
-      {/* Stats bar */}
-      {stats && (
+      {/* Stats bar — only after a successful load so it doesn't flash stale
+          numbers while a refetch is in flight. */}
+      {!loading && stats && (
         <div className="flex items-center gap-4 mt-2 text-[11px] font-mono">
           <div className="flex items-center gap-1.5">
             <div className="size-1.5 rounded-full bg-green-400" />
@@ -95,15 +96,34 @@ export function FundingChart({ asset, venueA, venueB }: Props) {
         </div>
       )}
 
-      {/* Caption */}
-      <div className="mt-3 rounded border border-blue-500/10 bg-blue-500/[0.04] px-3 py-1.5 flex items-start gap-2">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-blue-400/50 shrink-0 mt-px">
-          <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2"/>
-          <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-        </svg>
-        <p className="text-[11px] text-blue-300/60 leading-relaxed">
-          A persistent edge means the funding spread isn't a one-time spike — the opportunity has held over time, making it more reliable to trade.
-        </p>
+      {/* Caption — hidden while loading to keep the loading state clean. */}
+      {!loading && (
+        <div className="mt-3 rounded border border-blue-500/10 bg-blue-500/[0.04] px-3 py-1.5 flex items-start gap-2">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-blue-400/50 shrink-0 mt-px">
+            <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2"/>
+            <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+          <p className="text-[11px] text-blue-300/60 leading-relaxed">
+            A persistent edge means the funding spread isn't a one-time spike — the opportunity has held over time, making it more reliable to trade.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Pulsing Orbital logo — same motif as the opportunities loading state so the
+// two loading surfaces feel consistent. Fills the chart's exact height so the
+// layout doesn't shift when data arrives.
+function ChartLoading() {
+  return (
+    <div className="flex flex-col items-center justify-center h-[140px]">
+      <div className="relative size-8 animate-[loader-pulse_2s_ease-in-out_infinite]">
+        <div className="absolute inset-0 rounded-full border-2 border-slate-500/40" />
+        <div className="absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="size-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
+        </div>
       </div>
     </div>
   )

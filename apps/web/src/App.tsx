@@ -174,7 +174,18 @@ export default function App() {
       <header className="h-12 border-b border-border flex items-center px-5 shrink-0">
         <button className="flex items-center gap-2.5 mr-10 cursor-pointer" onClick={() => { setSelectedId(null); setActiveView('trade') }}>
           <OrbitalLogo />
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">Orbital Markets</span>
+          {/* Beta tag sits as a superscript on the wordmark — reads as
+              "Orbital Markets ᵇᵉᵗᵃ", visually anchored to the brand rather
+              than mixed in with the account controls on the right. */}
+          <span className="relative text-[15px] font-semibold tracking-tight text-foreground">
+            Orbital Markets
+            <span
+              title="Closed beta — real venues, real signatures."
+              className="absolute -top-1 -right-8 text-[8px] font-medium uppercase tracking-wider text-yellow-400/90 border border-yellow-400/30 rounded px-1 py-px leading-none"
+            >
+              Beta
+            </span>
+          </span>
         </button>
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
@@ -198,13 +209,6 @@ export default function App() {
             <span className="text-xs text-muted-foreground font-mono">
               {isLive ? `${Math.ceil(countdown)}s` : '...'}
             </span>
-          </div>
-          <div
-            title="Closed beta — real venues, real signatures."
-            className="flex items-center gap-1.5 rounded border border-yellow-400/30 px-2 py-0.5"
-          >
-            <div className="size-1.5 rounded-full bg-yellow-400" />
-            <span className="text-[11px] text-yellow-400 font-medium">Beta</span>
           </div>
           <AccountsHeaderButton
             aggregate={accountsAggregate}
