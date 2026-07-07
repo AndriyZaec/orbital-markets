@@ -103,7 +103,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const { connect: evmConnect, connectors: evmConnectors } = useEvmConnect()
   const { disconnect: evmDisconnect } = useEvmDisconnect()
 
-  // Which venue is currently showing its wallet picker (inline in the card).
+  // Which venue's wallet picker modal is open. Overlay-style — matches how
+  // the Solana wallet-adapter modal renders and keeps the venue card tidy.
   const [pickerOpen, setPickerOpen] = useState<string | null>(null)
 
   useEffect(() => {
@@ -294,31 +295,6 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   )}
                 </div>
 
-                {/* Inline EVM wallet picker for Hyperliquid — shows installed
-                    wallets announced via EIP-6963. Sits under the Connect
-                    button rather than in a separate modal to keep the
-                    Connect Accounts panel self-contained. */}
-                {venue.id === 'hyperliquid' && pickerOpen === 'hyperliquid' && (
-                  <div className="mt-2 rounded border border-border bg-white/[0.02] p-2 flex flex-col gap-1">
-                    <p className="text-[10px] text-muted-foreground/70 px-1">Choose a wallet</p>
-                    {evmConnectors.length === 0 ? (
-                      <p className="text-[10px] text-muted-foreground/60 px-1 py-1">
-                        No EVM wallets detected. Install MetaMask, Rabby, or another EVM wallet.
-                      </p>
-                    ) : (
-                      evmConnectors.map((c) => (
-                        <button
-                          key={c.uid}
-                          onClick={() => handlePickEvmConnector(c.uid)}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded text-[11px] font-medium bg-white/[0.04] hover:bg-white/[0.08] text-foreground transition-colors"
-                        >
-                          {c.icon && <img src={c.icon} alt="" className="size-4" />}
-                          <span className="truncate">{c.name}</span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
               </div>
             )
           })}
@@ -334,6 +310,137 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
             Non-custodial signing. Your keys never leave your browser. Revoke anytime.
+          </p>
+        </div>
+      </div>
+
+      {pickerOpen === 'hyperliquid' && (
+        <EvmWalletPicker
+          connectors={evmConnectors}
+          onPick={handlePickEvmConnector}
+          onClose={() => setPickerOpen(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// Centered modal for choosing which EVM wallet to connect. Uses the EIP-6963
+// entries wagmi's useConnect exposes; each installed wallet is a distinct
+// row so the user is never silently routed to the window.ethereum default.
+// Suggested wallets shown when the user has none installed. Deep-linked to
+// each wallet's official download page so the empty state is actionable.
+const SUGGESTED_EVM_WALLETS: { name: string; url: string; blurb: string }[] = [
+  { name: 'MetaMask', url: 'https://metamask.io/download', blurb: 'Most widely supported' },
+  { name: 'Rabby',    url: 'https://rabby.io/',            blurb: 'Made for power users' },
+  { name: 'Rainbow',  url: 'https://rainbow.me/download',  blurb: 'Simple, mobile-first' },
+]
+
+function EvmWalletPicker({
+  connectors,
+  onPick,
+  onClose,
+}: {
+  connectors: readonly { uid: string; name: string; icon?: string }[]
+  onPick: (uid: string) => void
+  onClose: () => void
+}) {
+  const hasAny = connectors.length > 0
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[380px] max-w-[90vw] rounded-lg border border-border bg-card shadow-2xl"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-4 py-3 border-b border-border">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-foreground">Connect Hyperliquid</h3>
+            <p className="text-[11px] text-muted-foreground/80 mt-0.5">
+              Pick an EVM wallet installed in your browser.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors shrink-0 ml-2"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-3 flex flex-col gap-2">
+          {hasAny ? (
+            <>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 px-1">
+                Detected wallets
+              </p>
+              <div className="flex flex-col gap-1">
+                {connectors.map((c) => (
+                  <button
+                    key={c.uid}
+                    onClick={() => onPick(c.uid)}
+                    className="flex items-center gap-3 px-3 py-2 rounded text-sm font-medium bg-white/[0.03] hover:bg-white/[0.08] text-foreground transition-colors group"
+                  >
+                    {c.icon ? (
+                      <img src={c.icon} alt="" className="size-7 rounded" />
+                    ) : (
+                      <div className="size-7 rounded bg-white/[0.08] flex items-center justify-center text-[11px] font-bold text-muted-foreground">
+                        {c.name[0]}
+                      </div>
+                    )}
+                    <span className="truncate flex-1 text-left">{c.name}</span>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className="text-muted-foreground/40 group-hover:text-muted-foreground transition-colors">
+                      <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="rounded border border-yellow-500/20 bg-yellow-500/[0.04] px-3 py-2">
+                <p className="text-[11px] text-yellow-200/80 font-medium">No EVM wallet detected</p>
+                <p className="text-[10px] text-muted-foreground/70 mt-1 leading-relaxed">
+                  Install an EVM browser wallet, then refresh this page. Solana wallets
+                  (Phantom, Backpack Solana) don't work here — Hyperliquid runs on an EVM chain.
+                </p>
+              </div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 px-1">
+                Suggested
+              </p>
+              <div className="flex flex-col gap-1">
+                {SUGGESTED_EVM_WALLETS.map((w) => (
+                  <a
+                    key={w.name}
+                    href={w.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between px-3 py-2 rounded text-sm bg-white/[0.03] hover:bg-white/[0.08] text-foreground transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-medium">{w.name}</p>
+                      <p className="text-[10px] text-muted-foreground/70">{w.blurb}</p>
+                    </div>
+                    <span className="text-[10px] text-blue-400 shrink-0 ml-2">Install ↗</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer explainer */}
+        <div className="px-4 py-2.5 border-t border-border">
+          <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+            You'll approve the connection in your wallet. Orbital never sees your seed phrase
+            or private keys — every action is signed by the wallet itself.
           </p>
         </div>
       </div>
