@@ -266,6 +266,7 @@ export default function App() {
             onClose={() => setSelectedId(null)}
             onExecute={handleExecutePaper}
             onViewPositions={() => setSelectedId(null)}
+            onOpenAccounts={() => setShowAccounts(true)}
           />
         )}
 

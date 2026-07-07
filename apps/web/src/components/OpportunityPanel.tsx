@@ -19,6 +19,7 @@ interface Props {
     requestedNotional?: number,
   ) => Promise<void>
   onViewPositions?: () => void
+  onOpenAccounts?: () => void
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -90,7 +91,7 @@ function useExpiry(expiresAt: string | null) {
 
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
-export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions }: Props) {
+export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions, onOpenAccounts }: Props) {
   const countdown = useCountdown(lastUpdated, 10)
   const isLive = countdown > 0
 
@@ -237,12 +238,13 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
         {/* Leverage — per leg */}
         <div className="px-5 py-4 border-b border-border">
-          <div className="flex items-center justify-between mb-2">
+          <div className="mb-2">
             <span className="text-sm text-muted-foreground">Leverage (per leg)</span>
             {plan && (
-              <span className="text-[11px] text-muted-foreground/70">
-                Total margin {fmtUsd(plan.leverage.margin_required)} · Exposure {fmtUsd(plan.leverage.gross_exposure)}
-              </span>
+              <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70">
+                <span>Margin {fmtUsd(plan.leverage.margin_required)}</span>
+                <span>Exposure {fmtUsd(plan.leverage.gross_exposure)}</span>
+              </div>
             )}
           </div>
           <LeverageRow
@@ -392,8 +394,15 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               className="w-full font-medium"
               size="lg"
               variant={isFullyReady ? 'default' : 'secondary'}
-              disabled={!isFullyReady || !plan?.executable || planExpired || planLoading || !notionalValid}
-              onClick={handleExecuteLive}
+              // When accounts aren't ready, keep the button clickable and
+              // route the click to open Connect Accounts. Plan/notional
+              // failures still hard-disable (nothing to fix in Accounts).
+              disabled={
+                isFullyReady
+                  ? !plan?.executable || planExpired || planLoading || !notionalValid
+                  : false
+              }
+              onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
             >
               {isFullyReady
                 ? 'Execute Live'
@@ -401,21 +410,6 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
                   ? 'Connect Wallets to Go Live'
                   : 'Accounts Not Ready'}
             </Button>
-            {!isFullyReady && readinessAggregate.blockingReasons.length > 0 && (
-              <div className="mt-1.5">
-                <ul className="flex flex-col gap-0.5">
-                  {readinessAggregate.blockingReasons.slice(0, 3).map((r, i) => (
-                    <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
-                  ))}
-                  {readinessAggregate.blockingReasons.length > 3 && (
-                    <li className="text-[10px] text-muted-foreground/50 leading-snug">
-                      +{readinessAggregate.blockingReasons.length - 3} more…
-                    </li>
-                  )}
-                </ul>
-                <p className="text-[10px] text-muted-foreground/60 mt-1">Open Connect Accounts to fix.</p>
-              </div>
-            )}
           </>
         )}
       </div>
