@@ -6,6 +6,15 @@ interface VenueBalance {
   equity: number
   available: number
   connected: boolean
+  // Backend-provided account-data readiness. stream_ready: subscriber
+  // produced at least one snapshot. fresh: snapshot age within the freshness
+  // threshold (see liveAccountFreshness on the backend). reason: human
+  // explanation when not ready.
+  stream_ready?: boolean
+  fresh?: boolean
+  last_updated?: string
+  age_seconds?: number
+  reason?: string
 }
 
 interface Balances {
@@ -14,8 +23,8 @@ interface Balances {
 }
 
 const EMPTY: Balances = {
-  pacifica: { venue: 'pacifica', equity: 0, available: 0, connected: false },
-  hyperliquid: { venue: 'hyperliquid', equity: 0, available: 0, connected: false },
+  pacifica: { venue: 'pacifica', equity: 0, available: 0, connected: false, stream_ready: false, fresh: false, age_seconds: 0 },
+  hyperliquid: { venue: 'hyperliquid', equity: 0, available: 0, connected: false, stream_ready: false, fresh: false, age_seconds: 0 },
 }
 
 export function useLiveBalances(pollInterval = 5_000) {

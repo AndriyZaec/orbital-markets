@@ -64,7 +64,11 @@ function signerPill(r: VenueReadiness): { label: string; tone: PillTone } {
 function balancePill(r: VenueReadiness): { label: string; tone: PillTone } {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
   if (r.balanceReady) return { label: 'Ready', tone: 'ok' }
-  if (r.balanceConnected) return { label: 'Pending', tone: 'pending' }
+  // Stream up but snapshot is old — surface as Stale, not Pending, so the
+  // operator can tell the difference between "still initializing" and
+  // "data went stale after being fresh".
+  if (r.streamReady && !r.accountFresh) return { label: 'Stale', tone: 'pending' }
+  if (r.balanceConnected || r.streamReady) return { label: 'Pending', tone: 'pending' }
   return { label: 'Not connected', tone: 'off' }
 }
 

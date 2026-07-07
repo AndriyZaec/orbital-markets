@@ -12,12 +12,13 @@ import { useLiveBalances } from './useLiveBalances'
 export type VenueId = 'pacifica' | 'hyperliquid'
 
 export type VenueStatus =
-  | 'disconnected'      // no wallet
-  | 'wallet_connected'  // wallet present but signer or balance not yet ready
-  | 'signer_missing'    // wallet cannot produce required signatures
-  | 'balance_pending'   // signer OK; waiting on balance stream
-  | 'ready'             // wallet + signer + balance stream all present
-  | 'error'             // authority reports an error
+  | 'disconnected'       // no wallet
+  | 'wallet_connected'   // wallet present but signer or balance not yet ready
+  | 'signer_missing'     // wallet cannot produce required signatures
+  | 'balance_pending'    // signer OK; waiting on first account snapshot
+  | 'account_stale'      // snapshot present but too old
+  | 'ready'              // wallet + signer + fresh account state
+  | 'error'              // authority reports an error
 
 export interface VenueReadiness {
   venue: VenueId
@@ -28,6 +29,13 @@ export interface VenueReadiness {
   signerReady: boolean
   balanceConnected: boolean
   balanceReady: boolean
+  // Backend account-data freshness. streamReady: subscriber has produced at
+  // least one snapshot. accountFresh: within the backend's freshness window.
+  // ageSeconds / lastUpdated echo the balance response for UI display.
+  streamReady: boolean
+  accountFresh: boolean
+  ageSeconds: number | null
+  lastUpdated: string | null
   equity: number | null
   available: number | null
   status: VenueStatus
@@ -84,28 +92,40 @@ function buildReadiness(args: {
   venue: VenueId
   address: string | null
   authorityReadiness: SigningReadiness
-  balance: { connected: boolean; equity: number; available: number }
+  balance: {
+    connected: boolean
+    equity: number
+    available: number
+    stream_ready?: boolean
+    fresh?: boolean
+    age_seconds?: number
+    last_updated?: string
+    reason?: string
+  }
 }): VenueReadiness {
   const { venue, address, authorityReadiness, balance } = args
   const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
 
-  // A live-balance connection is only meaningful once the signer is present;
-  // treat it as "ready" only when both the venue reports connected AND we
-  // actually have a signer (since balances tie to that wallet).
   const balanceConnected = balance.connected
-  const balanceReady = balance.connected && signerReady
+  // Legacy backends without stream_ready/fresh: fall back to `connected` so
+  // the readiness layer still behaves sensibly. New backends drive both.
+  const streamReady = balance.stream_ready ?? balance.connected
+  const accountFresh = balance.fresh ?? balance.connected
+  const balanceReady = balanceConnected && signerReady && streamReady && accountFresh
 
   const blockingReasons: string[] = []
   if (errored) blockingReasons.push('Wallet reported an error')
   if (!walletConnected) blockingReasons.push('Wallet not connected')
   else if (!signerReady) blockingReasons.push('Wallet cannot sign required messages')
-  else if (!balanceReady) blockingReasons.push('Waiting on balance stream')
+  else if (!streamReady) blockingReasons.push(balance.reason || 'Waiting on account data stream')
+  else if (!accountFresh) blockingReasons.push(balance.reason || 'Account data stale — refreshing')
 
   let status: VenueStatus
   if (errored) status = 'error'
   else if (!walletConnected) status = 'disconnected'
   else if (!signerReady) status = 'signer_missing'
-  else if (!balanceReady) status = 'balance_pending'
+  else if (!streamReady) status = 'balance_pending'
+  else if (!accountFresh) status = 'account_stale'
   else status = 'ready'
 
   return {
@@ -117,6 +137,10 @@ function buildReadiness(args: {
     signerReady,
     balanceConnected,
     balanceReady,
+    streamReady,
+    accountFresh,
+    ageSeconds: typeof balance.age_seconds === 'number' ? balance.age_seconds : null,
+    lastUpdated: balance.last_updated ?? null,
     equity: balance.connected ? balance.equity : null,
     available: balance.connected ? balance.available : null,
     status,

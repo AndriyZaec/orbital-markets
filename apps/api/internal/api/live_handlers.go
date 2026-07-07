@@ -106,6 +106,28 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	// 3. Start account subscribers if not already running (lazy — first prepare triggers them)
 	s.live.EnsureAccountStreams(req.AccountPacifica, req.AccountHyperliquid)
 
+	// 3b. Account-data readiness gate. This is separate from the admission
+	// gate below because admission looks at policy (leverage caps, etc); this
+	// looks at whether we have current account state to submit against. On
+	// first prepare after connect, streams may not have produced a snapshot
+	// yet — return 409 with a clear per-venue reason so the UI can retry.
+	pacStatus, hlStatus := s.liveAccountStatuses()
+	var notReady []string
+	if !pacStatus.Fresh {
+		notReady = append(notReady, fmt.Sprintf("Pacifica: %s", pacStatus.Reason))
+	}
+	if !hlStatus.Fresh {
+		notReady = append(notReady, fmt.Sprintf("Hyperliquid: %s", hlStatus.Reason))
+	}
+	if len(notReady) > 0 {
+		s.logger.Warn("live prepare: account state not ready", "reasons", notReady)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":   "account state not ready",
+			"reasons": notReady,
+		})
+		return
+	}
+
 	// 4. Live admission gate
 	admission := domain.CheckLiveAdmission(*opp, plan.Leverage.Leverage)
 	if !admission.Allowed {
@@ -336,38 +358,83 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleLiveBalances returns current available balance per venue from account state.
-//
-// GET /api/v1/live/balances
-//
-// Returns {"pacifica": {...}, "hyperliquid": {...}} with equity, available, connected.
-// Returns zeros/disconnected if account streams haven't started yet (wallets not connected).
-func (s *Server) handleLiveBalances(w http.ResponseWriter, _ *http.Request) {
-	type venueBalance struct {
-		Venue     string  `json:"venue"`
-		Equity    float64 `json:"equity"`
-		Available float64 `json:"available"`
-		Connected bool    `json:"connected"`
+// liveAccountFreshness bounds how stale a venue account snapshot may be for it
+// to count as "ready" for live execution. Matches the pre-trade check window
+// in venue/*/account/pretrade.go — both surfaces reject at the same age so the
+// UI's readiness and the actual admission gate agree.
+const liveAccountFreshness = 30 * time.Second
+
+// venueAccountStatus is the per-venue account-data readiness view returned by
+// /live/balances and consumed by the /live/prepare gate.
+type venueAccountStatus struct {
+	Venue       string     `json:"venue"`
+	Equity      float64    `json:"equity"`
+	Available   float64    `json:"available"`
+	Connected   bool       `json:"connected"`    // wallet-derived stream is up
+	StreamReady bool       `json:"stream_ready"` // account snapshot has been populated at least once
+	Fresh       bool       `json:"fresh"`        // snapshot age within liveAccountFreshness
+	LastUpdated *time.Time `json:"last_updated,omitempty"`
+	AgeSeconds  float64    `json:"age_seconds"`
+	Reason      string     `json:"reason,omitempty"` // human explanation when not ready
+}
+
+// buildVenueAccountStatus derives the readiness view from a raw venue snapshot.
+// streamReady means the subscriber produced at least one snapshot (LastUpdated
+// is non-zero); fresh means that snapshot is within liveAccountFreshness.
+// The reason string is populated only when NOT fresh, so happy-path responses
+// stay lean.
+func buildVenueAccountStatus(venue string, connected bool, lastUpdated time.Time, equity, available float64) venueAccountStatus {
+	st := venueAccountStatus{
+		Venue:     venue,
+		Equity:    equity,
+		Available: available,
+		Connected: connected,
 	}
+	if !lastUpdated.IsZero() {
+		lu := lastUpdated
+		st.LastUpdated = &lu
+		age := time.Since(lastUpdated)
+		st.AgeSeconds = age.Seconds()
+		st.StreamReady = true
+		st.Fresh = age <= liveAccountFreshness
+	}
+	if !st.Connected {
+		st.Reason = "account stream not connected"
+	} else if !st.StreamReady {
+		st.Reason = "account state not yet received"
+	} else if !st.Fresh {
+		st.Reason = fmt.Sprintf("account state stale (%.0fs old)", st.AgeSeconds)
+	}
+	return st
+}
 
-	var pac, hl venueBalance
-	pac.Venue = "pacifica"
-	hl.Venue = "hyperliquid"
-
+// liveAccountStatuses reads current status for both venues. Safe when live
+// deps aren't wired (returns disconnected).
+func (s *Server) liveAccountStatuses() (venueAccountStatus, venueAccountStatus) {
+	var pac, hl venueAccountStatus
 	if s.live != nil && s.live.pacState != nil {
 		snap := s.live.pacState.Snapshot()
-		pac.Equity = snap.Equity
-		pac.Available = snap.AvailableToSpend
-		pac.Connected = snap.Connected
+		pac = buildVenueAccountStatus("pacifica", snap.Connected, snap.LastUpdated, snap.Equity, snap.AvailableToSpend)
+	} else {
+		pac = buildVenueAccountStatus("pacifica", false, time.Time{}, 0, 0)
 	}
 	if s.live != nil && s.live.hlState != nil {
 		snap := s.live.hlState.Snapshot()
-		hl.Equity = snap.Margin.AccountEquity
-		hl.Available = snap.Margin.AvailableBalance
-		hl.Connected = snap.Connected
+		hl = buildVenueAccountStatus("hyperliquid", snap.Connected, snap.LastUpdated, snap.Margin.AccountEquity, snap.Margin.AvailableBalance)
+	} else {
+		hl = buildVenueAccountStatus("hyperliquid", false, time.Time{}, 0, 0)
 	}
+	return pac, hl
+}
 
-	writeJSON(w, http.StatusOK, map[string]venueBalance{
+// handleLiveBalances returns per-venue account status: balances plus stream
+// readiness and freshness. Never 500s if wallets aren't connected — returns
+// a disconnected/zero response with a reason so the UI can render it.
+//
+// GET /api/v1/live/balances
+func (s *Server) handleLiveBalances(w http.ResponseWriter, _ *http.Request) {
+	pac, hl := s.liveAccountStatuses()
+	writeJSON(w, http.StatusOK, map[string]venueAccountStatus{
 		"pacifica":    pac,
 		"hyperliquid": hl,
 	})
