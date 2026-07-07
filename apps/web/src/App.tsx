@@ -15,7 +15,8 @@ import { OpportunityPanel } from '@/components/OpportunityPanel'
 
 import { PaperPositions } from '@/components/PaperPositions'
 import { LivePositions } from '@/components/LivePositions'
-import { AnalyticsDashboard } from '@/components/AnalyticsDashboard'
+import { Portfolio } from '@/components/Portfolio'
+import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { ForAgents } from '@/components/ForAgents'
@@ -23,9 +24,19 @@ import { FundingChart } from '@/components/FundingChart'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'analytics' | 'rebates' | 'agents'
-type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi'
+type View = 'trade' | 'portfolio' | 'rebates' | 'agents'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'fundingSpread' | 'pacificaRate' | 'hlRate'
 type SortDir = 'asc' | 'desc'
+
+// Per-venue raw funding rate (single funding period, signed).
+// venue_a / venue_b naming is opaque; we look up by venue name so columns
+// stay aligned to the actual venue regardless of which slot it lands in.
+function fundingForVenue(opp: Opportunity, venue: string): number | null {
+  const v = venue.toLowerCase()
+  if (opp.venue_pair.venue_a.toLowerCase() === v) return opp.funding_rate_a
+  if (opp.venue_pair.venue_b.toLowerCase() === v) return opp.funding_rate_b
+  return null
+}
 
 function fmtPct(n: number, decimals = 2) {
   return (n * 100).toFixed(decimals) + '%'
@@ -49,6 +60,9 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
     case 'aprMaxLev': return opp.annualized_gross_edge * (opp.max_leverage || 1)
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
+    case 'fundingSpread': return Math.abs(opp.funding_spread)
+    case 'pacificaRate': return fundingForVenue(opp, 'pacifica') ?? 0
+    case 'hlRate': return fundingForVenue(opp, 'hyperliquid') ?? 0
   }
 }
 
@@ -81,10 +95,14 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [connectedVenues, setConnectedVenues] = useState(0)
   const [showAccounts, setShowAccounts] = useState(false)
+  // Header account status is driven by the same typed readiness layer used
+  // by Connect Accounts and Execute Live — one source of truth for the
+  // "is this trader actually ready to trade" signal.
+  const { aggregate: accountsAggregate } = useVenueReadiness()
   const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('live')
-  const countdown = useCountdown(lastUpdated, 10)
+  // Matches useOpportunities' 60s poll interval — scanner refreshes every 60s.
+  const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
@@ -119,12 +137,26 @@ export default function App() {
     document.addEventListener('mouseup', onUp)
   }, [posHeight])
 
-  const handleExecutePaper = async (opportunityId: string, leverage: number) => {
+  const handleExecutePaper = async (
+    opportunityId: string,
+    leverageLong: number,
+    leverageShort: number,
+    requestedNotional?: number,
+  ) => {
     try {
+      const body: Record<string, unknown> = {
+        opportunity_id: opportunityId,
+        leverage: leverageLong,
+        leverage_long: leverageLong,
+        leverage_short: leverageShort,
+      }
+      if (typeof requestedNotional === 'number' && requestedNotional > 0) {
+        body.requested_notional = requestedNotional
+      }
       const resp = await apiFetch('/api/v1/paper/open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ opportunity_id: opportunityId, leverage }),
+        body: JSON.stringify(body),
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
@@ -142,11 +174,22 @@ export default function App() {
       <header className="h-12 border-b border-border flex items-center px-5 shrink-0">
         <button className="flex items-center gap-2.5 mr-10 cursor-pointer" onClick={() => { setSelectedId(null); setActiveView('trade') }}>
           <OrbitalLogo />
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">Orbital Markets</span>
+          {/* Beta tag sits as a superscript on the wordmark — reads as
+              "Orbital Markets ᵇᵉᵗᵃ", visually anchored to the brand rather
+              than mixed in with the account controls on the right. */}
+          <span className="relative text-[15px] font-semibold tracking-tight text-foreground">
+            Orbital Markets
+            <span
+              title="Closed beta — real venues, real signatures."
+              className="absolute -top-1 -right-8 text-[8px] font-medium uppercase tracking-wider text-yellow-400/90 border border-yellow-400/30 rounded px-1 py-px leading-none"
+            >
+              Beta
+            </span>
+          </span>
         </button>
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
-          <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
+          <NavBtn active={activeView === 'portfolio'} onClick={() => setActiveView('portfolio')}>Portfolio</NavBtn>
           <NavBtn active={activeView === 'rebates'} onClick={() => setActiveView('rebates')}>Fee Rebates</NavBtn>
           <button
             onClick={() => setActiveView('agents')}
@@ -167,23 +210,11 @@ export default function App() {
               {isLive ? `${Math.ceil(countdown)}s` : '...'}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 rounded border border-yellow-400/30 px-2 py-0.5">
-            <div className="size-1.5 rounded-full bg-yellow-400" />
-            <span className="text-[11px] text-yellow-400 font-medium">Test</span>
-          </div>
-          <button
+          <AccountsHeaderButton
+            aggregate={accountsAggregate}
+            open={showAccounts}
             onClick={() => setShowAccounts((v) => !v)}
-            className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-              showAccounts
-                ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
-                : connectedVenues > 0
-                  ? 'border-green-500/30 bg-green-500/[0.06] text-green-400 hover:bg-green-500/10'
-                  : 'border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08]'
-            }`}
-          >
-            <div className={`size-1.5 rounded-full ${connectedVenues > 0 ? 'bg-green-400' : 'bg-zinc-500'}`} />
-            {connectedVenues > 0 ? `${connectedVenues} Connected` : 'Connect'}
-          </button>
+          />
         </div>
       </header>
 
@@ -214,8 +245,13 @@ export default function App() {
             </>
           )}
 
-          {activeView === 'analytics' && (
-            <PageBg><AnalyticsDashboard /></PageBg>
+          {activeView === 'portfolio' && (
+            <PageBg>
+              <Portfolio
+                onConnectWallets={() => setShowAccounts(true)}
+                onViewPositions={() => setActiveView('trade')}
+              />
+            </PageBg>
           )}
 
           {activeView === 'rebates' && (
@@ -235,10 +271,11 @@ export default function App() {
             onClose={() => setSelectedId(null)}
             onExecute={handleExecutePaper}
             onViewPositions={() => setSelectedId(null)}
+            onOpenAccounts={() => setShowAccounts(true)}
           />
         )}
 
-        <ConnectAccounts open={showAccounts} onConnectionChange={setConnectedVenues} onClose={() => setShowAccounts(false)} />
+        <ConnectAccounts open={showAccounts} onClose={() => setShowAccounts(false)} />
       </div>
 
     </div>
@@ -301,6 +338,9 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
                 <TableHead className="text-left">Long</TableHead>
                 <TableHead className="text-left">Short</TableHead>
+                <SortTH field="pacificaRate" label="Pacifica Funding (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="hlRate" label="HL Funding (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="fundingSpread" label="Funding Spread (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="apr" label="APR" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="aprMaxLev" label="APR x Max Lev" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SortTH field="priceSpread" label="Price Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
@@ -323,6 +363,13 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                     </TableCell>
                     <TableCell><VenueIcon venue={longVenue} /></TableCell>
                     <TableCell><VenueIcon venue={shortVenue} /></TableCell>
+                    <TC negative={(fundingForVenue(opp, 'pacifica') ?? 0) < 0}>
+                      {fundingForVenue(opp, 'pacifica') !== null ? fmtRate(fundingForVenue(opp, 'pacifica')!) : '—'}
+                    </TC>
+                    <TC negative={(fundingForVenue(opp, 'hyperliquid') ?? 0) < 0}>
+                      {fundingForVenue(opp, 'hyperliquid') !== null ? fmtRate(fundingForVenue(opp, 'hyperliquid')!) : '—'}
+                    </TC>
+                    <TC>{fmtRate(Math.abs(opp.funding_spread))}</TC>
                     <TC>{fmtPct(apr)}</TC>
                     <TC>{fmtPct(apr * maxLev)}</TC>
                     <TC negative={opp.entry_spread_estimate < 0}>{fmtPct(opp.entry_spread_estimate, 4)}</TC>
@@ -394,6 +441,57 @@ function PageBg({ children }: { children: React.ReactNode }) {
 }
 
 /* ── Shared ────────────────────────────────────────────── */
+
+// Header button for opening Connect Accounts. Label is always "Accounts" —
+// the dot color / border color carry the state (green ready, yellow needs
+// attention, neutral not connected). Detailed reasons live inside the panel
+// itself and in the hover tooltip; the header avoids duplicating them.
+function AccountsHeaderButton({
+  aggregate,
+  open,
+  onClick,
+}: {
+  aggregate: {
+    allReady: boolean
+    statusLabel: 'Ready' | 'Needs attention' | 'Not connected'
+    blockingReasons: string[]
+  }
+  open: boolean
+  onClick: () => void
+}) {
+  const notConnected = aggregate.statusLabel === 'Not connected'
+  const ready = aggregate.allReady
+
+  const tone = open
+    ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
+    : ready
+      ? 'border-green-500/30 bg-green-500/[0.06] text-green-400 hover:bg-green-500/10'
+      : notConnected
+        ? 'border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08]'
+        : 'border-yellow-500/30 bg-yellow-500/[0.06] text-yellow-400 hover:bg-yellow-500/10'
+
+  const dot = ready ? 'bg-green-400' : notConnected ? 'bg-zinc-500' : 'bg-yellow-400'
+
+  // Tooltip: state on the first line, reasons below when not ready.
+  const title = ready
+    ? 'Accounts ready'
+    : notConnected
+      ? 'No accounts connected'
+      : aggregate.blockingReasons.length > 0
+        ? `Needs attention\n${aggregate.blockingReasons.join('\n')}`
+        : 'Needs attention'
+
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-medium transition-colors ${tone}`}
+    >
+      <div className={`size-1.5 rounded-full ${dot}`} />
+      Accounts
+    </button>
+  )
+}
 
 function NavBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (

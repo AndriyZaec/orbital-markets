@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
-import { useVenueAuthority } from '@/hooks/useVenueAuthority'
-import { useLiveBalances } from '@/hooks/useLiveBalances'
+import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
@@ -13,8 +12,14 @@ interface Props {
   lastUpdated: Date | null
   mode: 'paper' | 'live'
   onClose: () => void
-  onExecute: (opportunityId: string, leverage: number) => Promise<void>
+  onExecute: (
+    opportunityId: string,
+    leverageLong: number,
+    leverageShort: number,
+    requestedNotional?: number,
+  ) => Promise<void>
   onViewPositions?: () => void
+  onOpenAccounts?: () => void
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -33,23 +38,21 @@ function fmtPrice(n: number) {
   return '$' + n.toPrecision(4)
 }
 
-const MAINTENANCE_MARGIN = 0.03
-
-function estLiqPrice(entryPrice: number, side: 'long' | 'short', leverage: number): string {
-  if (leverage <= 1 || entryPrice <= 0) return 'N/A (1x)'
-  if (side === 'long') {
-    const liq = entryPrice * (1 - 1 / leverage + MAINTENANCE_MARGIN)
-    return liq > 0 ? fmtPrice(liq) : '--'
-  }
-  return fmtPrice(entryPrice * (1 + 1 / leverage - MAINTENANCE_MARGIN))
+// Format a backend-provided estimated liquidation price for a leg.
+// Backend returns liquidation_price = 0 for 1x (not practically liquidatable).
+function fmtLiqPrice(leg: { liquidation_price: number; leverage: number } | null): string {
+  if (!leg) return '--'
+  if (leg.leverage <= 1 || leg.liquidation_price <= 0) return 'N/A (1x)'
+  return fmtPrice(leg.liquidation_price)
 }
 
-function fmtBalance(balances: ReturnType<typeof useLiveBalances>, venue: string) {
-  const key = venue.toLowerCase() as 'pacifica' | 'hyperliquid'
-  const b = balances[key]
-  if (!b || !b.connected) return '--'
-  if (b.available <= 0) return '$0.00'
-  return fmtUsd(b.available)
+// Show a real number only when the venue is actually connected AND we have
+// a positive balance. When disconnected (or before first snapshot) render
+// "--" so we don't misleadingly show $0.00.
+function fmtVenueBalance(available: number | null): string {
+  if (available === null || !Number.isFinite(available)) return '--'
+  if (available <= 0) return '--'
+  return fmtUsd(available)
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -88,8 +91,9 @@ function useExpiry(expiresAt: string | null) {
 
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
-export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions }: Props) {
-  const countdown = useCountdown(lastUpdated, 10)
+export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions, onOpenAccounts }: Props) {
+  // Matches useOpportunities' 60s poll interval.
+  const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
 
   const isLongA = opp.direction === 'long_a_short_b'
@@ -97,19 +101,56 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
   const maxLev = opp.max_leverage || 1
 
-  const [leverageVal, setLeverageVal] = useState(maxLev)
+  // Per-leg leverage. Notional is shared across legs; leverage is not.
+  const [leverageLong, setLeverageLong] = useState(maxLev)
+  const [leverageShort, setLeverageShort] = useState(maxLev)
   const [longSlippage, setLongSlippage] = useState(1)
   const [shortSlippage, setShortSlippage] = useState(1)
   const [longOpen, setLongOpen] = useState(true)
   const [shortOpen, setShortOpen] = useState(true)
 
+  // Position size = notional PER LEG. Seeded from the opportunity's recommended
+  // notional; user can override. The raw text is kept as a string so partial
+  // input ("", "1000.") is not fought by number coercion. `notionalNum` is the
+  // parsed numeric value sent to the backend (0 = fall back to recommended).
+  const [notionalInput, setNotionalInput] = useState<string>(() =>
+    opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '',
+  )
+  useEffect(() => {
+    // Re-seed when the selected opportunity changes.
+    setNotionalInput(opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '')
+  }, [opp.id, opp.recommended_notional])
+  const notionalNum = Number(notionalInput)
+  const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
+  const notionalForPlan = notionalValid ? notionalNum : undefined
+
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageVal)
+  const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageLong, leverageShort, notionalForPlan)
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
-  const { isFullyReady } = useVenueAuthority()
+  // Live execution is gated by the typed readiness layer (wallet + signer +
+  // balance stream). blockingReasons is already venue-prefixed and de-duped.
+  const {
+    aggregate: readinessAggregate,
+    pacifica: pacReadiness,
+    hyperliquid: hlReadiness,
+    refreshBalances,
+  } = useVenueReadiness()
+  const isFullyReady = readinessAggregate.allReady
+  const balanceByVenue = (venue: string): number | null => {
+    const v = venue.toLowerCase()
+    if (v === 'pacifica') return pacReadiness.available
+    if (v === 'hyperliquid') return hlReadiness.available
+    return null
+  }
+
+  // Opening the trade panel is a user intent to trade — nudge a balance
+  // refresh so the readiness gate reflects current state rather than the
+  // slow (30s) background poll.
+  useEffect(() => {
+    refreshBalances().catch(() => {})
+  }, [refreshBalances])
   const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
-  const balances = useLiveBalances()
   const [showLiveModal, setShowLiveModal] = useState(false)
 
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
@@ -118,15 +159,19 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const handleExecute = async () => {
     setExecuting(true)
     try {
-      await onExecute(opp.id, leverageVal)
+      await onExecute(opp.id, leverageLong, leverageShort, notionalForPlan)
     } finally {
       setExecuting(false)
     }
   }
 
   const handleExecuteLive = () => {
+    // Kick a balance refresh alongside the execute. Non-blocking: readiness
+    // was already ready when the button enabled; this just tightens the
+    // window between last-known-fresh and actual submission.
+    refreshBalances().catch(() => {})
     setShowLiveModal(true)
-    executeLive(opp.id, leverageVal)
+    executeLive(opp.id, leverageLong, leverageShort, notionalForPlan)
   }
 
   const handleCloseLiveModal = () => {
@@ -158,44 +203,90 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
         {/* Position Size + Currency */}
         <div className="px-5 py-4 border-b border-border">
           <div className="flex gap-2">
-            <div className="flex-1 rounded border border-border bg-white/[0.03] px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">Position Size</p>
-              <p className="text-sm font-mono text-foreground">{plan ? fmtUsd(plan.notional) : '--'}</p>
-            </div>
+            <label className={`flex-1 rounded border bg-white/[0.03] px-3 py-2 focus-within:border-blue-500/50 transition-colors ${notionalInput !== '' && !notionalValid ? 'border-red-500/50' : 'border-border'}`}>
+              <p className="text-[11px] text-muted-foreground">Position Size (per leg)</p>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={notionalInput}
+                onChange={(e) => setNotionalInput(e.target.value.replace(/[^\d.]/g, ''))}
+                placeholder={opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '0'}
+                className="w-full bg-transparent text-sm font-mono text-foreground outline-none"
+              />
+            </label>
             <div className="w-20 rounded border border-border bg-white/[0.03] px-3 py-2 text-center">
               <p className="text-[11px] text-muted-foreground">Currency</p>
               <p className="text-sm text-foreground">USD</p>
             </div>
           </div>
+          <div className="mt-1.5 flex items-center justify-between text-[11px]">
+            {notionalInput !== '' && !notionalValid ? (
+              <span className="text-red-400">Enter a positive amount</span>
+            ) : (
+              <span className="text-muted-foreground/70">Same notional on both legs</span>
+            )}
+            {opp.recommended_notional > 0 && (
+              <button
+                type="button"
+                onClick={() => setNotionalInput(String(Math.round(opp.recommended_notional)))}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Recommended: {fmtUsd(opp.recommended_notional)}
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Leverage */}
+        {/* Leverage — per leg */}
+        <div className="px-5 py-4 border-b border-border">
+          <div className="mb-2">
+            <span className="text-sm text-muted-foreground">Leverage (per leg)</span>
+            {plan && (
+              <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70">
+                <span>Margin {fmtUsd(plan.leverage.margin_required)}</span>
+                <span>Exposure {fmtUsd(plan.leverage.gross_exposure)}</span>
+              </div>
+            )}
+          </div>
+          <LeverageRow
+            label={`Long · ${longVenue}`}
+            value={leverageLong}
+            max={maxLev}
+            onChange={setLeverageLong}
+            margin={longLeg?.margin_required}
+            accent="green"
+          />
+          <LeverageRow
+            label={`Short · ${shortVenue}`}
+            value={leverageShort}
+            max={maxLev}
+            onChange={setLeverageShort}
+            margin={shortLeg?.margin_required}
+            accent="red"
+          />
+        </div>
+
+        {/* Entry Type */}
         <div className="px-5 py-4 border-b border-border">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-muted-foreground">Leverage</span>
-            <span className="text-sm font-mono text-foreground">{leverageVal}x</span>
+            <span className="text-sm text-muted-foreground">Entry Type</span>
+            <span className="text-[10px] text-muted-foreground/70">Market only in v1</span>
           </div>
-          <input
-            type="range"
-            min={1}
-            max={maxLev}
-            value={leverageVal}
-            onChange={(e) => setLeverageVal(Number(e.target.value))}
-            className="w-full h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer accent-green-400 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-background"
-          />
-          {plan && (
-            <div className="flex items-center justify-between mt-2 text-[11px] text-muted-foreground">
-              <span>Margin: {fmtUsd(plan.leverage.margin_required)}</span>
-              <span>Exposure: {fmtUsd(plan.leverage.gross_exposure)}</span>
-            </div>
-          )}
+          <div className="flex items-center gap-0">
+            <EntryTypeBtn label="Market" active first />
+            <EntryTypeBtn label="Limit" disabled />
+            <EntryTypeBtn label="TWAP" disabled last />
+          </div>
+          <p className="text-[11px] text-muted-foreground/70 mt-2">
+            Both legs execute as market orders. Limit and TWAP coming soon.
+          </p>
         </div>
 
         {/* Available balance */}
         <div className="px-5 py-3 border-b border-border">
           <p className="text-[11px] text-muted-foreground mb-1.5">Available balance</p>
-          <Row label={longVenue} value={fmtBalance(balances, longVenue)} capitalize />
-          <Row label={shortVenue} value={fmtBalance(balances, shortVenue)} capitalize />
+          <Row label={longVenue} value={fmtVenueBalance(balanceByVenue(longVenue))} capitalize />
+          <Row label={shortVenue} value={fmtVenueBalance(balanceByVenue(shortVenue))} capitalize />
         </div>
 
         {/* Long Section */}
@@ -215,10 +306,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               </div>
               <SlippageSelector value={longSlippage} onChange={setLongSlippage} />
               <div className="mt-3 flex flex-col gap-0">
-                <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
+                <Row label="Required Margin" value={longLeg ? `${fmtUsd(longLeg.margin_required)} · ${longLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && longLeg ? fmtUsd(longLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value={longLeg ? estLiqPrice(longLeg.expected_price, 'long', leverageVal) : '--'} />
+                <Row label="Est. Liquidation Price" value={fmtLiqPrice(longLeg)} />
                 <Row label="Est. Entry Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={longLeg ? fmtPct(longLeg.slippage + longLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
@@ -243,10 +334,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               </div>
               <SlippageSelector value={shortSlippage} onChange={setShortSlippage} />
               <div className="mt-3 flex flex-col gap-0">
-                <Row label="Required Margin" value={plan ? fmtUsd(plan.leverage.margin_required / 2) : '--'} />
+                <Row label="Required Margin" value={shortLeg ? `${fmtUsd(shortLeg.margin_required)} · ${shortLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && shortLeg ? fmtUsd(shortLeg.expected_price) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
-                <Row label="Est. Liquidation Price" value={shortLeg ? estLiqPrice(shortLeg.expected_price, 'short', leverageVal) : '--'} />
+                <Row label="Est. Liquidation Price" value={fmtLiqPrice(shortLeg)} />
                 <Row label="Est. Entry Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
                 <Row label="Est. Slippage" value={shortLeg ? fmtPct(shortLeg.slippage + shortLeg.fee) : fmtPct(opp.slippage_estimate)} />
               </div>
@@ -293,7 +384,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!plan?.executable || planExpired || executing || planLoading}
+            disabled={!plan?.executable || planExpired || executing || planLoading || !notionalValid}
             onClick={handleExecute}
           >
             {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
@@ -304,14 +395,22 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               className="w-full font-medium"
               size="lg"
               variant={isFullyReady ? 'default' : 'secondary'}
-              disabled={!isFullyReady || !plan?.executable || planExpired || planLoading}
-              onClick={handleExecuteLive}
+              // When accounts aren't ready, keep the button clickable and
+              // route the click to open Connect Accounts. Plan/notional
+              // failures still hard-disable (nothing to fix in Accounts).
+              disabled={
+                isFullyReady
+                  ? !plan?.executable || planExpired || planLoading || !notionalValid
+                  : false
+              }
+              onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
             >
-              {isFullyReady ? 'Execute Live' : 'Connect Wallets to Go Live'}
+              {isFullyReady
+                ? 'Execute Live'
+                : readinessAggregate.statusLabel === 'Not connected'
+                  ? 'Connect Wallets to Go Live'
+                  : 'Accounts Not Ready'}
             </Button>
-            {!isFullyReady && (
-              <p className="text-[10px] text-muted-foreground/60 text-center mt-1.5">Connect both venue accounts to enable live execution</p>
-            )}
           </>
         )}
       </div>
@@ -334,6 +433,62 @@ function Row({ label, value, capitalize }: { label: string; value: string; capit
       <span className="text-sm text-muted-foreground">{label}</span>
       <span className={`text-sm font-mono text-foreground ${capitalize ? 'capitalize' : ''}`}>{value}</span>
     </div>
+  )
+}
+
+function LeverageRow({ label, value, max, onChange, margin, accent }: {
+  label: string
+  value: number
+  max: number
+  onChange: (v: number) => void
+  margin?: number
+  accent: 'green' | 'red'
+}) {
+  const dot = accent === 'green' ? 'bg-green-400' : 'bg-red-400'
+  return (
+    <div className="mt-2 first:mt-0">
+      <div className="flex items-center justify-between mb-1">
+        <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+          <span className={`size-1.5 rounded-full ${dot}`} />
+          {label}
+        </span>
+        <span className="text-[12px] font-mono text-foreground">
+          {value}x{typeof margin === 'number' ? ` · ${fmtUsd(margin)} margin` : ''}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={1}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full h-1 bg-white/[0.08] rounded-full appearance-none cursor-pointer accent-green-400 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-background"
+      />
+    </div>
+  )
+}
+
+function EntryTypeBtn({ label, active, disabled, first, last }: {
+  label: string; active?: boolean; disabled?: boolean; first?: boolean; last?: boolean
+}) {
+  const radius = first ? 'rounded-l' : last ? 'rounded-r' : ''
+  const border = first ? 'border' : 'border border-l-0'
+  const state = active
+    ? 'bg-white/[0.08] text-foreground'
+    : disabled
+      ? 'bg-white/[0.02] text-muted-foreground/40 cursor-not-allowed'
+      : 'bg-white/[0.02] text-muted-foreground hover:text-foreground'
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-disabled={disabled}
+      aria-pressed={active}
+      className={`flex-1 px-3 py-1.5 text-xs font-medium border-border transition-colors ${border} ${radius} ${state}`}
+    >
+      {label}
+      {disabled && <span className="ml-1 text-[9px] uppercase tracking-wide opacity-60">soon</span>}
+    </button>
   )
 }
 

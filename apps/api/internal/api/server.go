@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api/middleware"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
@@ -97,6 +100,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/advance", s.handleLiveAdvance)
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
 	s.mux.HandleFunc("GET /api/v1/live/balances", s.handleLiveBalances)
+	s.mux.HandleFunc("POST /api/v1/live/accounts/ensure", s.handleLiveAccountsEnsure)
 	s.mux.HandleFunc("GET /api/v1/live/positions", s.handleLivePositions)
 	s.mux.HandleFunc("GET /api/v1/live/positions/", s.handleLivePosition)
 	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
@@ -112,15 +116,39 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+// Bounds for the ?limit query on GET /api/v1/opportunities. Default keeps the
+// default response small (~100 rows) since the UI's default table shows far
+// fewer; the cap protects against pathological requests. Invalid or missing
+// values fall back to the default — never rejected.
+const (
+	opportunitiesDefaultLimit = 100
+	opportunitiesMaxLimit     = 300
+)
+
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
+	limit := opportunitiesDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+			if limit > opportunitiesMaxLimit {
+				limit = opportunitiesMaxLimit
+			}
+		}
+	}
 	opps := s.scanner.Opportunities()
+	if len(opps) > limit {
+		opps = opps[:limit]
+	}
 	writeJSON(w, http.StatusOK, opps)
 }
 
 func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OpportunityID string  `json:"opportunity_id"`
-		Leverage      float64 `json:"leverage"`
+		OpportunityID     string   `json:"opportunity_id"`
+		Leverage          float64  `json:"leverage"` // shared fallback when per-leg values are absent
+		LeverageLong      *float64 `json:"leverage_long,omitempty"`
+		LeverageShort     *float64 `json:"leverage_short,omitempty"`
+		RequestedNotional *float64 `json:"requested_notional,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -130,8 +158,22 @@ func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "opportunity_id required"})
 		return
 	}
+	// Explicitly-supplied notional must be positive; absent is fine (falls back to recommended).
+	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
+		return
+	}
+	var notional float64
+	if req.RequestedNotional != nil {
+		notional = *req.RequestedNotional
+	}
+	levLong, levShort, err := resolveLegLeverage(req.Leverage, req.LeverageLong, req.LeverageShort)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, levLong, levShort, notional)
 	if err != nil {
 		s.logger.Error("build plan", "err", err)
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
@@ -139,6 +181,32 @@ func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, plan)
+}
+
+// resolveLegLeverage picks per-leg leverage values, falling back to the shared
+// `leverage` field for backwards compatibility. Any explicitly provided per-leg
+// value is validated against the allowed range; a shared fallback of 0 is
+// tolerated (the planner defaults it to 1x).
+func resolveLegLeverage(shared float64, long, short *float64) (float64, float64, error) {
+	pick := func(p *float64, name string) (float64, error) {
+		if p == nil {
+			return shared, nil
+		}
+		v := *p
+		if !domain.ValidateLeverage(v) {
+			return 0, fmt.Errorf("%s must be between %.0fx and %.0fx", name, domain.MinLeverage, domain.MaxLeverage)
+		}
+		return v, nil
+	}
+	l, err := pick(long, "leverage_long")
+	if err != nil {
+		return 0, 0, err
+	}
+	s, err := pick(short, "leverage_short")
+	if err != nil {
+		return 0, 0, err
+	}
+	return l, s, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -12,8 +12,18 @@ import (
 const planTTL = 10 * time.Second
 
 // BuildPlan creates an ExecutionPlan from a given opportunity ID using fresh market data.
-// leverage is clamped to allowed range (1x-5x). Pass 0 for default (1x).
-func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string, leverage float64) (*domain.ExecutionPlan, error) {
+// leverageLong / leverageShort are each clamped to allowed range (1x-5x); pass 0 to
+// default to 1x on that leg. requestedNotional is the user-entered notional per leg;
+// pass 0 to fall back to the opportunity's recommended notional. If > 0 it is used
+// verbatim for BOTH legs — position size stays equal across legs; only leverage /
+// margin / liquidation vary between them.
+func (s *Scanner) BuildPlan(
+	ctx context.Context,
+	opportunityID string,
+	leverageLong float64,
+	leverageShort float64,
+	requestedNotional float64,
+) (*domain.ExecutionPlan, error) {
 	// Find the opportunity
 	opp := s.FindOpportunity(opportunityID)
 	if opp == nil {
@@ -95,11 +105,52 @@ func (s *Scanner) BuildPlan(ctx context.Context, opportunityID string, leverage 
 		domain.SlippageExecutable(slippageLevel)
 
 	notional := opp.RecommendedNotional
-
-	if leverage <= 0 {
-		leverage = domain.DefaultLeverage
+	if requestedNotional > 0 {
+		notional = requestedNotional
 	}
-	levConfig := domain.ComputeLeverage(notional, leverage)
+
+	if leverageLong <= 0 {
+		leverageLong = domain.DefaultLeverage
+	}
+	if leverageShort <= 0 {
+		leverageShort = domain.DefaultLeverage
+	}
+	// Per-leg leverage configs (leverage is clamped to [Min,Max] inside).
+	longCfg := domain.ComputeLeverage(notional, leverageLong)
+	shortCfg := domain.ComputeLeverage(notional, leverageShort)
+
+	// leg1 is long, leg2 is short (see leg construction above).
+	leg1.Leverage = longCfg.Leverage
+	leg1.MarginRequired = notional / longCfg.Leverage
+	leg2.Leverage = shortCfg.Leverage
+	leg2.MarginRequired = notional / shortCfg.Leverage
+
+	// Aggregate config for backward-compat top-level Leverage field.
+	// MarginRequired = sum of leg margins; GrossExposure stays 2×notional.
+	totalMargin := leg1.MarginRequired + leg2.MarginRequired
+	exposure := notional * 2
+	effective := 0.0
+	if totalMargin > 0 {
+		effective = exposure / totalMargin
+	}
+	// Top-level Leverage.Leverage: keep as the long leg for legacy display
+	// (frontend now reads per-leg values; this is a compatibility surface).
+	levConfig := domain.LeverageConfig{
+		Leverage:          leg1.Leverage,
+		MarginRequired:    totalMargin,
+		GrossExposure:     exposure,
+		EffectiveLeverage: effective,
+	}
+
+	// Attach estimated liquidation to each leg at THIS leg's leverage.
+	// We use ExpectedPrice as the reference "current" price — plan is built
+	// from a fresh snapshot, so at plan time entry ≈ current.
+	leg1.LiquidationPrice = domain.LiquidationPrice(leg1.ExpectedPrice, leg1.Side, leg1.Leverage)
+	leg1.LiquidationDistance = domain.LiquidationDistance(leg1.ExpectedPrice, leg1.LiquidationPrice, leg1.Side)
+	leg1.LiquidationRisk = domain.ClassifyLiqRisk(leg1.LiquidationDistance, leg1.LiquidationPrice)
+	leg2.LiquidationPrice = domain.LiquidationPrice(leg2.ExpectedPrice, leg2.Side, leg2.Leverage)
+	leg2.LiquidationDistance = domain.LiquidationDistance(leg2.ExpectedPrice, leg2.LiquidationPrice, leg2.Side)
+	leg2.LiquidationRisk = domain.ClassifyLiqRisk(leg2.LiquidationDistance, leg2.LiquidationPrice)
 
 	plan := &domain.ExecutionPlan{
 		ID:            fmt.Sprintf("plan-%s-%d", opp.ID, now.UnixMilli()),

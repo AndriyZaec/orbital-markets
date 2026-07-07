@@ -1,15 +1,17 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
-import { injected } from 'wagmi/connectors'
-import { useVenueAuthority, type SigningReadiness } from '@/hooks/useVenueAuthority'
+import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import nadoLogo from '@/assets/nado.jpg'
 import gmtradeLogo from '@/assets/gm-trade.png'
 import driftLogo from '@/assets/drift.png'
 
+// Static venue metadata (logos, blurbs, chain, coming-soon flag). Runtime
+// readiness comes from useVenueReadiness — the single typed layer that
+// composes wallet + signer + balance state.
 interface VenueDef {
   id: string
   name: string
@@ -27,45 +29,110 @@ const VENUES: VenueDef[] = [
   { id: 'gmtrade', name: 'GMTrade', logo: gmtradeLogo, description: 'Solana-based perpetual trading platform', chain: 'Solana', comingSoon: true },
 ]
 
-const READINESS_CONFIG: Record<SigningReadiness, { label: string; dot: string; text: string }> = {
-  not_connected: { label: 'Not Connected', dot: 'bg-zinc-500', text: 'text-muted-foreground' },
-  connected_cannot_sign: { label: 'No Signer', dot: 'bg-yellow-400', text: 'text-yellow-400' },
-  ready: { label: 'Ready', dot: 'bg-green-400', text: 'text-green-400' },
-  error: { label: 'Error', dot: 'bg-red-400', text: 'text-red-400' },
-}
-
-function truncateAddress(addr: string): string {
-  if (addr.length <= 12) return addr
-  return addr.slice(0, 6) + '...' + addr.slice(-4)
-}
-
 interface Props {
   open: boolean
   onConnectionChange?: (count: number) => void
   onClose: () => void
 }
 
+function fmtUsd(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return '--'
+  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
+  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(2)}K`
+  return `$${n.toFixed(2)}`
+}
+
+// Diagnostic pill state (label + colors). Copy is operator-friendly, not
+// adapter jargon: we say "Balance" not "balance stream", etc.
+type PillTone = 'ok' | 'pending' | 'off' | 'bad'
+const TONE: Record<PillTone, { dot: string; text: string }> = {
+  ok:      { dot: 'bg-green-400',           text: 'text-green-400' },
+  pending: { dot: 'bg-yellow-400',          text: 'text-yellow-400' },
+  off:     { dot: 'bg-zinc-500',            text: 'text-muted-foreground' },
+  bad:     { dot: 'bg-red-400',             text: 'text-red-400' },
+}
+
+function walletPill(r: VenueReadiness): { label: string; tone: PillTone } {
+  if (r.status === 'error') return { label: 'Error', tone: 'bad' }
+  return r.walletConnected ? { label: 'Connected', tone: 'ok' } : { label: 'Not connected', tone: 'off' }
+}
+function signerPill(r: VenueReadiness): { label: string; tone: PillTone } {
+  if (!r.walletConnected) return { label: '—', tone: 'off' }
+  return r.signerReady ? { label: 'Ready', tone: 'ok' } : { label: 'Missing', tone: 'pending' }
+}
+function balancePill(r: VenueReadiness): { label: string; tone: PillTone } {
+  if (!r.walletConnected) return { label: '—', tone: 'off' }
+  if (r.balanceReady) return { label: 'Ready', tone: 'ok' }
+  // Stream up but snapshot is old — surface as Stale, not Pending, so the
+  // operator can tell the difference between "still initializing" and
+  // "data went stale after being fresh".
+  if (r.streamReady && !r.accountFresh) return { label: 'Stale', tone: 'pending' }
+  if (r.balanceConnected || r.streamReady) return { label: 'Pending', tone: 'pending' }
+  return { label: 'Not connected', tone: 'off' }
+}
+
+// Overall aggregate → header color + copy. Kept local so the aggregate
+// hook can stay purely data.
+function aggregateTone(label: 'Ready' | 'Needs attention' | 'Not connected'): PillTone {
+  if (label === 'Ready') return 'ok'
+  if (label === 'Needs attention') return 'pending'
+  return 'off'
+}
+
 export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
-  const { venueAuthorities, pacifica, hyperliquid } = useVenueAuthority()
+  const {
+    pacifica,
+    hyperliquid,
+    aggregate,
+    ensureStatus,
+    ensureError,
+    refreshBalances,
+  } = useVenueReadiness()
+
+  // Opening the panel is a user intent to see fresh state — nudge a refresh.
+  // (Background poll is deliberately slow at 30s.)
+  useEffect(() => {
+    if (open) refreshBalances().catch(() => {})
+  }, [open, refreshBalances])
 
   const solWallet = useWallet()
   const { setVisible: setSolModalVisible } = useWalletModal()
-  const { connect: evmConnect } = useEvmConnect()
+  // `connectors` is EIP-6963-populated: each installed EVM wallet announces
+  // itself as a separate entry, so the user can pick one instead of being
+  // silently routed to whatever won window.ethereum.
+  const { connect: evmConnect, connectors: evmConnectors } = useEvmConnect()
   const { disconnect: evmDisconnect } = useEvmDisconnect()
 
-  const connectedCount = venueAuthorities.filter((v) => v.readiness === 'ready').length
-  const totalSupported = VENUES.filter((v) => !v.comingSoon).length
+  // Which venue's wallet picker modal is open. Overlay-style — matches how
+  // the Solana wallet-adapter modal renders and keeps the venue card tidy.
+  const [pickerOpen, setPickerOpen] = useState<string | null>(null)
 
   useEffect(() => {
-    onConnectionChange?.(connectedCount)
-  }, [connectedCount, onConnectionChange])
+    // Preserve existing parent contract: this counts fully-ready venues.
+    onConnectionChange?.(aggregate.readyCount)
+  }, [aggregate.readyCount, onConnectionChange])
 
   const handleConnect = (venueId: string) => {
     if (venueId === 'pacifica') {
       setSolModalVisible(true)
-    } else if (venueId === 'hyperliquid') {
-      evmConnect({ connector: injected() })
+      return
     }
+    if (venueId === 'hyperliquid') {
+      // If exactly one EVM connector is installed, skip the picker; else open
+      // the inline picker so the user chooses which wallet to connect.
+      if (evmConnectors.length === 1) {
+        evmConnect({ connector: evmConnectors[0] })
+        return
+      }
+      setPickerOpen((v) => (v === 'hyperliquid' ? null : 'hyperliquid'))
+    }
+  }
+
+  const handlePickEvmConnector = (connectorUid: string) => {
+    const c = evmConnectors.find((x) => x.uid === connectorUid)
+    if (!c) return
+    evmConnect({ connector: c })
+    setPickerOpen(null)
   }
 
   const handleDisconnect = (venueId: string) => {
@@ -76,11 +143,13 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     }
   }
 
-  const getVenueState = (venueId: string) => {
+  const getReadiness = (venueId: string): VenueReadiness | null => {
     if (venueId === 'pacifica') return pacifica
     if (venueId === 'hyperliquid') return hyperliquid
     return null
   }
+
+  const summaryTone = TONE[aggregateTone(aggregate.statusLabel)]
 
   return (
     <div
@@ -91,30 +160,37 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Connect Accounts</h2>
-          <p className="text-[10px] text-muted-foreground/60 mt-0.5">{connectedCount}/{totalSupported} venues linked</p>
+          <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+            {aggregate.readyCount}/{aggregate.totalCount} venues ready
+          </p>
         </div>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
       </div>
 
-      {/* Status summary */}
+      {/* Aggregate readiness summary */}
       <div className="px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-muted-foreground">Signing Status</span>
-          <span className={`font-medium ${connectedCount === totalSupported ? 'text-green-400' : connectedCount > 0 ? 'text-yellow-400' : 'text-muted-foreground'}`}>
-            {connectedCount === totalSupported ? 'All Ready' : connectedCount > 0 ? 'Partial' : 'No accounts'}
-          </span>
-        </div>
-        <div className="flex items-center justify-between text-[11px] mt-1.5">
-          <span className="text-muted-foreground">Live Execution</span>
+          <span className="text-muted-foreground">Trading readiness</span>
           <div className="flex items-center gap-1.5">
-            <div className={`size-1.5 rounded-full ${connectedCount === totalSupported ? 'bg-green-400' : 'bg-zinc-500'}`} />
-            <span className={`font-medium ${connectedCount === totalSupported ? 'text-green-400' : 'text-muted-foreground'}`}>
-              {connectedCount === totalSupported ? 'Enabled' : 'Disabled'}
-            </span>
+            <div className={`size-1.5 rounded-full ${summaryTone.dot}`} />
+            <span className={`font-medium ${summaryTone.text}`}>{aggregate.statusLabel}</span>
           </div>
         </div>
+        {!aggregate.allReady && aggregate.blockingReasons.length > 0 && (
+          <ul className="mt-2 flex flex-col gap-0.5">
+            {aggregate.blockingReasons.map((r, i) => (
+              <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
+            ))}
+          </ul>
+        )}
+        {ensureError && (
+          <p className="text-[10px] text-red-400 mt-2">Account data: {ensureError}</p>
+        )}
+        {ensureStatus === 'starting' && (
+          <p className="text-[10px] text-muted-foreground/70 mt-2">Starting account data…</p>
+        )}
       </div>
 
       {/* Venue list */}
@@ -122,13 +198,10 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
         <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mb-2 px-1">Venues</p>
         <div className="flex flex-col gap-2">
           {VENUES.map((venue) => {
-            const authority = getVenueState(venue.id)
+            const readiness = getReadiness(venue.id)
             const isComingSoon = venue.comingSoon
-            const readiness = authority?.readiness ?? 'not_connected'
-            const isReady = readiness === 'ready'
-            const cfg = isComingSoon
-              ? { label: 'Coming Soon', dot: 'bg-yellow-400/60', text: 'text-yellow-400/60' }
-              : READINESS_CONFIG[readiness]
+            const isReady = !isComingSoon && readiness?.status === 'ready'
+            const isErr = !isComingSoon && readiness?.status === 'error'
 
             return (
               <div
@@ -136,11 +209,14 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 className={`rounded-lg border px-3 py-3 ${
                   isReady
                     ? 'border-green-500/20 bg-green-500/[0.03]'
-                    : isComingSoon
-                      ? 'border-border bg-white/[0.01] opacity-50'
-                      : 'border-border bg-white/[0.02]'
+                    : isErr
+                      ? 'border-red-500/25 bg-red-500/[0.03]'
+                      : isComingSoon
+                        ? 'border-border bg-white/[0.01] opacity-50'
+                        : 'border-border bg-white/[0.02]'
                 }`}
               >
+                {/* Top row: logo + name + address/description */}
                 <div className="flex items-center gap-2.5 mb-2">
                   <div className="size-8 rounded-md bg-white/[0.04] border border-border flex items-center justify-center shrink-0 overflow-hidden">
                     {venue.logo ? (
@@ -154,29 +230,61 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       <span className="text-xs font-semibold text-foreground">{venue.name}</span>
                       <span className="text-[9px] px-1 py-px rounded bg-white/[0.06] text-muted-foreground/70 font-medium">{venue.chain}</span>
                     </div>
-                    {isReady && authority?.address ? (
-                      <p className="text-[10px] text-green-400/70 font-mono leading-snug mt-0.5 truncate">{truncateAddress(authority.address)}</p>
+                    {readiness?.shortAddress ? (
+                      <p className="text-[10px] text-muted-foreground/70 font-mono leading-snug mt-0.5 truncate">{readiness.shortAddress}</p>
                     ) : (
                       <p className="text-[10px] text-muted-foreground/50 leading-snug mt-0.5 truncate">{venue.description}</p>
                     )}
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`size-1.5 rounded-full ${cfg.dot}`} />
-                    <span className={`text-[10px] font-medium ${cfg.text}`}>{cfg.label}</span>
+
+                {/* Diagnostics — only for supported venues */}
+                {!isComingSoon && readiness && (
+                  <div className="mt-2 mb-2 rounded border border-border/60 bg-white/[0.02] px-2 py-2 flex flex-col gap-1">
+                    <DiagRow label="Wallet" pill={walletPill(readiness)} />
+                    <DiagRow label="Signer" pill={signerPill(readiness)} />
+                    <DiagRow label="Balance" pill={balancePill(readiness)} />
+                    {(readiness.equity !== null || readiness.available !== null) && (
+                      <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
+                        <span className="text-muted-foreground">Equity / Available</span>
+                        <span className="font-mono text-foreground">
+                          {fmtUsd(readiness.equity)} / {fmtUsd(readiness.available)}
+                        </span>
+                      </div>
+                    )}
+                    {readiness.blockingReasons.length > 0 && !isReady && (
+                      <ul className="mt-1 flex flex-col gap-0.5">
+                        {readiness.blockingReasons.map((r, i) => (
+                          <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
+                )}
+
+                {/* Action */}
+                <div className="flex items-center justify-end">
                   {isComingSoon ? (
                     <button disabled className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.04] text-muted-foreground/30 cursor-not-allowed">
                       Coming Soon
                     </button>
-                  ) : isReady ? (
-                    <button
-                      onClick={() => handleDisconnect(venue.id)}
-                      className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
-                    >
-                      Disconnect
-                    </button>
+                  ) : readiness?.walletConnected ? (
+                    <div className="flex items-center gap-1.5">
+                      {!isReady && (
+                        <button
+                          onClick={() => handleConnect(venue.id)}
+                          className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
+                        >
+                          Reconnect
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDisconnect(venue.id)}
+                        className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
                   ) : (
                     <button
                       onClick={() => handleConnect(venue.id)}
@@ -186,6 +294,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     </button>
                   )}
                 </div>
+
               </div>
             )
           })}
@@ -204,6 +313,153 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
           </p>
         </div>
       </div>
+
+      {pickerOpen === 'hyperliquid' && (
+        <EvmWalletPicker
+          connectors={evmConnectors}
+          onPick={handlePickEvmConnector}
+          onClose={() => setPickerOpen(null)}
+        />
+      )}
     </div>
   )
 }
+
+// Centered modal for choosing which EVM wallet to connect. Uses the EIP-6963
+// entries wagmi's useConnect exposes; each installed wallet is a distinct
+// row so the user is never silently routed to the window.ethereum default.
+// Suggested wallets shown when the user has none installed. Deep-linked to
+// each wallet's official download page so the empty state is actionable.
+const SUGGESTED_EVM_WALLETS: { name: string; url: string; blurb: string }[] = [
+  { name: 'MetaMask', url: 'https://metamask.io/download', blurb: 'Most widely supported' },
+  { name: 'Rabby',    url: 'https://rabby.io/',            blurb: 'Made for power users' },
+  { name: 'Rainbow',  url: 'https://rainbow.me/download',  blurb: 'Simple, mobile-first' },
+]
+
+function EvmWalletPicker({
+  connectors,
+  onPick,
+  onClose,
+}: {
+  connectors: readonly { uid: string; name: string; icon?: string }[]
+  onPick: (uid: string) => void
+  onClose: () => void
+}) {
+  const hasAny = connectors.length > 0
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[380px] max-w-[90vw] rounded-lg border border-border bg-card shadow-2xl"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-4 py-3 border-b border-border">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-foreground">Connect Hyperliquid</h3>
+            <p className="text-[11px] text-muted-foreground/80 mt-0.5">
+              Pick an EVM wallet installed in your browser.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors shrink-0 ml-2"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-3 flex flex-col gap-2">
+          {hasAny ? (
+            <>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 px-1">
+                Detected wallets
+              </p>
+              <div className="flex flex-col gap-1">
+                {connectors.map((c) => (
+                  <button
+                    key={c.uid}
+                    onClick={() => onPick(c.uid)}
+                    className="flex items-center gap-3 px-3 py-2 rounded text-sm font-medium bg-white/[0.03] hover:bg-white/[0.08] text-foreground transition-colors group"
+                  >
+                    {c.icon ? (
+                      <img src={c.icon} alt="" className="size-7 rounded" />
+                    ) : (
+                      <div className="size-7 rounded bg-white/[0.08] flex items-center justify-center text-[11px] font-bold text-muted-foreground">
+                        {c.name[0]}
+                      </div>
+                    )}
+                    <span className="truncate flex-1 text-left">{c.name}</span>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className="text-muted-foreground/40 group-hover:text-muted-foreground transition-colors">
+                      <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="rounded border border-yellow-500/20 bg-yellow-500/[0.04] px-3 py-2">
+                <p className="text-[11px] text-yellow-200/80 font-medium">No EVM wallet detected</p>
+                <p className="text-[10px] text-muted-foreground/70 mt-1 leading-relaxed">
+                  Install an EVM browser wallet, then refresh this page. Solana wallets
+                  (Phantom, Backpack Solana) don't work here — Hyperliquid runs on an EVM chain.
+                </p>
+              </div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 px-1">
+                Suggested
+              </p>
+              <div className="flex flex-col gap-1">
+                {SUGGESTED_EVM_WALLETS.map((w) => (
+                  <a
+                    key={w.name}
+                    href={w.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between px-3 py-2 rounded text-sm bg-white/[0.03] hover:bg-white/[0.08] text-foreground transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-medium">{w.name}</p>
+                      <p className="text-[10px] text-muted-foreground/70">{w.blurb}</p>
+                    </div>
+                    <span className="text-[10px] text-blue-400 shrink-0 ml-2">Install ↗</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer explainer */}
+        <div className="px-4 py-2.5 border-t border-border">
+          <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+            You'll approve the connection in your wallet. Orbital never sees your seed phrase
+            or private keys — every action is signed by the wallet itself.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DiagRow({ label, pill }: { label: string; pill: { label: string; tone: PillTone } }) {
+  const t = TONE[pill.tone]
+  return (
+    <div className="flex items-center justify-between text-[10px]">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <div className={`size-1.5 rounded-full ${t.dot}`} />
+        <span className={`font-medium ${t.text}`}>{pill.label}</span>
+      </div>
+    </div>
+  )
+}
+
+// Suppress unused-VenueId warning if consumers of this file don't import it.
+export type { VenueId }
