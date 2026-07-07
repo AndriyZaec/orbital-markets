@@ -81,7 +81,20 @@ function aggregateTone(label: 'Ready' | 'Needs attention' | 'Not connected'): Pi
 }
 
 export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
-  const { pacifica, hyperliquid, aggregate } = useVenueReadiness()
+  const {
+    pacifica,
+    hyperliquid,
+    aggregate,
+    ensureStatus,
+    ensureError,
+    refreshBalances,
+  } = useVenueReadiness()
+
+  // Opening the panel is a user intent to see fresh state — nudge a refresh.
+  // (Background poll is deliberately slow at 30s.)
+  useEffect(() => {
+    if (open) refreshBalances().catch(() => {})
+  }, [open, refreshBalances])
 
   const solWallet = useWallet()
   const { setVisible: setSolModalVisible } = useWalletModal()
@@ -150,6 +163,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
               <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
             ))}
           </ul>
+        )}
+        {ensureError && (
+          <p className="text-[10px] text-red-400 mt-2">Account data: {ensureError}</p>
+        )}
+        {ensureStatus === 'starting' && (
+          <p className="text-[10px] text-muted-foreground/70 mt-2">Starting account data…</p>
         )}
       </div>
 

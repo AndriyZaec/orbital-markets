@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { apiFetch } from '@/lib/api'
 import { useVenueAuthority, type SigningReadiness } from './useVenueAuthority'
 import { useLiveBalances } from './useLiveBalances'
 
@@ -50,11 +51,23 @@ export interface AggregateReadiness {
   statusLabel: 'Ready' | 'Needs attention' | 'Not connected'
 }
 
+// Status of the backend account-stream ensure step. This is per-session
+// UI state, not persisted — a fresh page load starts idle again.
+export type EnsureStatus = 'idle' | 'starting' | 'ready' | 'error'
+
 export interface UseVenueReadinessResult {
   pacifica: VenueReadiness
   hyperliquid: VenueReadiness
   venues: VenueReadiness[]
   aggregate: AggregateReadiness
+  ensureStatus: EnsureStatus
+  ensureError: string | null
+  ensureAccounts: () => Promise<void>
+  // Force a balances re-fetch. Callers use this on user intent (opening
+  // the trade panel, clicking Execute Live) — the background 30s poll is
+  // deliberately slow, so intent-driven refresh is how we stay accurate at
+  // the moments that matter.
+  refreshBalances: () => Promise<void>
 }
 
 const LABELS: Record<VenueId, string> = {
@@ -152,6 +165,64 @@ export function useVenueReadiness(): UseVenueReadinessResult {
   const authority = useVenueAuthority()
   const balances = useLiveBalances()
 
+  // Ensure state — kick /live/accounts/ensure once per (pacAddr|hlAddr) pair
+  // so backend account subscribers can start BEFORE Execute Live. Without
+  // this the UI deadlocks: readiness blocks Execute Live, but Execute Live
+  // (via /live/prepare) is the only thing that starts the streams.
+  const [ensureStatus, setEnsureStatus] = useState<EnsureStatus>('idle')
+  const [ensureError, setEnsureError] = useState<string | null>(null)
+  const inflightRef = useRef<string | null>(null)   // pair currently being ensured
+  const attemptedRef = useRef<Set<string>>(new Set()) // pairs already auto-attempted
+
+  const pacAddr = authority.pacifica.address
+  const hlAddr = authority.hyperliquid.address
+  const pacSignerReady = authority.pacifica.readiness === 'ready'
+  const hlSignerReady = authority.hyperliquid.readiness === 'ready'
+
+  const doEnsure = useCallback(async (pac: string, hl: string) => {
+    const pair = `${pac}|${hl}`
+    if (inflightRef.current === pair) return // dedup concurrent calls
+    inflightRef.current = pair
+    setEnsureStatus('starting')
+    setEnsureError(null)
+    try {
+      const resp = await apiFetch('/api/v1/live/accounts/ensure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_pacifica: pac, account_hyperliquid: hl }),
+      })
+      if (!resp.ok) {
+        const b = await resp.json().catch(() => ({}))
+        throw new Error(b.error || `HTTP ${resp.status}`)
+      }
+      setEnsureStatus('ready')
+      // Nudge balances so readiness can move to ready without waiting for
+      // the next 5s poll tick.
+      balances.refetch().catch(() => {})
+    } catch (e) {
+      setEnsureStatus('error')
+      setEnsureError(e instanceof Error ? e.message : 'Unknown error')
+    } finally {
+      inflightRef.current = null
+    }
+  }, [balances])
+
+  // Auto-start streams once per address pair as soon as BOTH signers are
+  // ready. Manual retry (ensureAccounts) bypasses the attempted-set check.
+  useEffect(() => {
+    if (!pacAddr || !hlAddr || !pacSignerReady || !hlSignerReady) return
+    const pair = `${pacAddr}|${hlAddr}`
+    if (attemptedRef.current.has(pair)) return
+    attemptedRef.current.add(pair)
+    doEnsure(pacAddr, hlAddr)
+  }, [pacAddr, hlAddr, pacSignerReady, hlSignerReady, doEnsure])
+
+  const ensureAccounts = useCallback(async () => {
+    if (!pacAddr || !hlAddr) return
+    // Manual retry: bypass the attempted-set gate.
+    await doEnsure(pacAddr, hlAddr)
+  }, [pacAddr, hlAddr, doEnsure])
+
   return useMemo<UseVenueReadinessResult>(() => {
     const pacifica = buildReadiness({
       venue: 'pacifica',
@@ -185,6 +256,10 @@ export function useVenueReadiness(): UseVenueReadinessResult {
       pacifica,
       hyperliquid,
       venues,
+      ensureStatus,
+      ensureError,
+      ensureAccounts,
+      refreshBalances: balances.refetch,
       aggregate: {
         allReady,
         readyCount,
@@ -193,5 +268,5 @@ export function useVenueReadiness(): UseVenueReadinessResult {
         statusLabel,
       },
     }
-  }, [authority.pacifica, authority.hyperliquid, balances])
+  }, [authority.pacifica, authority.hyperliquid, balances, ensureStatus, ensureError, ensureAccounts])
 }

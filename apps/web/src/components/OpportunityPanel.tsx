@@ -128,8 +128,15 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
-  const { aggregate: readinessAggregate } = useVenueReadiness()
+  const { aggregate: readinessAggregate, refreshBalances } = useVenueReadiness()
   const isFullyReady = readinessAggregate.allReady
+
+  // Opening the trade panel is a user intent to trade — nudge a balance
+  // refresh so the readiness gate reflects current state rather than the
+  // slow (30s) background poll.
+  useEffect(() => {
+    refreshBalances().catch(() => {})
+  }, [refreshBalances])
   const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
   const balances = useLiveBalances()
   const [showLiveModal, setShowLiveModal] = useState(false)
@@ -147,6 +154,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   }
 
   const handleExecuteLive = () => {
+    // Kick a balance refresh alongside the execute. Non-blocking: readiness
+    // was already ready when the button enabled; this just tightens the
+    // window between last-known-fresh and actual submission.
+    refreshBalances().catch(() => {})
     setShowLiveModal(true)
     executeLive(opp.id, leverageLong, leverageShort, notionalForPlan)
   }

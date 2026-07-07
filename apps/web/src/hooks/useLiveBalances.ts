@@ -27,7 +27,12 @@ const EMPTY: Balances = {
   hyperliquid: { venue: 'hyperliquid', equity: 0, available: 0, connected: false, stream_ready: false, fresh: false, age_seconds: 0 },
 }
 
-export function useLiveBalances(pollInterval = 5_000) {
+// Balance display is background context. The real freshness gate lives in
+// /live/prepare (30s admissionFreshness). 30s poll here keeps request volume
+// low while still catching a broken stream well within the 5-minute display
+// staleness window. Consumers refresh on intent (opening trade panel /
+// clicking Execute Live) via balances.refetch().
+export function useLiveBalances(pollInterval = 30_000) {
   const [balances, setBalances] = useState<Balances>(EMPTY)
 
   const fetch_ = useCallback(async () => {
@@ -47,5 +52,9 @@ export function useLiveBalances(pollInterval = 5_000) {
     return () => clearInterval(id)
   }, [fetch_, pollInterval])
 
-  return balances
+  // Expose refetch so ensure-account-streams callers can force a poll and
+  // move the UI to "ready" without waiting for the next 5s tick. Returned
+  // shape is a superset of Balances (adds `refetch`); existing consumers
+  // that only read pacifica/hyperliquid are unaffected.
+  return { ...balances, refetch: fetch_ }
 }

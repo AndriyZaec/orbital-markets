@@ -111,7 +111,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	// looks at whether we have current account state to submit against. On
 	// first prepare after connect, streams may not have produced a snapshot
 	// yet — return 409 with a clear per-venue reason so the UI can retry.
-	pacStatus, hlStatus := s.liveAccountStatuses()
+	pacStatus, hlStatus := s.liveAccountStatuses(admissionFreshness)
 	var notReady []string
 	if !pacStatus.Fresh {
 		notReady = append(notReady, fmt.Sprintf("Pacifica: %s", pacStatus.Reason))
@@ -358,11 +358,22 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// liveAccountFreshness bounds how stale a venue account snapshot may be for it
-// to count as "ready" for live execution. Matches the pre-trade check window
-// in venue/*/account/pretrade.go — both surfaces reject at the same age so the
-// UI's readiness and the actual admission gate agree.
-const liveAccountFreshness = 30 * time.Second
+// Two freshness thresholds serve two different needs:
+//
+//   admissionFreshness — hard gate at /live/prepare and pretrade checks in
+//     venue/*/account/pretrade.go. Must stay strict; this is what prevents
+//     submitting orders against stale account state.
+//
+//   displayFreshness — soft gate for the balances/readiness UI. Push-driven
+//     Pacifica WS doesn't heartbeat when nothing is happening, so a healthy
+//     but quiet account naturally ages past 30s. Using the strict window for
+//     display caused frequent false "Stale" flags with no user-visible fix.
+//     5 minutes is generous enough to hide the quiet-account case while
+//     still catching a genuinely broken stream.
+const (
+	admissionFreshness = 30 * time.Second
+	displayFreshness   = 5 * time.Minute
+)
 
 // venueAccountStatus is the per-venue account-data readiness view returned by
 // /live/balances and consumed by the /live/prepare gate.
@@ -383,7 +394,7 @@ type venueAccountStatus struct {
 // is non-zero); fresh means that snapshot is within liveAccountFreshness.
 // The reason string is populated only when NOT fresh, so happy-path responses
 // stay lean.
-func buildVenueAccountStatus(venue string, connected bool, lastUpdated time.Time, equity, available float64) venueAccountStatus {
+func buildVenueAccountStatus(venue string, connected bool, lastUpdated time.Time, equity, available float64, freshness time.Duration) venueAccountStatus {
 	st := venueAccountStatus{
 		Venue:     venue,
 		Equity:    equity,
@@ -396,7 +407,7 @@ func buildVenueAccountStatus(venue string, connected bool, lastUpdated time.Time
 		age := time.Since(lastUpdated)
 		st.AgeSeconds = age.Seconds()
 		st.StreamReady = true
-		st.Fresh = age <= liveAccountFreshness
+		st.Fresh = age <= freshness
 	}
 	if !st.Connected {
 		st.Reason = "account stream not connected"
@@ -408,21 +419,21 @@ func buildVenueAccountStatus(venue string, connected bool, lastUpdated time.Time
 	return st
 }
 
-// liveAccountStatuses reads current status for both venues. Safe when live
-// deps aren't wired (returns disconnected).
-func (s *Server) liveAccountStatuses() (venueAccountStatus, venueAccountStatus) {
+// liveAccountStatuses reads current status for both venues using the given
+// freshness threshold. Safe when live deps aren't wired (returns disconnected).
+func (s *Server) liveAccountStatuses(freshness time.Duration) (venueAccountStatus, venueAccountStatus) {
 	var pac, hl venueAccountStatus
 	if s.live != nil && s.live.pacState != nil {
 		snap := s.live.pacState.Snapshot()
-		pac = buildVenueAccountStatus("pacifica", snap.Connected, snap.LastUpdated, snap.Equity, snap.AvailableToSpend)
+		pac = buildVenueAccountStatus("pacifica", snap.Connected, snap.LastUpdated, snap.Equity, snap.AvailableToSpend, freshness)
 	} else {
-		pac = buildVenueAccountStatus("pacifica", false, time.Time{}, 0, 0)
+		pac = buildVenueAccountStatus("pacifica", false, time.Time{}, 0, 0, freshness)
 	}
 	if s.live != nil && s.live.hlState != nil {
 		snap := s.live.hlState.Snapshot()
-		hl = buildVenueAccountStatus("hyperliquid", snap.Connected, snap.LastUpdated, snap.Margin.AccountEquity, snap.Margin.AvailableBalance)
+		hl = buildVenueAccountStatus("hyperliquid", snap.Connected, snap.LastUpdated, snap.Margin.AccountEquity, snap.Margin.AvailableBalance, freshness)
 	} else {
-		hl = buildVenueAccountStatus("hyperliquid", false, time.Time{}, 0, 0)
+		hl = buildVenueAccountStatus("hyperliquid", false, time.Time{}, 0, 0, freshness)
 	}
 	return pac, hl
 }
@@ -430,11 +441,60 @@ func (s *Server) liveAccountStatuses() (venueAccountStatus, venueAccountStatus) 
 // handleLiveBalances returns per-venue account status: balances plus stream
 // readiness and freshness. Never 500s if wallets aren't connected — returns
 // a disconnected/zero response with a reason so the UI can render it.
+// Zero equity/available is NOT treated as pending; freshness is the only
+// gate on "Ready".
 //
 // GET /api/v1/live/balances
 func (s *Server) handleLiveBalances(w http.ResponseWriter, _ *http.Request) {
-	pac, hl := s.liveAccountStatuses()
+	pac, hl := s.liveAccountStatuses(displayFreshness)
 	writeJSON(w, http.StatusOK, map[string]venueAccountStatus{
+		"pacifica":    pac,
+		"hyperliquid": hl,
+	})
+}
+
+// handleLiveAccountsEnsure starts the venue account subscribers up front so
+// readiness can transition to "ready" BEFORE the user clicks Execute Live.
+// Without this, /live/prepare was the only trigger for EnsureAccountStreams,
+// which deadlocked the UI (readiness blocks prepare; prepare starts streams).
+//
+// POST /api/v1/live/accounts/ensure
+// Body: {"account_pacifica": "...", "account_hyperliquid": "..."}
+//
+// The handler intentionally does NOT build a plan, create a session, or
+// return signing requests — those remain on /live/prepare.
+func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "live execution not configured",
+		})
+		return
+	}
+	var req struct {
+		AccountPacifica    string `json:"account_pacifica"`
+		AccountHyperliquid string `json:"account_hyperliquid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.AccountPacifica == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_pacifica required"})
+		return
+	}
+	if req.AccountHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_hyperliquid required"})
+		return
+	}
+
+	// Idempotent — LiveDeps.EnsureAccountStreams no-ops after the first call.
+	s.live.EnsureAccountStreams(req.AccountPacifica, req.AccountHyperliquid)
+
+	// Snapshot readiness right after the call. On a very first ensure the
+	// snapshot will typically still be empty (streams start asynchronously);
+	// the frontend polls /live/balances to see them go ready.
+	pac, hl := s.liveAccountStatuses(displayFreshness)
+	writeJSON(w, http.StatusOK, map[string]any{
 		"pacifica":    pac,
 		"hyperliquid": hl,
 	})
