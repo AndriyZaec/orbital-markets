@@ -27,7 +27,10 @@ interface Opportunity {
   warnings: string[] | null
 }
 
-export function useOpportunities(pollInterval = 10_000) {
+// Default poll matches the backend scanner's 60s refresh cadence. Polling
+// faster just moves the same data around; a manual refetch is still available
+// on the returned object for user-triggered refreshes.
+export function useOpportunities(pollInterval = 60_000) {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api/middleware"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -115,8 +116,29 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+// Bounds for the ?limit query on GET /api/v1/opportunities. Default keeps the
+// default response small (~100 rows) since the UI's default table shows far
+// fewer; the cap protects against pathological requests. Invalid or missing
+// values fall back to the default — never rejected.
+const (
+	opportunitiesDefaultLimit = 100
+	opportunitiesMaxLimit     = 300
+)
+
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
+	limit := opportunitiesDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+			if limit > opportunitiesMaxLimit {
+				limit = opportunitiesMaxLimit
+			}
+		}
+	}
 	opps := s.scanner.Opportunities()
+	if len(opps) > limit {
+		opps = opps[:limit]
+	}
 	writeJSON(w, http.StatusOK, opps)
 }
 

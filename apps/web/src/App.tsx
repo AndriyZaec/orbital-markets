@@ -101,7 +101,8 @@ export default function App() {
   // "is this trader actually ready to trade" signal.
   const { aggregate: accountsAggregate } = useVenueReadiness()
   const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('live')
-  const countdown = useCountdown(lastUpdated, 10)
+  // Matches useOpportunities' 60s poll interval — scanner refreshes every 60s.
+  const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null

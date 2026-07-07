@@ -92,7 +92,8 @@ function useExpiry(expiresAt: string | null) {
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
 export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions, onOpenAccounts }: Props) {
-  const countdown = useCountdown(lastUpdated, 10)
+  // Matches useOpportunities' 60s poll interval.
+  const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
 
   const isLongA = opp.direction === 'long_a_short_b'
