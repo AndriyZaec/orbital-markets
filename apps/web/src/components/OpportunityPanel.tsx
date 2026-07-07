@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
-import { useVenueAuthority } from '@/hooks/useVenueAuthority'
+import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { useLiveBalances } from '@/hooks/useLiveBalances'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -126,7 +126,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageLong, leverageShort, notionalForPlan)
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
-  const { isFullyReady } = useVenueAuthority()
+  // Live execution is gated by the typed readiness layer (wallet + signer +
+  // balance stream). blockingReasons is already venue-prefixed and de-duped.
+  const { aggregate: readinessAggregate } = useVenueReadiness()
+  const isFullyReady = readinessAggregate.allReady
   const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
   const balances = useLiveBalances()
   const [showLiveModal, setShowLiveModal] = useState(false)
@@ -371,10 +374,26 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               disabled={!isFullyReady || !plan?.executable || planExpired || planLoading || !notionalValid}
               onClick={handleExecuteLive}
             >
-              {isFullyReady ? 'Execute Live' : 'Connect Wallets to Go Live'}
+              {isFullyReady
+                ? 'Execute Live'
+                : readinessAggregate.statusLabel === 'Not connected'
+                  ? 'Connect Wallets to Go Live'
+                  : 'Accounts Not Ready'}
             </Button>
-            {!isFullyReady && (
-              <p className="text-[10px] text-muted-foreground/60 text-center mt-1.5">Connect both venue accounts to enable live execution</p>
+            {!isFullyReady && readinessAggregate.blockingReasons.length > 0 && (
+              <div className="mt-1.5">
+                <ul className="flex flex-col gap-0.5">
+                  {readinessAggregate.blockingReasons.slice(0, 3).map((r, i) => (
+                    <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
+                  ))}
+                  {readinessAggregate.blockingReasons.length > 3 && (
+                    <li className="text-[10px] text-muted-foreground/50 leading-snug">
+                      +{readinessAggregate.blockingReasons.length - 3} more…
+                    </li>
+                  )}
+                </ul>
+                <p className="text-[10px] text-muted-foreground/60 mt-1">Open Connect Accounts to fix.</p>
+              </div>
             )}
           </>
         )}

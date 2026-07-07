@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useSignTypedData } from 'wagmi'
@@ -93,11 +93,30 @@ interface AdvanceResp {
   unwind_status?: 'not_armed' | 'submit_failed' | 'unconfirmed' | 'confirmed'
 }
 
+// Normalize account strings for comparison. Ethereum addresses are
+// case-insensitive so we lowercase for that side; Solana base58 is
+// case-sensitive so we only trim it. Nulls stay null.
+function normalizePacifica(addr: string | null): string | null {
+  return addr ? addr.trim() : null
+}
+function normalizeHyperliquid(addr: string | null): string | null {
+  return addr ? addr.trim().toLowerCase() : null
+}
+
 export function useLiveExecution() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
   const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
   const { signTypedDataAsync } = useSignTypedData()
+
+  // Live refs of the currently connected accounts. The executeLive async
+  // callback is created once and closes over stale addresses; refs let us
+  // read the LATEST connected accounts inside the flow without re-creating
+  // the callback (which would cancel in-flight sessions).
+  const pacificaRef = useRef<string | null>(pacificaAddress)
+  const hyperliquidRef = useRef<string | null>(hyperliquidAddress)
+  useEffect(() => { pacificaRef.current = pacificaAddress }, [pacificaAddress])
+  useEffect(() => { hyperliquidRef.current = hyperliquidAddress }, [hyperliquidAddress])
 
   const buildSigners = useCallback((): Signers => ({
     pacifica: solWallet.signMessage && solWallet.publicKey
@@ -169,6 +188,21 @@ export function useLiveExecution() {
         throw new Error('Expected leg-1 open and unwind signing requests')
       }
 
+      // Snapshot the accounts the session was prepared for. Any subsequent
+      // wallet change must halt the flow (before leg 1) or trigger abort +
+      // armed unwind (after leg 1). Comparisons are normalized (lowercased
+      // for EVM, trimmed for Solana) so casing/whitespace doesn't false-flag.
+      const preparedPacifica = normalizePacifica(pacificaAddress)
+      const preparedHyperliquid = normalizeHyperliquid(hyperliquidAddress)
+
+      const detectAccountChange = (): string | null => {
+        const nowPac = normalizePacifica(pacificaRef.current)
+        const nowHl = normalizeHyperliquid(hyperliquidRef.current)
+        if (nowPac !== preparedPacifica) return 'Pacifica'
+        if (nowHl !== preparedHyperliquid) return 'Hyperliquid'
+        return null
+      }
+
       setState((s) => ({
         ...s,
         phase: 'awaiting_leg1',
@@ -182,6 +216,19 @@ export function useLiveExecution() {
       }))
 
       const signers = buildSigners()
+
+      // Guard: pre-leg-1 wallet swap → nothing submitted, fail cleanly.
+      {
+        const changed = detectAccountChange()
+        if (changed) {
+          setState((s) => ({
+            ...s,
+            phase: 'failed',
+            error: `${changed} wallet changed before execution. Restart the trade.`,
+          }))
+          return
+        }
+      }
 
       // 2. Sign BOTH leg-1 requests up front. If either fails, submit nothing.
       let signedLeg1: SignedAction[]
@@ -198,6 +245,20 @@ export function useLiveExecution() {
           error: `Leg 1 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
         }))
         return
+      }
+
+      // Guard: wallet swap during leg-1 signing but before we submit anything.
+      // Nothing has hit the venue yet; same rule as above.
+      {
+        const changed = detectAccountChange()
+        if (changed) {
+          setState((s) => ({
+            ...s,
+            phase: 'failed',
+            error: `${changed} wallet changed before execution. Restart the trade.`,
+          }))
+          return
+        }
       }
 
       // 3. Advance step 1 — backend arms unwind, submits leg 1, waits for fill.
@@ -232,6 +293,28 @@ export function useLiveExecution() {
         expiresAt: leg2Req.expires_at,
       }))
 
+      // Guard: wallet swap after leg 1 filled but before leg 2 signing.
+      // Leg 1 is live on the venue; the backend has an armed unwind. Call
+      // abort so it fires the pre-signed unwind. If abort itself fails, we
+      // surface a degraded state — manual action may be required.
+      {
+        const changed = detectAccountChange()
+        if (changed) {
+          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortOk = abortResp !== null
+          setState((s) => ({
+            ...s,
+            phase: abortOk ? 'aborted' : 'degraded',
+            reason: abortOk
+              ? `Execution aborted: ${changed} wallet changed after leg 1. Armed unwind fired.`
+              : `${changed} wallet changed after leg 1 and abort failed. Manual action may be required.`,
+            unwound: abortResp?.unwound ?? false,
+            unwindStatus: (abortResp?.unwind_status ?? (abortOk ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+          }))
+          return
+        }
+      }
+
       // 4. Sign leg 2. If it fails, tell the backend to abort -> fires armed unwind.
       let signedLeg2: SignedAction
       try {
@@ -246,6 +329,26 @@ export function useLiveExecution() {
           unwindStatus: (abortResp?.unwind_status ?? 'unconfirmed') as UnwindStatus,
         }))
         return
+      }
+
+      // Guard: wallet swap during leg-2 signing but before submitting.
+      // Same treatment as the pre-leg-2-sign guard.
+      {
+        const changed = detectAccountChange()
+        if (changed) {
+          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortOk = abortResp !== null
+          setState((s) => ({
+            ...s,
+            phase: abortOk ? 'aborted' : 'degraded',
+            reason: abortOk
+              ? `Execution aborted: ${changed} wallet changed after leg 1. Armed unwind fired.`
+              : `${changed} wallet changed after leg 1 and abort failed. Manual action may be required.`,
+            unwound: abortResp?.unwound ?? false,
+            unwindStatus: (abortResp?.unwind_status ?? (abortOk ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+          }))
+          return
+        }
       }
 
       // 5. Advance step 2 — submit leg 2, verify hedge.
