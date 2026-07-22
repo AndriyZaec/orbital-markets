@@ -72,6 +72,34 @@ func venueImpact(size float64, vd venueDepth) float64 {
 	return (vd.spread / 2) * (math.Sqrt(1+size/vd.topOfBook) - 1)
 }
 
+// estimateExecutionSlippage returns the cost of crossing the spread plus the
+// incremental BBO impact for the order's executable side. Bid and ask depth
+// must not be blended: longs consume asks, shorts consume bids.
+func estimateExecutionSlippage(md venue.MarketData, side domain.Side, notional float64) float64 {
+	if md.BidPrice <= 0 || md.AskPrice <= 0 {
+		return 0
+	}
+
+	depth := executionSideDepth(md, side)
+
+	spread := relSpread(md)
+	if spread <= 0 {
+		spread = minHiddenSpread
+	}
+	if depth <= 0 {
+		return spread / 2
+	}
+	vd := venueDepth{topOfBook: depth, spread: spread}
+	return spread/2 + venueImpact(notional, vd)
+}
+
+func executionSideDepth(md venue.MarketData, side domain.Side) float64 {
+	if side == domain.SideLong {
+		return md.AskSize
+	}
+	return md.BidSize
+}
+
 // computeSizing determines execution-aware sizing from BBO depth.
 //
 // Primary input: top-of-book bid/ask sizes from both venues.

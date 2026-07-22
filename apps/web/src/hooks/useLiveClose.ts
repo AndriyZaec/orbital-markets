@@ -6,7 +6,7 @@ import { useVenueAuthority } from './useVenueAuthority'
 import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 
-export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'done' | 'error'
+export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
 
 export interface CloseState {
   phase: ClosePhase
@@ -24,6 +24,22 @@ const INITIAL: CloseState = {
   succeeded: 0,
   failed: 0,
   errors: [],
+}
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+async function waitForClose(positionId: string): Promise<void> {
+  for (let attempt = 0; attempt < 22; attempt++) {
+    const resp = await apiFetch(`/api/v1/live/positions/${positionId}`)
+    if (!resp.ok) throw new Error(`Close confirmation failed: HTTP ${resp.status}`)
+    const data: { position: { state: string } } = await resp.json()
+    if (data.position.state === 'closed') return
+    if (data.position.state === 'degraded') {
+      throw new Error('A close fill was not confirmed; manual action may be required')
+    }
+    await delay(1_000)
+  }
+  throw new Error('Close fill confirmation timed out; check the position before retrying')
 }
 
 export function useLiveClose() {
@@ -82,16 +98,20 @@ export function useLiveClose() {
       setState(s => ({ ...s, phase: 'signing', total: requests.length }))
       const signers = buildSigners()
       const errors: string[] = []
-      let succeeded = 0
       let failed = 0
+      const signedActions: Array<{ request: SigningRequest; signed: SignedAction }> = []
 
       for (let i = 0; i < requests.length; i++) {
         const req = requests[i]
-        try {
-          setState(s => ({ ...s, phase: 'signing', submitted: i }))
-          const signed: SignedAction = await signRequest(req, signers)
+        setState(s => ({ ...s, phase: 'signing', submitted: i }))
+        const signed = await signRequest(req, signers)
+        signedActions.push({ request: req, signed })
+      }
 
-          setState(s => ({ ...s, phase: 'submitting', submitted: i }))
+      setState(s => ({ ...s, phase: 'submitting', submitted: 0 }))
+      for (let i = 0; i < signedActions.length; i++) {
+        const { request: req, signed } = signedActions[i]
+        try {
           const submitResp = await apiFetch('/api/v1/live/submit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -103,13 +123,11 @@ export function useLiveClose() {
           }
           const result: SubmissionResult = await submitResp.json()
 
-          if (result.accepted) {
-            succeeded++
-          } else {
+          if (!result.accepted) {
             failed++
             errors.push(`${req.venue} ${req.symbol}: ${result.error || 'rejected'}`)
           }
-          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors] }))
+          setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
         } catch (e) {
           failed++
           errors.push(`${req.venue} ${req.symbol}: ${e instanceof Error ? e.message : 'unknown'}`)
@@ -117,7 +135,14 @@ export function useLiveClose() {
         }
       }
 
-      setState(s => ({ ...s, phase: 'done', succeeded, failed, errors: [...errors] }))
+      if (failed > 0) {
+        setState(s => ({ ...s, phase: 'done', failed, errors: [...errors] }))
+        return
+      }
+
+      setState(s => ({ ...s, phase: 'confirming' }))
+      await waitForClose(positionId)
+      setState(s => ({ ...s, phase: 'done', succeeded: requests.length }))
     } catch (e) {
       setState(s => ({
         ...s,

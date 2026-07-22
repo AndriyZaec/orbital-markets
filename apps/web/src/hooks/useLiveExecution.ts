@@ -5,6 +5,12 @@ import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
 import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction } from '@/types/signing'
+import {
+  executionPhaseFromStatus,
+  normalizeHyperliquidAddress,
+  normalizePacificaAddress,
+  type AdvanceStatus,
+} from '@/lib/live-execution-state'
 
 // Two-phase non-custodial open (Option A):
 //   prepare -> sign leg-1 open + leg-1 unwind -> advance (submit leg 1, wait fill)
@@ -17,6 +23,9 @@ export type ExecutionPhase =
   | 'submitting_leg1' // backend submitting leg 1 + waiting for fill
   | 'awaiting_leg2' // signing leg-2 (sized from actual fill)
   | 'submitting_leg2' // backend submitting leg 2 + verifying hedge
+  | 'awaiting_leg2_retry' // signing the single residual hedge retry
+  | 'submitting_leg2_retry' // submitting the residual retry
+  | 'recovering' // venue truth is being reconciled after an ambiguous result
   | 'open' // success
   | 'degraded' // hedge broken; leg 1 unwound
   | 'aborted' // leg 1 underfilled or user-aborted; leg 1 unwound
@@ -29,7 +38,15 @@ export interface LegFillView {
   fill_ratio?: number
 }
 
-export type UnwindStatus = 'not_armed' | 'submit_failed' | 'unconfirmed' | 'confirmed' | null
+export type UnwindStatus = 'not_armed' | 'skipped' | 'submit_failed' | 'unconfirmed' | 'confirmed' | null
+
+export interface RemainingExposure {
+  leg: number
+  venue: string
+  symbol: string
+  side: string
+  amount: number
+}
 
 export interface LiveExecutionState {
   phase: ExecutionPhase
@@ -49,6 +66,7 @@ export interface LiveExecutionState {
   reason: string | null
   expiresAt: string | null
   currentVenue: string | null
+  remainingExposure: RemainingExposure[]
 }
 
 const INITIAL_STATE: LiveExecutionState = {
@@ -69,6 +87,7 @@ const INITIAL_STATE: LiveExecutionState = {
   reason: null,
   expiresAt: null,
   currentVenue: null,
+  remainingExposure: [],
 }
 
 interface PrepareResp {
@@ -82,7 +101,7 @@ interface PrepareResp {
 
 interface AdvanceResp {
   session_id: string
-  status: 'awaiting_leg2_sign' | 'open' | 'degraded' | 'aborted' | 'failed'
+  status: AdvanceStatus
   leg1_fill?: LegFillView
   leg2_fill?: LegFillView
   signing_requests?: SigningRequest[] // [leg2 open]
@@ -90,17 +109,8 @@ interface AdvanceResp {
   position_id?: string
   reason?: string
   unwound?: boolean
-  unwind_status?: 'not_armed' | 'submit_failed' | 'unconfirmed' | 'confirmed'
-}
-
-// Normalize account strings for comparison. Ethereum addresses are
-// case-insensitive so we lowercase for that side; Solana base58 is
-// case-sensitive so we only trim it. Nulls stay null.
-function normalizePacifica(addr: string | null): string | null {
-  return addr ? addr.trim() : null
-}
-function normalizeHyperliquid(addr: string | null): string | null {
-  return addr ? addr.trim().toLowerCase() : null
+  unwind_status?: 'not_armed' | 'skipped' | 'submit_failed' | 'unconfirmed' | 'confirmed'
+  remaining_exposure?: RemainingExposure[]
 }
 
 export function useLiveExecution() {
@@ -150,8 +160,7 @@ export function useLiveExecution() {
 
   const executeLive = useCallback(async (
     opportunityId: string,
-    leverageLong: number,
-    leverageShort: number,
+    leverage: number,
     requestedNotional?: number,
   ) => {
     if (!pacificaAddress || !hyperliquidAddress) {
@@ -168,9 +177,7 @@ export function useLiveExecution() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           opportunity_id: opportunityId,
-          leverage: leverageLong, // shared-fallback field
-          leverage_long: leverageLong,
-          leverage_short: leverageShort,
+          leverage,
           ...(typeof requestedNotional === 'number' && requestedNotional > 0
             ? { requested_notional: requestedNotional }
             : {}),
@@ -192,12 +199,12 @@ export function useLiveExecution() {
       // wallet change must halt the flow (before leg 1) or trigger abort +
       // armed unwind (after leg 1). Comparisons are normalized (lowercased
       // for EVM, trimmed for Solana) so casing/whitespace doesn't false-flag.
-      const preparedPacifica = normalizePacifica(pacificaAddress)
-      const preparedHyperliquid = normalizeHyperliquid(hyperliquidAddress)
+      const preparedPacifica = normalizePacificaAddress(pacificaAddress)
+      const preparedHyperliquid = normalizeHyperliquidAddress(hyperliquidAddress)
 
       const detectAccountChange = (): string | null => {
-        const nowPac = normalizePacifica(pacificaRef.current)
-        const nowHl = normalizeHyperliquid(hyperliquidRef.current)
+        const nowPac = normalizePacificaAddress(pacificaRef.current)
+        const nowHl = normalizeHyperliquidAddress(hyperliquidRef.current)
         if (nowPac !== preparedPacifica) return 'Pacifica'
         if (nowHl !== preparedHyperliquid) return 'Hyperliquid'
         return null
@@ -263,9 +270,19 @@ export function useLiveExecution() {
 
       // 3. Advance step 1 — backend arms unwind, submits leg 1, waits for fill.
       setState((s) => ({ ...s, phase: 'submitting_leg1' }))
-      const adv1 = await postAdvance({ session_id: prep.session_id, signed_actions: signedLeg1 })
+      let adv1: AdvanceResp
+      try {
+        adv1 = await postAdvance({ session_id: prep.session_id, signed_actions: signedLeg1 })
+      } catch (e) {
+        setState((s) => ({
+          ...s,
+          phase: 'recovering',
+          reason: `Leg-1 response is uncertain: ${e instanceof Error ? e.message : 'unknown error'}`,
+        }))
+        return
+      }
 
-      if (adv1.status === 'aborted' || adv1.status === 'failed' || adv1.status === 'degraded') {
+      if (adv1.status === 'aborted' || adv1.status === 'failed' || adv1.status === 'degraded' || adv1.status === 'recovering') {
         setState((s) => ({
           ...s,
           phase: adv1.status as ExecutionPhase,
@@ -273,6 +290,7 @@ export function useLiveExecution() {
           reason: adv1.reason ?? null,
           unwound: adv1.unwound ?? false,
           unwindStatus: (adv1.unwind_status ?? null) as UnwindStatus,
+          remainingExposure: adv1.remaining_exposure ?? [],
         }))
         return
       }
@@ -353,17 +371,91 @@ export function useLiveExecution() {
 
       // 5. Advance step 2 — submit leg 2, verify hedge.
       setState((s) => ({ ...s, phase: 'submitting_leg2' }))
-      const adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedLeg2] })
+      let adv2: AdvanceResp
+      try {
+        adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedLeg2] })
+      } catch (e) {
+        setState((s) => ({
+          ...s,
+          phase: 'recovering',
+          reason: `Leg-2 response is uncertain: ${e instanceof Error ? e.message : 'unknown error'}`,
+        }))
+        return
+      }
+
+      if (adv2.status === 'awaiting_leg2_retry_sign') {
+        const retryReq = adv2.signing_requests?.[0]
+        if (!retryReq) throw new Error('Expected residual leg-2 retry signing request')
+        setState((s) => ({
+          ...s,
+          phase: 'awaiting_leg2_retry',
+          leg2Fill: adv2.leg2_fill ?? null,
+          leg2Request: retryReq,
+          mismatch: adv2.mismatch ?? null,
+          reason: adv2.reason ?? null,
+          expiresAt: retryReq.expires_at,
+        }))
+
+        const abortRetry = async (failureReason: string): Promise<AdvanceResp | null> => {
+          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          if (!abortResp) {
+            setState((s) => ({
+              ...s,
+              phase: 'degraded',
+              reason: `${failureReason}; recovery request failed, manual action may be required`,
+            }))
+          }
+          return abortResp
+        }
+
+        const changed = detectAccountChange()
+        if (changed) {
+          const abortResp = await abortRetry(`${changed} wallet changed before leg-2 retry`)
+          if (!abortResp) return
+          adv2 = abortResp
+        } else {
+          let signedRetry: SignedAction | null = null
+          try {
+            signedRetry = await signRequest(retryReq, signers)
+          } catch (e) {
+            const message = `Leg 2 retry signing failed: ${e instanceof Error ? e.message : 'unknown error'}`
+            const abortResp = await abortRetry(message)
+            if (!abortResp) return
+            adv2 = { ...abortResp, reason: message }
+          }
+          if (signedRetry) {
+            const changedAfterSign = detectAccountChange()
+            if (changedAfterSign) {
+              const abortResp = await abortRetry(`${changedAfterSign} wallet changed during leg-2 retry signing`)
+              if (!abortResp) return
+              adv2 = abortResp
+            } else {
+              setState((s) => ({ ...s, phase: 'submitting_leg2_retry' }))
+              try {
+                adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedRetry] })
+              } catch (e) {
+                setState((s) => ({
+                  ...s,
+                  phase: 'recovering',
+                  reason: `Leg-2 retry response is uncertain: ${e instanceof Error ? e.message : 'unknown error'}`,
+                }))
+                return
+              }
+            }
+          }
+        }
+      }
 
       setState((s) => ({
         ...s,
-        phase: (adv2.status === 'open' ? 'open' : adv2.status) as ExecutionPhase,
+        phase: executionPhaseFromStatus(adv2.status),
         leg2Fill: adv2.leg2_fill ?? null,
         mismatch: adv2.mismatch ?? null,
         positionId: adv2.position_id ?? null,
         reason: adv2.reason ?? null,
         unwound: adv2.unwound ?? false,
         unwindStatus: (adv2.unwind_status ?? null) as UnwindStatus,
+        remainingExposure: adv2.remaining_exposure ?? [],
       }))
     } catch (e) {
       setState((s) => ({

@@ -27,3 +27,10 @@ type Adapter interface {
 	Name() string
 	FetchMarketData(ctx context.Context) ([]MarketData, error)
 }
+
+// MetadataRefresher is implemented by adapters whose execution constraints are
+// not continuously refreshed with market data. Scanner plan construction uses
+// it before reading fresh snapshots.
+type MetadataRefresher interface {
+	RefreshMetadata(ctx context.Context) error
+}

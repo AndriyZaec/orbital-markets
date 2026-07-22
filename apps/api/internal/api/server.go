@@ -4,29 +4,31 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 
+	"github.com/google/uuid"
+
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api/middleware"
-	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 )
 
 type Server struct {
-	ctx       context.Context // server-lifetime context, not per-request
-	scanner   *scanner.Scanner
-	executor  *paper.Executor
-	store     *paper.DBStore
-	db        *sql.DB
-	liveStore *executor.Store // always available when DB exists — read-only live position access
-	live      *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
-	logger    *slog.Logger
-	mux       *http.ServeMux
-	handler   http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	ctx           context.Context // server-lifetime context, not per-request
+	scanner       *scanner.Scanner
+	executor      *paper.Executor
+	store         *paper.DBStore
+	db            *sql.DB
+	liveStore     *executor.Store // always available when DB exists — read-only live position access
+	live          *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	logger        *slog.Logger
+	mux           *http.ServeMux
+	handler       http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	recoveryOwner string
 }
 
 func NewServer(
@@ -49,15 +51,16 @@ func NewServer(
 	}
 
 	s := &Server{
-		ctx:       ctx,
-		scanner:   sc,
-		executor:  exec,
-		store:     store,
-		db:        database,
-		liveStore: ls,
-		live:      live,
-		logger:    logger,
-		mux:       http.NewServeMux(),
+		ctx:           ctx,
+		scanner:       sc,
+		executor:      exec,
+		store:         store,
+		db:            database,
+		liveStore:     ls,
+		live:          live,
+		logger:        logger,
+		mux:           http.NewServeMux(),
+		recoveryOwner: uuid.NewString(),
 	}
 	s.routes()
 
@@ -70,6 +73,9 @@ func NewServer(
 			),
 		),
 	)
+	if live != nil {
+		go s.runLiveSessionRecovery()
+	}
 	return s
 }
 
@@ -145,9 +151,7 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		OpportunityID     string   `json:"opportunity_id"`
-		Leverage          float64  `json:"leverage"` // shared fallback when per-leg values are absent
-		LeverageLong      *float64 `json:"leverage_long,omitempty"`
-		LeverageShort     *float64 `json:"leverage_short,omitempty"`
+		Leverage          float64  `json:"leverage"`
 		RequestedNotional *float64 `json:"requested_notional,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -167,46 +171,26 @@ func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 	if req.RequestedNotional != nil {
 		notional = *req.RequestedNotional
 	}
-	levLong, levShort, err := resolveLegLeverage(req.Leverage, req.LeverageLong, req.LeverageShort)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, levLong, levShort, notional)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
 	if err != nil {
 		s.logger.Error("build plan", "err", err)
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		writePlanError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, plan)
 }
 
-// resolveLegLeverage picks per-leg leverage values, falling back to the shared
-// `leverage` field for backwards compatibility. Any explicitly provided per-leg
-// value is validated against the allowed range; a shared fallback of 0 is
-// tolerated (the planner defaults it to 1x).
-func resolveLegLeverage(shared float64, long, short *float64) (float64, float64, error) {
-	pick := func(p *float64, name string) (float64, error) {
-		if p == nil {
-			return shared, nil
-		}
-		v := *p
-		if !domain.ValidateLeverage(v) {
-			return 0, fmt.Errorf("%s must be between %.0fx and %.0fx", name, domain.MinLeverage, domain.MaxLeverage)
-		}
-		return v, nil
+func writePlanError(w http.ResponseWriter, status int, err error) {
+	var leverageErr *scanner.LeverageRangeError
+	if errors.As(err, &leverageErr) {
+		writeJSON(w, status, map[string]any{
+			"error":             err.Error(),
+			"pair_max_leverage": leverageErr.PairMax,
+		})
+		return
 	}
-	l, err := pick(long, "leverage_long")
-	if err != nil {
-		return 0, 0, err
-	}
-	s, err := pick(short, "leverage_short")
-	if err != nil {
-		return 0, 0, err
-	}
-	return l, s, nil
+	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -74,7 +74,7 @@ func (e *LiveExecutor) Execute(
 	}()
 
 	// 1. Admission gate
-	admission := domain.CheckLiveAdmission(opp, plan.Leverage.Leverage)
+	admission := domain.CheckLiveAdmission(opp, plan.Leverage.Leverage, float64(plan.MaxLeverage))
 	if !admission.Allowed {
 		result.Reasons = append(result.Reasons, admission.Reasons...)
 		result.CompletedAt = time.Now()

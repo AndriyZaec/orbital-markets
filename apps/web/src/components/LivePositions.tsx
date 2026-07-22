@@ -215,10 +215,17 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
               {kill.state.positions.length > 0 && (
                 <div className="pt-1 space-y-0.5">
                   {kill.state.positions.map((p) => (
-                    <div key={p.id} className="flex items-center gap-2 text-[11px]">
-                      <span className="font-medium text-foreground">{p.asset}</span>
-                      <span className="text-muted-foreground">{p.legs_to_close} leg{p.legs_to_close !== 1 ? 's' : ''}</span>
-                      {p.error && <span className="text-red-400/70">{p.error}</span>}
+                    <div key={p.id} className="text-[11px]">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-foreground">{p.asset}</span>
+                        <span className="text-muted-foreground">{p.legs_to_close} leg{p.legs_to_close !== 1 ? 's' : ''}</span>
+                        {p.error && <span className="text-red-400/70">{p.error}</span>}
+                      </div>
+                      {p.remaining_exposure?.map((exposure) => (
+                        <p key={`${p.id}-${exposure.leg}`} className="ml-3 font-mono text-orange-300/80">
+                          {exposure.venue} · {exposure.side} {exposure.amount.toPrecision(4)} {exposure.symbol}
+                        </p>
+                      ))}
                     </div>
                   ))}
                 </div>

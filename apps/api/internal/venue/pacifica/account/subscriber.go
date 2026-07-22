@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 
 const (
 	privateWSURL   = "wss://ws.pacifica.fi/ws"
+	accountRESTURL = "https://api.pacifica.fi/api/v1/account"
 	reconnectDelay = 5 * time.Second
 )
 
@@ -29,9 +33,10 @@ type StreamHandler interface {
 // No separate auth/login step is needed — subscriptions are public by account address.
 type Subscriber struct {
 	state   *AccountState
-	account string         // Solana public key (base58)
-	handler StreamHandler  // optional: receives order/trade updates
+	account string        // Solana public key (base58)
+	handler StreamHandler // optional: receives order/trade updates
 	logger  *slog.Logger
+	client  *http.Client
 }
 
 func NewSubscriber(
@@ -45,17 +50,24 @@ func NewSubscriber(
 		account: account,
 		handler: handler,
 		logger:  logger,
+		client:  &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
 // Run connects and listens to account streams until ctx is cancelled.
 func (s *Subscriber) Run(ctx context.Context) {
 	for {
+		// Account websocket subscriptions stream changes only; they do not send
+		// an initial snapshot for a quiet account. Bootstrap state from REST on
+		// startup and every reconnect, then let websocket updates keep it fresh.
+		if err := s.refreshAccountInfo(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Warn("pacifica: initial account snapshot failed", "err", err)
+		}
 		err := s.connectAndListen(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		s.state.SetConnected(false)
+		s.state.SetConnectedForAccount(s.account, false)
 		s.logger.Error("pacifica account ws disconnected, reconnecting", "err", err)
 		select {
 		case <-ctx.Done():
@@ -63,6 +75,88 @@ func (s *Subscriber) Run(ctx context.Context) {
 		case <-time.After(reconnectDelay):
 		}
 	}
+}
+
+type accountInfo struct {
+	Equity              float64
+	AvailableToSpend    float64
+	AvailableToWithdraw float64
+	TotalMarginUsed     float64
+	MaintenanceMargin   float64
+}
+
+func (s *Subscriber) refreshAccountInfo(ctx context.Context) error {
+	u, err := url.Parse(accountRESTURL)
+	if err != nil {
+		return fmt.Errorf("parse account URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("account", s.account)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("build account request: %w", err)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch account: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch account: HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read account response: %w", err)
+	}
+	info, err := parseRESTAccountInfo(raw)
+	if err != nil {
+		return err
+	}
+	s.state.UpdateEquityForAccount(
+		s.account,
+		info.Equity,
+		info.AvailableToSpend,
+		info.AvailableToWithdraw,
+		info.TotalMarginUsed,
+		info.MaintenanceMargin,
+	)
+	s.logger.Info("pacifica: initial account state loaded",
+		"equity", fmt.Sprintf("%.2f", info.Equity),
+		"available", fmt.Sprintf("%.2f", info.AvailableToSpend),
+	)
+	return nil
+}
+
+func parseRESTAccountInfo(raw []byte) (accountInfo, error) {
+	var resp struct {
+		Success bool `json:"success"`
+		Data    *struct {
+			AccountEquity       string `json:"account_equity"`
+			AvailableToSpend    string `json:"available_to_spend"`
+			AvailableToWithdraw string `json:"available_to_withdraw"`
+			TotalMarginUsed     string `json:"total_margin_used"`
+			CrossMMR            string `json:"cross_mmr"`
+		} `json:"data"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return accountInfo{}, fmt.Errorf("parse account response: %w", err)
+	}
+	if !resp.Success || resp.Data == nil {
+		if resp.Error == "" {
+			resp.Error = "missing account data"
+		}
+		return accountInfo{}, fmt.Errorf("fetch account: %s", resp.Error)
+	}
+	return accountInfo{
+		Equity:              parseFloat(resp.Data.AccountEquity),
+		AvailableToSpend:    parseFloat(resp.Data.AvailableToSpend),
+		AvailableToWithdraw: parseFloat(resp.Data.AvailableToWithdraw),
+		TotalMarginUsed:     parseFloat(resp.Data.TotalMarginUsed),
+		MaintenanceMargin:   parseFloat(resp.Data.CrossMMR),
+	}, nil
 }
 
 type wsMessage struct {
@@ -76,6 +170,15 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
 
 	// Subscribe to account channels — each needs the account address.
 	// No separate auth step is required.
@@ -99,7 +202,7 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 		}
 	}
 
-	s.state.SetConnected(true)
+	s.state.SetConnectedForAccount(s.account, true)
 	s.logger.Info("pacifica account ws connected",
 		"channels", len(channels),
 		"account", s.account,
@@ -181,7 +284,7 @@ func (s *Subscriber) handleAccountInfo(data json.RawMessage) {
 	marginUsed := parseFloat(info.MU)
 	maintenance := parseFloat(info.CM)
 
-	s.state.UpdateEquity(equity, available, withdrawable, marginUsed, maintenance)
+	s.state.UpdateEquityForAccount(s.account, equity, available, withdrawable, marginUsed, maintenance)
 }
 
 // handleMarginMode processes per-symbol margin mode changes (isolated/cross).
@@ -219,7 +322,7 @@ func (s *Subscriber) handleMarginMode(data json.RawMessage) {
 		lev = existing.Leverage
 	}
 
-	s.state.UpdateSymbolConfig(SymbolConfig{
+	s.state.UpdateSymbolConfigForAccount(s.account, SymbolConfig{
 		Symbol:     update.S,
 		Leverage:   lev,
 		MarginMode: mode,
@@ -243,14 +346,14 @@ func (s *Subscriber) handleMarginMode(data json.RawMessage) {
 //	}]
 func (s *Subscriber) handlePositions(data json.RawMessage) {
 	var positions []struct {
-		S string      `json:"s"` // symbol
-		D string      `json:"d"` // side: "bid" or "ask"
-		A string      `json:"a"` // amount
-		P string      `json:"p"` // entry price
-		M string      `json:"m"` // margin
-		F string      `json:"f"` // funding fee
-		I bool        `json:"i"` // isolated
-		L *string     `json:"l"` // liquidation price (nullable)
+		S string  `json:"s"` // symbol
+		D string  `json:"d"` // side: "bid" or "ask"
+		A string  `json:"a"` // amount
+		P string  `json:"p"` // entry price
+		M string  `json:"m"` // margin
+		F string  `json:"f"` // funding fee
+		I bool    `json:"i"` // isolated
+		L *string `json:"l"` // liquidation price (nullable)
 	}
 	if err := json.Unmarshal(data, &positions); err != nil {
 		s.logger.Warn("pacifica: parse account_positions", "err", err)
@@ -288,7 +391,7 @@ func (s *Subscriber) handlePositions(data json.RawMessage) {
 		})
 	}
 
-	s.state.UpdatePositions(parsed)
+	s.state.UpdatePositionsForAccount(s.account, parsed)
 }
 
 // handleLeverage processes per-symbol leverage updates.
@@ -323,7 +426,7 @@ func (s *Subscriber) handleLeverage(data json.RawMessage) {
 		mode = existing.MarginMode
 	}
 
-	s.state.UpdateSymbolConfig(SymbolConfig{
+	s.state.UpdateSymbolConfigForAccount(s.account, SymbolConfig{
 		Symbol:     update.S,
 		Leverage:   lev,
 		MarginMode: mode,

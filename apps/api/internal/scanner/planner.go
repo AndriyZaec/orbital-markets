@@ -11,17 +11,31 @@ import (
 
 const planTTL = 10 * time.Second
 
+// LeverageRangeError exposes the fresh pair maximum to API clients when their
+// selected leverage is no longer supported.
+type LeverageRangeError struct {
+	Requested float64
+	PairMax   int
+}
+
+func (e *LeverageRangeError) Error() string {
+	return fmt.Sprintf(
+		"leverage %.1fx outside supported range (minimum %.0fx, pair maximum %dx)",
+		e.Requested, domain.MinLeverage, e.PairMax,
+	)
+}
+
 // BuildPlan creates an ExecutionPlan from a given opportunity ID using fresh market data.
-// leverageLong / leverageShort are each clamped to allowed range (1x-5x); pass 0 to
-// default to 1x on that leg. requestedNotional is the user-entered notional per leg;
+// leverage is shared across both legs and validated against the lower maximum
+// reported by the two fresh venue snapshots. Pass 0 to default to 1x.
+// requestedNotional is the user-entered notional per leg;
 // pass 0 to fall back to the opportunity's recommended notional. If > 0 it is used
 // verbatim for BOTH legs — position size stays equal across legs; only leverage /
 // margin / liquidation vary between them.
 func (s *Scanner) BuildPlan(
 	ctx context.Context,
 	opportunityID string,
-	leverageLong float64,
-	leverageShort float64,
+	leverage float64,
 	requestedNotional float64,
 ) (*domain.ExecutionPlan, error) {
 	// Find the opportunity
@@ -29,11 +43,31 @@ func (s *Scanner) BuildPlan(
 	if opp == nil {
 		return nil, fmt.Errorf("opportunity not found: %s", opportunityID)
 	}
+	for _, adapter := range s.adapters {
+		if adapter.Name() != opp.VenuePair.VenueA && adapter.Name() != opp.VenuePair.VenueB {
+			continue
+		}
+		if refresher, ok := adapter.(venue.MetadataRefresher); ok {
+			if err := refresher.RefreshMetadata(ctx); err != nil {
+				return nil, fmt.Errorf("refresh %s metadata: %w", adapter.Name(), err)
+			}
+		}
+	}
 
 	// Fetch fresh snapshots for both venues
 	snapA, snapB, err := s.FreshSnapshots(ctx, opp.Asset, opp.VenuePair.VenueA, opp.VenuePair.VenueB)
 	if err != nil {
 		return nil, fmt.Errorf("fetch fresh data: %w", err)
+	}
+	pairMaxLeverage := minLeverage(snapA.MaxLeverage, snapB.MaxLeverage)
+	if pairMaxLeverage <= 0 {
+		return nil, fmt.Errorf("maximum leverage unavailable for %s venue pair", opp.Asset)
+	}
+	if leverage <= 0 {
+		leverage = domain.DefaultLeverage
+	}
+	if !domain.ValidateLeverage(leverage, float64(pairMaxLeverage)) {
+		return nil, &LeverageRangeError{Requested: leverage, PairMax: pairMaxLeverage}
 	}
 
 	// Determine legs based on direction
@@ -45,6 +79,10 @@ func (s *Scanner) BuildPlan(
 		longSnap = snapB
 		shortSnap = snapA
 	}
+	notional := opp.RecommendedNotional
+	if requestedNotional > 0 {
+		notional = requestedNotional
+	}
 
 	// Build legs with fresh prices
 	leg1 := domain.Leg{
@@ -52,7 +90,7 @@ func (s *Scanner) BuildPlan(
 		Asset:         longSnap.Asset,
 		Side:          domain.SideLong,
 		ExpectedPrice: longSnap.AskPrice, // buy at ask
-		Slippage:      estimateSlippage(longSnap),
+		Slippage:      estimateExecutionSlippage(longSnap, domain.SideLong, notional),
 		Fee:           estimateFee(longSnap),
 	}
 
@@ -61,7 +99,7 @@ func (s *Scanner) BuildPlan(
 		Asset:         shortSnap.Asset,
 		Side:          domain.SideShort,
 		ExpectedPrice: shortSnap.BidPrice, // sell at bid
-		Slippage:      estimateSlippage(shortSnap),
+		Slippage:      estimateExecutionSlippage(shortSnap, domain.SideShort, notional),
 		Fee:           estimateFee(shortSnap),
 	}
 
@@ -90,6 +128,14 @@ func (s *Scanner) BuildPlan(
 	if !hasBidAsk(snapB) {
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid/ask", snapB.Venue))
 	}
+	longDepthAvailable := executionSideDepth(longSnap, domain.SideLong) > 0
+	shortDepthAvailable := executionSideDepth(shortSnap, domain.SideShort) > 0
+	if !longDepthAvailable {
+		warnings = append(warnings, fmt.Sprintf("%s: missing ask depth for long leg", longSnap.Venue))
+	}
+	if !shortDepthAvailable {
+		warnings = append(warnings, fmt.Sprintf("%s: missing bid depth for short leg", shortSnap.Venue))
+	}
 	switch slippageLevel {
 	case domain.SlippageWarn:
 		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: elevated slippage", totalCosts*100))
@@ -102,28 +148,17 @@ func (s *Scanner) BuildPlan(
 	hasMissingBidAsk := !hasBidAsk(snapA) || !hasBidAsk(snapB)
 	executable := confidence == domain.ConfidenceHigh &&
 		!hasMissingBidAsk &&
+		longDepthAvailable &&
+		shortDepthAvailable &&
 		domain.SlippageExecutable(slippageLevel)
 
-	notional := opp.RecommendedNotional
-	if requestedNotional > 0 {
-		notional = requestedNotional
-	}
-
-	if leverageLong <= 0 {
-		leverageLong = domain.DefaultLeverage
-	}
-	if leverageShort <= 0 {
-		leverageShort = domain.DefaultLeverage
-	}
-	// Per-leg leverage configs (leverage is clamped to [Min,Max] inside).
-	longCfg := domain.ComputeLeverage(notional, leverageLong)
-	shortCfg := domain.ComputeLeverage(notional, leverageShort)
+	sharedCfg := domain.ComputeLeverage(notional, leverage)
 
 	// leg1 is long, leg2 is short (see leg construction above).
-	leg1.Leverage = longCfg.Leverage
-	leg1.MarginRequired = notional / longCfg.Leverage
-	leg2.Leverage = shortCfg.Leverage
-	leg2.MarginRequired = notional / shortCfg.Leverage
+	leg1.Leverage = sharedCfg.Leverage
+	leg1.MarginRequired = sharedCfg.MarginRequired
+	leg2.Leverage = sharedCfg.Leverage
+	leg2.MarginRequired = sharedCfg.MarginRequired
 
 	// Aggregate config for backward-compat top-level Leverage field.
 	// MarginRequired = sum of leg margins; GrossExposure stays 2×notional.
@@ -153,20 +188,21 @@ func (s *Scanner) BuildPlan(
 	leg2.LiquidationRisk = domain.ClassifyLiqRisk(leg2.LiquidationDistance, leg2.LiquidationPrice)
 
 	plan := &domain.ExecutionPlan{
-		ID:            fmt.Sprintf("plan-%s-%d", opp.ID, now.UnixMilli()),
-		OpportunityID: opp.ID,
-		Asset:         opp.Asset,
-		Direction:     opp.Direction,
-		Notional:      notional,
-		Leverage:      levConfig,
-		Leg1:          leg1,
-		Leg2:          leg2,
+		ID:               fmt.Sprintf("plan-%s-%d", opp.ID, now.UnixMilli()),
+		OpportunityID:    opp.ID,
+		Asset:            opp.Asset,
+		Direction:        opp.Direction,
+		Notional:         notional,
+		MaxLeverage:      pairMaxLeverage,
+		Leverage:         levConfig,
+		Leg1:             leg1,
+		Leg2:             leg2,
 		ExpectedSpread:   expectedSpread,
 		EstimatedNetEdge: estimatedNetEdge,
 		Bounds: domain.Bounds{
-			MaxSlippagePct:    0.005,  // 0.5%
-			MaxEntrySpreadPct: 0.01,   // 1%
-			MinNetEdgePct:     0.01,   // 1% annualized minimum
+			MaxSlippagePct:    0.005, // 0.5%
+			MaxEntrySpreadPct: 0.01,  // 1%
+			MinNetEdgePct:     0.01,  // 1% annualized minimum
 		},
 		RiskTier:   opp.RiskTier,
 		Confidence: confidence,
@@ -231,14 +267,6 @@ func (s *Scanner) FreshSnapshots(ctx context.Context, asset, venueA, venueB stri
 	}
 
 	return snapA, snapB, nil
-}
-
-func estimateSlippage(md venue.MarketData) float64 {
-	if md.BidPrice <= 0 || md.AskPrice <= 0 {
-		return 0
-	}
-	mid := (md.BidPrice + md.AskPrice) / 2
-	return (md.AskPrice - md.BidPrice) / mid / 2 // half-spread as slippage estimate
 }
 
 func estimateFee(md venue.MarketData) float64 {

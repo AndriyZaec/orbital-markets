@@ -1,8 +1,9 @@
 package domain
 
-// V1 leverage model.
+// Shared leverage model.
 //
-// Leverage is user-selected, applied uniformly to both legs.
+// Leverage is user-selected and applied uniformly to both legs. Its upper
+// bound comes from the selected asset's fresh venue metadata, not a global cap.
 // margin_required = notional / leverage
 // gross_exposure = notional * 2 (both legs)
 // effective_leverage = gross_exposure / margin_required
@@ -16,24 +17,20 @@ package domain
 const (
 	DefaultLeverage = 1.0
 	MinLeverage     = 1.0
-	MaxLeverage     = 5.0
 )
 
 // LeverageConfig holds leverage-related sizing for a trade.
 type LeverageConfig struct {
-	Leverage        float64 `json:"leverage"`         // user-selected, 1x-5x
-	MarginRequired  float64 `json:"margin_required"`  // notional / leverage
-	GrossExposure   float64 `json:"gross_exposure"`   // notional * 2 (both legs)
+	Leverage          float64 `json:"leverage"`
+	MarginRequired    float64 `json:"margin_required"`    // notional / leverage
+	GrossExposure     float64 `json:"gross_exposure"`     // notional * 2 (both legs)
 	EffectiveLeverage float64 `json:"effective_leverage"` // gross_exposure / margin_required
 }
 
 // ComputeLeverage builds a LeverageConfig from notional and leverage multiplier.
 func ComputeLeverage(notional, leverage float64) LeverageConfig {
-	if leverage < MinLeverage {
-		leverage = MinLeverage
-	}
-	if leverage > MaxLeverage {
-		leverage = MaxLeverage
+	if leverage <= 0 {
+		leverage = DefaultLeverage
 	}
 
 	margin := notional / leverage
@@ -47,7 +44,8 @@ func ComputeLeverage(notional, leverage float64) LeverageConfig {
 	}
 }
 
-// ValidateLeverage returns true if leverage is within allowed range.
-func ValidateLeverage(leverage float64) bool {
-	return leverage >= MinLeverage && leverage <= MaxLeverage
+// ValidateLeverage returns true if leverage is within the current venue pair's
+// supported range.
+func ValidateLeverage(leverage, pairMax float64) bool {
+	return pairMax >= MinLeverage && leverage >= MinLeverage && leverage <= pairMax
 }

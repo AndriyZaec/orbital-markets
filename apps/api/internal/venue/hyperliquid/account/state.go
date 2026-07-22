@@ -16,31 +16,35 @@ type MarginSummary struct {
 
 // AssetPosition is a single open position on Hyperliquid.
 type AssetPosition struct {
-	Coin           string  `json:"coin"`
-	Side           string  `json:"side"` // "long" or "short"
-	Size           float64 `json:"size"`
-	EntryPx        float64 `json:"entry_px"`
-	UnrealizedPnL  float64 `json:"unrealized_pnl"`
-	Leverage       float64 `json:"leverage"`
-	LiquidationPx  float64 `json:"liquidation_px"`
-	MarginUsed     float64 `json:"margin_used"`
+	Coin          string  `json:"coin"`
+	Side          string  `json:"side"` // "long" or "short"
+	Size          float64 `json:"size"`
+	EntryPx       float64 `json:"entry_px"`
+	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	Leverage      float64 `json:"leverage"`
+	LiquidationPx float64 `json:"liquidation_px"`
+	MarginUsed    float64 `json:"margin_used"`
 }
 
 // AccountStateSnapshot is an immutable view of Hyperliquid account state.
 type AccountStateSnapshot struct {
-	Margin      MarginSummary   `json:"margin"`
-	Positions   []AssetPosition `json:"positions"`
-	LastUpdated time.Time       `json:"last_updated"`
-	Connected   bool            `json:"connected"`
+	Account            string          `json:"account"`
+	Margin             MarginSummary   `json:"margin"`
+	Positions          []AssetPosition `json:"positions"`
+	PositionsUpdatedAt time.Time       `json:"positions_updated_at"`
+	LastUpdated        time.Time       `json:"last_updated"`
+	Connected          bool            `json:"connected"`
 }
 
 // AccountState is the live mutable Hyperliquid account state.
 type AccountState struct {
-	mu          sync.RWMutex
-	margin      MarginSummary
-	positions   []AssetPosition
-	lastUpdated time.Time
-	connected   bool
+	mu                 sync.RWMutex
+	account            string
+	margin             MarginSummary
+	positions          []AssetPosition
+	positionsUpdatedAt time.Time
+	lastUpdated        time.Time
+	connected          bool
 }
 
 func NewAccountState() *AccountState {
@@ -55,10 +59,12 @@ func (s *AccountState) Snapshot() AccountStateSnapshot {
 	copy(positions, s.positions)
 
 	return AccountStateSnapshot{
-		Margin:      s.margin,
-		Positions:   positions,
-		LastUpdated: s.lastUpdated,
-		Connected:   s.connected,
+		Account:            s.account,
+		Margin:             s.margin,
+		Positions:          positions,
+		PositionsUpdatedAt: s.positionsUpdatedAt,
+		LastUpdated:        s.lastUpdated,
+		Connected:          s.connected,
 	}
 }
 
@@ -69,21 +75,71 @@ func (s *AccountState) IsFresh(maxAge time.Duration) bool {
 }
 
 func (s *AccountState) UpdateMargin(m MarginSummary) {
+	s.updateMargin("", m)
+}
+
+func (s *AccountState) UpdateMarginForAccount(account string, m MarginSummary) {
+	s.updateMargin(account, m)
+}
+
+func (s *AccountState) updateMargin(account string, m MarginSummary) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
 	s.margin = m
 	s.lastUpdated = time.Now()
 }
 
 func (s *AccountState) UpdatePositions(positions []AssetPosition) {
+	s.updatePositions("", positions)
+}
+
+func (s *AccountState) UpdatePositionsForAccount(account string, positions []AssetPosition) {
+	s.updatePositions(account, positions)
+}
+
+func (s *AccountState) updatePositions(account string, positions []AssetPosition) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
 	s.positions = positions
-	s.lastUpdated = time.Now()
+	s.positionsUpdatedAt = time.Now()
+	s.lastUpdated = s.positionsUpdatedAt
 }
 
 func (s *AccountState) SetConnected(connected bool) {
+	s.setConnected("", connected)
+}
+
+func (s *AccountState) SetConnectedForAccount(account string, connected bool) {
+	s.setConnected(account, connected)
+}
+
+func (s *AccountState) setConnected(account string, connected bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
 	s.connected = connected
+}
+
+// Reset clears state when the connected wallet address changes.
+func (s *AccountState) Reset() {
+	s.ResetForAccount("")
+}
+
+func (s *AccountState) ResetForAccount(account string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.account = account
+	s.margin = MarginSummary{}
+	s.positions = nil
+	s.positionsUpdatedAt = time.Time{}
+	s.lastUpdated = time.Time{}
+	s.connected = false
 }

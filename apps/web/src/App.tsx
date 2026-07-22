@@ -139,16 +139,13 @@ export default function App() {
 
   const handleExecutePaper = async (
     opportunityId: string,
-    leverageLong: number,
-    leverageShort: number,
+    leverage: number,
     requestedNotional?: number,
   ) => {
     try {
       const body: Record<string, unknown> = {
         opportunity_id: opportunityId,
-        leverage: leverageLong,
-        leverage_long: leverageLong,
-        leverage_short: leverageShort,
+        leverage,
       }
       if (typeof requestedNotional === 'number' && requestedNotional > 0) {
         body.requested_notional = requestedNotional

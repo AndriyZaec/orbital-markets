@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -36,13 +37,13 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.live.sessions.cleanup() // evict stale sessions opportunistically
+	s.cleanupExpiredLiveSessions()
+	s.live.recoveryMu.Lock()
+	defer s.live.recoveryMu.Unlock()
 
 	var req struct {
 		OpportunityID      string   `json:"opportunity_id"`
-		Leverage           float64  `json:"leverage"` // shared fallback
-		LeverageLong       *float64 `json:"leverage_long,omitempty"`
-		LeverageShort      *float64 `json:"leverage_short,omitempty"`
+		Leverage           float64  `json:"leverage"`
 		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
 		AccountPacifica    string   `json:"account_pacifica"`
 		AccountHyperliquid string   `json:"account_hyperliquid"`
@@ -72,17 +73,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	if req.RequestedNotional != nil {
 		notional = *req.RequestedNotional
 	}
-	levLong, levShort, err := resolveLegLeverage(req.Leverage, req.LeverageLong, req.LeverageShort)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
 	// 1. Build a fresh execution plan
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, levLong, levShort, notional)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		writePlanError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	if !plan.Executable {
@@ -104,7 +99,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Start account subscribers if not already running (lazy — first prepare triggers them)
-	s.live.EnsureAccountStreams(req.AccountPacifica, req.AccountHyperliquid)
+	s.live.ensureAccountStreams(req.AccountPacifica, req.AccountHyperliquid)
 
 	// 3b. Account-data readiness gate. This is separate from the admission
 	// gate below because admission looks at policy (leverage caps, etc); this
@@ -127,9 +122,15 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !s.venuePositionStateReady("pacifica") || !s.venuePositionStateReady("hyperliquid") {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "venue position state not yet received; retry shortly",
+		})
+		return
+	}
 
 	// 4. Live admission gate
-	admission := domain.CheckLiveAdmission(*opp, plan.Leverage.Leverage)
+	admission := domain.CheckLiveAdmission(*opp, plan.Leverage.Leverage, float64(plan.MaxLeverage))
 	if !admission.Allowed {
 		s.logger.Warn("live prepare: admission denied",
 			"asset", opp.Asset,
@@ -144,6 +145,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Riskier leg first (higher slippage = thinner book → submit first).
 	leg1, leg2 := orderLegsByRisk(plan)
+	baselineLeg1Size, _ := s.currentVenuePosition(leg1.venue, leg1.symbol)
+	baselineLeg2Size, _ := s.currentVenuePosition(leg2.venue, leg2.symbol)
+	if math.Abs(baselineLeg1Size) > 1e-9 || math.Abs(baselineLeg2Size) > 1e-9 {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "existing position for this asset must be closed before starting a live session",
+		})
+		return
+	}
 
 	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
 	// Both are on the riskier leg's venue/wallet and signed together up front,
@@ -189,9 +198,19 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		State:              sessAwaitingLeg1Signs,
 		Leg1OpenReqID:      leg1Open.ID,
 		Leg1UnwindReqID:    leg1Unwind.ID,
+		Leg1OpenReq:        leg1Open,
+		Leg1UnwindReq:      leg1Unwind,
+		BaselineLeg1Size:   baselineLeg1Size,
+		BaselineLeg2Size:   baselineLeg2Size,
 		CreatedAt:          now,
 	}
 	s.live.sessions.put(sess)
+	if err := s.saveLiveSession(r.Context(), sess); err != nil {
+		s.live.sessions.remove(sess.ID)
+		s.logger.Error("live prepare: persist session", "err", err, "session_id", sess.ID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist live session"})
+		return
+	}
 
 	s.logger.Info("live prepare: session ready",
 		"session_id", sessionID,
@@ -318,6 +337,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	result, err := s.submitSignedAction(r.Context(), signed, sigReq)
 
 	if err != nil {
+		s.recordCloseSubmissionFailure(r.Context(), sigReq, err.Error())
 		s.logger.Error("live submit: submission error",
 			"request_id", signed.RequestID,
 			"venue", signed.Venue,
@@ -330,6 +350,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result == nil {
+		s.recordCloseSubmissionFailure(r.Context(), sigReq, "submission returned no result")
 		s.logger.Error("live submit: nil result without error",
 			"request_id", signed.RequestID,
 			"venue", signed.Venue,
@@ -354,22 +375,23 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 			"error", result.Error,
 		)
 	}
+	s.trackCloseSubmission(sigReq, result)
 
 	writeJSON(w, http.StatusOK, result)
 }
 
 // Two freshness thresholds serve two different needs:
 //
-//   admissionFreshness — hard gate at /live/prepare and pretrade checks in
-//     venue/*/account/pretrade.go. Must stay strict; this is what prevents
-//     submitting orders against stale account state.
+//	admissionFreshness — hard gate at /live/prepare and pretrade checks in
+//	  venue/*/account/pretrade.go. Must stay strict; this is what prevents
+//	  submitting orders against stale account state.
 //
-//   displayFreshness — soft gate for the balances/readiness UI. Push-driven
-//     Pacifica WS doesn't heartbeat when nothing is happening, so a healthy
-//     but quiet account naturally ages past 30s. Using the strict window for
-//     display caused frequent false "Stale" flags with no user-visible fix.
-//     5 minutes is generous enough to hide the quiet-account case while
-//     still catching a genuinely broken stream.
+//	displayFreshness — soft gate for the balances/readiness UI. Push-driven
+//	  Pacifica WS doesn't heartbeat when nothing is happening, so a healthy
+//	  but quiet account naturally ages past 30s. Using the strict window for
+//	  display caused frequent false "Stale" flags with no user-visible fix.
+//	  5 minutes is generous enough to hide the quiet-account case while
+//	  still catching a genuinely broken stream.
 const (
 	admissionFreshness = 30 * time.Second
 	displayFreshness   = 5 * time.Minute
@@ -613,10 +635,15 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get fills"})
 		return
 	}
+	confirmedLegs, err := s.liveStore.ConfirmedCloseLegs(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get close progress"})
+		return
+	}
 
 	var signingRequests []*domain.SigningRequest
 	for _, fill := range fills {
-		if !fill.Filled || fill.FilledAmount <= 0 {
+		if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
 			continue
 		}
 		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
@@ -628,6 +655,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		sigReq.PositionID = id
+		sigReq.Leg = fill.Leg
 		s.live.signingStore.Store(sigReq)
 		signingRequests = append(signingRequests, sigReq)
 	}
@@ -637,9 +666,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.liveStore.MarkClosing(r.Context(), id)
-	s.liveStore.InsertEvent(r.Context(), id, "close_initiated",
-		executor.ExecStateClosing,
+	s.liveStore.InsertEvent(r.Context(), id, "close_prepared",
+		executor.ExecState(pos.State),
 		fmt.Sprintf("%d close orders prepared", len(signingRequests)))
 
 	s.logger.Info("live close: signing requests ready",
@@ -666,7 +694,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 //  1. Find all open/degraded positions
 //  2. For each position, get fills to know what legs to close
 //  3. Build close signing requests for each filled leg
-//  4. Store signing requests, mark positions as "closing"
+//  4. Store signing requests; accepted submissions mark positions as "closing"
 //  5. Return all signing requests — frontend signs + submits each via /api/v1/live/submit
 //
 // Idempotent — repeated calls regenerate signing requests for positions still open.
@@ -715,10 +743,17 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type positionClose struct {
-		ID    string `json:"id"`
-		Asset string `json:"asset"`
-		State string `json:"state"`
-		Legs  int    `json:"legs_to_close"`
+		ID       string `json:"id"`
+		Asset    string `json:"asset"`
+		State    string `json:"state"`
+		Legs     int    `json:"legs_to_close"`
+		Exposure []struct {
+			Leg    int     `json:"leg"`
+			Venue  string  `json:"venue"`
+			Symbol string  `json:"symbol"`
+			Side   string  `json:"side"`
+			Amount float64 `json:"amount"`
+		} `json:"remaining_exposure"`
 		Error string `json:"error,omitempty"`
 	}
 
@@ -739,12 +774,26 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			posResults = append(posResults, pc)
 			continue
 		}
+		confirmedLegs, err := s.live.liveStore.ConfirmedCloseLegs(ctx, pos.ID)
+		if err != nil {
+			s.logger.Error("kill switch: get close progress", "err", err, "id", pos.ID)
+			pc.Error = "failed to get close progress"
+			posResults = append(posResults, pc)
+			continue
+		}
 
 		legsClosed := 0
 		for _, fill := range fills {
-			if !fill.Filled || fill.FilledAmount <= 0 {
+			if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
 				continue
 			}
+			pc.Exposure = append(pc.Exposure, struct {
+				Leg    int     `json:"leg"`
+				Venue  string  `json:"venue"`
+				Symbol string  `json:"symbol"`
+				Side   string  `json:"side"`
+				Amount float64 `json:"amount"`
+			}{fill.Leg, fill.Venue, fill.Symbol, fill.Side, fill.FilledAmount})
 
 			cloid := fmt.Sprintf("kill-%s-leg%d-%d", pos.ID[:8], fill.Leg, time.Now().UnixNano())
 
@@ -759,6 +808,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				pc.Error = fmt.Sprintf("leg %d: %s", fill.Leg, err)
 				continue
 			}
+			sigReq.PositionID = pos.ID
+			sigReq.Leg = fill.Leg
 
 			s.live.signingStore.Store(sigReq)
 			signingRequests = append(signingRequests, sigReq)
@@ -775,11 +826,9 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 
 		pc.Legs = legsClosed
 
-		// Mark position as closing
 		if legsClosed > 0 {
-			s.live.liveStore.MarkClosing(ctx, pos.ID)
-			s.live.liveStore.InsertEvent(ctx, pos.ID, "emergency_close_initiated",
-				executor.ExecStateClosing,
+			s.live.liveStore.InsertEvent(ctx, pos.ID, "emergency_close_prepared",
+				executor.ExecState(pos.State),
 				fmt.Sprintf("kill switch: %d close orders prepared", legsClosed))
 		}
 

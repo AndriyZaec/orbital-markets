@@ -14,7 +14,7 @@ import "math"
 //   Short leg: liq_price = entry_price * (1 + 1/leverage - maintenance_margin)
 //
 // Where:
-//   leverage = user-selected leverage (1x-5x)
+//   leverage = user-selected leverage within the venue pair maximum
 //   maintenance_margin = 0.005 (0.5%) — conservative buffer
 //
 // At 1x long: liq = entry * (1 - 1 + 0.005) = entry * 0.005 ≈ 0 (can't be liquidated)

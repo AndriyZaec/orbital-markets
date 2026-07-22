@@ -11,9 +11,7 @@ import (
 func (s *Server) handlePaperOpen(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		OpportunityID     string   `json:"opportunity_id"`
-		Leverage          float64  `json:"leverage"` // shared fallback
-		LeverageLong      *float64 `json:"leverage_long,omitempty"`
-		LeverageShort     *float64 `json:"leverage_short,omitempty"`
+		Leverage          float64  `json:"leverage"`
 		RequestedNotional *float64 `json:"requested_notional,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -32,15 +30,9 @@ func (s *Server) handlePaperOpen(w http.ResponseWriter, r *http.Request) {
 	if req.RequestedNotional != nil {
 		notional = *req.RequestedNotional
 	}
-	levLong, levShort, err := resolveLegLeverage(req.Leverage, req.LeverageLong, req.LeverageShort)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, levLong, levShort, notional)
-	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		writePlanError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	if !plan.Executable {

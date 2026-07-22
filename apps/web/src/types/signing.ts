@@ -1,6 +1,8 @@
 export interface SigningRequest {
   id: string
   client_order_id: string
+  position_id?: string
+  leg?: number
   venue: 'pacifica' | 'hyperliquid'
   action: 'open' | 'close'
   symbol: string

@@ -19,6 +19,13 @@ export interface KillPositionInfo {
   asset: string
   state: string
   legs_to_close: number
+  remaining_exposure: Array<{
+    leg: number
+    venue: string
+    symbol: string
+    side: string
+    amount: number
+  }>
   error?: string
 }
 

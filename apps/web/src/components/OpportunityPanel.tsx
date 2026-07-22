@@ -14,8 +14,7 @@ interface Props {
   onClose: () => void
   onExecute: (
     opportunityId: string,
-    leverageLong: number,
-    leverageShort: number,
+    leverage: number,
     requestedNotional?: number,
   ) => Promise<void>
   onViewPositions?: () => void
@@ -89,6 +88,15 @@ function useExpiry(expiresAt: string | null) {
   return { remaining, expired }
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delayMs)
+    return () => window.clearTimeout(id)
+  }, [value, delayMs])
+  return debounced
+}
+
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
 export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions, onOpenAccounts }: Props) {
@@ -99,11 +107,13 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const maxLev = opp.max_leverage || 1
+  const opportunityMaxLev = opp.max_leverage || 1
 
-  // Per-leg leverage. Notional is shared across legs; leverage is not.
-  const [leverageLong, setLeverageLong] = useState(maxLev)
-  const [leverageShort, setLeverageShort] = useState(maxLev)
+  const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: opportunityMaxLev })
+  const leverage = leverageSelection.opportunityId === opp.id
+    ? leverageSelection.value
+    : opportunityMaxLev
+  const setLeverage = (value: number) => setLeverageSelection({ opportunityId: opp.id, value })
   const [longSlippage, setLongSlippage] = useState(1)
   const [shortSlippage, setShortSlippage] = useState(1)
   const [longOpen, setLongOpen] = useState(true)
@@ -123,9 +133,13 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const notionalNum = Number(notionalInput)
   const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
   const notionalForPlan = notionalValid ? notionalNum : undefined
+  const debouncedNotionalForPlan = useDebouncedValue(notionalForPlan, 300)
+  const planInputsPending = !Object.is(notionalForPlan, debouncedNotionalForPlan)
 
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError } = usePlan(opp.id, leverageLong, leverageShort, notionalForPlan)
+  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(opp.id, leverage, debouncedNotionalForPlan)
+  const planUpdating = planLoading || planInputsPending
+  const maxLev = maxLeverage || opportunityMaxLev
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
   // Live execution is gated by the typed readiness layer (wallet + signer +
@@ -159,7 +173,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const handleExecute = async () => {
     setExecuting(true)
     try {
-      await onExecute(opp.id, leverageLong, leverageShort, notionalForPlan)
+      await onExecute(opp.id, leverage, notionalForPlan)
     } finally {
       setExecuting(false)
     }
@@ -171,7 +185,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
     // window between last-known-fresh and actual submission.
     refreshBalances().catch(() => {})
     setShowLiveModal(true)
-    executeLive(opp.id, leverageLong, leverageShort, notionalForPlan)
+    executeLive(opp.id, leverage, notionalForPlan)
   }
 
   const handleCloseLiveModal = () => {
@@ -237,10 +251,13 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
           </div>
         </div>
 
-        {/* Leverage — per leg */}
+        {/* Shared leverage */}
         <div className="px-5 py-4 border-b border-border">
           <div className="mb-2">
-            <span className="text-sm text-muted-foreground">Leverage (per leg)</span>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Leverage</span>
+              <span className="text-[11px] text-muted-foreground/70">Pair max {maxLev}x</span>
+            </div>
             {plan && (
               <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70">
                 <span>Margin {fmtUsd(plan.leverage.margin_required)}</span>
@@ -249,20 +266,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
             )}
           </div>
           <LeverageRow
-            label={`Long · ${longVenue}`}
-            value={leverageLong}
+            label={`${longVenue} + ${shortVenue}`}
+            value={leverage}
             max={maxLev}
-            onChange={setLeverageLong}
-            margin={longLeg?.margin_required}
-            accent="green"
-          />
-          <LeverageRow
-            label={`Short · ${shortVenue}`}
-            value={leverageShort}
-            max={maxLev}
-            onChange={setLeverageShort}
-            margin={shortLeg?.margin_required}
-            accent="red"
+            onChange={setLeverage}
           />
         </div>
 
@@ -384,10 +391,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!plan?.executable || planExpired || executing || planLoading || !notionalValid}
+            disabled={!plan?.executable || planExpired || executing || planUpdating || !notionalValid}
             onClick={handleExecute}
           >
-            {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+            {executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
           </Button>
         ) : (
           <>
@@ -400,7 +407,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
                 isFullyReady
-                  ? !plan?.executable || planExpired || planLoading || !notionalValid
+                  ? !plan?.executable || planExpired || planUpdating || !notionalValid
                   : false
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
@@ -436,24 +443,21 @@ function Row({ label, value, capitalize }: { label: string; value: string; capit
   )
 }
 
-function LeverageRow({ label, value, max, onChange, margin, accent }: {
+function LeverageRow({ label, value, max, onChange }: {
   label: string
   value: number
   max: number
   onChange: (v: number) => void
-  margin?: number
-  accent: 'green' | 'red'
 }) {
-  const dot = accent === 'green' ? 'bg-green-400' : 'bg-red-400'
   return (
     <div className="mt-2 first:mt-0">
       <div className="flex items-center justify-between mb-1">
         <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-          <span className={`size-1.5 rounded-full ${dot}`} />
+          <span className="size-1.5 rounded-full bg-blue-400" />
           {label}
         </span>
         <span className="text-[12px] font-mono text-foreground">
-          {value}x{typeof margin === 'number' ? ` · ${fmtUsd(margin)} margin` : ''}
+          {value}x
         </span>
       </div>
       <input

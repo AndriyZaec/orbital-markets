@@ -54,7 +54,7 @@ func BuildOpenPayload(
 	return buildPayload(
 		symbol,
 		sideToVenue(side),
-		fmt.Sprintf("%g", amount),
+		amount,
 		price,
 		false,
 		defaultOpenSlippagePct,
@@ -82,7 +82,7 @@ func BuildClosePayload(
 	return buildPayload(
 		symbol,
 		closeSide,
-		fmt.Sprintf("%g", amount),
+		amount,
 		price,
 		true,
 		defaultCloseSlippagePct,
@@ -94,7 +94,7 @@ func BuildClosePayload(
 func buildPayload(
 	symbol string,
 	side string,
-	amount string,
+	amount float64,
 	price float64,
 	reduceOnly bool,
 	slippagePct string,
@@ -108,7 +108,7 @@ func buildPayload(
 		ExpiryWindow:  expiryWindowMs,
 		Symbol:        symbol,
 		Side:          side,
-		Amount:        amount,
+		Amount:        fmt.Sprintf("%g", amount),
 		ReduceOnly:    reduceOnly,
 		SlippagePct:   slippagePct,
 		ClientOrderID: clientOrderID,
@@ -135,7 +135,7 @@ func buildPayload(
 		Action:          action,
 		Symbol:          symbol,
 		Side:            side,
-		Amount:          0, // not used for display in non-custodial flow
+		Amount:          amount,
 		Price:           price,
 		ReduceOnly:      reduceOnly,
 		UnsignedPayload: unsignedBytes,

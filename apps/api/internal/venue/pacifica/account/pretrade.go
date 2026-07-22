@@ -91,9 +91,8 @@ func ValidatePreTrade(
 	}
 
 	// 3. Leverage range
-	if !domain.ValidateLeverage(leverage) {
-		block(fmt.Sprintf("leverage %.1fx outside allowed range (%.0fx-%.0fx)",
-			leverage, domain.MinLeverage, domain.MaxLeverage))
+	if leverage < domain.MinLeverage {
+		block(fmt.Sprintf("leverage %.1fx below minimum %.0fx", leverage, domain.MinLeverage))
 	}
 
 	// 4. Symbol config
