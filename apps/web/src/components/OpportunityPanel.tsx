@@ -88,6 +88,15 @@ function useExpiry(expiresAt: string | null) {
   return { remaining, expired }
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delayMs)
+    return () => window.clearTimeout(id)
+  }, [value, delayMs])
+  return debounced
+}
+
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
 export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions, onOpenAccounts }: Props) {
@@ -124,9 +133,12 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const notionalNum = Number(notionalInput)
   const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
   const notionalForPlan = notionalValid ? notionalNum : undefined
+  const debouncedNotionalForPlan = useDebouncedValue(notionalForPlan, 300)
+  const planInputsPending = !Object.is(notionalForPlan, debouncedNotionalForPlan)
 
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(opp.id, leverage, notionalForPlan)
+  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(opp.id, leverage, debouncedNotionalForPlan)
+  const planUpdating = planLoading || planInputsPending
   const maxLev = maxLeverage || opportunityMaxLev
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
@@ -379,10 +391,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!plan?.executable || planExpired || executing || planLoading || !notionalValid}
+            disabled={!plan?.executable || planExpired || executing || planUpdating || !notionalValid}
             onClick={handleExecute}
           >
-            {executing ? 'Executing...' : planLoading ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+            {executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
           </Button>
         ) : (
           <>
@@ -395,7 +407,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
                 isFullyReady
-                  ? !plan?.executable || planExpired || planLoading || !notionalValid
+                  ? !plan?.executable || planExpired || planUpdating || !notionalValid
                   : false
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}

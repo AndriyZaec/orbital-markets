@@ -79,6 +79,10 @@ func (s *Scanner) BuildPlan(
 		longSnap = snapB
 		shortSnap = snapA
 	}
+	notional := opp.RecommendedNotional
+	if requestedNotional > 0 {
+		notional = requestedNotional
+	}
 
 	// Build legs with fresh prices
 	leg1 := domain.Leg{
@@ -86,7 +90,7 @@ func (s *Scanner) BuildPlan(
 		Asset:         longSnap.Asset,
 		Side:          domain.SideLong,
 		ExpectedPrice: longSnap.AskPrice, // buy at ask
-		Slippage:      estimateSlippage(longSnap),
+		Slippage:      estimateExecutionSlippage(longSnap, domain.SideLong, notional),
 		Fee:           estimateFee(longSnap),
 	}
 
@@ -95,7 +99,7 @@ func (s *Scanner) BuildPlan(
 		Asset:         shortSnap.Asset,
 		Side:          domain.SideShort,
 		ExpectedPrice: shortSnap.BidPrice, // sell at bid
-		Slippage:      estimateSlippage(shortSnap),
+		Slippage:      estimateExecutionSlippage(shortSnap, domain.SideShort, notional),
 		Fee:           estimateFee(shortSnap),
 	}
 
@@ -124,6 +128,14 @@ func (s *Scanner) BuildPlan(
 	if !hasBidAsk(snapB) {
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid/ask", snapB.Venue))
 	}
+	longDepthAvailable := executionSideDepth(longSnap, domain.SideLong) > 0
+	shortDepthAvailable := executionSideDepth(shortSnap, domain.SideShort) > 0
+	if !longDepthAvailable {
+		warnings = append(warnings, fmt.Sprintf("%s: missing ask depth for long leg", longSnap.Venue))
+	}
+	if !shortDepthAvailable {
+		warnings = append(warnings, fmt.Sprintf("%s: missing bid depth for short leg", shortSnap.Venue))
+	}
 	switch slippageLevel {
 	case domain.SlippageWarn:
 		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: elevated slippage", totalCosts*100))
@@ -136,12 +148,9 @@ func (s *Scanner) BuildPlan(
 	hasMissingBidAsk := !hasBidAsk(snapA) || !hasBidAsk(snapB)
 	executable := confidence == domain.ConfidenceHigh &&
 		!hasMissingBidAsk &&
+		longDepthAvailable &&
+		shortDepthAvailable &&
 		domain.SlippageExecutable(slippageLevel)
-
-	notional := opp.RecommendedNotional
-	if requestedNotional > 0 {
-		notional = requestedNotional
-	}
 
 	sharedCfg := domain.ComputeLeverage(notional, leverage)
 
@@ -258,14 +267,6 @@ func (s *Scanner) FreshSnapshots(ctx context.Context, asset, venueA, venueB stri
 	}
 
 	return snapA, snapB, nil
-}
-
-func estimateSlippage(md venue.MarketData) float64 {
-	if md.BidPrice <= 0 || md.AskPrice <= 0 {
-		return 0
-	}
-	mid := (md.BidPrice + md.AskPrice) / 2
-	return (md.AskPrice - md.BidPrice) / mid / 2 // half-spread as slippage estimate
 }
 
 func estimateFee(md venue.MarketData) float64 {

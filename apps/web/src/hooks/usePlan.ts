@@ -64,8 +64,10 @@ export function usePlan(
   const [error, setError] = useState<string | null>(null)
   const [maxLeverage, setMaxLeverage] = useState<number | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const requestSequence = useRef(0)
 
   const fetchPlan = useCallback(async (oppId: string, selectedLeverage: number, notional?: number) => {
+    const requestId = ++requestSequence.current
     try {
       setLoading(true)
       const body: Record<string, unknown> = {
@@ -82,25 +84,31 @@ export function usePlan(
       })
       if (!resp.ok) {
         const body: { error?: string; pair_max_leverage?: number } = await resp.json().catch(() => ({}))
+        if (requestId !== requestSequence.current) return
         if (typeof body.pair_max_leverage === 'number') {
           setMaxLeverage(body.pair_max_leverage)
         }
         throw new Error(body.error || `HTTP ${resp.status}`)
       }
       const data: ExecutionPlan = await resp.json()
+      if (requestId !== requestSequence.current) return
       setPlan(data)
       setMaxLeverage(data.max_leverage)
       setError(null)
     } catch (e) {
+      if (requestId !== requestSequence.current) return
       setError(e instanceof Error ? e.message : 'Unknown error')
       setPlan(null)
     } finally {
-      setLoading(false)
+      if (requestId === requestSequence.current) {
+        setLoading(false)
+      }
     }
   }, [])
 
   useEffect(() => {
     if (!opportunityId) {
+      requestSequence.current++
       setPlan(null)
       setError(null)
       setMaxLeverage(null)
@@ -119,6 +127,7 @@ export function usePlan(
   }, [opportunityId, leverage, requestedNotional, fetchPlan])
 
   const clear = useCallback(() => {
+    requestSequence.current++
     setPlan(null)
     setError(null)
     setMaxLeverage(null)
