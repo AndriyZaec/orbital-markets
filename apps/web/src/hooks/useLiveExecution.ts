@@ -150,8 +150,7 @@ export function useLiveExecution() {
 
   const executeLive = useCallback(async (
     opportunityId: string,
-    leverageLong: number,
-    leverageShort: number,
+    leverage: number,
     requestedNotional?: number,
   ) => {
     if (!pacificaAddress || !hyperliquidAddress) {
@@ -168,9 +167,7 @@ export function useLiveExecution() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           opportunity_id: opportunityId,
-          leverage: leverageLong, // shared-fallback field
-          leverage_long: leverageLong,
-          leverage_short: leverageShort,
+          leverage,
           ...(typeof requestedNotional === 'number' && requestedNotional > 0
             ? { requested_notional: requestedNotional }
             : {}),

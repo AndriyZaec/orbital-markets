@@ -40,6 +40,7 @@ interface ExecutionPlan {
   asset: string
   direction: string
   notional: number
+  max_leverage: number
   leverage: LeverageConfig
   leg_1: Leg
   leg_2: Leg
@@ -55,25 +56,21 @@ interface ExecutionPlan {
 
 export function usePlan(
   opportunityId: string | null,
-  leverageLong: number = 1,
-  leverageShort: number = 1,
+  leverage: number = 1,
   requestedNotional?: number,
 ) {
   const [plan, setPlan] = useState<ExecutionPlan | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [maxLeverage, setMaxLeverage] = useState<number | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const fetchPlan = useCallback(async (oppId: string, levLong: number, levShort: number, notional?: number) => {
+  const fetchPlan = useCallback(async (oppId: string, selectedLeverage: number, notional?: number) => {
     try {
       setLoading(true)
-      // `leverage` is kept as a shared fallback for older backends; per-leg
-      // fields are the source of truth today.
       const body: Record<string, unknown> = {
         opportunity_id: oppId,
-        leverage: levLong,
-        leverage_long: levLong,
-        leverage_short: levShort,
+        leverage: selectedLeverage,
       }
       if (typeof notional === 'number' && notional > 0) {
         body.requested_notional = notional
@@ -84,11 +81,15 @@ export function usePlan(
         body: JSON.stringify(body),
       })
       if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
+        const body: { error?: string; pair_max_leverage?: number } = await resp.json().catch(() => ({}))
+        if (typeof body.pair_max_leverage === 'number') {
+          setMaxLeverage(body.pair_max_leverage)
+        }
         throw new Error(body.error || `HTTP ${resp.status}`)
       }
       const data: ExecutionPlan = await resp.json()
       setPlan(data)
+      setMaxLeverage(data.max_leverage)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error')
@@ -102,26 +103,28 @@ export function usePlan(
     if (!opportunityId) {
       setPlan(null)
       setError(null)
+      setMaxLeverage(null)
       return
     }
 
-    fetchPlan(opportunityId, leverageLong, leverageShort, requestedNotional)
+    fetchPlan(opportunityId, leverage, requestedNotional)
 
     intervalRef.current = setInterval(
-      () => fetchPlan(opportunityId, leverageLong, leverageShort, requestedNotional),
+      () => fetchPlan(opportunityId, leverage, requestedNotional),
       10_000,
     )
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [opportunityId, leverageLong, leverageShort, requestedNotional, fetchPlan])
+  }, [opportunityId, leverage, requestedNotional, fetchPlan])
 
   const clear = useCallback(() => {
     setPlan(null)
     setError(null)
+    setMaxLeverage(null)
   }, [])
 
-  return { plan, loading, error, clear }
+  return { plan, loading, error, maxLeverage, clear }
 }
 
 export type { ExecutionPlan, Leg, Bounds }

@@ -16,7 +16,7 @@ type LiveAdmissionResult struct {
 //  4. Liquidity must not be "toxic"
 //  5. RecommendedNotional must be > 0
 //  6. Leverage must be within allowed range
-func CheckLiveAdmission(opp Opportunity, leverage float64) LiveAdmissionResult {
+func CheckLiveAdmission(opp Opportunity, leverage float64, pairMaxLeverage float64) LiveAdmissionResult {
 	var reasons []string
 
 	// 1. Venue pair
@@ -46,8 +46,8 @@ func CheckLiveAdmission(opp Opportunity, leverage float64) LiveAdmissionResult {
 	}
 
 	// 6. Leverage
-	if !ValidateLeverage(leverage) {
-		reasons = append(reasons, "leverage outside allowed range")
+	if !ValidateLeverage(leverage, pairMaxLeverage) {
+		reasons = append(reasons, "leverage outside venue pair range")
 	}
 
 	return LiveAdmissionResult{

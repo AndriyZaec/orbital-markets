@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	wsURL      = "wss://ws.pacifica.fi/ws"
-	infoURL    = "https://api.pacifica.fi/api/v1/info"
-	venueName  = "pacifica"
+	wsURL     = "wss://ws.pacifica.fi/ws"
+	infoURL   = "https://api.pacifica.fi/api/v1/info"
+	venueName = "pacifica"
 )
 
 // wsMessage wraps both prices and bbo channel messages.
@@ -61,15 +61,18 @@ type assetState struct {
 }
 
 type Adapter struct {
-	mu     sync.RWMutex
-	assets map[string]*assetState
-	logger *slog.Logger
+	mu         sync.RWMutex
+	assets     map[string]*assetState
+	logger     *slog.Logger
+	client     *http.Client
+	metadataMu sync.Mutex
 }
 
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
 		assets: make(map[string]*assetState),
 		logger: logger,
+		client: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -102,15 +105,22 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 	return out, nil
 }
 
-// fetchSymbolInfo loads per-symbol metadata (max leverage) from the REST API.
-func (a *Adapter) fetchSymbolInfo() {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(infoURL)
+// RefreshMetadata loads current per-symbol execution constraints from REST.
+func (a *Adapter) RefreshMetadata(ctx context.Context) error {
+	a.metadataMu.Lock()
+	defer a.metadataMu.Unlock()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, infoURL, nil)
 	if err != nil {
-		a.logger.Warn("pacifica: fetch symbol info", "err", err)
-		return
+		return fmt.Errorf("build symbol info request: %w", err)
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch symbol info: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch symbol info: HTTP %d", resp.StatusCode)
+	}
 
 	var result struct {
 		Success bool `json:"success"`
@@ -120,11 +130,10 @@ func (a *Adapter) fetchSymbolInfo() {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		a.logger.Warn("pacifica: parse symbol info", "err", err)
-		return
+		return fmt.Errorf("parse symbol info: %w", err)
 	}
 	if !result.Success || len(result.Data) == 0 {
-		return
+		return fmt.Errorf("symbol info response contains no data")
 	}
 
 	a.mu.Lock()
@@ -141,11 +150,14 @@ func (a *Adapter) fetchSymbolInfo() {
 		state.maxLeverage = s.MaxLeverage
 	}
 	a.logger.Info("pacifica: symbol info loaded", "symbols", len(result.Data))
+	return nil
 }
 
 // Connect starts the WebSocket connection and processes messages until ctx is cancelled.
 func (a *Adapter) Connect(ctx context.Context) error {
-	a.fetchSymbolInfo()
+	if err := a.RefreshMetadata(ctx); err != nil {
+		a.logger.Warn("pacifica: initial symbol info", "err", err)
+	}
 	for {
 		err := a.connectAndListen(ctx)
 		if ctx.Err() != nil {

@@ -265,20 +265,17 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		Liquidity:           sizing.Liquidity,
 		Confidence:          confidence,
 		RiskTier:            riskTier,
-		MaxLeverage:     minLeverage(a.MaxLeverage, b.MaxLeverage),
-		LiqSuspect:      liqCheck.Suspect,
-		ExecutionStatus: executionStatus,
-		RiskFlags:       riskFlags,
-		Warnings:        warnings,
+		MaxLeverage:         minLeverage(a.MaxLeverage, b.MaxLeverage),
+		LiqSuspect:          liqCheck.Suspect,
+		ExecutionStatus:     executionStatus,
+		RiskFlags:           riskFlags,
+		Warnings:            warnings,
 	}
 }
 
 func minLeverage(a, b int) int {
-	if a <= 0 {
-		return b
-	}
-	if b <= 0 {
-		return a
+	if a <= 0 || b <= 0 {
+		return 0
 	}
 	if a < b {
 		return a

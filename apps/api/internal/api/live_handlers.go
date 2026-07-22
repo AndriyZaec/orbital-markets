@@ -40,9 +40,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		OpportunityID      string   `json:"opportunity_id"`
-		Leverage           float64  `json:"leverage"` // shared fallback
-		LeverageLong       *float64 `json:"leverage_long,omitempty"`
-		LeverageShort      *float64 `json:"leverage_short,omitempty"`
+		Leverage           float64  `json:"leverage"`
 		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
 		AccountPacifica    string   `json:"account_pacifica"`
 		AccountHyperliquid string   `json:"account_hyperliquid"`
@@ -72,17 +70,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	if req.RequestedNotional != nil {
 		notional = *req.RequestedNotional
 	}
-	levLong, levShort, err := resolveLegLeverage(req.Leverage, req.LeverageLong, req.LeverageShort)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-
 	// 1. Build a fresh execution plan
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, levLong, levShort, notional)
+	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		writePlanError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	if !plan.Executable {
@@ -129,7 +121,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Live admission gate
-	admission := domain.CheckLiveAdmission(*opp, plan.Leverage.Leverage)
+	admission := domain.CheckLiveAdmission(*opp, plan.Leverage.Leverage, float64(plan.MaxLeverage))
 	if !admission.Allowed {
 		s.logger.Warn("live prepare: admission denied",
 			"asset", opp.Asset,
@@ -360,16 +352,16 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 
 // Two freshness thresholds serve two different needs:
 //
-//   admissionFreshness — hard gate at /live/prepare and pretrade checks in
-//     venue/*/account/pretrade.go. Must stay strict; this is what prevents
-//     submitting orders against stale account state.
+//	admissionFreshness — hard gate at /live/prepare and pretrade checks in
+//	  venue/*/account/pretrade.go. Must stay strict; this is what prevents
+//	  submitting orders against stale account state.
 //
-//   displayFreshness — soft gate for the balances/readiness UI. Push-driven
-//     Pacifica WS doesn't heartbeat when nothing is happening, so a healthy
-//     but quiet account naturally ages past 30s. Using the strict window for
-//     display caused frequent false "Stale" flags with no user-visible fix.
-//     5 minutes is generous enough to hide the quiet-account case while
-//     still catching a genuinely broken stream.
+//	displayFreshness — soft gate for the balances/readiness UI. Push-driven
+//	  Pacifica WS doesn't heartbeat when nothing is happening, so a healthy
+//	  but quiet account naturally ages past 30s. Using the strict window for
+//	  display caused frequent false "Stale" flags with no user-visible fix.
+//	  5 minutes is generous enough to hide the quiet-account case while
+//	  still catching a genuinely broken stream.
 const (
 	admissionFreshness = 30 * time.Second
 	displayFreshness   = 5 * time.Minute
