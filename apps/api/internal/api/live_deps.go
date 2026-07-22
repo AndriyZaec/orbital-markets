@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -27,10 +28,12 @@ type LiveDeps struct {
 	hlClient     *hllive.Client
 	hlAssetMap   hllive.AssetMap
 
-	ctx    context.Context
-	logger *slog.Logger
-	mu     sync.Mutex
-	active bool
+	ctx                context.Context
+	logger             *slog.Logger
+	mu                 sync.Mutex
+	accountCancel      context.CancelFunc
+	pacificaAccount    string
+	hyperliquidAccount string
 }
 
 // NewLiveDeps creates a LiveDeps. Venue clients are created eagerly; account
@@ -60,34 +63,45 @@ func NewLiveDeps(
 	}
 }
 
-// EnsureAccountStreams starts venue account subscribers if not already running.
-// Called on the first /live/prepare with the connected wallet addresses.
-// Safe to call multiple times — only the first call starts the subscribers.
+// EnsureAccountStreams starts venue account subscribers for the current wallet
+// pair. Repeated calls for the same pair are no-ops; a changed pair cancels the
+// old subscribers, clears their state, and starts fresh subscribers.
 func (d *LiveDeps) EnsureAccountStreams(pacAccount, hlAddress string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.active {
+	pacAccount = strings.TrimSpace(pacAccount)
+	hlAddress = strings.ToLower(strings.TrimSpace(hlAddress))
+	if d.accountCancel != nil && d.pacificaAccount == pacAccount && d.hyperliquidAccount == hlAddress {
 		return
 	}
+	if d.accountCancel != nil {
+		d.logger.Info("live: connected wallet pair changed; restarting account streams")
+		d.accountCancel()
+	}
+	d.pacState.Reset()
+	d.hlState.Reset()
+	streamCtx, cancel := context.WithCancel(d.ctx)
 
 	// Pacifica account subscriber
 	pacSub := pacaccount.NewSubscriber(d.logger, d.pacState, pacAccount, d.pacTracker)
-	go pacSub.Run(d.ctx)
+	go pacSub.Run(streamCtx)
 	d.logger.Info("live: pacifica account subscriber started", "account", pacAccount)
 
 	// Hyperliquid account subscriber (REST polling)
 	hlAcctSub := hlaccount.NewSubscriber(d.logger, d.hlState, hlAddress)
-	go hlAcctSub.Run(d.ctx)
+	go hlAcctSub.Run(streamCtx)
 	d.logger.Info("live: hyperliquid account subscriber started", "address", hlAddress)
 
 	// Hyperliquid order/fill tracker (WS)
 	hlTracker := hllive.NewTracker(d.logger, hlAddress)
-	go hlTracker.Run(d.ctx)
+	go hlTracker.Run(streamCtx)
 	d.logger.Info("live: hyperliquid order tracker started", "address", hlAddress)
 
 	// Wire the HL client now that we have a tracker
 	d.hlClient = hllive.NewClient(d.logger, nil, d.hlAssetMap, d.hlState, hlTracker)
 	d.logger.Info("live: hyperliquid live client ready")
 
-	d.active = true
+	d.accountCancel = cancel
+	d.pacificaAccount = pacAccount
+	d.hyperliquidAccount = hlAddress
 }

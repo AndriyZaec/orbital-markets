@@ -53,7 +53,6 @@ func (s *Subscriber) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.state.SetConnected(false)
 			return
 		case <-ticker.C:
 			s.poll(ctx)
@@ -62,53 +61,68 @@ func (s *Subscriber) Run(ctx context.Context) {
 }
 
 func (s *Subscriber) poll(ctx context.Context) {
-	body := fmt.Sprintf(`{"type":"clearinghouseState","user":"%s"}`, s.address)
+	perpRaw, err := s.fetchInfo(ctx, "clearinghouseState")
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.Error("hl account: fetch perp state failed", "err", err)
+			s.state.SetConnected(false)
+		}
+		return
+	}
+	spotRaw, err := s.fetchInfo(ctx, "spotClearinghouseState")
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.Error("hl account: fetch unified balance failed", "err", err)
+			s.state.SetConnected(false)
+		}
+		return
+	}
+
+	margin, positions, err := parseAccountState(perpRaw, spotRaw)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.Error("hl account: parse failed", "err", err)
+			s.state.SetConnected(false)
+		}
+		return
+	}
+	s.state.UpdateMargin(margin)
+	s.state.UpdatePositions(positions)
+	s.state.SetConnected(true)
+
+	if !s.firstUpdate {
+		s.firstUpdate = true
+		s.logger.Info("hl account: first state update",
+			"equity", fmt.Sprintf("%.2f", margin.AccountEquity),
+			"available", fmt.Sprintf("%.2f", margin.AvailableBalance),
+			"positions", len(positions),
+		)
+	}
+}
+
+func (s *Subscriber) fetchInfo(ctx context.Context, requestType string) ([]byte, error) {
+	body := fmt.Sprintf(`{"type":%q,"user":%q}`, requestType, s.address)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, infoURL, strings.NewReader(body))
 	if err != nil {
-		s.logger.Error("hl account: build request", "err", err)
-		s.state.SetConnected(false)
-		return
+		return nil, fmt.Errorf("build %s request: %w", requestType, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		s.logger.Error("hl account: fetch failed", "err", err)
-		s.state.SetConnected(false)
-		return
+		return nil, fmt.Errorf("fetch %s: %w", requestType, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		s.logger.Error("hl account: non-200 response", "status", resp.StatusCode)
-		s.state.SetConnected(false)
-		return
+		return nil, fmt.Errorf("fetch %s: HTTP %d", requestType, resp.StatusCode)
 	}
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		s.logger.Error("hl account: read body", "err", err)
-		s.state.SetConnected(false)
-		return
+		return nil, fmt.Errorf("read %s response: %w", requestType, err)
 	}
-
-	if err := s.parseAndUpdate(raw); err != nil {
-		s.logger.Error("hl account: parse failed", "err", err)
-		s.state.SetConnected(false)
-		return
-	}
-
-	s.state.SetConnected(true)
-
-	if !s.firstUpdate {
-		s.firstUpdate = true
-		snap := s.state.Snapshot()
-		s.logger.Info("hl account: first state update",
-			"equity", fmt.Sprintf("%.2f", snap.Margin.AccountEquity),
-			"available", fmt.Sprintf("%.2f", snap.Margin.AvailableBalance),
-			"positions", len(snap.Positions),
-		)
-	}
+	return raw, nil
 }
 
 // clearinghouseState response shape (subset we care about):
@@ -143,13 +157,12 @@ func (s *Subscriber) poll(ctx context.Context) {
 //	    }
 //	  ]
 //	}
-func (s *Subscriber) parseAndUpdate(raw []byte) error {
-	var resp struct {
+func parseAccountState(perpRaw, spotRaw []byte) (MarginSummary, []AssetPosition, error) {
+	var perp struct {
 		MarginSummary struct {
 			AccountValue    string `json:"accountValue"`
 			TotalMarginUsed string `json:"totalMarginUsed"`
 			TotalRawUsd     string `json:"totalRawUsd"`
-			Withdrawable    string `json:"withdrawable"`
 		} `json:"marginSummary"`
 		CrossMarginSummary struct {
 			AccountValue    string `json:"accountValue"`
@@ -157,47 +170,82 @@ func (s *Subscriber) parseAndUpdate(raw []byte) error {
 		} `json:"crossMarginSummary"`
 		AssetPositions []struct {
 			Position struct {
-				Coin            string `json:"coin"`
-				Szi             string `json:"szi"` // signed size: positive=long, negative=short
-				EntryPx         string `json:"entryPx"`
-				PositionValue   string `json:"positionValue"`
-				UnrealizedPnl   string `json:"unrealizedPnl"`
-				LiquidationPx   string `json:"liquidationPx"`
-				MarginUsed      string `json:"marginUsed"`
-				Leverage        json.RawMessage `json:"leverage"`
+				Coin          string          `json:"coin"`
+				Szi           string          `json:"szi"` // signed size: positive=long, negative=short
+				EntryPx       string          `json:"entryPx"`
+				PositionValue string          `json:"positionValue"`
+				UnrealizedPnl string          `json:"unrealizedPnl"`
+				LiquidationPx string          `json:"liquidationPx"`
+				MarginUsed    string          `json:"marginUsed"`
+				Leverage      json.RawMessage `json:"leverage"`
 			} `json:"position"`
 		} `json:"assetPositions"`
+		Withdrawable string `json:"withdrawable"`
 	}
 
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return fmt.Errorf("unmarshal clearinghouseState: %w", err)
+	if err := json.Unmarshal(perpRaw, &perp); err != nil {
+		return MarginSummary{}, nil, fmt.Errorf("unmarshal clearinghouseState: %w", err)
 	}
 
-	// Update margin
-	accountEquity := parseFloat(resp.MarginSummary.AccountValue)
-	totalMarginUsed := parseFloat(resp.MarginSummary.TotalMarginUsed)
-	withdrawable := parseFloat(resp.MarginSummary.Withdrawable)
+	var spot struct {
+		Balances []struct {
+			Coin  string `json:"coin"`
+			Token int    `json:"token"`
+			Total string `json:"total"`
+			Hold  string `json:"hold"`
+		} `json:"balances"`
+		TokenToAvailableAfterMaintenance [][]json.RawMessage `json:"tokenToAvailableAfterMaintenance"`
+	}
+	if err := json.Unmarshal(spotRaw, &spot); err != nil {
+		return MarginSummary{}, nil, fmt.Errorf("unmarshal spotClearinghouseState: %w", err)
+	}
 
-	// Available balance = account value - margin used
+	accountEquity := parseFloat(perp.MarginSummary.AccountValue)
+	totalMarginUsed := parseFloat(perp.MarginSummary.TotalMarginUsed)
 	availableBalance := accountEquity - totalMarginUsed
+	withdrawable := parseFloat(perp.Withdrawable)
 
-	// Cross margin ratio
+	// Hyperliquid unified accounts keep trading USDC in spot state. The API
+	// documents spotClearinghouseState as the source of truth across spot and
+	// perps, while clearinghouseState can legitimately report zero.
+	for _, balance := range spot.Balances {
+		if balance.Token != 0 && balance.Coin != "USDC" {
+			continue
+		}
+		accountEquity = parseFloat(balance.Total)
+		availableBalance = accountEquity - parseFloat(balance.Hold)
+		break
+	}
+	for _, entry := range spot.TokenToAvailableAfterMaintenance {
+		if len(entry) != 2 {
+			continue
+		}
+		var token int
+		var available string
+		if json.Unmarshal(entry[0], &token) == nil && token == 0 && json.Unmarshal(entry[1], &available) == nil {
+			availableBalance = parseFloat(available)
+			break
+		}
+	}
+	if withdrawable == 0 && accountEquity > 0 {
+		withdrawable = availableBalance
+	}
+
 	var crossMarginRatio float64
 	if accountEquity > 0 {
 		crossMarginRatio = totalMarginUsed / accountEquity
 	}
 
-	s.state.UpdateMargin(MarginSummary{
+	margin := MarginSummary{
 		AccountEquity:    accountEquity,
 		TotalMarginUsed:  totalMarginUsed,
 		CrossMarginRatio: crossMarginRatio,
 		AvailableBalance: availableBalance,
 		Withdrawable:     withdrawable,
-	})
+	}
 
-	// Update positions
 	var positions []AssetPosition
-	for _, ap := range resp.AssetPositions {
+	for _, ap := range perp.AssetPositions {
 		p := ap.Position
 		szi := parseFloat(p.Szi)
 		if szi == 0 {
@@ -225,9 +273,7 @@ func (s *Subscriber) parseAndUpdate(raw []byte) error {
 		})
 	}
 
-	s.state.UpdatePositions(positions)
-
-	return nil
+	return margin, positions, nil
 }
 
 // parseLeverage handles the HL leverage field which can be:

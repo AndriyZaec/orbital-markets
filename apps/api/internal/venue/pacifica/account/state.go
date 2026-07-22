@@ -36,15 +36,15 @@ type AccountPosition struct {
 
 // AccountStateSnapshot is an immutable copy of account state for safe reading.
 type AccountStateSnapshot struct {
-	Equity              float64                `json:"equity"`
-	AvailableToSpend    float64                `json:"available_to_spend"`
-	AvailableToWithdraw float64                `json:"available_to_withdraw"`
-	TotalMarginUsed     float64                `json:"total_margin_used"`
-	MaintenanceMargin   float64                `json:"maintenance_margin"`
+	Equity              float64                 `json:"equity"`
+	AvailableToSpend    float64                 `json:"available_to_spend"`
+	AvailableToWithdraw float64                 `json:"available_to_withdraw"`
+	TotalMarginUsed     float64                 `json:"total_margin_used"`
+	MaintenanceMargin   float64                 `json:"maintenance_margin"`
 	SymbolConfigs       map[string]SymbolConfig `json:"symbol_configs"`
-	Positions           []AccountPosition      `json:"positions"`
-	LastUpdated         time.Time              `json:"last_updated"`
-	Connected           bool                   `json:"connected"`
+	Positions           []AccountPosition       `json:"positions"`
+	LastUpdated         time.Time               `json:"last_updated"`
+	Connected           bool                    `json:"connected"`
 }
 
 // AccountState is the live account state from Pacifica private streams.
@@ -137,4 +137,19 @@ func (s *AccountState) SetConnected(connected bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connected = connected
+}
+
+// Reset clears state when the connected wallet account changes.
+func (s *AccountState) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.equity = 0
+	s.availableToSpend = 0
+	s.availableToWithdraw = 0
+	s.totalMarginUsed = 0
+	s.maintenanceMargin = 0
+	s.symbolConfigs = make(map[string]SymbolConfig)
+	s.positions = nil
+	s.lastUpdated = time.Time{}
+	s.connected = false
 }

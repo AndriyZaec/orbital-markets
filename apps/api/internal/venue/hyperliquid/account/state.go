@@ -16,14 +16,14 @@ type MarginSummary struct {
 
 // AssetPosition is a single open position on Hyperliquid.
 type AssetPosition struct {
-	Coin           string  `json:"coin"`
-	Side           string  `json:"side"` // "long" or "short"
-	Size           float64 `json:"size"`
-	EntryPx        float64 `json:"entry_px"`
-	UnrealizedPnL  float64 `json:"unrealized_pnl"`
-	Leverage       float64 `json:"leverage"`
-	LiquidationPx  float64 `json:"liquidation_px"`
-	MarginUsed     float64 `json:"margin_used"`
+	Coin          string  `json:"coin"`
+	Side          string  `json:"side"` // "long" or "short"
+	Size          float64 `json:"size"`
+	EntryPx       float64 `json:"entry_px"`
+	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	Leverage      float64 `json:"leverage"`
+	LiquidationPx float64 `json:"liquidation_px"`
+	MarginUsed    float64 `json:"margin_used"`
 }
 
 // AccountStateSnapshot is an immutable view of Hyperliquid account state.
@@ -86,4 +86,14 @@ func (s *AccountState) SetConnected(connected bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connected = connected
+}
+
+// Reset clears state when the connected wallet address changes.
+func (s *AccountState) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.margin = MarginSummary{}
+	s.positions = nil
+	s.lastUpdated = time.Time{}
+	s.connected = false
 }
