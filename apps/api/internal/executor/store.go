@@ -147,16 +147,146 @@ func (s *Store) MarkClosing(ctx context.Context, positionID string) error {
 	return err
 }
 
-// MarkClosed transitions a position to terminal "closed" state.
-func (s *Store) MarkClosed(ctx context.Context, positionID string) error {
+// MarkClosed transitions a position to terminal "closed" state and reports
+// whether this call performed the transition.
+func (s *Store) MarkClosed(ctx context.Context, positionID string) (bool, error) {
 	now := time.Now().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE live_positions SET state = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
-		WHERE id = ?`,
-		string(ExecStateClosed), now, now, positionID,
+		WHERE id = ? AND state != ?`,
+		string(ExecStateClosed), now, now, positionID, string(ExecStateClosed),
 	)
 	if err != nil {
 		s.logger.Error("live store: mark closed", "err", err, "id", positionID)
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
+// CloseOutcome records the latest known state of a reduce-only close order.
+type CloseOutcome struct {
+	PositionID      string
+	Leg             int
+	Venue           string
+	ClientOrderID   string
+	OrderID         string
+	RequestedAmount float64
+	FilledAmount    float64
+	AvgFillPrice    float64
+	FillRatio       float64
+	Accepted        bool
+	Confirmed       bool
+	Resolved        bool
+	Error           string
+}
+
+// CloseProgress summarizes the latest close attempt for each original open leg.
+type CloseProgress struct {
+	Required  int
+	Confirmed int
+	Failed    int
+	Pending   int
+}
+
+// UpsertCloseOutcome persists submission acceptance and later fill resolution.
+func (s *Store) UpsertCloseOutcome(ctx context.Context, outcome CloseOutcome) error {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO live_close_outcomes (
+			position_id, leg, venue, client_order_id, order_id,
+			requested_amount, filled_amount, avg_fill_price, fill_ratio,
+			accepted, confirmed, resolved, error, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(position_id, client_order_id) DO UPDATE SET
+			order_id = excluded.order_id,
+			filled_amount = excluded.filled_amount,
+			avg_fill_price = excluded.avg_fill_price,
+			fill_ratio = excluded.fill_ratio,
+			accepted = excluded.accepted,
+			confirmed = excluded.confirmed,
+			resolved = excluded.resolved,
+			error = excluded.error,
+			updated_at = excluded.updated_at`,
+		outcome.PositionID, outcome.Leg, outcome.Venue, outcome.ClientOrderID, outcome.OrderID,
+		outcome.RequestedAmount, outcome.FilledAmount, outcome.AvgFillPrice, outcome.FillRatio,
+		boolToInt(outcome.Accepted), boolToInt(outcome.Confirmed), boolToInt(outcome.Resolved), outcome.Error,
+		now, now,
+	)
+	if err != nil {
+		s.logger.Error("live store: upsert close outcome", "err", err, "id", outcome.PositionID, "leg", outcome.Leg)
+	}
+	return err
+}
+
+// GetCloseProgress compares the latest close attempt for each leg with the
+// original confirmed legs that must be closed.
+func (s *Store) GetCloseProgress(ctx context.Context, positionID string) (CloseProgress, error) {
+	var progress CloseProgress
+	err := s.db.QueryRowContext(ctx, `
+		WITH required AS (
+			SELECT COUNT(DISTINCT leg) AS total
+			FROM live_fills
+			WHERE position_id = ? AND filled = 1
+		), latest AS (
+			SELECT outcome.leg, outcome.confirmed, outcome.resolved
+			FROM live_close_outcomes outcome
+			JOIN (
+				SELECT leg, MAX(id) AS id
+				FROM live_close_outcomes
+				WHERE position_id = ?
+				GROUP BY leg
+			) current ON current.id = outcome.id
+		)
+		SELECT required.total,
+			COALESCE(SUM(CASE WHEN latest.confirmed = 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN latest.resolved = 1 AND latest.confirmed = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN latest.resolved = 0 THEN 1 ELSE 0 END), 0)
+		FROM required LEFT JOIN latest ON 1 = 1
+		GROUP BY required.total`, positionID, positionID).Scan(
+		&progress.Required, &progress.Confirmed, &progress.Failed, &progress.Pending,
+	)
+	return progress, err
+}
+
+// ConfirmedCloseLegs returns legs already confirmed closed, so retries do not
+// submit a second reduce-only order for them.
+func (s *Store) ConfirmedCloseLegs(ctx context.Context, positionID string) (map[int]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT outcome.leg
+		FROM live_close_outcomes outcome
+		JOIN (
+			SELECT leg, MAX(id) AS id
+			FROM live_close_outcomes
+			WHERE position_id = ?
+			GROUP BY leg
+		) current ON current.id = outcome.id
+		WHERE outcome.confirmed = 1`, positionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	legs := make(map[int]bool)
+	for rows.Next() {
+		var leg int
+		if err := rows.Scan(&leg); err != nil {
+			return nil, err
+		}
+		legs[leg] = true
+	}
+	return legs, rows.Err()
+}
+
+// MarkCloseDegraded records a terminal close failure without overwriting
+// monitoring fields from the open position.
+func (s *Store) MarkCloseDegraded(ctx context.Context, positionID string) error {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE live_positions SET state = ?, updated_at = ? WHERE id = ? AND state != ?`,
+		string(ExecStateDegraded), now, positionID, string(ExecStateClosed),
+	)
+	if err != nil {
+		s.logger.Error("live store: mark close degraded", "err", err, "id", positionID)
 	}
 	return err
 }

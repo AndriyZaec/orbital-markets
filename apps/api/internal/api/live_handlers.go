@@ -310,6 +310,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	result, err := s.submitSignedAction(r.Context(), signed, sigReq)
 
 	if err != nil {
+		s.recordCloseSubmissionFailure(r.Context(), sigReq, err.Error())
 		s.logger.Error("live submit: submission error",
 			"request_id", signed.RequestID,
 			"venue", signed.Venue,
@@ -322,6 +323,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result == nil {
+		s.recordCloseSubmissionFailure(r.Context(), sigReq, "submission returned no result")
 		s.logger.Error("live submit: nil result without error",
 			"request_id", signed.RequestID,
 			"venue", signed.Venue,
@@ -346,6 +348,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 			"error", result.Error,
 		)
 	}
+	s.trackCloseSubmission(sigReq, result)
 
 	writeJSON(w, http.StatusOK, result)
 }
@@ -605,10 +608,15 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get fills"})
 		return
 	}
+	confirmedLegs, err := s.liveStore.ConfirmedCloseLegs(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get close progress"})
+		return
+	}
 
 	var signingRequests []*domain.SigningRequest
 	for _, fill := range fills {
-		if !fill.Filled || fill.FilledAmount <= 0 {
+		if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
 			continue
 		}
 		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
@@ -620,6 +628,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		sigReq.PositionID = id
+		sigReq.Leg = fill.Leg
 		s.live.signingStore.Store(sigReq)
 		signingRequests = append(signingRequests, sigReq)
 	}
@@ -629,9 +639,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.liveStore.MarkClosing(r.Context(), id)
-	s.liveStore.InsertEvent(r.Context(), id, "close_initiated",
-		executor.ExecStateClosing,
+	s.liveStore.InsertEvent(r.Context(), id, "close_prepared",
+		executor.ExecState(pos.State),
 		fmt.Sprintf("%d close orders prepared", len(signingRequests)))
 
 	s.logger.Info("live close: signing requests ready",
@@ -658,7 +667,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 //  1. Find all open/degraded positions
 //  2. For each position, get fills to know what legs to close
 //  3. Build close signing requests for each filled leg
-//  4. Store signing requests, mark positions as "closing"
+//  4. Store signing requests; accepted submissions mark positions as "closing"
 //  5. Return all signing requests — frontend signs + submits each via /api/v1/live/submit
 //
 // Idempotent — repeated calls regenerate signing requests for positions still open.
@@ -731,10 +740,17 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			posResults = append(posResults, pc)
 			continue
 		}
+		confirmedLegs, err := s.live.liveStore.ConfirmedCloseLegs(ctx, pos.ID)
+		if err != nil {
+			s.logger.Error("kill switch: get close progress", "err", err, "id", pos.ID)
+			pc.Error = "failed to get close progress"
+			posResults = append(posResults, pc)
+			continue
+		}
 
 		legsClosed := 0
 		for _, fill := range fills {
-			if !fill.Filled || fill.FilledAmount <= 0 {
+			if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
 				continue
 			}
 
@@ -751,6 +767,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				pc.Error = fmt.Sprintf("leg %d: %s", fill.Leg, err)
 				continue
 			}
+			sigReq.PositionID = pos.ID
+			sigReq.Leg = fill.Leg
 
 			s.live.signingStore.Store(sigReq)
 			signingRequests = append(signingRequests, sigReq)
@@ -767,11 +785,9 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 
 		pc.Legs = legsClosed
 
-		// Mark position as closing
 		if legsClosed > 0 {
-			s.live.liveStore.MarkClosing(ctx, pos.ID)
-			s.live.liveStore.InsertEvent(ctx, pos.ID, "emergency_close_initiated",
-				executor.ExecStateClosing,
+			s.live.liveStore.InsertEvent(ctx, pos.ID, "emergency_close_prepared",
+				executor.ExecState(pos.State),
 				fmt.Sprintf("kill switch: %d close orders prepared", legsClosed))
 		}
 

@@ -92,19 +92,19 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
-  // Refresh the parent list once a close transitions to done.
+  // Refresh the parent list once close tracking reaches a terminal UI state.
   useEffect(() => {
-    if (closeDone) onRefresh?.()
-  }, [closeDone, onRefresh])
+    if (closeDone || liveClose.state.phase === 'error') onRefresh?.()
+  }, [closeDone, liveClose.state.phase, onRefresh])
 
   const handleClose = () => {
     setConfirmClose(false)
     liveClose.closePosition(pos.id)
   }
 
-  // Extract reason from the last 'complete' event
-  const completeEvent = [...events].reverse().find(e => e.event === 'complete')
-  const reason = completeEvent?.detail
+  const reasonEvent = [...events].reverse().find(e =>
+    e.event === 'complete' || e.event === 'close_leg_failed' || e.event === 'close_incomplete')
+  const reason = reasonEvent?.detail
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
@@ -237,12 +237,13 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
               <p className="text-[11px] text-yellow-400">
                 {liveClose.state.phase === 'preparing' ? 'Preparing close orders...' :
                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} — check your wallet` :
+                 liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
                  `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
               </p>
             )}
             {/* Result */}
             {closeDone && liveClose.state.failed === 0 && (
-              <p className="text-[11px] text-green-400">Close orders submitted successfully.</p>
+              <p className="text-[11px] text-green-400">Position closed with all leg fills confirmed.</p>
             )}
             {closeDone && liveClose.state.failed > 0 && (
               <div className="text-[11px] space-y-1">

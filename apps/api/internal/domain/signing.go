@@ -15,6 +15,8 @@ type SigningRequest struct {
 	// Correlation
 	ID            string `json:"id"`              // unique request ID
 	ClientOrderID string `json:"client_order_id"` // venue-facing order correlation
+	PositionID    string `json:"position_id,omitempty"`
+	Leg           int    `json:"leg,omitempty"`
 
 	// Venue context
 	Venue  string `json:"venue"`  // "pacifica" or "hyperliquid"
