@@ -145,7 +145,9 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
 
         {/* Leg Fills */}
         <div className="px-5 py-4 border-b border-border">
-          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Leg Fills</p>
+          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">
+            {pos.state === 'degraded' ? 'Remaining Exposure' : 'Leg Fills'}
+          </p>
           {loading && <p className="text-[10px] text-muted-foreground">Loading...</p>}
           {!loading && fills.length === 0 && (
             <p className="text-[10px] text-muted-foreground">No fills recorded.</p>

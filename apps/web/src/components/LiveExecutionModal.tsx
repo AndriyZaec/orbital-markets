@@ -10,7 +10,7 @@ interface Props {
   onViewPositions: () => void
 }
 
-const TERMINAL: ExecutionPhase[] = ['open', 'degraded', 'aborted', 'failed']
+const TERMINAL: ExecutionPhase[] = ['open', 'degraded', 'aborted', 'failed', 'recovering']
 
 function fmtAmount(n: number) {
   if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 })
@@ -41,6 +41,8 @@ function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatu
     case 'submitting_leg1': return 'submitting'
     case 'awaiting_leg2':
     case 'submitting_leg2':
+    case 'awaiting_leg2_retry':
+    case 'submitting_leg2_retry':
     case 'open': return 'accepted'
     case 'degraded':
     case 'aborted':
@@ -56,6 +58,8 @@ function leg2Status(phase: ExecutionPhase): LegStatus {
   switch (phase) {
     case 'awaiting_leg2': return 'signing'
     case 'submitting_leg2': return 'submitting'
+    case 'awaiting_leg2_retry': return 'signing'
+    case 'submitting_leg2_retry': return 'submitting'
     case 'open': return 'accepted'
     case 'degraded': return 'failed'
     case 'aborted': return 'skipped'
@@ -134,6 +138,8 @@ function UnwindNotice({ status }: { status: UnwindStatus }) {
       return <p className="text-[10px] text-red-400 mt-1">Leg 1 unwind failed to submit. Manual close or kill switch is required.</p>
     case 'not_armed':
       return <p className="text-[10px] text-muted-foreground mt-1">No unwind was armed for this session.</p>
+    case 'skipped':
+      return <p className="text-[10px] text-orange-300/80 mt-1">Leg 1 unwind was skipped because it would increase directional exposure.</p>
     default:
       return null
   }
@@ -145,6 +151,9 @@ const PHASE_HINT: Partial<Record<ExecutionPhase, string>> = {
   submitting_leg1: 'Submitting riskier leg and waiting for fill...',
   awaiting_leg2: 'Sign the hedge leg (sized from the actual fill)',
   submitting_leg2: 'Submitting hedge leg and verifying hedge...',
+  awaiting_leg2_retry: 'Sign one residual hedge retry',
+  submitting_leg2_retry: 'Submitting the residual hedge retry...',
+  recovering: 'Reconciling venue positions after an uncertain result...',
 }
 
 export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }: Props) {
@@ -199,7 +208,8 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           )}
 
           {/* Armed-unwind reassurance during the exposed window */}
-          {(state.phase === 'awaiting_leg2' || state.phase === 'submitting_leg2') && (
+          {(state.phase === 'awaiting_leg2' || state.phase === 'submitting_leg2' ||
+            state.phase === 'awaiting_leg2_retry' || state.phase === 'submitting_leg2_retry') && (
             <p className="text-[10px] text-muted-foreground/70 text-center mb-3">
               Safety: leg-1 unwind is pre-signed — if the hedge fails, it closes automatically.
             </p>
@@ -226,6 +236,22 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
               </p>
               {state.reason && <p className="text-[11px] text-orange-400/70">{state.reason}</p>}
               <UnwindNotice status={state.unwindStatus} />
+              {state.remainingExposure.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-[10px] text-muted-foreground">Remaining exposure:</p>
+                  {state.remainingExposure.map((exposure) => (
+                    <p key={`${exposure.leg}-${exposure.venue}`} className="text-[10px] font-mono text-orange-300">
+                      Leg {exposure.leg} · {exposure.venue} · {exposure.side} {fmtAmount(exposure.amount)} {exposure.symbol}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {state.phase === 'recovering' && (
+            <div className="rounded border border-blue-500/20 bg-blue-500/[0.04] px-4 py-3 text-center">
+              <p className="text-xs text-blue-400 font-medium">Venue reconciliation started</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Check Live Positions for the recovered open, failed, or degraded result.</p>
             </div>
           )}
           {state.phase === 'failed' && (
@@ -241,7 +267,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
         {/* Footer actions */}
         {isTerminal && (
           <div className="px-5 py-4 border-t border-border flex gap-2">
-            {state.phase === 'open' ? (
+            {state.phase === 'open' || state.phase === 'recovering' ? (
               <button
                 onClick={onViewPositions}
                 className="flex-1 py-2 rounded-lg text-xs font-medium bg-green-600 text-white hover:bg-green-500 transition-colors"

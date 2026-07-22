@@ -743,10 +743,17 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type positionClose struct {
-		ID    string `json:"id"`
-		Asset string `json:"asset"`
-		State string `json:"state"`
-		Legs  int    `json:"legs_to_close"`
+		ID       string `json:"id"`
+		Asset    string `json:"asset"`
+		State    string `json:"state"`
+		Legs     int    `json:"legs_to_close"`
+		Exposure []struct {
+			Leg    int     `json:"leg"`
+			Venue  string  `json:"venue"`
+			Symbol string  `json:"symbol"`
+			Side   string  `json:"side"`
+			Amount float64 `json:"amount"`
+		} `json:"remaining_exposure"`
 		Error string `json:"error,omitempty"`
 	}
 
@@ -780,6 +787,13 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
 				continue
 			}
+			pc.Exposure = append(pc.Exposure, struct {
+				Leg    int     `json:"leg"`
+				Venue  string  `json:"venue"`
+				Symbol string  `json:"symbol"`
+				Side   string  `json:"side"`
+				Amount float64 `json:"amount"`
+			}{fill.Leg, fill.Venue, fill.Symbol, fill.Side, fill.FilledAmount})
 
 			cloid := fmt.Sprintf("kill-%s-leg%d-%d", pos.ID[:8], fill.Leg, time.Now().UnixNano())
 

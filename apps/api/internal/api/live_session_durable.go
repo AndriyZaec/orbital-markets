@@ -24,27 +24,31 @@ type durableLegPlan struct {
 }
 
 type durableLiveSession struct {
-	ID                 string                 `json:"id"`
-	Plan               *domain.ExecutionPlan  `json:"plan"`
-	Leg1               durableLegPlan         `json:"leg_1"`
-	Leg2               durableLegPlan         `json:"leg_2"`
-	AccountPacifica    string                 `json:"account_pacifica"`
-	AccountHyperliquid string                 `json:"account_hyperliquid"`
-	State              sessionState           `json:"state"`
-	Leg1OpenReqID      string                 `json:"leg_1_open_request_id"`
-	Leg1UnwindReqID    string                 `json:"leg_1_unwind_request_id"`
-	Leg2OpenReqID      string                 `json:"leg_2_open_request_id"`
-	Leg1OpenReq        *domain.SigningRequest `json:"leg_1_open_request,omitempty"`
-	Leg1UnwindReq      *domain.SigningRequest `json:"leg_1_unwind_request,omitempty"`
-	Leg2OpenReq        *domain.SigningRequest `json:"leg_2_open_request,omitempty"`
-	ArmedUnwindSigned  *domain.SignedAction   `json:"armed_unwind_signed,omitempty"`
-	ArmedUnwindReq     *domain.SigningRequest `json:"armed_unwind_request,omitempty"`
-	Leg1Fill           *normFill              `json:"leg_1_fill,omitempty"`
-	Leg2Fill           *normFill              `json:"leg_2_fill,omitempty"`
-	BaselineLeg1Size   float64                `json:"baseline_leg_1_size"`
-	BaselineLeg2Size   float64                `json:"baseline_leg_2_size"`
-	CreatedAt          string                 `json:"created_at"`
-	UpdatedAt          string                 `json:"updated_at"`
+	ID                 string                    `json:"id"`
+	Plan               *domain.ExecutionPlan     `json:"plan"`
+	Leg1               durableLegPlan            `json:"leg_1"`
+	Leg2               durableLegPlan            `json:"leg_2"`
+	AccountPacifica    string                    `json:"account_pacifica"`
+	AccountHyperliquid string                    `json:"account_hyperliquid"`
+	State              sessionState              `json:"state"`
+	Leg1OpenReqID      string                    `json:"leg_1_open_request_id"`
+	Leg1UnwindReqID    string                    `json:"leg_1_unwind_request_id"`
+	Leg2OpenReqID      string                    `json:"leg_2_open_request_id"`
+	Leg2RetryReqID     string                    `json:"leg_2_retry_request_id"`
+	Leg1OpenReq        *domain.SigningRequest    `json:"leg_1_open_request,omitempty"`
+	Leg1UnwindReq      *domain.SigningRequest    `json:"leg_1_unwind_request,omitempty"`
+	Leg2OpenReq        *domain.SigningRequest    `json:"leg_2_open_request,omitempty"`
+	Leg2RetryReq       *domain.SigningRequest    `json:"leg_2_retry_request,omitempty"`
+	ArmedUnwindSigned  *domain.SignedAction      `json:"armed_unwind_signed,omitempty"`
+	ArmedUnwindReq     *domain.SigningRequest    `json:"armed_unwind_request,omitempty"`
+	Leg1Fill           *normFill                 `json:"leg_1_fill,omitempty"`
+	Leg2Fill           *normFill                 `json:"leg_2_fill,omitempty"`
+	Leg2Attempts       int                       `json:"leg_2_attempts"`
+	Recovery           []executor.RecoveryAction `json:"recovery,omitempty"`
+	BaselineLeg1Size   float64                   `json:"baseline_leg_1_size"`
+	BaselineLeg2Size   float64                   `json:"baseline_leg_2_size"`
+	CreatedAt          string                    `json:"created_at"`
+	UpdatedAt          string                    `json:"updated_at"`
 }
 
 func marshalLiveSession(session *LiveSession) ([]byte, error) {
@@ -54,10 +58,13 @@ func marshalLiveSession(session *LiveSession) ([]byte, error) {
 		Leg2:            durableLegPlan{Venue: session.Leg2.venue, Symbol: session.Leg2.symbol, Side: session.Leg2.side, Price: session.Leg2.price},
 		AccountPacifica: session.AccountPacifica, AccountHyperliquid: session.AccountHyperliquid,
 		State:         session.State,
-		Leg1OpenReqID: session.Leg1OpenReqID, Leg1UnwindReqID: session.Leg1UnwindReqID, Leg2OpenReqID: session.Leg2OpenReqID,
-		Leg1OpenReq: session.Leg1OpenReq, Leg1UnwindReq: session.Leg1UnwindReq, Leg2OpenReq: session.Leg2OpenReq,
+		Leg1OpenReqID: session.Leg1OpenReqID, Leg1UnwindReqID: session.Leg1UnwindReqID,
+		Leg2OpenReqID: session.Leg2OpenReqID, Leg2RetryReqID: session.Leg2RetryReqID,
+		Leg1OpenReq: session.Leg1OpenReq, Leg1UnwindReq: session.Leg1UnwindReq,
+		Leg2OpenReq: session.Leg2OpenReq, Leg2RetryReq: session.Leg2RetryReq,
 		ArmedUnwindSigned: session.ArmedUnwindSigned, ArmedUnwindReq: session.ArmedUnwindReq,
 		Leg1Fill: session.Leg1Fill, Leg2Fill: session.Leg2Fill,
+		Leg2Attempts: session.Leg2Attempts, Recovery: session.Recovery,
 		BaselineLeg1Size: session.BaselineLeg1Size,
 		BaselineLeg2Size: session.BaselineLeg2Size,
 		CreatedAt:        session.CreatedAt.UTC().Format(timeFormat), UpdatedAt: session.UpdatedAt.UTC().Format(timeFormat),
@@ -84,10 +91,13 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 		Leg2:            legPlan{venue: durable.Leg2.Venue, symbol: durable.Leg2.Symbol, side: durable.Leg2.Side, price: durable.Leg2.Price},
 		AccountPacifica: durable.AccountPacifica, AccountHyperliquid: durable.AccountHyperliquid,
 		State:         durable.State,
-		Leg1OpenReqID: durable.Leg1OpenReqID, Leg1UnwindReqID: durable.Leg1UnwindReqID, Leg2OpenReqID: durable.Leg2OpenReqID,
-		Leg1OpenReq: durable.Leg1OpenReq, Leg1UnwindReq: durable.Leg1UnwindReq, Leg2OpenReq: durable.Leg2OpenReq,
+		Leg1OpenReqID: durable.Leg1OpenReqID, Leg1UnwindReqID: durable.Leg1UnwindReqID,
+		Leg2OpenReqID: durable.Leg2OpenReqID, Leg2RetryReqID: durable.Leg2RetryReqID,
+		Leg1OpenReq: durable.Leg1OpenReq, Leg1UnwindReq: durable.Leg1UnwindReq,
+		Leg2OpenReq: durable.Leg2OpenReq, Leg2RetryReq: durable.Leg2RetryReq,
 		ArmedUnwindSigned: durable.ArmedUnwindSigned, ArmedUnwindReq: durable.ArmedUnwindReq,
 		Leg1Fill: durable.Leg1Fill, Leg2Fill: durable.Leg2Fill,
+		Leg2Attempts: durable.Leg2Attempts, Recovery: durable.Recovery,
 		BaselineLeg1Size: durable.BaselineLeg1Size,
 		BaselineLeg2Size: durable.BaselineLeg2Size,
 		CreatedAt:        createdAt, UpdatedAt: updatedAt,

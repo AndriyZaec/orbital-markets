@@ -173,7 +173,8 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
 	defer cancel()
 
-	needLeg2 := originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
+	needLeg2 := originalState == sessAwaitingLeg2RetrySign ||
+		originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
 	truthReady := s.waitForRecoveryAccountState(ctx, session, needLeg2)
 	leg1Size, leg1Price := s.currentVenuePosition(session.Leg1.venue, session.Leg1.symbol)
 	leg2Size, leg2Price := s.currentVenuePosition(session.Leg2.venue, session.Leg2.symbol)
@@ -190,6 +191,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 			unwindCtx, unwindCancel := context.WithTimeout(s.ctx, 20*time.Second)
 			ur := s.fireUnwind(unwindCtx, session)
 			unwindCancel()
+			session.Leg1Fill = remainingFillAfterUnwind(session.Leg1Fill, ur.FilledAmount)
 			sessionState, persistState := terminalStateAfterUnwind(ur)
 			session.State = sessionState
 			detail := reason + "; venue position state unavailable" + unwindReasonSuffix(ur)
@@ -209,6 +211,8 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 		return
 	}
 	if !leg1Exposed {
+		session.Leg1Fill = nil
+		session.Leg2Fill = nil
 		session.State = sessFailed
 		s.persistSession(s.ctx, session, executor.ExecStateFailed, reason+"; venue truth shows no leg-1 exposure")
 		return
@@ -218,6 +222,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	unwindCtx, unwindCancel := context.WithTimeout(s.ctx, 20*time.Second)
 	ur := s.fireUnwind(unwindCtx, session)
 	unwindCancel()
+	session.Leg1Fill = remainingFillAfterUnwind(session.Leg1Fill, ur.FilledAmount)
 	sessionState, persistState := terminalStateAfterUnwind(ur)
 	session.State = sessionState
 	detail := reason + "; leg-1 exposure reconciled from venue state" + unwindReasonSuffix(ur)
@@ -230,12 +235,12 @@ func (s *Server) reconcileSubmittedHedge(
 	leg1Delta, leg2Delta, leg1Price, leg2Price float64,
 	leg1Exposed, leg2Exposed bool,
 ) {
+	s.ensureRecoveryFills(session, math.Abs(leg1Delta), math.Abs(leg2Delta), leg1Price, leg2Price)
 	if !leg1Exposed && !leg2Exposed {
 		session.State = sessFailed
 		s.persistSession(s.ctx, session, executor.ExecStateFailed, reason+"; venue truth shows no remaining exposure")
 		return
 	}
-	s.ensureRecoveryFills(session, math.Abs(leg1Delta), math.Abs(leg2Delta), leg1Price, leg2Price)
 	if leg1Exposed && leg2Exposed {
 		mismatch := math.Abs(math.Abs(leg2Delta)-math.Abs(leg1Delta)) / math.Abs(leg1Delta)
 		if mismatch <= maxHedgeMismatchPct {
@@ -248,6 +253,7 @@ func (s *Server) reconcileSubmittedHedge(
 		unwindCtx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
 		ur := s.fireUnwind(unwindCtx, session)
 		cancel()
+		session.Leg1Fill = remainingFillAfterUnwind(session.Leg1Fill, ur.FilledAmount)
 		sessionState, persistState := terminalStateAfterUnwind(ur)
 		session.State = sessionState
 		s.persistSession(s.ctx, session, persistState, reason+"; hedge absent"+unwindReasonSuffix(ur))
@@ -334,9 +340,13 @@ func exposureMatches(side domain.Side, delta float64) bool {
 func (s *Server) ensureRecoveryFills(session *LiveSession, leg1Amount, leg2Amount, leg1Price, leg2Price float64) {
 	if leg1Amount > 0 {
 		session.Leg1Fill = &normFill{FilledAmount: leg1Amount, AvgFillPrice: leg1Price, Status: "reconciled", Filled: true}
+	} else {
+		session.Leg1Fill = nil
 	}
 	if leg2Amount > 0 {
 		session.Leg2Fill = &normFill{FilledAmount: leg2Amount, AvgFillPrice: leg2Price, Status: "reconciled", Filled: true}
+	} else {
+		session.Leg2Fill = nil
 	}
 }
 

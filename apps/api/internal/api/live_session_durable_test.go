@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 )
 
 func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
@@ -28,8 +29,10 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 		State: sessAwaitingLeg2Sign, BaselineLeg1Size: 3, BaselineLeg2Size: -2,
 		Leg1OpenReq: req, Leg1UnwindReq: req,
 		ArmedUnwindReq: req, ArmedUnwindSigned: signed,
-		Leg1Fill:  &normFill{FilledAmount: 10, AvgFillPrice: 100, Filled: true},
-		CreatedAt: createdAt, UpdatedAt: createdAt.Add(time.Minute),
+		Leg1Fill:     &normFill{FilledAmount: 10, AvgFillPrice: 100, Filled: true},
+		Leg2Attempts: 1,
+		Recovery:     []executor.RecoveryAction{{Action: "retry_leg2", Detail: "residual=6"}},
+		CreatedAt:    createdAt, UpdatedAt: createdAt.Add(time.Minute),
 	}
 
 	payload, err := marshalLiveSession(session)
@@ -51,6 +54,9 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)
+	}
+	if restored.Leg2Attempts != 1 || len(restored.Recovery) != 1 || restored.Recovery[0].Action != "retry_leg2" {
+		t.Fatalf("retry recovery state not restored: attempts=%d recovery=%+v", restored.Leg2Attempts, restored.Recovery)
 	}
 }
 

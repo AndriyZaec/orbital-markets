@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 )
 
 // sessionState tracks where a live open session is in the two-phase signing flow.
@@ -15,6 +16,8 @@ const (
 	sessAwaitingLeg1Signs sessionState = "awaiting_leg1_signs"
 	// sessAwaitingLeg2Sign: leg 1 filled; waiting for signed leg-2 open (sized from actual fill).
 	sessAwaitingLeg2Sign sessionState = "awaiting_leg2_sign"
+	// sessAwaitingLeg2RetrySign: one residual hedge retry is ready for signing.
+	sessAwaitingLeg2RetrySign sessionState = "awaiting_leg2_retry_sign"
 	// sessLeg1Submitted: leg 1 was accepted; fill state must be reconciled after a restart.
 	sessLeg1Submitted sessionState = "leg1_submitted"
 	// sessLeg1Submitting is persisted before the venue call because acceptance
@@ -75,9 +78,11 @@ type LiveSession struct {
 	Leg1OpenReqID   string
 	Leg1UnwindReqID string
 	Leg2OpenReqID   string
+	Leg2RetryReqID  string
 	Leg1OpenReq     *domain.SigningRequest
 	Leg1UnwindReq   *domain.SigningRequest
 	Leg2OpenReq     *domain.SigningRequest
+	Leg2RetryReq    *domain.SigningRequest
 
 	// Armed reduce-only unwind for leg 1 — signed up front, held to fire on any
 	// failure after leg 1 opens. Reduce-only auto-caps to the actual open size.
@@ -85,8 +90,10 @@ type LiveSession struct {
 	ArmedUnwindReq    *domain.SigningRequest
 
 	// Fills captured as the flow progresses.
-	Leg1Fill *normFill
-	Leg2Fill *normFill
+	Leg1Fill     *normFill
+	Leg2Fill     *normFill
+	Leg2Attempts int
+	Recovery     []executor.RecoveryAction
 
 	// Signed venue position size before leg 1 submission. Recovery compares
 	// current venue truth with this baseline to isolate this session's exposure.
@@ -103,7 +110,8 @@ func (s *LiveSession) expired() bool {
 
 func (s *LiveSession) hasPossibleExposure() bool {
 	return s.State == sessLeg1Submitting || s.State == sessLeg1Submitted || s.State == sessAwaitingLeg2Sign ||
-		s.State == sessLeg2Submitting || s.State == sessLeg2Submitted || s.State == sessRecovering
+		s.State == sessAwaitingLeg2RetrySign || s.State == sessLeg2Submitting ||
+		s.State == sessLeg2Submitted || s.State == sessRecovering
 }
 
 // SessionManager is a thread-safe in-memory store of live open sessions.
