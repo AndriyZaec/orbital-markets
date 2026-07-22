@@ -30,6 +30,7 @@ type LiveDeps struct {
 
 	ctx                context.Context
 	logger             *slog.Logger
+	recoveryMu         sync.Mutex
 	mu                 sync.Mutex
 	accountCancel      context.CancelFunc
 	pacificaAccount    string
@@ -67,6 +68,12 @@ func NewLiveDeps(
 // pair. Repeated calls for the same pair are no-ops; a changed pair cancels the
 // old subscribers, clears their state, and starts fresh subscribers.
 func (d *LiveDeps) EnsureAccountStreams(pacAccount, hlAddress string) {
+	d.recoveryMu.Lock()
+	defer d.recoveryMu.Unlock()
+	d.ensureAccountStreams(pacAccount, hlAddress)
+}
+
+func (d *LiveDeps) ensureAccountStreams(pacAccount, hlAddress string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	pacAccount = strings.TrimSpace(pacAccount)
@@ -78,8 +85,8 @@ func (d *LiveDeps) EnsureAccountStreams(pacAccount, hlAddress string) {
 		d.logger.Info("live: connected wallet pair changed; restarting account streams")
 		d.accountCancel()
 	}
-	d.pacState.Reset()
-	d.hlState.Reset()
+	d.pacState.ResetForAccount(pacAccount)
+	d.hlState.ResetForAccount(hlAddress)
 	streamCtx, cancel := context.WithCancel(d.ctx)
 
 	// Pacifica account subscriber
@@ -104,4 +111,12 @@ func (d *LiveDeps) EnsureAccountStreams(pacAccount, hlAddress string) {
 	d.accountCancel = cancel
 	d.pacificaAccount = pacAccount
 	d.hyperliquidAccount = hlAddress
+}
+
+func (d *LiveDeps) accountStreamsMatch(pacAccount, hlAddress string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.accountCancel != nil &&
+		d.pacificaAccount == strings.TrimSpace(pacAccount) &&
+		d.hyperliquidAccount == strings.ToLower(strings.TrimSpace(hlAddress))
 }

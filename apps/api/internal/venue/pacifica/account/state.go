@@ -36,6 +36,7 @@ type AccountPosition struct {
 
 // AccountStateSnapshot is an immutable copy of account state for safe reading.
 type AccountStateSnapshot struct {
+	Account             string                  `json:"account"`
 	Equity              float64                 `json:"equity"`
 	AvailableToSpend    float64                 `json:"available_to_spend"`
 	AvailableToWithdraw float64                 `json:"available_to_withdraw"`
@@ -43,13 +44,15 @@ type AccountStateSnapshot struct {
 	MaintenanceMargin   float64                 `json:"maintenance_margin"`
 	SymbolConfigs       map[string]SymbolConfig `json:"symbol_configs"`
 	Positions           []AccountPosition       `json:"positions"`
+	PositionsUpdatedAt  time.Time               `json:"positions_updated_at"`
 	LastUpdated         time.Time               `json:"last_updated"`
 	Connected           bool                    `json:"connected"`
 }
 
 // AccountState is the live account state from Pacifica private streams.
 type AccountState struct {
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	account string
 
 	equity              float64
 	availableToSpend    float64
@@ -58,6 +61,7 @@ type AccountState struct {
 	maintenanceMargin   float64
 	symbolConfigs       map[string]SymbolConfig
 	positions           []AccountPosition
+	positionsUpdatedAt  time.Time
 	lastUpdated         time.Time
 	connected           bool
 }
@@ -82,6 +86,7 @@ func (s *AccountState) Snapshot() AccountStateSnapshot {
 	}
 
 	return AccountStateSnapshot{
+		Account:             s.account,
 		Equity:              s.equity,
 		AvailableToSpend:    s.availableToSpend,
 		AvailableToWithdraw: s.availableToWithdraw,
@@ -89,6 +94,7 @@ func (s *AccountState) Snapshot() AccountStateSnapshot {
 		MaintenanceMargin:   s.maintenanceMargin,
 		SymbolConfigs:       configs,
 		Positions:           positions,
+		PositionsUpdatedAt:  s.positionsUpdatedAt,
 		LastUpdated:         s.lastUpdated,
 		Connected:           s.connected,
 	}
@@ -106,8 +112,27 @@ func (s *AccountState) UpdateEquity(
 	equity, availableToSpend, availableToWithdraw,
 	totalMarginUsed, maintenanceMargin float64,
 ) {
+	s.updateEquity("", equity, availableToSpend, availableToWithdraw, totalMarginUsed, maintenanceMargin)
+}
+
+func (s *AccountState) UpdateEquityForAccount(
+	account string,
+	equity, availableToSpend, availableToWithdraw,
+	totalMarginUsed, maintenanceMargin float64,
+) {
+	s.updateEquity(account, equity, availableToSpend, availableToWithdraw, totalMarginUsed, maintenanceMargin)
+}
+
+func (s *AccountState) updateEquity(
+	account string,
+	equity, availableToSpend, availableToWithdraw,
+	totalMarginUsed, maintenanceMargin float64,
+) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
 	s.equity = equity
 	s.availableToSpend = availableToSpend
 	s.availableToWithdraw = availableToWithdraw
@@ -118,31 +143,70 @@ func (s *AccountState) UpdateEquity(
 
 // UpdatePositions replaces all positions atomically.
 func (s *AccountState) UpdatePositions(positions []AccountPosition) {
+	s.updatePositions("", positions)
+}
+
+func (s *AccountState) UpdatePositionsForAccount(account string, positions []AccountPosition) {
+	s.updatePositions(account, positions)
+}
+
+func (s *AccountState) updatePositions(account string, positions []AccountPosition) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
 	s.positions = positions
-	s.lastUpdated = time.Now()
+	s.positionsUpdatedAt = time.Now()
+	s.lastUpdated = s.positionsUpdatedAt
 }
 
 // UpdateSymbolConfig sets leverage/margin mode for a symbol.
 func (s *AccountState) UpdateSymbolConfig(cfg SymbolConfig) {
+	s.updateSymbolConfig("", cfg)
+}
+
+func (s *AccountState) UpdateSymbolConfigForAccount(account string, cfg SymbolConfig) {
+	s.updateSymbolConfig(account, cfg)
+}
+
+func (s *AccountState) updateSymbolConfig(account string, cfg SymbolConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
 	s.symbolConfigs[cfg.Symbol] = cfg
 	s.lastUpdated = time.Now()
 }
 
 // SetConnected marks the account stream as connected/disconnected.
 func (s *AccountState) SetConnected(connected bool) {
+	s.setConnected("", connected)
+}
+
+func (s *AccountState) SetConnectedForAccount(account string, connected bool) {
+	s.setConnected(account, connected)
+}
+
+func (s *AccountState) setConnected(account string, connected bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
 	s.connected = connected
 }
 
 // Reset clears state when the connected wallet account changes.
 func (s *AccountState) Reset() {
+	s.ResetForAccount("")
+}
+
+func (s *AccountState) ResetForAccount(account string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.account = account
 	s.equity = 0
 	s.availableToSpend = 0
 	s.availableToWithdraw = 0
@@ -150,6 +214,7 @@ func (s *AccountState) Reset() {
 	s.maintenanceMargin = 0
 	s.symbolConfigs = make(map[string]SymbolConfig)
 	s.positions = nil
+	s.positionsUpdatedAt = time.Time{}
 	s.lastUpdated = time.Time{}
 	s.connected = false
 }

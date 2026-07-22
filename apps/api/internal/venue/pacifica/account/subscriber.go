@@ -67,7 +67,7 @@ func (s *Subscriber) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.state.SetConnected(false)
+		s.state.SetConnectedForAccount(s.account, false)
 		s.logger.Error("pacifica account ws disconnected, reconnecting", "err", err)
 		select {
 		case <-ctx.Done():
@@ -114,7 +114,8 @@ func (s *Subscriber) refreshAccountInfo(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.state.UpdateEquity(
+	s.state.UpdateEquityForAccount(
+		s.account,
 		info.Equity,
 		info.AvailableToSpend,
 		info.AvailableToWithdraw,
@@ -201,7 +202,7 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 		}
 	}
 
-	s.state.SetConnected(true)
+	s.state.SetConnectedForAccount(s.account, true)
 	s.logger.Info("pacifica account ws connected",
 		"channels", len(channels),
 		"account", s.account,
@@ -283,7 +284,7 @@ func (s *Subscriber) handleAccountInfo(data json.RawMessage) {
 	marginUsed := parseFloat(info.MU)
 	maintenance := parseFloat(info.CM)
 
-	s.state.UpdateEquity(equity, available, withdrawable, marginUsed, maintenance)
+	s.state.UpdateEquityForAccount(s.account, equity, available, withdrawable, marginUsed, maintenance)
 }
 
 // handleMarginMode processes per-symbol margin mode changes (isolated/cross).
@@ -321,7 +322,7 @@ func (s *Subscriber) handleMarginMode(data json.RawMessage) {
 		lev = existing.Leverage
 	}
 
-	s.state.UpdateSymbolConfig(SymbolConfig{
+	s.state.UpdateSymbolConfigForAccount(s.account, SymbolConfig{
 		Symbol:     update.S,
 		Leverage:   lev,
 		MarginMode: mode,
@@ -390,7 +391,7 @@ func (s *Subscriber) handlePositions(data json.RawMessage) {
 		})
 	}
 
-	s.state.UpdatePositions(parsed)
+	s.state.UpdatePositionsForAccount(s.account, parsed)
 }
 
 // handleLeverage processes per-symbol leverage updates.
@@ -425,7 +426,7 @@ func (s *Subscriber) handleLeverage(data json.RawMessage) {
 		mode = existing.MarginMode
 	}
 
-	s.state.UpdateSymbolConfig(SymbolConfig{
+	s.state.UpdateSymbolConfigForAccount(s.account, SymbolConfig{
 		Symbol:     update.S,
 		Leverage:   lev,
 		MarginMode: mode,

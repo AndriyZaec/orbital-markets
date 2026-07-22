@@ -65,7 +65,7 @@ func (s *Subscriber) poll(ctx context.Context) {
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.Error("hl account: fetch perp state failed", "err", err)
-			s.state.SetConnected(false)
+			s.state.SetConnectedForAccount(s.address, false)
 		}
 		return
 	}
@@ -73,7 +73,7 @@ func (s *Subscriber) poll(ctx context.Context) {
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.Error("hl account: fetch unified balance failed", "err", err)
-			s.state.SetConnected(false)
+			s.state.SetConnectedForAccount(s.address, false)
 		}
 		return
 	}
@@ -82,13 +82,13 @@ func (s *Subscriber) poll(ctx context.Context) {
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.Error("hl account: parse failed", "err", err)
-			s.state.SetConnected(false)
+			s.state.SetConnectedForAccount(s.address, false)
 		}
 		return
 	}
-	s.state.UpdateMargin(margin)
-	s.state.UpdatePositions(positions)
-	s.state.SetConnected(true)
+	s.state.UpdateMarginForAccount(s.address, margin)
+	s.state.UpdatePositionsForAccount(s.address, positions)
+	s.state.SetConnectedForAccount(s.address, true)
 
 	if !s.firstUpdate {
 		s.firstUpdate = true

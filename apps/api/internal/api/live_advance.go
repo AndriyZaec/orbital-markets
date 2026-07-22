@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -59,21 +61,47 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, ok := s.live.sessions.get(req.SessionID)
-	if !ok {
+	sess, found, claimed := s.live.sessions.claim(req.SessionID)
+	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found or expired"})
+		return
+	}
+	if !claimed {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "session action already in progress"})
+		return
+	}
+	releaseDone := make(chan struct{})
+	defer func() {
+		s.live.sessions.release(req.SessionID)
+		close(releaseDone)
+	}()
+	if sess.expired() {
+		s.live.sessions.remove(sess.ID)
+		s.recoverExpiredLiveSession(sess)
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "session expired; recovery started for any possible exposure",
+		})
+		return
+	}
+	s.live.recoveryMu.Lock()
+	defer s.live.recoveryMu.Unlock()
+	if !s.live.accountStreamsMatch(sess.AccountPacifica, sess.AccountHyperliquid) {
+		s.live.ensureAccountStreams(sess.AccountPacifica, sess.AccountHyperliquid)
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "session account streams restarted; retry when account state is ready",
+		})
 		return
 	}
 
 	switch sess.State {
 	case sessAwaitingLeg1Signs:
-		s.advanceLeg1(w, r, sess, req.SignedActions)
+		s.advanceLeg1(w, r, sess, req.SignedActions, releaseDone)
 	case sessAwaitingLeg2Sign:
 		if req.Abort {
 			s.abortAfterLeg1(w, r, sess, "user aborted before leg 2 signing")
 			return
 		}
-		s.advanceLeg2(w, r, sess, req.SignedActions)
+		s.advanceLeg2(w, r, sess, req.SignedActions, releaseDone)
 	default:
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":  "session already in terminal state",
@@ -84,8 +112,22 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 
 // advanceLeg1 arms the unwind, submits leg 1, waits for fill, and either returns
 // the leg-2 signing request (sized from the actual fill) or fires the unwind.
-func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveSession, signed []domain.SignedAction) {
+func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveSession, signed []domain.SignedAction, releaseDone <-chan struct{}) {
 	ctx := r.Context()
+	if !s.venuePositionStateReady(sess.Leg1.venue) || !s.venuePositionStateReady(sess.Leg2.venue) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "venue position state not ready; retry shortly"})
+		return
+	}
+	leg1Size, _ := s.currentVenuePosition(sess.Leg1.venue, sess.Leg1.symbol)
+	leg2Size, _ := s.currentVenuePosition(sess.Leg2.venue, sess.Leg2.symbol)
+	if math.Abs(leg1Size-sess.BaselineLeg1Size) > 1e-9 || math.Abs(leg2Size-sess.BaselineLeg2Size) > 1e-9 {
+		sess.State = sessFailed
+		s.finishLiveSession(ctx, sess, "venue position changed after prepare; no order submitted")
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "venue position changed after prepare; build a new live session",
+		})
+		return
+	}
 
 	openSigned := findSigned(signed, sess.Leg1OpenReqID)
 	unwindSigned := findSigned(signed, sess.Leg1UnwindReqID)
@@ -100,14 +142,14 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	openReq, err := s.live.signingStore.ValidateAndConsume(*openSigned)
 	if err != nil {
 		sess.State = sessFailed
-		s.live.sessions.remove(sess.ID)
+		s.finishLiveSession(ctx, sess, "leg-1 open signature validation failed before submission")
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "leg-1 open validation failed: " + err.Error()})
 		return
 	}
 	unwindReq, err := s.live.signingStore.ValidateAndConsume(*unwindSigned)
 	if err != nil {
 		sess.State = sessFailed
-		s.live.sessions.remove(sess.ID)
+		s.finishLiveSession(ctx, sess, "leg-1 unwind signature validation failed before submission")
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "leg-1 unwind validation failed: " + err.Error()})
 		return
 	}
@@ -115,10 +157,32 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	// Arm the unwind — held, not submitted, until a failure needs it.
 	sess.ArmedUnwindSigned = unwindSigned
 	sess.ArmedUnwindReq = unwindReq
+	sess.State = sessLeg1Submitting
+	if err := s.saveLiveSession(ctx, sess); err != nil {
+		if s.writeSessionOwnershipConflict(w, sess, err) {
+			return
+		}
+		sess.State = sessFailed
+		s.finishLiveSession(ctx, sess, recoveryPersistenceError(sess.ID, err))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist armed live session"})
+		return
+	}
 
 	// Submit leg 1.
 	sub, err := s.submitSignedAction(ctx, *openSigned, openReq)
-	if err != nil || sub == nil || !sub.Accepted {
+	if err != nil || sub == nil {
+		s.live.sessions.remove(sess.ID)
+		go func() {
+			<-releaseDone
+			s.recoverExposedSession(sess, "leg 1 submission result was ambiguous")
+		}()
+		reason := "leg 1 submission result is unknown; venue reconciliation started"
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sess.ID, "status": string(sessRecovering), "reason": reason,
+		})
+		return
+	}
+	if !sub.Accepted {
 		// Leg 1 never opened — nothing to unwind.
 		sess.State = sessFailed
 		s.live.sessions.remove(sess.ID)
@@ -132,6 +196,22 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		s.logger.Error("live advance: leg 1 not accepted", "session_id", sess.ID, "reason", reason)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"session_id": sess.ID, "status": string(sessFailed), "reason": reason,
+		})
+		return
+	}
+	sess.State = sessLeg1Submitted
+	s.live.sessions.put(sess)
+	if err := s.saveLiveSession(ctx, sess); err != nil {
+		if s.writeSessionOwnershipConflict(w, sess, err) {
+			return
+		}
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
+		reason := recoveryPersistenceError(sess.ID, err) + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sess.ID, "status": string(sessState), "reason": reason,
 		})
 		return
 	}
@@ -154,6 +234,20 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		return
 	}
 	sess.Leg1Fill = fill
+	if err := s.saveLiveSession(ctx, sess); err != nil {
+		if s.writeSessionOwnershipConflict(w, sess, err) {
+			return
+		}
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
+		reason := recoveryPersistenceError(sess.ID, err) + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sess.ID, "status": string(sessState), "reason": reason,
+		})
+		return
+	}
 
 	fillRatio := 0.0
 	if sess.Plan.Notional > 0 {
@@ -197,10 +291,25 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		return
 	}
 
-	s.live.signingStore.Store(leg2Open)
 	sess.Leg2OpenReqID = leg2Open.ID
+	sess.Leg2OpenReq = leg2Open
 	sess.State = sessAwaitingLeg2Sign
 	s.live.sessions.put(sess)
+	if err := s.saveLiveSession(ctx, sess); err != nil {
+		if s.writeSessionOwnershipConflict(w, sess, err) {
+			return
+		}
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
+		reason := recoveryPersistenceError(sess.ID, err) + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sess.ID, "status": string(sessState), "reason": reason,
+		})
+		return
+	}
+	s.live.signingStore.Store(leg2Open)
 
 	s.logger.Info("live advance: leg 1 filled, leg 2 ready",
 		"session_id", sess.ID, "leg1_filled", fill.FilledAmount, "fill_ratio", fillRatio)
@@ -215,7 +324,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 
 // advanceLeg2 submits leg 2, verifies hedge mismatch, and either marks the
 // position open or fires the armed unwind and degrades.
-func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveSession, signed []domain.SignedAction) {
+func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveSession, signed []domain.SignedAction, releaseDone <-chan struct{}) {
 	ctx := r.Context()
 
 	openSigned := findSigned(signed, sess.Leg2OpenReqID)
@@ -242,10 +351,39 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+	sess.State = sessLeg2Submitting
+	s.live.sessions.put(sess)
+	if err := s.saveLiveSession(ctx, sess); err != nil {
+		if s.writeSessionOwnershipConflict(w, sess, err) {
+			return
+		}
+		ur := s.fireUnwind(ctx, sess)
+		sessState, persistState := terminalStateAfterUnwind(ur)
+		sess.State = sessState
+		reason := recoveryPersistenceError(sess.ID, err) + unwindReasonSuffix(ur)
+		s.persistSession(ctx, sess, persistState, reason)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sess.ID, "status": string(sessState), "reason": reason,
+		})
+		return
+	}
 
 	// Submit leg 2.
 	sub, err := s.submitSignedAction(ctx, *openSigned, leg2Req)
-	if err != nil || sub == nil || !sub.Accepted {
+	if err != nil || sub == nil {
+		s.live.sessions.remove(sess.ID)
+		go func() {
+			<-releaseDone
+			s.recoverExposedSession(sess, "leg 2 submission result was ambiguous")
+		}()
+		reason := "leg 2 submission result is unknown; venue reconciliation started"
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sess.ID, "status": string(sessRecovering),
+			"leg1_fill": fillView(sess.Leg1Fill, 0), "reason": reason,
+		})
+		return
+	}
+	if !sub.Accepted {
 		ur := s.fireUnwind(ctx, sess)
 		sessState, persistState := terminalStateAfterUnwind(ur)
 		sess.State = sessState
@@ -260,6 +398,14 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 		for k, v := range unwindJSON(ur) { resp[k] = v }
 		writeJSON(w, http.StatusOK, resp)
 		return
+	}
+	sess.State = sessLeg2Submitted
+	s.live.sessions.put(sess)
+	if err := s.saveLiveSession(ctx, sess); err != nil {
+		if s.writeSessionOwnershipConflict(w, sess, err) {
+			return
+		}
+		s.logger.Error("live advance: persist accepted leg 2", "err", err, "session_id", sess.ID)
 	}
 
 	// Wait for leg 2 fill.
@@ -315,6 +461,17 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 	for k, v := range unwindJSON(ur) { resp[k] = v }
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) writeSessionOwnershipConflict(w http.ResponseWriter, session *LiveSession, err error) bool {
+	if !errors.Is(err, errDurableSessionOwned) {
+		return false
+	}
+	s.live.sessions.remove(session.ID)
+	writeJSON(w, http.StatusConflict, map[string]string{
+		"error": "session recovery is active on another server; retry after reconciliation",
+	})
+	return true
 }
 
 // abortAfterLeg1 fires the armed unwind when the user aborts before signing leg 2.
@@ -434,6 +591,12 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 	if s.live.liveStore == nil {
 		return ""
 	}
+	posID := sess.Plan.ID
+	claimed, err := s.live.liveStore.ClaimDurableSession(ctx, sess.ID, s.recoveryOwner, sessionRecoveryLease)
+	if err != nil || !claimed {
+		s.logger.Error("live session: terminal persistence lease unavailable", "err", err, "session_id", sess.ID)
+		return posID
+	}
 	res := &executor.ExecutionResult{
 		OpportunityID: sess.Plan.OpportunityID,
 		PlanID:        sess.Plan.ID,
@@ -445,10 +608,14 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 		StartedAt:     sess.CreatedAt,
 		CompletedAt:   time.Now(),
 	}
-	s.live.liveStore.PersistFullResult(
+	if err := s.live.liveStore.PersistFullResultAtomic(
 		ctx, res, sess.Plan.Leg1.Venue, sess.Plan.Leg2.Venue,
 		sess.Plan.Notional, sess.Plan.Leverage.Leverage,
-	)
+	); err != nil {
+		s.logger.Error("live session: persist terminal result", "err", err, "session_id", sess.ID)
+		return posID
+	}
+	s.finishLiveSession(ctx, sess, strings.Join(reasons, "; "))
 	return sess.Plan.ID
 }
 

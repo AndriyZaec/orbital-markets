@@ -88,7 +88,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const liveClose = useLiveClose()
   const [confirmClose, setConfirmClose] = useState(false)
 
-  const canClose = pos.state === 'open' || pos.state === 'degraded'
+  const canClose = (pos.state === 'open' || pos.state === 'degraded') && pos.notional > 0
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
@@ -103,7 +103,8 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   }
 
   const reasonEvent = [...events].reverse().find(e =>
-    e.event === 'complete' || e.event === 'close_leg_failed' || e.event === 'close_incomplete')
+    e.event === 'complete' || e.event === 'close_leg_failed' || e.event === 'close_incomplete' ||
+    e.event === 'session_recovery_blocked')
   const reason = reasonEvent?.detail
 
   return (

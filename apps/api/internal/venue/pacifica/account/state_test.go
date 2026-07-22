@@ -17,3 +17,15 @@ func TestAccountStateReset(t *testing.T) {
 		t.Fatalf("Reset() left account collections populated: %+v", snap)
 	}
 }
+
+func TestAccountStateRejectsLateUpdatesFromPreviousAccount(t *testing.T) {
+	state := NewAccountState()
+	state.ResetForAccount("new-wallet")
+	state.UpdatePositionsForAccount("old-wallet", []AccountPosition{{Symbol: "SOL", Size: 10}})
+	state.SetConnectedForAccount("old-wallet", true)
+
+	snap := state.Snapshot()
+	if snap.Account != "new-wallet" || snap.Connected || len(snap.Positions) != 0 || !snap.PositionsUpdatedAt.IsZero() {
+		t.Fatalf("old account update contaminated state: %+v", snap)
+	}
+}

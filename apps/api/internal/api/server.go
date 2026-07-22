@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/google/uuid"
+
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api/middleware"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
@@ -16,16 +18,17 @@ import (
 )
 
 type Server struct {
-	ctx       context.Context // server-lifetime context, not per-request
-	scanner   *scanner.Scanner
-	executor  *paper.Executor
-	store     *paper.DBStore
-	db        *sql.DB
-	liveStore *executor.Store // always available when DB exists — read-only live position access
-	live      *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
-	logger    *slog.Logger
-	mux       *http.ServeMux
-	handler   http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	ctx           context.Context // server-lifetime context, not per-request
+	scanner       *scanner.Scanner
+	executor      *paper.Executor
+	store         *paper.DBStore
+	db            *sql.DB
+	liveStore     *executor.Store // always available when DB exists — read-only live position access
+	live          *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	logger        *slog.Logger
+	mux           *http.ServeMux
+	handler       http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	recoveryOwner string
 }
 
 func NewServer(
@@ -48,15 +51,16 @@ func NewServer(
 	}
 
 	s := &Server{
-		ctx:       ctx,
-		scanner:   sc,
-		executor:  exec,
-		store:     store,
-		db:        database,
-		liveStore: ls,
-		live:      live,
-		logger:    logger,
-		mux:       http.NewServeMux(),
+		ctx:           ctx,
+		scanner:       sc,
+		executor:      exec,
+		store:         store,
+		db:            database,
+		liveStore:     ls,
+		live:          live,
+		logger:        logger,
+		mux:           http.NewServeMux(),
+		recoveryOwner: uuid.NewString(),
 	}
 	s.routes()
 
@@ -69,6 +73,9 @@ func NewServer(
 			),
 		),
 	)
+	if live != nil {
+		go s.runLiveSessionRecovery()
+	}
 	return s
 }
 

@@ -17,3 +17,15 @@ func TestAccountStateReset(t *testing.T) {
 		t.Fatalf("Reset() left positions populated: %+v", snap)
 	}
 }
+
+func TestAccountStateRejectsLateUpdatesFromPreviousAccount(t *testing.T) {
+	state := NewAccountState()
+	state.ResetForAccount("0xnew")
+	state.UpdatePositionsForAccount("0xold", []AssetPosition{{Coin: "SOL", Size: 10}})
+	state.SetConnectedForAccount("0xold", true)
+
+	snap := state.Snapshot()
+	if snap.Account != "0xnew" || snap.Connected || len(snap.Positions) != 0 || !snap.PositionsUpdatedAt.IsZero() {
+		t.Fatalf("old account update contaminated state: %+v", snap)
+	}
+}

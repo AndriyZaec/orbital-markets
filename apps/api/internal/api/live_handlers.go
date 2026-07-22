@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -36,7 +37,9 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.live.sessions.cleanup() // evict stale sessions opportunistically
+	s.cleanupExpiredLiveSessions()
+	s.live.recoveryMu.Lock()
+	defer s.live.recoveryMu.Unlock()
 
 	var req struct {
 		OpportunityID      string   `json:"opportunity_id"`
@@ -96,7 +99,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Start account subscribers if not already running (lazy — first prepare triggers them)
-	s.live.EnsureAccountStreams(req.AccountPacifica, req.AccountHyperliquid)
+	s.live.ensureAccountStreams(req.AccountPacifica, req.AccountHyperliquid)
 
 	// 3b. Account-data readiness gate. This is separate from the admission
 	// gate below because admission looks at policy (leverage caps, etc); this
@@ -119,6 +122,12 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !s.venuePositionStateReady("pacifica") || !s.venuePositionStateReady("hyperliquid") {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "venue position state not yet received; retry shortly",
+		})
+		return
+	}
 
 	// 4. Live admission gate
 	admission := domain.CheckLiveAdmission(*opp, plan.Leverage.Leverage, float64(plan.MaxLeverage))
@@ -136,6 +145,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Riskier leg first (higher slippage = thinner book → submit first).
 	leg1, leg2 := orderLegsByRisk(plan)
+	baselineLeg1Size, _ := s.currentVenuePosition(leg1.venue, leg1.symbol)
+	baselineLeg2Size, _ := s.currentVenuePosition(leg2.venue, leg2.symbol)
+	if math.Abs(baselineLeg1Size) > 1e-9 || math.Abs(baselineLeg2Size) > 1e-9 {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "existing position for this asset must be closed before starting a live session",
+		})
+		return
+	}
 
 	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
 	// Both are on the riskier leg's venue/wallet and signed together up front,
@@ -181,9 +198,19 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		State:              sessAwaitingLeg1Signs,
 		Leg1OpenReqID:      leg1Open.ID,
 		Leg1UnwindReqID:    leg1Unwind.ID,
+		Leg1OpenReq:        leg1Open,
+		Leg1UnwindReq:      leg1Unwind,
+		BaselineLeg1Size:   baselineLeg1Size,
+		BaselineLeg2Size:   baselineLeg2Size,
 		CreatedAt:          now,
 	}
 	s.live.sessions.put(sess)
+	if err := s.saveLiveSession(r.Context(), sess); err != nil {
+		s.live.sessions.remove(sess.ID)
+		s.logger.Error("live prepare: persist session", "err", err, "session_id", sess.ID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist live session"})
+		return
+	}
 
 	s.logger.Info("live prepare: session ready",
 		"session_id", sessionID,
