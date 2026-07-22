@@ -5,6 +5,12 @@ import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
 import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction } from '@/types/signing'
+import {
+  executionPhaseFromStatus,
+  normalizeHyperliquidAddress,
+  normalizePacificaAddress,
+  type AdvanceStatus,
+} from '@/lib/live-execution-state'
 
 // Two-phase non-custodial open (Option A):
 //   prepare -> sign leg-1 open + leg-1 unwind -> advance (submit leg 1, wait fill)
@@ -95,7 +101,7 @@ interface PrepareResp {
 
 interface AdvanceResp {
   session_id: string
-  status: 'awaiting_leg2_sign' | 'awaiting_leg2_retry_sign' | 'recovering' | 'open' | 'degraded' | 'aborted' | 'failed'
+  status: AdvanceStatus
   leg1_fill?: LegFillView
   leg2_fill?: LegFillView
   signing_requests?: SigningRequest[] // [leg2 open]
@@ -105,16 +111,6 @@ interface AdvanceResp {
   unwound?: boolean
   unwind_status?: 'not_armed' | 'skipped' | 'submit_failed' | 'unconfirmed' | 'confirmed'
   remaining_exposure?: RemainingExposure[]
-}
-
-// Normalize account strings for comparison. Ethereum addresses are
-// case-insensitive so we lowercase for that side; Solana base58 is
-// case-sensitive so we only trim it. Nulls stay null.
-function normalizePacifica(addr: string | null): string | null {
-  return addr ? addr.trim() : null
-}
-function normalizeHyperliquid(addr: string | null): string | null {
-  return addr ? addr.trim().toLowerCase() : null
 }
 
 export function useLiveExecution() {
@@ -203,12 +199,12 @@ export function useLiveExecution() {
       // wallet change must halt the flow (before leg 1) or trigger abort +
       // armed unwind (after leg 1). Comparisons are normalized (lowercased
       // for EVM, trimmed for Solana) so casing/whitespace doesn't false-flag.
-      const preparedPacifica = normalizePacifica(pacificaAddress)
-      const preparedHyperliquid = normalizeHyperliquid(hyperliquidAddress)
+      const preparedPacifica = normalizePacificaAddress(pacificaAddress)
+      const preparedHyperliquid = normalizeHyperliquidAddress(hyperliquidAddress)
 
       const detectAccountChange = (): string | null => {
-        const nowPac = normalizePacifica(pacificaRef.current)
-        const nowHl = normalizeHyperliquid(hyperliquidRef.current)
+        const nowPac = normalizePacificaAddress(pacificaRef.current)
+        const nowHl = normalizeHyperliquidAddress(hyperliquidRef.current)
         if (nowPac !== preparedPacifica) return 'Pacifica'
         if (nowHl !== preparedHyperliquid) return 'Hyperliquid'
         return null
@@ -452,7 +448,7 @@ export function useLiveExecution() {
 
       setState((s) => ({
         ...s,
-        phase: (adv2.status === 'open' ? 'open' : adv2.status) as ExecutionPhase,
+        phase: executionPhaseFromStatus(adv2.status),
         leg2Fill: adv2.leg2_fill ?? null,
         mismatch: adv2.mismatch ?? null,
         positionId: adv2.position_id ?? null,
