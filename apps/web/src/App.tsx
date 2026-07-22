@@ -418,7 +418,15 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
         <StatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
       </div>
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">
-        <FundingChart asset={opp.asset} venueA={opp.venue_pair.venue_a} venueB={opp.venue_pair.venue_b} />
+        <FundingChart
+          asset={opp.asset}
+          venueA={opp.venue_pair.venue_a}
+          venueB={opp.venue_pair.venue_b}
+          direction={opp.direction}
+          recommendedNotional={opp.recommended_notional}
+          feeEstimate={opp.fee_estimate}
+          slippageEstimate={opp.slippage_estimate}
+        />
       </div>
     </div>
   )

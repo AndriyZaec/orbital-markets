@@ -1,30 +1,59 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState, type PointerEvent } from 'react'
 import { useHistory, type HistoryPoint } from '@/hooks/useHistory'
+import {
+  annualizeFunding,
+  calculateFundingStats,
+  calculateReturnProjection,
+  directionalCarry,
+  paddedChartDomain,
+  type FundingDirection,
+  type ReturnProjection,
+} from '@/lib/funding-chart'
 
 interface Props {
   asset: string
   venueA: string
   venueB: string
+  direction: FundingDirection
+  recommendedNotional: number
+  feeEstimate: number
+  slippageEstimate: number
 }
 
 type Timeframe = 'D' | 'W' | 'M'
+type ChartView = 'funding' | 'return'
 
 const rangeMap: Record<Timeframe, string> = { D: '24h', W: '7d', M: '30d' }
 const rangeLabel: Record<Timeframe, string> = { D: '24h', W: '7 days', M: '30 days' }
-const edgeColor = '#60a5fa'
+const horizonHours: Record<Timeframe, number> = { D: 24, W: 24 * 7, M: 24 * 30 }
 
-function formatTime(ts: string, tf: Timeframe) {
-  const d = new Date(ts)
-  if (tf === 'D') return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+function formatTime(ts: string | number, tf: Timeframe) {
+  const date = new Date(ts)
+  if (tf === 'D') return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function fmtEdge(v: number) {
-  return (v * 100).toFixed(2) + '%'
+function formatRate(value: number, signed = false) {
+  const percent = value * 100
+  const sign = signed && percent > 0 ? '+' : ''
+  return `${sign}${percent.toFixed(Math.abs(percent) >= 10 ? 1 : 2)}%`
 }
 
-function fmtFunding(v: number) {
-  return (v * 100).toFixed(4) + '%'
+function formatUsd(value: number) {
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  return `${sign}$${Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function formatUsdAxis(value: number, domainSpan: number) {
+  const digits = domainSpan < 0.1 ? 3 : 2
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  return `${sign}$${Math.abs(value).toFixed(digits)}`
+}
+
+function formatNotional(value: number) {
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}m`
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}k`
+  return `$${Math.round(value)}`
 }
 
 function venueLabel(venue: string) {
@@ -38,35 +67,69 @@ function venueColor(venue: string) {
   return '#f59e0b'
 }
 
-export function FundingChart({ asset, venueA, venueB }: Props) {
+export function FundingChart({
+  asset,
+  venueA,
+  venueB,
+  direction,
+  recommendedNotional,
+  feeEstimate,
+  slippageEstimate,
+}: Props) {
+  const [view, setView] = useState<ChartView>('funding')
   const [tf, setTf] = useState<Timeframe>('W')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+  const defaultNotional = Math.max(100, recommendedNotional || 10_000)
+  const [notionalOverride, setNotionalOverride] = useState<number | null>(null)
+  const notional = notionalOverride ?? defaultNotional
   const { data, loading, error } = useHistory(asset, venueA, venueB, rangeMap[tf])
 
-  const hovered = hoverIdx !== null ? data[hoverIdx] : null
-  const stats = useMemo(() => {
-    if (data.length === 0) return null
-    return {
-      averageEdge: data.reduce((sum, point) => sum + point.edge, 0) / data.length,
-      currentEdge: data[data.length - 1].edge,
-    }
-  }, [data])
+  const stats = useMemo(() => calculateFundingStats(data, direction), [data, direction])
+  const projection = useMemo(
+    () => calculateReturnProjection(
+      data,
+      direction,
+      notional,
+      feeEstimate + slippageEstimate,
+      horizonHours[tf],
+    ),
+    [data, direction, feeEstimate, notional, slippageEstimate, tf],
+  )
+  const notionalOptions = useMemo(
+    () => Array.from(new Set([defaultNotional, 1_000, 5_000, 10_000])),
+    [defaultNotional],
+  )
 
   const labelA = venueLabel(venueA)
   const labelB = venueLabel(venueB)
   const colorA = venueColor(venueA)
   const colorB = venueColor(venueB)
+  const isLongA = direction === 'long_a_short_b'
+  const directionLabel = `Long ${isLongA ? labelA : labelB} / Short ${isLongA ? labelB : labelA}`
+  const hovered = hoverIdx !== null ? data[hoverIdx] : null
+
+  const changeView = (nextView: ChartView) => {
+    setView(nextView)
+    setHoverIdx(null)
+  }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <p className="text-xs font-semibold text-foreground">Funding & Edge History</p>
-        <div className="flex gap-0.5 bg-white/[0.04] rounded p-0.5">
+    <section className="rounded-lg border border-white/[0.07] bg-[#090d14]/70 overflow-hidden">
+      <div className="flex items-end justify-between gap-4 border-b border-white/[0.07] px-4 pt-3">
+        <div className="flex h-9 items-end gap-5" role="tablist" aria-label="Opportunity chart">
+          <ChartTab active={view === 'funding'} onClick={() => changeView('funding')}>
+            Funding Rates
+          </ChartTab>
+          <ChartTab active={view === 'return'} onClick={() => changeView('return')}>
+            Potential Return
+          </ChartTab>
+        </div>
+        <div className="mb-2 flex gap-0.5 rounded bg-white/[0.04] p-0.5">
           {(['D', 'W', 'M'] as Timeframe[]).map((timeframe) => (
             <button
               key={timeframe}
               onClick={() => { setTf(timeframe); setHoverIdx(null) }}
-              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+              className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
                 tf === timeframe ? 'bg-white/[0.08] text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -76,214 +139,345 @@ export function FundingChart({ asset, venueA, venueB }: Props) {
         </div>
       </div>
 
-      <div className="h-4 mb-2 text-[11px] text-muted-foreground/60 font-mono truncate">
-        {hovered ? (
+      <div className="p-4">
+        {loading ? (
+          <ChartLoading />
+        ) : error || data.length === 0 ? (
+          <div className="flex h-[272px] items-center justify-center text-xs text-muted-foreground">
+            {error ? `Error: ${error}` : 'No history yet. Funding snapshots will appear here as they accumulate.'}
+          </div>
+        ) : view === 'funding' && stats ? (
           <>
-            <span className="text-muted-foreground">{formatTime(hovered.t, tf)}</span>
-            <span style={{ color: colorA }}> · {labelA} {fmtFunding(hovered.funding_a)}</span>
-            <span style={{ color: colorB }}> · {labelB} {fmtFunding(hovered.funding_b)}</span>
-            <span style={{ color: edgeColor }}> · Edge {fmtEdge(hovered.edge)}</span>
+            <div className="grid grid-cols-3 gap-3 mb-3 max-w-xl">
+              <Metric label="Current carry" value={formatRate(stats.currentCarry, true)} tone={stats.currentCarry} />
+              <Metric label={`${rangeLabel[tf]} average`} value={formatRate(stats.averageCarry, true)} tone={stats.averageCarry} />
+              <Metric label="Positive periods" value={`${Math.round(stats.positiveShare * 100)}%`} />
+            </div>
+
+            <div className="h-5 mb-1 text-[11px] font-mono text-muted-foreground truncate">
+              {hovered ? (
+                <>
+                  <span>{formatTime(hovered.t, tf)}</span>
+                  <span style={{ color: colorA }}> · {labelA} {formatRate(annualizeFunding(hovered.funding_a), true)}</span>
+                  <span style={{ color: colorB }}> · {labelB} {formatRate(annualizeFunding(hovered.funding_b), true)}</span>
+                  <span className={directionalCarry(hovered, direction) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                    {' '}· Carry {formatRate(annualizeFunding(directionalCarry(hovered, direction)), true)}
+                  </span>
+                </>
+              ) : directionLabel}
+            </div>
+
+            <FundingRateChart
+              data={data}
+              tf={tf}
+              hoverIdx={hoverIdx}
+              setHoverIdx={setHoverIdx}
+              colorA={colorA}
+              colorB={colorB}
+              direction={direction}
+            />
+
+            <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted-foreground">
+              <Legend color={colorA} label={labelA} />
+              <Legend color={colorB} label={labelB} />
+              <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-sm bg-emerald-400/70" /> Positive carry</span>
+              <span className="ml-auto text-muted-foreground/60">Annualized rates · {directionLabel}</span>
+            </div>
           </>
-        ) : (
-          <>Hourly venue funding and annualized gross edge over {rangeLabel[tf]}</>
-        )}
+        ) : projection ? (
+          <>
+            <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+              <div className="grid grid-cols-3 gap-3 flex-1 max-w-xl">
+                <Metric label="Potential return" value={formatUsd(projection.potentialReturn)} tone={projection.potentialReturn} />
+                <Metric label="Break-even time" value={formatBreakEven(projection.breakEvenHours, horizonHours[tf])} />
+                <Metric label="Estimated costs" value={`$${projection.costs.toFixed(2)}`} />
+              </div>
+              <div>
+                <p className="mb-1.5 text-right text-[10px] text-muted-foreground">Position size</p>
+                <div className="flex gap-1">
+                  {notionalOptions.map((value) => (
+                    <button
+                      key={value}
+                      onClick={() => setNotionalOverride(value === defaultNotional ? null : value)}
+                      className={`rounded border px-2 py-1 text-[10px] font-mono transition-colors ${
+                        notional === value
+                          ? 'border-blue-400/30 bg-blue-400/10 text-blue-300'
+                          : 'border-white/[0.07] text-muted-foreground hover:border-white/15 hover:text-foreground'
+                      }`}
+                    >
+                      {formatNotional(value)}{value === defaultNotional ? ' rec.' : ''}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <PotentialReturnChart projection={projection} notional={notional} tf={tf} />
+
+            <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted-foreground">
+              <span className="flex items-center gap-1.5"><span className="w-3 h-px bg-blue-400" /> Base estimate</span>
+              <span className="flex items-center gap-1.5"><span className="size-2 rounded-sm bg-blue-400/15" /> Historical range</span>
+              <span className="ml-auto text-muted-foreground/60">Based on historical funding rates. Actual results may vary.</span>
+            </div>
+          </>
+        ) : null}
       </div>
+    </section>
+  )
+}
 
-      <div className="flex items-center gap-4 mb-1 text-[10px] text-muted-foreground">
-        <Legend color={colorA} label={`${labelA} hourly`} />
-        <Legend color={colorB} label={`${labelB} hourly`} />
-        <Legend color={edgeColor} label="Annualized edge" />
-      </div>
+function ChartTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
+  return (
+    <button
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={`relative h-9 pb-2 text-xs font-medium transition-colors ${active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+    >
+      {children}
+      {active && <span className="absolute inset-x-0 -bottom-px h-px bg-blue-400" />}
+    </button>
+  )
+}
 
-      {loading ? (
-        <ChartLoading />
-      ) : error || data.length === 0 ? (
-        <div className="flex items-center justify-center h-[158px] text-xs text-muted-foreground">
-          {error ? `Error: ${error}` : 'No data yet — snapshots accumulate every minute'}
-        </div>
-      ) : (
-        <FundingLines
-          data={data}
-          tf={tf}
-          hoverIdx={hoverIdx}
-          setHoverIdx={setHoverIdx}
-          colorA={colorA}
-          colorB={colorB}
-        />
-      )}
-
-      {!loading && stats && (
-        <div className="flex items-center gap-4 mt-2 text-[11px] font-mono">
-          <div className="flex items-center gap-1.5">
-            <div className="size-1.5 rounded-full" style={{ backgroundColor: edgeColor }} />
-            <span className="text-muted-foreground">Edge now</span>
-            <span style={{ color: edgeColor }}>{fmtEdge(stats.currentEdge)}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="size-1.5 rounded-full bg-blue-400/60" />
-            <span className="text-muted-foreground">Avg ({rangeLabel[tf]})</span>
-            <span className="text-blue-400">{fmtEdge(stats.averageEdge)}</span>
-          </div>
-        </div>
-      )}
-
-      {!loading && (
-        <div className="mt-3 rounded border border-blue-500/10 bg-blue-500/[0.04] px-3 py-1.5 flex items-start gap-2">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-blue-400/50 shrink-0 mt-px">
-            <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2" />
-            <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-          </svg>
-          <p className="text-[11px] text-blue-300/60 leading-relaxed">
-            Funding lines show each venue's hourly rate. Edge is the absolute annualized difference between them, not guaranteed realized yield.
-          </p>
-        </div>
-      )}
+function Metric({ label, value, tone }: { label: string; value: string; tone?: number }) {
+  const toneClass = tone === undefined ? 'text-foreground' : tone > 0 ? 'text-emerald-400' : tone < 0 ? 'text-rose-400' : 'text-foreground'
+  return (
+    <div>
+      <p className="text-[10px] text-muted-foreground mb-0.5">{label}</p>
+      <p className={`text-sm font-mono font-medium ${toneClass}`}>{value}</p>
     </div>
   )
 }
 
 function Legend({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className="w-3 h-px" style={{ backgroundColor: color }} />
-      {label}
-    </span>
-  )
+  return <span className="flex items-center gap-1.5"><span className="w-3 h-px" style={{ backgroundColor: color }} />{label}</span>
 }
 
 function ChartLoading() {
   return (
-    <div className="flex flex-col items-center justify-center h-[158px]">
-      <div className="relative size-8 animate-[loader-pulse_2s_ease-in-out_infinite]">
-        <div className="absolute inset-0 rounded-full border-2 border-slate-500/40" />
-        <div className="absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="size-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
-        </div>
-      </div>
+    <div className="flex h-[272px] items-center justify-center">
+      <div className="size-5 animate-spin rounded-full border border-slate-500/40 border-t-cyan-400" />
     </div>
   )
 }
 
-function FundingLines({ data, tf, hoverIdx, setHoverIdx, colorA, colorB }: {
+interface PlotPoint {
+  x: number
+  y: number
+}
+
+function FundingRateChart({ data, tf, hoverIdx, setHoverIdx, colorA, colorB, direction }: {
   data: HistoryPoint[]
   tf: Timeframe
   hoverIdx: number | null
   setHoverIdx: (index: number | null) => void
   colorA: string
   colorB: string
+  direction: FundingDirection
 }) {
-  const width = 700
-  const height = 140
-  const top = 10
-  const bottom = 12
-  const plotHeight = height - top - bottom
-  const maxFunding = Math.max(
-    ...data.flatMap((point) => [Math.abs(point.funding_a), Math.abs(point.funding_b)]),
-    0.000001,
-  )
-  const maxEdge = Math.max(...data.map((point) => point.edge), 0.001)
-  const x = (index: number) => data.length === 1 ? width / 2 : (index / (data.length - 1)) * width
-  const fundingY = (value: number) => top + plotHeight / 2 - (value / maxFunding) * (plotHeight / 2)
-  const edgeY = (value: number) => top + plotHeight - (value / maxEdge) * plotHeight
-  const path = (value: (point: HistoryPoint) => number, y: (value: number) => number) =>
-    data.map((point, index) => `${index === 0 ? 'M' : 'L'} ${x(index).toFixed(2)} ${y(value(point)).toFixed(2)}`).join(' ')
-  const fundingAPath = path((point) => point.funding_a, fundingY)
-  const fundingBPath = path((point) => point.funding_b, fundingY)
-  const edgePath = path((point) => point.edge, edgeY)
-  const edgeAreaPath = `${edgePath} L ${width} ${top + plotHeight} L 0 ${top + plotHeight} Z`
-  const labelStep = Math.max(1, Math.ceil(data.length / 7))
-  const hitWidth = width / Math.max(1, data.length)
-  const hovered = hoverIdx !== null ? data[hoverIdx] : null
+  const gradientId = `funding-spread-${useId().replace(/:/g, '')}`
+  const width = 1100
+  const height = 210
+  const left = 58
+  const right = 32
+  const plotTop = 10
+  const plotBottom = 126
+  const carryTop = 147
+  const carryBottom = 177
+  const plotWidth = width - left - right
+  const timestamps = data.map((point) => new Date(point.t).getTime())
+  const minTime = Math.min(...timestamps)
+  const maxTime = Math.max(...timestamps)
+  const x = (timestamp: number) => left + ((timestamp - minTime) / Math.max(1, maxTime - minTime)) * plotWidth
+  const values = data.flatMap((point) => [annualizeFunding(point.funding_a), annualizeFunding(point.funding_b)])
+  const minValue = Math.min(0, ...values)
+  const maxValue = Math.max(0, ...values)
+  const padding = Math.max((maxValue - minValue) * 0.12, 0.005)
+  const domainMin = minValue - padding
+  const domainMax = maxValue + padding
+  const y = (value: number) => plotBottom - ((value - domainMin) / (domainMax - domainMin)) * (plotBottom - plotTop)
+  const segments = [data]
+  const carryValues = data.map((point) => annualizeFunding(directionalCarry(point, direction)))
+  const maxCarry = Math.max(...carryValues.map(Math.abs), 0.001)
+  const carryMid = (carryTop + carryBottom) / 2
+  const carryY = (value: number) => carryMid - (value / maxCarry) * ((carryBottom - carryTop) / 2)
+  const barWidth = Math.max(1, Math.min(5, plotWidth / data.length * 0.7))
+  const hoveredX = hoverIdx === null ? null : x(timestamps[hoverIdx])
+  const ticks = Array.from({ length: 5 }, (_, index) => domainMin + (domainMax - domainMin) * (index / 4))
+
+  const handlePointer = (event: PointerEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const svgX = ((event.clientX - rect.left) / rect.width) * width
+    setHoverIdx(nearestTimestampIndex(timestamps, minTime + ((svgX - left) / plotWidth) * (maxTime - minTime)))
+  }
 
   return (
     <svg
-      key={`${tf}-${data[0]?.t}-${data.length}`}
-      viewBox={`0 0 ${width} ${height + 18}`}
-      className="w-full"
-      onMouseLeave={() => setHoverIdx(null)}
+      viewBox={`0 0 ${width} ${height}`}
+      className="w-full touch-none"
+      onPointerMove={handlePointer}
+      onPointerLeave={() => setHoverIdx(null)}
       role="img"
-      aria-label="Historical Pacifica funding, Hyperliquid funding, and annualized edge"
+      aria-label="Annualized venue funding rates and directional carry history"
     >
       <defs>
-        <linearGradient id="edge-area" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={edgeColor} stopOpacity="0.18" />
-          <stop offset="75%" stopColor={edgeColor} stopOpacity="0.025" />
-          <stop offset="100%" stopColor={edgeColor} stopOpacity="0" />
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.10" />
+          <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.025" />
         </linearGradient>
-        <linearGradient id="pacifica-line" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor={colorA} stopOpacity="0.55" />
-          <stop offset="100%" stopColor={colorA} />
-        </linearGradient>
-        <linearGradient id="hyperliquid-line" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor={colorB} stopOpacity="0.55" />
-          <stop offset="100%" stopColor={colorB} />
-        </linearGradient>
-        <filter id="line-glow" x="-20%" y="-30%" width="140%" height="160%">
-          <feGaussianBlur stdDeviation="2.2" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
       </defs>
-      <rect x="0" y={top} width={width} height={plotHeight} fill="rgba(255,255,255,0.012)" rx="2" />
 
-      {[-1, -0.5, 0, 0.5, 1].map((tick) => {
-        const y = fundingY(tick * maxFunding)
+      {ticks.map((tick) => (
+        <g key={tick}>
+          <line x1={left} y1={y(tick)} x2={width - right} y2={y(tick)} stroke="rgba(255,255,255,0.05)" />
+          <text x={left - 8} y={y(tick) + 3} fill="#64748b" fontSize="8" fontFamily="monospace" textAnchor="end">
+            {formatRate(tick)}
+          </text>
+        </g>
+      ))}
+      <line x1={left} y1={y(0)} x2={width - right} y2={y(0)} stroke="rgba(255,255,255,0.16)" />
+
+      {segments.map((segment, index) => {
+        const a = segment.map((point) => ({ x: x(new Date(point.t).getTime()), y: y(annualizeFunding(point.funding_a)) }))
+        const b = segment.map((point) => ({ x: x(new Date(point.t).getTime()), y: y(annualizeFunding(point.funding_b)) }))
+        const area = [...a, ...b.toReversed()].map((point, pointIndex) => `${pointIndex === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ') + ' Z'
         return (
-          <g key={tick}>
-            <line x1="0" y1={y} x2={width} y2={y} stroke={tick === 0 ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.035)'} strokeWidth="1" />
-            <text x="3" y={y - 3} fill="#64748b" fontSize="7" fontFamily="monospace" opacity="0.65">
-              {fmtFunding(tick * maxFunding)}
-            </text>
+          <g key={`${segment[0].t}-${index}`}>
+            <path d={area} fill={`url(#${gradientId})`} />
+            <path d={monotonePath(a)} fill="none" stroke={colorA} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+            <path d={monotonePath(b)} fill="none" stroke={colorB} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
           </g>
         )
       })}
 
-      {[0, 0.5, 1].map((tick) => {
-        const y = edgeY(tick * maxEdge)
+      <text x={left} y={carryTop - 7} fill="#64748b" fontSize="8" fontFamily="monospace">NET CARRY</text>
+      <line x1={left} y1={carryMid} x2={width - right} y2={carryMid} stroke="rgba(255,255,255,0.08)" />
+      {data.map((point, index) => {
+        const value = carryValues[index]
+        const barY = carryY(value)
         return (
-          <text key={tick} x={width - 3} y={y - 3} fill={edgeColor} fontSize="7" fontFamily="monospace" textAnchor="end" opacity="0.65">
-            {fmtEdge(tick * maxEdge)}
+          <rect
+            key={point.t}
+            x={x(timestamps[index]) - barWidth / 2}
+            y={Math.min(carryMid, barY)}
+            width={barWidth}
+            height={Math.max(1, Math.abs(carryMid - barY))}
+            rx="0.5"
+            fill={value >= 0 ? '#34d399' : '#fb7185'}
+            opacity={hoverIdx === index ? 1 : 0.58}
+          />
+        )
+      })}
+
+      {Array.from({ length: 6 }, (_, index) => {
+        const timestamp = minTime + (maxTime - minTime) * (index / 5)
+        return (
+          <text key={timestamp} x={x(timestamp)} y={height - 5} fill="#64748b" fontSize="8" fontFamily="monospace" textAnchor={index === 0 ? 'start' : index === 5 ? 'end' : 'middle'}>
+            {formatTime(timestamp, tf)}
           </text>
         )
       })}
 
-      <path d={edgeAreaPath} fill="url(#edge-area)" opacity="0">
-        <animate attributeName="opacity" from="0" to="1" dur="0.7s" begin="0.55s" fill="freeze" />
-      </path>
+      {hoveredX !== null && hoverIdx !== null && (
+        <g pointerEvents="none">
+          <line x1={hoveredX} y1={plotTop} x2={hoveredX} y2={carryBottom} stroke="rgba(255,255,255,0.2)" strokeDasharray="2 3" />
+          <circle cx={hoveredX} cy={y(annualizeFunding(data[hoverIdx].funding_a))} r="2.5" fill={colorA} stroke="#090d14" />
+          <circle cx={hoveredX} cy={y(annualizeFunding(data[hoverIdx].funding_b))} r="2.5" fill={colorB} stroke="#090d14" />
+        </g>
+      )}
+    </svg>
+  )
+}
 
-      <AnimatedLine d={fundingAPath} stroke="url(#pacifica-line)" glowColor={colorA} delay={0.05} />
-      <AnimatedLine d={fundingBPath} stroke="url(#hyperliquid-line)" glowColor={colorB} delay={0.18} />
-      <AnimatedLine d={edgePath} stroke={edgeColor} glowColor={edgeColor} delay={0.32} emphasis />
+function PotentialReturnChart({ projection, notional, tf }: { projection: ReturnProjection; notional: number; tf: Timeframe }) {
+  const clipPositive = `return-positive-${useId().replace(/:/g, '')}`
+  const clipNegative = `return-negative-${useId().replace(/:/g, '')}`
+  const bandGradient = `return-band-${useId().replace(/:/g, '')}`
+  const width = 1100
+  const height = 210
+  const left = 58
+  const right = 24
+  const top = 10
+  const bottom = 178
+  const plotWidth = width - left - right
+  const horizon = horizonHours[tf]
+  const steps = 32
+  const values = Array.from({ length: steps + 1 }, (_, index) => {
+    const hours = horizon * (index / steps)
+    return {
+      hours,
+      base: notional * projection.baseCarryPerHour * hours - projection.costs,
+      lower: notional * projection.lowerCarryPerHour * hours - projection.costs,
+      upper: notional * projection.upperCarryPerHour * hours - projection.costs,
+    }
+  })
+  const allValues = values.flatMap((point) => [point.base, point.lower, point.upper, 0])
+  const { min: domainMin, max: domainMax } = paddedChartDomain(allValues, 0.02)
+  const domainSpan = domainMax - domainMin
+  const x = (hours: number) => left + (hours / horizon) * plotWidth
+  const y = (value: number) => bottom - ((value - domainMin) / (domainMax - domainMin)) * (bottom - top)
+  const zeroY = y(0)
+  const basePoints = values.map((point) => ({ x: x(point.hours), y: y(point.base) }))
+  const upperPoints = values.map((point) => ({ x: x(point.hours), y: y(point.upper) }))
+  const lowerPoints = values.toReversed().map((point) => ({ x: x(point.hours), y: y(point.lower) }))
+  const bandPath = [...upperPoints, ...lowerPoints].map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ') + ' Z'
+  const areaPath = `${monotonePath(basePoints)} L ${width - right} ${zeroY} L ${left} ${zeroY} Z`
+  const breakEvenX = projection.breakEvenHours !== null
+    && projection.breakEvenHours > horizon * 0.01
+    && projection.breakEvenHours <= horizon
+    ? x(projection.breakEvenHours)
+    : null
+  const ticks = Array.from({ length: 5 }, (_, index) => domainMin + (domainMax - domainMin) * (index / 4))
 
-      {data.map((_, index) => (
-        <rect
-          key={index}
-          x={Math.max(0, x(index) - hitWidth / 2)}
-          y={top}
-          width={hitWidth}
-          height={plotHeight}
-          fill="transparent"
-          onMouseEnter={() => setHoverIdx(index)}
-        />
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Potential return projection after estimated costs">
+      <defs>
+        <clipPath id={clipPositive}><rect x={left} y={top} width={plotWidth} height={Math.max(0, zeroY - top)} /></clipPath>
+        <clipPath id={clipNegative}><rect x={left} y={zeroY} width={plotWidth} height={Math.max(0, bottom - zeroY)} /></clipPath>
+        <linearGradient id={bandGradient} x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.04" />
+          <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.18" />
+        </linearGradient>
+      </defs>
+
+      {ticks.map((tick) => (
+        <g key={tick}>
+          <line x1={left} y1={y(tick)} x2={width - right} y2={y(tick)} stroke="rgba(255,255,255,0.05)" />
+          <text x={left - 8} y={y(tick) + 3} fill="#64748b" fontSize="8" fontFamily="monospace" textAnchor="end">
+            {formatUsdAxis(tick, domainSpan)}
+          </text>
+        </g>
       ))}
+      <line x1={left} y1={zeroY} x2={width - right} y2={zeroY} stroke="rgba(255,255,255,0.18)" />
 
-      {hoverIdx !== null && hovered && (
+      <path d={bandPath} fill={`url(#${bandGradient})`} />
+      <path d={areaPath} fill="#34d399" opacity="0.16" clipPath={`url(#${clipPositive})`} />
+      <path d={areaPath} fill="#fb7185" opacity="0.14" clipPath={`url(#${clipNegative})`} />
+      <path d={monotonePath(basePoints)} fill="none" stroke="#60a5fa" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
+      <path d={monotonePath(upperPoints)} fill="none" stroke="#60a5fa" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.4" vectorEffect="non-scaling-stroke" />
+      <path d={monotonePath(values.map((point) => ({ x: x(point.hours), y: y(point.lower) })))} fill="none" stroke="#60a5fa" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.4" vectorEffect="non-scaling-stroke" />
+
+      {projection.costs >= 0.005 && (
+        <>
+          <circle cx={left} cy={y(-projection.costs)} r="2.5" fill="#fb7185" />
+          <text x={left + 6} y={y(-projection.costs) - 6} fill="#94a3b8" fontSize="8" fontFamily="monospace">ENTRY COST</text>
+        </>
+      )}
+
+      {breakEvenX !== null && (
         <g>
-          <line x1={x(hoverIdx)} y1={top} x2={x(hoverIdx)} y2={top + plotHeight} stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="2,2" />
-          <circle cx={x(hoverIdx)} cy={fundingY(hovered.funding_a)} r="3" fill={colorA} stroke="#080b12" strokeWidth="1" />
-          <circle cx={x(hoverIdx)} cy={fundingY(hovered.funding_b)} r="3" fill={colorB} stroke="#080b12" strokeWidth="1" />
-          <circle cx={x(hoverIdx)} cy={edgeY(hovered.edge)} r="3" fill={edgeColor} stroke="#080b12" strokeWidth="1" />
+          <line x1={breakEvenX} y1={top} x2={breakEvenX} y2={bottom} stroke="rgba(52,211,153,0.35)" strokeDasharray="2 3" />
+          <circle cx={breakEvenX} cy={zeroY} r="3" fill="#34d399" stroke="#090d14" />
+          <text x={breakEvenX + 6} y={zeroY - 7} fill="#6ee7b7" fontSize="8" fontFamily="monospace">BREAK-EVEN</text>
         </g>
       )}
 
-      {data.map((point, index) => {
-        if (index % labelStep !== 0) return null
+      {Array.from({ length: 6 }, (_, index) => {
+        const hours = horizon * (index / 5)
         return (
-          <text key={point.t} x={Math.max(18, Math.min(width - 18, x(index)))} y={height + 10} textAnchor="middle" fill="#64748b" fontSize="7" fontFamily="monospace">
-            {formatTime(point.t, tf)}
+          <text key={hours} x={x(hours)} y={height - 5} fill="#64748b" fontSize="8" fontFamily="monospace" textAnchor={index === 0 ? 'start' : index === 5 ? 'end' : 'middle'}>
+            {formatHorizon(hours)}
           </text>
         )
       })}
@@ -291,43 +485,67 @@ function FundingLines({ data, tf, hoverIdx, setHoverIdx, colorA, colorB }: {
   )
 }
 
-function AnimatedLine({ d, stroke, glowColor, delay, emphasis = false }: {
-  d: string
-  stroke: string
-  glowColor: string
-  delay: number
-  emphasis?: boolean
-}) {
-  const duration = emphasis ? 0.95 : 0.8
-  return (
-    <g>
-      <path
-        d={d}
-        fill="none"
-        stroke={glowColor}
-        strokeWidth={emphasis ? 5 : 4}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        opacity="0"
-        filter="url(#line-glow)"
-        vectorEffect="non-scaling-stroke"
-      >
-        <animate attributeName="opacity" from="0" to={emphasis ? '0.13' : '0.09'} dur="0.4s" begin={`${delay + 0.25}s`} fill="freeze" />
-      </path>
-      <path
-        d={d}
-        fill="none"
-        stroke={stroke}
-        strokeWidth={emphasis ? 2.2 : 1.7}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        pathLength="1"
-        strokeDasharray="1"
-        strokeDashoffset="1"
-        vectorEffect="non-scaling-stroke"
-      >
-        <animate attributeName="stroke-dashoffset" from="1" to="0" dur={`${duration}s`} begin={`${delay}s`} fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.22 1 0.36 1" />
-      </path>
-    </g>
-  )
+function formatBreakEven(hours: number | null, horizon: number) {
+  if (hours === null) return 'Not projected'
+  if (hours <= 0.05) return 'Immediate'
+  if (hours > horizon) return `Beyond ${formatHorizon(horizon)}`
+  if (hours < 1) return `${Math.round(hours * 60)}m`
+  if (hours < 48) return `${hours.toFixed(1)}h`
+  return `${(hours / 24).toFixed(1)}d`
+}
+
+function formatHorizon(hours: number) {
+  if (hours === 0) return 'Entry'
+  if (hours < 48) return `${Math.round(hours)}h`
+  return `${Math.round(hours / 24)}d`
+}
+
+function nearestTimestampIndex(timestamps: number[], target: number) {
+  let nearest = 0
+  let distance = Number.POSITIVE_INFINITY
+  timestamps.forEach((timestamp, index) => {
+    const nextDistance = Math.abs(timestamp - target)
+    if (nextDistance < distance) {
+      nearest = index
+      distance = nextDistance
+    }
+  })
+  return nearest
+}
+
+// Fritsch-Carlson tangents keep the visual smoothing inside each data segment,
+// avoiding the invented peaks produced by ordinary chart splines.
+function monotonePath(points: PlotPoint[]) {
+  if (points.length === 0) return ''
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
+
+  const slopes = points.slice(1).map((point, index) => (point.y - points[index].y) / Math.max(0.0001, point.x - points[index].x))
+  const tangents = points.map((_, index) => {
+    if (index === 0) return slopes[0]
+    if (index === points.length - 1) return slopes[slopes.length - 1]
+    if (slopes[index - 1] * slopes[index] <= 0) return 0
+    return (slopes[index - 1] + slopes[index]) / 2
+  })
+
+  slopes.forEach((slope, index) => {
+    if (slope === 0) {
+      tangents[index] = 0
+      tangents[index + 1] = 0
+      return
+    }
+    const alpha = tangents[index] / slope
+    const beta = tangents[index + 1] / slope
+    const magnitude = alpha * alpha + beta * beta
+    if (magnitude > 9) {
+      const scale = 3 / Math.sqrt(magnitude)
+      tangents[index] = scale * alpha * slope
+      tangents[index + 1] = scale * beta * slope
+    }
+  })
+
+  return points.slice(1).reduce((path, point, index) => {
+    const previous = points[index]
+    const dx = point.x - previous.x
+    return `${path} C ${previous.x + dx / 3} ${previous.y + tangents[index] * dx / 3}, ${point.x - dx / 3} ${point.y - tangents[index + 1] * dx / 3}, ${point.x} ${point.y}`
+  }, `M ${points[0].x} ${points[0].y}`)
 }
