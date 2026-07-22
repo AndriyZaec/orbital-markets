@@ -11,9 +11,11 @@ import (
 )
 
 type historyPoint struct {
-	T     string  `json:"t"`
-	Basis float64 `json:"basis"`
-	Edge  float64 `json:"edge"`
+	T        string  `json:"t"`
+	Basis    float64 `json:"basis"`
+	Edge     float64 `json:"edge"`
+	FundingA float64 `json:"funding_a"`
+	FundingB float64 `json:"funding_b"`
 }
 
 type historyResponse struct {
@@ -47,17 +49,15 @@ var rangeSpec = map[string]struct {
 	source historySource
 }{
 	"1h":  {1 * time.Hour, sourceRaw},
-	"24h": {24 * time.Hour, sourceRaw},
-	// 7d moved to 5m rollup: raw would return ~10k rows/venue for 7d which
-	// costs both DB and pairing time. 5m rollup is ~2k rows/venue with the
-	// same visible detail after the 200-point downsample.
-	"7d":  {7 * 24 * time.Hour, source5m},
-	"30d": {30 * 24 * time.Hour, source5m},
+	"24h": {24 * time.Hour, source5m},
+	"7d":  {7 * 24 * time.Hour, source1h},
+	"30d": {30 * 24 * time.Hour, source1h},
 	"90d": {90 * 24 * time.Hour, source1h},
 	"1y":  {365 * 24 * time.Hour, source1h},
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	requestStarted := time.Now()
 	asset := r.URL.Query().Get("asset")
 	venueA := r.URL.Query().Get("venue_a")
 	venueB := r.URL.Query().Get("venue_b")
@@ -78,29 +78,41 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	start := now.Add(-spec.dur)
 	queries := sqlc.New(s.db)
 
+	fetchAStarted := time.Now()
 	rowsA, err := fetchHistoryRows(r.Context(), queries, spec.source, venueA, asset, start.Unix(), now.Unix())
+	fetchADuration := time.Since(fetchAStarted)
 	if err != nil {
 		s.logger.Error("history: fetch venue_a", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
 		return
 	}
 
+	fetchBStarted := time.Now()
 	rowsB, err := fetchHistoryRows(r.Context(), queries, spec.source, venueB, asset, start.Unix(), now.Unix())
+	fetchBDuration := time.Since(fetchBStarted)
 	if err != nil {
 		s.logger.Error("history: fetch venue_b", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
 		return
 	}
 
-	points := pairHistoryRows(rowsA, rowsB, spec.source)
-
-	if len(points) > 200 {
-		step := len(points) / 200
-		var ds []historyPoint
-		for i := 0; i < len(points); i += step {
-			ds = append(ds, points[i])
-		}
-		points = ds
+	pairStarted := time.Now()
+	points := downsampleHistoryPoints(pairHistoryRows(rowsA, rowsB, spec.source), 200)
+	pairDuration := time.Since(pairStarted)
+	totalDuration := time.Since(requestStarted)
+	if totalDuration >= 100*time.Millisecond {
+		s.logger.Warn("history: slow request",
+			"asset", asset,
+			"range", rangeStr,
+			"source", spec.source,
+			"rows_a", len(rowsA),
+			"rows_b", len(rowsB),
+			"points", len(points),
+			"fetch_a_ms", fetchADuration.Milliseconds(),
+			"fetch_b_ms", fetchBDuration.Milliseconds(),
+			"pair_ms", pairDuration.Milliseconds(),
+			"total_ms", totalDuration.Milliseconds(),
+		)
 	}
 
 	writeJSON(w, http.StatusOK, historyResponse{
@@ -109,6 +121,18 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		VenueB: venueB,
 		Points: points,
 	})
+}
+
+func downsampleHistoryPoints(points []historyPoint, maxPoints int) []historyPoint {
+	if maxPoints <= 0 || len(points) <= maxPoints {
+		return points
+	}
+	downsampled := make([]historyPoint, maxPoints)
+	for i := range maxPoints {
+		index := i * (len(points) - 1) / (maxPoints - 1)
+		downsampled[i] = points[index]
+	}
+	return downsampled
 }
 
 func fetchHistoryRows(ctx context.Context, q *sqlc.Queries, src historySource, venue, asset string, startUnix, endUnix int64) ([]historyRow, error) {
@@ -205,9 +229,11 @@ func pairHistoryRows(a, b []historyRow, src historySource) []historyPoint {
 		edge := domain.AnnualizedGrossEdge(sa.FundingRate, sb.FundingRate)
 
 		points = append(points, historyPoint{
-			T:     ta.Format(time.RFC3339),
-			Basis: basis,
-			Edge:  edge,
+			T:        ta.Format(time.RFC3339),
+			Basis:    basis,
+			Edge:     edge,
+			FundingA: sa.FundingRate,
+			FundingB: sb.FundingRate,
 		})
 	}
 
