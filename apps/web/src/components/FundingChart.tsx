@@ -168,6 +168,7 @@ export function FundingChart({
             </div>
 
             <FundingRateChart
+              key={`funding-${tf}-${data[0]?.t}-${data.length}`}
               data={data}
               tf={tf}
               hoverIdx={hoverIdx}
@@ -180,8 +181,11 @@ export function FundingChart({
             <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted-foreground">
               <Legend color={colorA} label={labelA} />
               <Legend color={colorB} label={labelB} />
-              <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-sm bg-emerald-400/70" /> Positive carry</span>
-              <span className="ml-auto text-muted-foreground/60">Annualized rates · {directionLabel}</span>
+              <span className="flex items-center gap-1.5">
+                <span className="flex gap-px"><span className="h-2 w-1 bg-emerald-400/70" /><span className="h-2 w-1 bg-rose-400/70" /></span>
+                Bars show net carry
+              </span>
+              <span className="ml-auto text-muted-foreground/60">Shading shows the funding gap · {directionLabel}</span>
             </div>
           </>
         ) : projection ? (
@@ -212,11 +216,16 @@ export function FundingChart({
               </div>
             </div>
 
-            <PotentialReturnChart projection={projection} notional={notional} tf={tf} />
+            <PotentialReturnChart
+              key={`return-${tf}-${notional}-${data[0]?.t}-${data.length}`}
+              projection={projection}
+              notional={notional}
+              tf={tf}
+            />
 
             <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] text-muted-foreground">
               <span className="flex items-center gap-1.5"><span className="w-3 h-px bg-blue-400" /> Base estimate</span>
-              <span className="flex items-center gap-1.5"><span className="size-2 rounded-sm bg-blue-400/15" /> Historical range</span>
+              <span className="flex items-center gap-1.5"><span className="size-2 rounded-sm bg-blue-400/15" /> Range from history</span>
               <span className="ml-auto text-muted-foreground/60">Based on historical funding rates. Actual results may vary.</span>
             </div>
           </>
@@ -276,7 +285,7 @@ function FundingRateChart({ data, tf, hoverIdx, setHoverIdx, colorA, colorB, dir
   colorB: string
   direction: FundingDirection
 }) {
-  const gradientId = `funding-spread-${useId().replace(/:/g, '')}`
+  const revealId = `funding-reveal-${useId().replace(/:/g, '')}`
   const width = 1100
   const height = 210
   const left = 58
@@ -322,10 +331,7 @@ function FundingRateChart({ data, tf, hoverIdx, setHoverIdx, colorA, colorB, dir
       aria-label="Annualized venue funding rates and directional carry history"
     >
       <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.10" />
-          <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.025" />
-        </linearGradient>
+        <RevealClip id={revealId} x={left} y={plotTop} width={plotWidth} height={carryBottom - plotTop} />
       </defs>
 
       {ticks.map((tick) => (
@@ -338,37 +344,38 @@ function FundingRateChart({ data, tf, hoverIdx, setHoverIdx, colorA, colorB, dir
       ))}
       <line x1={left} y1={y(0)} x2={width - right} y2={y(0)} stroke="rgba(255,255,255,0.16)" />
 
-      {segments.map((segment, index) => {
-        const a = segment.map((point) => ({ x: x(new Date(point.t).getTime()), y: y(annualizeFunding(point.funding_a)) }))
-        const b = segment.map((point) => ({ x: x(new Date(point.t).getTime()), y: y(annualizeFunding(point.funding_b)) }))
-        const area = [...a, ...b.toReversed()].map((point, pointIndex) => `${pointIndex === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ') + ' Z'
-        return (
-          <g key={`${segment[0].t}-${index}`}>
-            <path d={area} fill={`url(#${gradientId})`} />
-            <path d={monotonePath(a)} fill="none" stroke={colorA} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
-            <path d={monotonePath(b)} fill="none" stroke={colorB} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
-          </g>
-        )
-      })}
-
       <text x={left} y={carryTop - 7} fill="#64748b" fontSize="8" fontFamily="monospace">NET CARRY</text>
       <line x1={left} y1={carryMid} x2={width - right} y2={carryMid} stroke="rgba(255,255,255,0.08)" />
-      {data.map((point, index) => {
-        const value = carryValues[index]
-        const barY = carryY(value)
-        return (
-          <rect
-            key={point.t}
-            x={x(timestamps[index]) - barWidth / 2}
-            y={Math.min(carryMid, barY)}
-            width={barWidth}
-            height={Math.max(1, Math.abs(carryMid - barY))}
-            rx="0.5"
-            fill={value >= 0 ? '#34d399' : '#fb7185'}
-            opacity={hoverIdx === index ? 1 : 0.58}
-          />
-        )
-      })}
+      <g clipPath={`url(#${revealId})`}>
+        {segments.map((segment, index) => {
+          const a = segment.map((point) => ({ x: x(new Date(point.t).getTime()), y: y(annualizeFunding(point.funding_a)) }))
+          const b = segment.map((point) => ({ x: x(new Date(point.t).getTime()), y: y(annualizeFunding(point.funding_b)) }))
+          const area = [...a, ...b.toReversed()].map((point, pointIndex) => `${pointIndex === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ') + ' Z'
+          return (
+            <g key={`${segment[0].t}-${index}`}>
+              <path d={area} fill="#60a5fa" opacity="0.055" />
+              <path d={monotonePath(a)} fill="none" stroke={colorA} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+              <path d={monotonePath(b)} fill="none" stroke={colorB} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+            </g>
+          )
+        })}
+        {data.map((point, index) => {
+          const value = carryValues[index]
+          const barY = carryY(value)
+          return (
+            <rect
+              key={point.t}
+              x={x(timestamps[index]) - barWidth / 2}
+              y={Math.min(carryMid, barY)}
+              width={barWidth}
+              height={Math.max(1, Math.abs(carryMid - barY))}
+              rx="0.5"
+              fill={value >= 0 ? '#34d399' : '#fb7185'}
+              opacity={hoverIdx === index ? 1 : 0.58}
+            />
+          )
+        })}
+      </g>
 
       {Array.from({ length: 6 }, (_, index) => {
         const timestamp = minTime + (maxTime - minTime) * (index / 5)
@@ -393,7 +400,7 @@ function FundingRateChart({ data, tf, hoverIdx, setHoverIdx, colorA, colorB, dir
 function PotentialReturnChart({ projection, notional, tf }: { projection: ReturnProjection; notional: number; tf: Timeframe }) {
   const clipPositive = `return-positive-${useId().replace(/:/g, '')}`
   const clipNegative = `return-negative-${useId().replace(/:/g, '')}`
-  const bandGradient = `return-band-${useId().replace(/:/g, '')}`
+  const revealId = `return-reveal-${useId().replace(/:/g, '')}`
   const width = 1100
   const height = 210
   const left = 58
@@ -429,16 +436,15 @@ function PotentialReturnChart({ projection, notional, tf }: { projection: Return
     ? x(projection.breakEvenHours)
     : null
   const ticks = Array.from({ length: 5 }, (_, index) => domainMin + (domainMax - domainMin) * (index / 4))
+  const endpoint = basePoints[basePoints.length - 1]
+  const endpointLabelY = endpoint.y < top + 14 ? endpoint.y + 16 : endpoint.y - 8
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Potential return projection after estimated costs">
       <defs>
         <clipPath id={clipPositive}><rect x={left} y={top} width={plotWidth} height={Math.max(0, zeroY - top)} /></clipPath>
         <clipPath id={clipNegative}><rect x={left} y={zeroY} width={plotWidth} height={Math.max(0, bottom - zeroY)} /></clipPath>
-        <linearGradient id={bandGradient} x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.04" />
-          <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.18" />
-        </linearGradient>
+        <RevealClip id={revealId} x={left} y={top} width={plotWidth} height={bottom - top} />
       </defs>
 
       {ticks.map((tick) => (
@@ -451,27 +457,36 @@ function PotentialReturnChart({ projection, notional, tf }: { projection: Return
       ))}
       <line x1={left} y1={zeroY} x2={width - right} y2={zeroY} stroke="rgba(255,255,255,0.18)" />
 
-      <path d={bandPath} fill={`url(#${bandGradient})`} />
-      <path d={areaPath} fill="#34d399" opacity="0.16" clipPath={`url(#${clipPositive})`} />
-      <path d={areaPath} fill="#fb7185" opacity="0.14" clipPath={`url(#${clipNegative})`} />
-      <path d={monotonePath(basePoints)} fill="none" stroke="#60a5fa" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
-      <path d={monotonePath(upperPoints)} fill="none" stroke="#60a5fa" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.4" vectorEffect="non-scaling-stroke" />
-      <path d={monotonePath(values.map((point) => ({ x: x(point.hours), y: y(point.lower) })))} fill="none" stroke="#60a5fa" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.4" vectorEffect="non-scaling-stroke" />
+      <g clipPath={`url(#${revealId})`}>
+        <path d={bandPath} fill="#60a5fa" opacity="0.09" />
+        <path d={areaPath} fill="#34d399" opacity="0.16" clipPath={`url(#${clipPositive})`} />
+        <path d={areaPath} fill="#fb7185" opacity="0.14" clipPath={`url(#${clipNegative})`} />
+        <path d={monotonePath(basePoints)} fill="none" stroke="#60a5fa" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
+        <path d={monotonePath(upperPoints)} fill="none" stroke="#60a5fa" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.4" vectorEffect="non-scaling-stroke" />
+        <path d={monotonePath(values.map((point) => ({ x: x(point.hours), y: y(point.lower) })))} fill="none" stroke="#60a5fa" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.4" vectorEffect="non-scaling-stroke" />
 
-      {projection.costs >= 0.005 && (
-        <>
-          <circle cx={left} cy={y(-projection.costs)} r="2.5" fill="#fb7185" />
-          <text x={left + 6} y={y(-projection.costs) - 6} fill="#94a3b8" fontSize="8" fontFamily="monospace">ENTRY COST</text>
-        </>
-      )}
+        {projection.costs >= 0.005 && (
+          <>
+            <circle cx={left} cy={y(-projection.costs)} r="2.5" fill="#fb7185" />
+            <text x={left + 6} y={y(-projection.costs) - 6} fill="#94a3b8" fontSize="8" fontFamily="monospace">ENTRY COST</text>
+          </>
+        )}
 
-      {breakEvenX !== null && (
-        <g>
-          <line x1={breakEvenX} y1={top} x2={breakEvenX} y2={bottom} stroke="rgba(52,211,153,0.35)" strokeDasharray="2 3" />
-          <circle cx={breakEvenX} cy={zeroY} r="3" fill="#34d399" stroke="#090d14" />
-          <text x={breakEvenX + 6} y={zeroY - 7} fill="#6ee7b7" fontSize="8" fontFamily="monospace">BREAK-EVEN</text>
-        </g>
-      )}
+        {breakEvenX !== null && (
+          <g>
+            <line x1={breakEvenX} y1={top} x2={breakEvenX} y2={bottom} stroke="rgba(52,211,153,0.35)" strokeDasharray="2 3" />
+            <circle cx={breakEvenX} cy={zeroY} r="3" fill="#34d399" stroke="#090d14" />
+            <text x={breakEvenX + 6} y={zeroY - 7} fill="#6ee7b7" fontSize="8" fontFamily="monospace">BREAK-EVEN</text>
+          </g>
+        )}
+      </g>
+
+      <g className="chart-endpoint" pointerEvents="none">
+        <circle cx={endpoint.x} cy={endpoint.y} r="3" fill={projection.potentialReturn >= 0 ? '#34d399' : '#fb7185'} stroke="#090d14" />
+        <text x={endpoint.x - 7} y={endpointLabelY} fill={projection.potentialReturn >= 0 ? '#6ee7b7' : '#fda4af'} fontSize="10" fontFamily="monospace" fontWeight="600" textAnchor="end">
+          {formatUsd(projection.potentialReturn)}
+        </text>
+      </g>
 
       {Array.from({ length: 6 }, (_, index) => {
         const hours = horizon * (index / 5)
@@ -482,6 +497,14 @@ function PotentialReturnChart({ projection, notional, tf }: { projection: Return
         )
       })}
     </svg>
+  )
+}
+
+function RevealClip({ id, x, y, width, height }: { id: string; x: number; y: number; width: number; height: number }) {
+  return (
+    <clipPath id={id}>
+      <rect className="chart-reveal" x={x} y={y} width={width} height={height} />
+    </clipPath>
   )
 }
 

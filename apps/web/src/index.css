@@ -148,3 +148,30 @@ body {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(1.15); }
 }
+
+@keyframes chart-reveal {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes chart-endpoint {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.chart-reveal {
+  animation: chart-reveal 600ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-box: fill-box;
+  transform-origin: left center;
+}
+
+.chart-endpoint {
+  animation: chart-endpoint 180ms ease-out 500ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-reveal,
+  .chart-endpoint {
+    animation: none;
+  }
+}
