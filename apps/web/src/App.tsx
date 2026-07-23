@@ -25,7 +25,7 @@ import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
 type View = 'trade' | 'portfolio' | 'rebates' | 'agents'
-type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'fundingSpread' | 'pacificaRate' | 'hlRate'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate'
 type SortDir = 'asc' | 'desc'
 
 // Per-venue raw funding rate (single funding period, signed).
@@ -60,6 +60,7 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
     case 'aprMaxLev': return opp.annualized_gross_edge * (opp.max_leverage || 1)
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
+    case 'capacity': return opp.best_price_capacity
     case 'fundingSpread': return Math.abs(opp.funding_spread)
     case 'pacificaRate': return fundingForVenue(opp, 'pacifica') ?? 0
     case 'hlRate': return fundingForVenue(opp, 'hyperliquid') ?? 0
@@ -84,17 +85,21 @@ function useCountdown(lastUpdated: Date | null, intervalSec: number) {
 function OrbitalLogo() {
   return (
     <div className="relative size-8 flex items-center justify-center">
-      <div className="absolute inset-0 rounded-full border-2 border-slate-500/40" />
-      <div className="absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
-      <div className="absolute size-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
+      <div className="orbital-logo-outer absolute inset-0 rounded-full border-2 border-slate-500/40" />
+      <div className="orbital-logo-inner absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
+      <div className="orbital-logo-core absolute size-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
     </div>
   )
+}
+
+function opportunityIdFromURL() {
+  return new URLSearchParams(window.location.search).get('opportunity')
 }
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
   const [showAccounts, setShowAccounts] = useState(false)
   // Header account status is driven by the same typed readiness layer used
   // by Connect Accounts and Execute Live — one source of truth for the
@@ -106,6 +111,33 @@ export default function App() {
   const isLive = countdown > 0
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
+
+  const selectOpportunity = useCallback((id: string) => {
+    const url = new URL(window.location.href)
+    url.searchParams.set('opportunity', id)
+    window.history.pushState({ ...window.history.state, orbitalOpportunity: id }, '', url)
+    setSelectedId(id)
+  }, [])
+
+  const closeOpportunity = useCallback(() => {
+    if (window.history.state?.orbitalOpportunity === selectedId) {
+      window.history.back()
+      return
+    }
+    const url = new URL(window.location.href)
+    url.searchParams.delete('opportunity')
+    window.history.replaceState(window.history.state, '', url)
+    setSelectedId(null)
+  }, [selectedId])
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setSelectedId(opportunityIdFromURL())
+      setActiveView('trade')
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   // Resizable positions panel
   const [posHeight, setPosHeight] = useState(280)
@@ -160,7 +192,7 @@ export default function App() {
         alert(body.error || `Execution failed: HTTP ${resp.status}`)
         return
       }
-      setSelectedId(null)
+      closeOpportunity()
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Unknown error')
     }
@@ -169,7 +201,7 @@ export default function App() {
   return (
     <div className="dark h-screen bg-background flex flex-col overflow-hidden">
       <header className="h-12 border-b border-border flex items-center px-5 shrink-0">
-        <button className="flex items-center gap-2.5 mr-10 cursor-pointer" onClick={() => { setSelectedId(null); setActiveView('trade') }}>
+        <button className="orbital-brand flex items-center gap-2.5 mr-10 cursor-pointer" onClick={() => { closeOpportunity(); setActiveView('trade') }}>
           <OrbitalLogo />
           {/* Beta tag sits as a superscript on the wordmark — reads as
               "Orbital Markets ᵇᵉᵗᵃ", visually anchored to the brand rather
@@ -221,9 +253,9 @@ export default function App() {
             <>
               <div className="flex-1 flex flex-col min-h-0 bg-[#080b12]">
                 {selected ? (
-                  <OpportunityDetail opportunity={selected} onBack={() => setSelectedId(null)} />
+                  <OpportunityDetail opportunity={selected} onBack={closeOpportunity} />
                 ) : (
-                  <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={setSelectedId} />
+                  <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={selectOpportunity} />
                 )}
               </div>
               <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative bg-[#080b12]" style={{ height: posHeight }}>
@@ -265,9 +297,9 @@ export default function App() {
             opportunity={selected}
             lastUpdated={lastUpdated}
             mode={tradingMode}
-            onClose={() => setSelectedId(null)}
+            onClose={closeOpportunity}
             onExecute={handleExecutePaper}
-            onViewPositions={() => setSelectedId(null)}
+            onViewPositions={closeOpportunity}
             onOpenAccounts={() => setShowAccounts(true)}
           />
         )}
@@ -320,8 +352,14 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
           <p className="text-muted-foreground text-xs mt-3">Scanning opportunities...</p>
         </div>
       ) : (<>
-      <div className="px-5 pt-5 pb-3 shrink-0 bg-[#080b12]">
-        <h2 className="text-base font-bold text-foreground">Funding Rate Arb Opportunities</h2>
+      <div className="px-5 pt-5 pb-3 shrink-0 bg-[#080b12] flex items-end justify-between gap-4">
+        <div>
+          <h2 className="text-base font-bold text-foreground">Funding Opportunities</h2>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Compare hedged funding carry across venues</p>
+        </div>
+        <span className="mb-0.5 rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
+          {sorted.length} live
+        </span>
       </div>
       <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
         {error && <p className="text-destructive text-sm px-5 py-6">Error: {error}</p>}
@@ -333,15 +371,12 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
             <TableHeader className="sticky top-0 z-10">
               <TableRow className="hover:bg-transparent bg-[#080b12]">
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
-                <TableHead className="text-left">Long</TableHead>
-                <TableHead className="text-left">Short</TableHead>
-                <SortTH field="pacificaRate" label="Pacifica Funding (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="hlRate" label="HL Funding (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="fundingSpread" label="Funding Spread (1p)" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="apr" label="APR" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="aprMaxLev" label="APR x Max Lev" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="priceSpread" label="Price Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="oi" label="Open Interest" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <TableHead className="text-left">Position</TableHead>
+                <TableHead className="text-right">Venue Funding</TableHead>
+                <SortTH field="fundingSpread" label="Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="apr" label="Est. Return" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="capacity" label="Liquidity" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <TableHead className="w-8" />
               </TableRow>
             </TableHeader>
@@ -354,25 +389,36 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                 const apr = opp.annualized_gross_edge
 
                 return (
-                  <TableRow key={opp.id} className="cursor-pointer" onClick={() => onSelect(opp.id)}>
-                    <TableCell className="font-medium text-foreground">
-                      {opp.asset}<span className="text-muted-foreground ml-1.5 text-xs">{maxLev}x</span>
+                  <TableRow key={opp.id} className="group cursor-pointer hover:bg-white/[0.025]" onClick={() => onSelect(opp.id)}>
+                    <TableCell className="py-3">
+                      <p className="font-semibold text-foreground">{opp.asset}</p>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
                     </TableCell>
-                    <TableCell><VenueIcon venue={longVenue} /></TableCell>
-                    <TableCell><VenueIcon venue={shortVenue} /></TableCell>
-                    <TC negative={(fundingForVenue(opp, 'pacifica') ?? 0) < 0}>
-                      {fundingForVenue(opp, 'pacifica') !== null ? fmtRate(fundingForVenue(opp, 'pacifica')!) : '—'}
-                    </TC>
-                    <TC negative={(fundingForVenue(opp, 'hyperliquid') ?? 0) < 0}>
-                      {fundingForVenue(opp, 'hyperliquid') !== null ? fmtRate(fundingForVenue(opp, 'hyperliquid')!) : '—'}
-                    </TC>
-                    <TC>{fmtRate(Math.abs(opp.funding_spread))}</TC>
-                    <TC>{fmtPct(apr)}</TC>
-                    <TC>{fmtPct(apr * maxLev)}</TC>
-                    <TC negative={opp.entry_spread_estimate < 0}>{fmtPct(opp.entry_spread_estimate, 4)}</TC>
-                    <TC>{fmtUsd(opp.available_notional)}</TC>
-                    <TableCell>
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-50">
+                    <TableCell className="py-3">
+                      <PositionRoute longVenue={longVenue} shortVenue={shortVenue} />
+                    </TableCell>
+                    <TableCell className="py-3 text-right font-mono">
+                      <FundingRateLine label="PAC" value={fundingForVenue(opp, 'pacifica')} color="text-cyan-400" />
+                      <FundingRateLine label="HL" value={fundingForVenue(opp, 'hyperliquid')} color="text-violet-400" />
+                    </TableCell>
+                    <TableCell className="py-3 text-right font-mono text-foreground">
+                      {fmtRate(Math.abs(opp.funding_spread))}
+                      <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">per hour</p>
+                    </TableCell>
+                    <TableCell className="py-3 text-right font-mono">
+                      <p className="font-semibold text-emerald-400">{fmtPct(apr)}</p>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">{fmtPct(apr * maxLev)} at {maxLev}x</p>
+                    </TableCell>
+                    <TableCell className={`py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
+                      {fmtPct(opp.entry_spread_estimate, 4)}
+                      <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">price spread</p>
+                    </TableCell>
+                    <TableCell className="py-3 text-right font-mono text-foreground">
+                      {fmtUsd(opp.best_price_capacity)}
+                      <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">OI {fmtUsd(opp.available_notional)}</p>
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-35 transition-all group-hover:translate-x-0.5 group-hover:opacity-80">
                         <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
                     </TableCell>
@@ -399,7 +445,7 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="px-5 pt-4 pb-2 shrink-0">
-        <p className="text-[11px] text-muted-foreground mb-1">Funding Rate Arb Opportunities</p>
+        <p className="text-[11px] text-muted-foreground mb-1">Funding Opportunities</p>
         <div className="flex items-center gap-2">
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors -ml-1">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -533,11 +579,30 @@ function SortTH({ field, label, current, dir, onSort, right }: {
   )
 }
 
-function TC({ children, negative }: { children: React.ReactNode; negative?: boolean }) {
+function PositionRoute({ longVenue, shortVenue }: { longVenue: string; shortVenue: string }) {
   return (
-    <TableCell className={`font-mono ${negative ? 'text-red-400' : 'text-foreground'}`} style={{ textAlign: 'right' }}>
-      {children}
-    </TableCell>
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
+        <VenueIcon venue={longVenue} />
+        <span className="text-[9px] font-medium uppercase tracking-wide text-emerald-400">Long</span>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 text-muted-foreground/40">
+        <path d="M2 7h10M9 4l3 3-3 3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div className="flex items-center gap-1.5">
+        <VenueIcon venue={shortVenue} />
+        <span className="text-[9px] font-medium uppercase tracking-wide text-rose-400">Short</span>
+      </div>
+    </div>
+  )
+}
+
+function FundingRateLine({ label, value, color }: { label: string; value: number | null; color: string }) {
+  return (
+    <p className={value !== null && value < 0 ? 'text-red-400' : 'text-foreground'}>
+      <span className={`mr-1.5 text-[9px] font-sans font-semibold ${color}`}>{label}</span>
+      {value !== null ? fmtRate(value) : '—'}
+    </p>
   )
 }
 
