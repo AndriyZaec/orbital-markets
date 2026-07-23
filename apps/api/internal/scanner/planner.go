@@ -83,6 +83,10 @@ func (s *Scanner) BuildPlan(
 	if requestedNotional > 0 {
 		notional = requestedNotional
 	}
+	bestPriceCapacity := min(
+		executionSideDepth(longSnap, domain.SideLong),
+		executionSideDepth(shortSnap, domain.SideShort),
+	)
 
 	// Build legs with fresh prices
 	leg1 := domain.Leg{
@@ -136,6 +140,13 @@ func (s *Scanner) BuildPlan(
 	if !shortDepthAvailable {
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid depth for short leg", shortSnap.Venue))
 	}
+	if bestPriceCapacity > 0 && notional > bestPriceCapacity {
+		warnings = append(warnings, fmt.Sprintf(
+			"requested notional $%.2f exceeds visible best-price capacity $%.2f; fill beyond BBO is unknown",
+			notional,
+			bestPriceCapacity,
+		))
+	}
 	switch slippageLevel {
 	case domain.SlippageWarn:
 		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: elevated slippage", totalCosts*100))
@@ -188,17 +199,18 @@ func (s *Scanner) BuildPlan(
 	leg2.LiquidationRisk = domain.ClassifyLiqRisk(leg2.LiquidationDistance, leg2.LiquidationPrice)
 
 	plan := &domain.ExecutionPlan{
-		ID:               fmt.Sprintf("plan-%s-%d", opp.ID, now.UnixMilli()),
-		OpportunityID:    opp.ID,
-		Asset:            opp.Asset,
-		Direction:        opp.Direction,
-		Notional:         notional,
-		MaxLeverage:      pairMaxLeverage,
-		Leverage:         levConfig,
-		Leg1:             leg1,
-		Leg2:             leg2,
-		ExpectedSpread:   expectedSpread,
-		EstimatedNetEdge: estimatedNetEdge,
+		ID:                fmt.Sprintf("plan-%s-%d", opp.ID, now.UnixMilli()),
+		OpportunityID:     opp.ID,
+		Asset:             opp.Asset,
+		Direction:         opp.Direction,
+		Notional:          notional,
+		BestPriceCapacity: bestPriceCapacity,
+		MaxLeverage:       pairMaxLeverage,
+		Leverage:          levConfig,
+		Leg1:              leg1,
+		Leg2:              leg2,
+		ExpectedSpread:    expectedSpread,
+		EstimatedNetEdge:  estimatedNetEdge,
 		Bounds: domain.Bounds{
 			MaxSlippagePct:    0.005, // 0.5%
 			MaxEntrySpreadPct: 0.01,  // 1%

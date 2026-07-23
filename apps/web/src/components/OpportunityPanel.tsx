@@ -119,17 +119,16 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   const [longOpen, setLongOpen] = useState(true)
   const [shortOpen, setShortOpen] = useState(true)
 
-  // Position size = notional PER LEG. Seeded from the opportunity's recommended
+  // Position size = notional PER LEG. Seeded from the opportunity's suggested
   // notional; user can override. The raw text is kept as a string so partial
   // input ("", "1000.") is not fought by number coercion. `notionalNum` is the
   // parsed numeric value sent to the backend (0 = fall back to recommended).
-  const [notionalInput, setNotionalInput] = useState<string>(() =>
-    opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '',
-  )
-  useEffect(() => {
-    // Re-seed when the selected opportunity changes.
-    setNotionalInput(opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '')
-  }, [opp.id, opp.recommended_notional])
+  const suggestedNotionalInput = opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : ''
+  const [notionalSelection, setNotionalSelection] = useState({ opportunityId: opp.id, value: suggestedNotionalInput })
+  const notionalInput = notionalSelection.opportunityId === opp.id
+    ? notionalSelection.value
+    : suggestedNotionalInput
+  const setNotionalInput = (value: string) => setNotionalSelection({ opportunityId: opp.id, value })
   const notionalNum = Number(notionalInput)
   const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
   const notionalForPlan = notionalValid ? notionalNum : undefined
@@ -237,15 +236,18 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
             {notionalInput !== '' && !notionalValid ? (
               <span className="text-red-400">Enter a positive amount</span>
             ) : (
-              <span className="text-muted-foreground/70">Same notional on both legs</span>
+              <span className="text-muted-foreground/70">
+                Best-price capacity: {fmtUsd(plan?.best_price_capacity ?? opp.best_price_capacity)}
+              </span>
             )}
             {opp.recommended_notional > 0 && (
               <button
                 type="button"
                 onClick={() => setNotionalInput(String(Math.round(opp.recommended_notional)))}
+                title="25% of the weaker leg's available best-price liquidity"
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >
-                Recommended: {fmtUsd(opp.recommended_notional)}
+                Suggested: {fmtUsd(opp.recommended_notional)}
               </button>
             )}
           </div>
@@ -314,7 +316,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               <SlippageSelector value={longSlippage} onChange={setLongSlippage} />
               <div className="mt-3 flex flex-col gap-0">
                 <Row label="Required Margin" value={longLeg ? `${fmtUsd(longLeg.margin_required)} · ${longLeg.leverage}x` : '--'} />
-                <Row label="Position Size" value={plan && longLeg ? fmtUsd(longLeg.expected_price) : '--'} />
+                <Row label="Position Size" value={plan && longLeg ? fmtUsd(plan.notional) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
                 <Row label="Est. Liquidation Price" value={fmtLiqPrice(longLeg)} />
                 <Row label="Est. Entry Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
@@ -342,7 +344,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               <SlippageSelector value={shortSlippage} onChange={setShortSlippage} />
               <div className="mt-3 flex flex-col gap-0">
                 <Row label="Required Margin" value={shortLeg ? `${fmtUsd(shortLeg.margin_required)} · ${shortLeg.leverage}x` : '--'} />
-                <Row label="Position Size" value={plan && shortLeg ? fmtUsd(shortLeg.expected_price) : '--'} />
+                <Row label="Position Size" value={plan && shortLeg ? fmtUsd(plan.notional) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
                 <Row label="Est. Liquidation Price" value={fmtLiqPrice(shortLeg)} />
                 <Row label="Est. Entry Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />

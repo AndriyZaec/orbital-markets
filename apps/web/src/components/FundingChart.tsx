@@ -79,7 +79,7 @@ export function FundingChart({
   const [view, setView] = useState<ChartView>('funding')
   const [tf, setTf] = useState<Timeframe>('W')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
-  const defaultNotional = Math.max(100, recommendedNotional || 10_000)
+  const defaultNotional = Math.max(1, recommendedNotional || 10_000)
   const [notionalOverride, setNotionalOverride] = useState<number | null>(null)
   const notional = notionalOverride ?? defaultNotional
   const { data, loading, error } = useHistory(asset, venueA, venueB, rangeMap[tf])

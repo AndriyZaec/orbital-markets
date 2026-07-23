@@ -181,7 +181,11 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 	annualizedGross := domain.AnnualizedGrossEdge(a.FundingRate, b.FundingRate)
 
 	// Execution-aware sizing
-	sizing := computeSizing(a, b, annualizedGross)
+	sizing := computeSizing(a, b, direction)
+	longMarket, shortMarket := marketsForDirection(a, b, direction)
+	slippageEstimate := estimateExecutionSlippage(longMarket, domain.SideLong, sizing.RecommendedNotional) +
+		estimateExecutionSlippage(shortMarket, domain.SideShort, sizing.RecommendedNotional)
+	feeEstimate := estimateFee(longMarket) + estimateFee(shortMarket)
 
 	// Build warnings.
 	var warnings []string
@@ -260,7 +264,10 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		FundingSpread:       fundingSpread,
 		AnnualizedGrossEdge: annualizedGross,
 		EntrySpreadEstimate: entrySpread,
+		SlippageEstimate:    slippageEstimate,
+		FeeEstimate:         feeEstimate,
 		AvailableNotional:   sizing.MaxAvailableNotional,
+		BestPriceCapacity:   sizing.BestPriceCapacity,
 		RecommendedNotional: sizing.RecommendedNotional,
 		Liquidity:           sizing.Liquidity,
 		Confidence:          confidence,

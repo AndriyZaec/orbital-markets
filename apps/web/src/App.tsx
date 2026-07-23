@@ -415,6 +415,7 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
         <StatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
         <StatItem label="APR x Max Lev" value={fmtPct(opp.annualized_gross_edge * maxLev)} mono />
         <StatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
+        <StatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
         <StatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
       </div>
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">

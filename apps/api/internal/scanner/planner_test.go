@@ -41,6 +41,15 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	if len(opps) != 1 {
 		t.Fatalf("opportunities = %d, want 1", len(opps))
 	}
+	if opps[0].BestPriceCapacity != 1000 {
+		t.Fatalf("BestPriceCapacity = %v, want 1000", opps[0].BestPriceCapacity)
+	}
+	if opps[0].RecommendedNotional != 250 {
+		t.Fatalf("RecommendedNotional = %v, want 250", opps[0].RecommendedNotional)
+	}
+	if opps[0].SlippageEstimate <= 0 || opps[0].FeeEstimate <= 0 {
+		t.Fatalf("opportunity costs = slippage %v fee %v, want both populated", opps[0].SlippageEstimate, opps[0].FeeEstimate)
+	}
 
 	plan, err := s.BuildPlan(context.Background(), opps[0].ID, 10, 100)
 	if err != nil {
@@ -52,26 +61,22 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	if plan.Leg1.Leverage != 10 || plan.Leg2.Leverage != 10 {
 		t.Fatalf("leg leverage = %v/%v, want 10/10", plan.Leg1.Leverage, plan.Leg2.Leverage)
 	}
-	largePlan, err := s.BuildPlan(context.Background(), opps[0].ID, 10, 5000)
+	largePlan, err := s.BuildPlan(context.Background(), opps[0].ID, 10, 1000)
 	if err != nil {
 		t.Fatalf("BuildPlan(large notional) error = %v", err)
 	}
-	if largePlan.Leg1.Slippage <= plan.Leg1.Slippage || largePlan.Leg2.Slippage <= plan.Leg2.Slippage {
-		t.Fatalf(
-			"large plan slippage = %v/%v, want greater than small plan %v/%v",
-			largePlan.Leg1.Slippage, largePlan.Leg2.Slippage,
-			plan.Leg1.Slippage, plan.Leg2.Slippage,
-		)
+	if !largePlan.Executable {
+		t.Fatalf("BuildPlan(at capacity) executable = false, warnings = %v", largePlan.Warnings)
 	}
-	blockedPlan, err := s.BuildPlan(context.Background(), opps[0].ID, 10, 1_000_000_000)
+	blockedPlan, err := s.BuildPlan(context.Background(), opps[0].ID, 10, 1001)
 	if err != nil {
 		t.Fatalf("BuildPlan(oversized notional) error = %v", err)
 	}
-	if blockedPlan.Executable {
-		t.Fatal("BuildPlan(oversized notional) executable = true, want false")
+	if !blockedPlan.Executable {
+		t.Fatalf("BuildPlan(oversized notional) executable = false, warnings = %v", blockedPlan.Warnings)
 	}
-	if !containsWarning(blockedPlan.Warnings, "exceeds 5% threshold") {
-		t.Fatalf("oversized plan warnings = %v, want slippage blocker", blockedPlan.Warnings)
+	if !containsWarning(blockedPlan.Warnings, "exceeds visible best-price capacity") {
+		t.Fatalf("oversized plan warnings = %v, want capacity blocker", blockedPlan.Warnings)
 	}
 
 	// Pacifica is the short leg for this funding direction, so bid depth is
