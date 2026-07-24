@@ -168,6 +168,15 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
   const shortLeg = plan ? (plan.leg_1.side === 'short' ? plan.leg_1 : plan.leg_2) : null
+  const marginShortfalls = plan
+    ? [plan.leg_1, plan.leg_2].flatMap((leg) => {
+        const available = balanceByVenue(leg.venue)
+        return available !== null && available < leg.margin_required
+          ? [`${leg.venue}: needs ${fmtUsd(leg.margin_required)}, available ${fmtUsd(available)}`]
+          : []
+      })
+    : []
+  const hasMarginShortfall = marginShortfalls.length > 0
 
   const handleExecute = async () => {
     setExecuting(true)
@@ -374,6 +383,11 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
         {planError && (
           <p className="text-[11px] text-red-400 mb-2">Plan error: {planError}</p>
         )}
+        {hasMarginShortfall && (
+          <p className="text-[11px] text-red-400 mb-2">
+            Insufficient margin: {marginShortfalls.join('; ')}
+          </p>
+        )}
         <div className="flex items-center gap-1.5 mb-3">
           <div className={`size-1.5 rounded-full ${isLive ? 'bg-green-400' : 'bg-yellow-400'}`} />
           <span className="text-[11px] text-muted-foreground">
@@ -409,13 +423,13 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
                 isFullyReady
-                  ? !plan?.executable || planExpired || planUpdating || !notionalValid
+                  ? !plan?.executable || planExpired || planUpdating || !notionalValid || hasMarginShortfall
                   : false
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
             >
               {isFullyReady
-                ? 'Execute Live'
+                ? hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
                 : readinessAggregate.statusLabel === 'Not connected'
                   ? 'Connect Wallets to Go Live'
                   : 'Accounts Not Ready'}

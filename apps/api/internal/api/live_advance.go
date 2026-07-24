@@ -120,6 +120,18 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 // the leg-2 signing request (sized from the actual fill) or fires the unwind.
 func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveSession, signed []domain.SignedAction, releaseDone <-chan struct{}) {
 	ctx := r.Context()
+	if reasons := s.livePreTradeBlockers(sess.Plan); len(reasons) > 0 {
+		s.logger.Warn("live advance: pre-trade blocked before leg 1",
+			"session_id", sess.ID,
+			"reasons", reasons,
+		)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "pre-trade checks failed",
+			"code":    livePreparePreTradeBlocked,
+			"reasons": reasons,
+		})
+		return
+	}
 	if !s.venuePositionStateReady(sess.Leg1.venue) || !s.venuePositionStateReady(sess.Leg2.venue) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "venue position state not ready; retry shortly"})
 		return
