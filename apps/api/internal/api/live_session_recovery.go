@@ -301,7 +301,17 @@ func (s *Server) venuePositionStateReadyAfter(venue string, after time.Time) boo
 	default:
 		return false
 	}
-	return !updatedAt.IsZero() && updatedAt.After(after) && time.Since(updatedAt) <= admissionFreshness
+	return positionStateReady(updatedAt, after)
+}
+
+func positionStateReady(updatedAt, after time.Time) bool {
+	if updatedAt.IsZero() {
+		return false
+	}
+	if after.IsZero() {
+		return true
+	}
+	return updatedAt.After(after) && time.Since(updatedAt) <= admissionFreshness
 }
 
 func (s *Server) currentVenuePosition(venue, symbol string) (float64, float64) {

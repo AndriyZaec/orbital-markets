@@ -161,6 +161,15 @@ func (s *AccountState) updatePositions(account string, positions []AccountPositi
 	s.lastUpdated = s.positionsUpdatedAt
 }
 
+func (s *AccountState) InvalidatePositionsForAccount(account string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if account != "" && s.account != account {
+		return
+	}
+	s.positionsUpdatedAt = time.Time{}
+}
+
 // UpdateSymbolConfig sets leverage/margin mode for a symbol.
 func (s *AccountState) UpdateSymbolConfig(cfg SymbolConfig) {
 	s.updateSymbolConfig("", cfg)
