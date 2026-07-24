@@ -79,3 +79,34 @@ func TestRefreshAccountInfoBootstrapsEmptyPositions(t *testing.T) {
 		t.Fatal("empty positions snapshot did not mark position state ready")
 	}
 }
+
+func TestParseRESTPositions(t *testing.T) {
+	raw := []byte(`{
+		"success": true,
+		"data": [
+			{"symbol":"SOL","side":"bid","amount":"1.25","entry_price":"185.50","margin":"20","liquidation_price":"140.25"},
+			{"symbol":"BTC","side":"ask","amount":"0.01","entry_price":"105000","margin":"50","liquidation_price":null},
+			{"symbol":"ETH","side":"bid","amount":"0","entry_price":"3000","margin":"0","liquidation_price":null}
+		]
+	}`)
+
+	positions, err := parseRESTPositions(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 2 {
+		t.Fatalf("positions = %d, want 2", len(positions))
+	}
+	if got := positions[0]; got.Symbol != "SOL" || got.Side != "long" || got.Size != 1.25 || got.EntryPrice != 185.50 || got.MarginUsed != 20 || got.LiqPrice != 140.25 {
+		t.Fatalf("long position = %+v", got)
+	}
+	if got := positions[1]; got.Symbol != "BTC" || got.Side != "short" || got.Size != 0.01 || got.EntryPrice != 105000 || got.MarginUsed != 50 || got.LiqPrice != 0 {
+		t.Fatalf("short position = %+v", got)
+	}
+}
+
+func TestParseRESTPositionsRejectsMissingData(t *testing.T) {
+	if _, err := parseRESTPositions([]byte(`{"success":true,"data":null}`)); err == nil {
+		t.Fatal("expected missing positions data error")
+	}
+}

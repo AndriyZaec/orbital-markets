@@ -186,7 +186,7 @@ export function useLiveExecution() {
         }),
       })
       if (!prepResp.ok) {
-        const b: { error?: string; reasons?: unknown } = await prepResp.json().catch(() => ({}))
+        const b: { error?: string; code?: string; reasons?: unknown } = await prepResp.json().catch(() => ({}))
         const reasons = Array.isArray(b.reasons)
           ? b.reasons.filter((reason): reason is string => typeof reason === 'string')
           : []
