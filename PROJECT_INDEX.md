@@ -1,240 +1,89 @@
-# Project Index: Orbital Market
+# Project Index
 
-Updated: 2026-06-01
+## Deployable applications
 
-## Product
+### `apps/api`
 
-Execution-focused perp spread trading product. Orbital detects funding opportunities across Pacifica and Hyperliquid, builds execution plans, simulates and validates them, and tracks hedged positions with explicit risk and degraded-state handling.
-
-V1 is off-chain-first. No custom on-chain program is part of the current release path.
-
-## Project Structure
+Go service responsible for venue connectivity, normalized market state,
+opportunity discovery, plan construction, paper trading, live execution,
+history, and persistence.
 
 ```text
-orbital-market/
-├── apps/
-│   ├── api/          # Go backend: scanner, paper execution, live execution APIs
-│   └── web/          # React + TypeScript frontend
-├── packages/
-│   └── shared/       # Reserved for shared code/types
-├── services/         # Reserved
-├── docs/             # Reserved
-├── .claude/          # Product steering, execution/risk docs, progress handoff
-└── Makefile          # api-build, api-run, api-test
+cmd/server/                 process entry point and dependency wiring
+internal/api/               HTTP routes, auth, and response contracts
+internal/db/                SQLite, migrations, snapshots, retention, rollups
+internal/domain/            shared market, opportunity, and plan types
+internal/executor/          live session state, orchestration, and monitoring
+internal/paper/             paper executor, monitor, store, and analytics
+internal/scanner/           opportunity generation, sizing, and planning
+internal/venue/pacifica/    Pacifica adapter
+internal/venue/hyperliquid/ Hyperliquid adapter
 ```
 
-## Backend: `apps/api`
+HTTP routes are registered in `apps/api/internal/api/server.go`:
 
-Go 1.25, SQLite, embedded migrations, sqlc, HTTP, WebSocket venue integrations.
-
-**Entry point:** `cmd/server/main.go`
-
-### Core Packages
-
-| Package | Purpose |
+| Area | Routes |
 |---|---|
-| `internal/api/` | HTTP server, route wiring, paper handlers, analytics/history handlers, live handlers |
-| `internal/domain/` | Opportunity, execution plan, funding, leverage, liquidation, slippage, live admission, signing contracts |
-| `internal/scanner/` | Spread scanner, classifier, planner, sizing, liquidity checks |
-| `internal/paper/` | Paper executor, monitor, position model, in-memory store, SQLite store |
-| `internal/executor/` | Cross-venue live executor, live persistence store, live monitor, execution result model |
-| `internal/venue/` | Venue adapter contracts and shared execution interfaces |
-| `internal/venue/pacifica/` | Pacifica market data adapter |
-| `internal/venue/pacifica/account/` | Pacifica private account streams and pre-trade validation |
-| `internal/venue/pacifica/live/` | Pacifica live order client, signed payloads, submit path, fill tracker |
-| `internal/venue/hyperliquid/` | Hyperliquid market data adapter and asset map |
-| `internal/venue/hyperliquid/account/` | Hyperliquid account state polling and pre-trade validation |
-| `internal/venue/hyperliquid/live/` | Hyperliquid live order client, signed payloads, submit path, fill tracker |
-| `internal/db/` | SQLite init, migrations, market snapshot recorder |
-| `internal/db/sqlc/` | Generated typed queries |
+| System | `GET /api/v1/health` |
+| Discovery | `GET /api/v1/markets`, `GET /api/v1/opportunities`, `POST /api/v1/plan` |
+| History | `GET /api/v1/history` |
+| Paper | `/api/v1/paper/open`, `/api/v1/paper/positions*`, `/api/v1/paper/close/*`, `/api/v1/paper/analytics` |
+| Live setup | `/api/v1/live/balances`, `/api/v1/live/accounts/ensure` |
+| Live execution | `/api/v1/live/prepare`, `/api/v1/live/advance`, `/api/v1/live/submit` |
+| Live positions | `/api/v1/live/positions*`, `/api/v1/live/close/*`, `/api/v1/live/kill` |
 
-### API Routes
+Deployment configuration is in `apps/api/fly.toml`; automation is defined in
+`.github/workflows/deploy-api.yml`.
 
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/markets` | Raw normalized market data |
-| GET | `/api/v1/opportunities` | Ranked spread opportunities |
-| POST | `/api/v1/plan` | Build execution plan from opportunity |
-| POST | `/api/v1/paper/open` | Start paper trade execution |
-| GET | `/api/v1/paper/positions` | List paper positions |
-| GET | `/api/v1/paper/positions/{id}` | Paper position detail |
-| POST | `/api/v1/paper/close/{id}` | Manual close for paper position |
-| GET | `/api/v1/paper/analytics` | Paper analytics |
-| GET | `/api/v1/history` | Historical market snapshot data |
-| POST | `/api/v1/live/prepare` | Build live signing requests for a selected opportunity |
-| POST | `/api/v1/live/advance` | Advance the non-custodial live-open session state machine |
-| POST | `/api/v1/live/submit` | Validate and submit a signed venue action |
-| GET | `/api/v1/live/positions` | List persisted live positions |
-| GET | `/api/v1/live/positions/{id}` | Live position detail with fills/events |
-| POST | `/api/v1/live/close/{id}` | Build reduce-only close signing requests for one live position |
-| POST | `/api/v1/live/kill` | Emergency close signing-request preparation for live positions |
+### `apps/web`
 
-### Domain Models
+React 19 application for opportunity discovery, funding and return charts,
+paper trading, wallet connections, and non-custodial live execution.
 
-| File | Key Types |
-|---|---|
-| `opportunity.go` | Opportunity, confidence, risk tier, liquidity tier, direction, venue pair |
-| `execution_plan.go` | ExecutionPlan, legs, bounds, side |
-| `position.go` | Paper position states and common position concepts |
-| `funding.go` | Hourly-normalized funding and canonical edge math |
-| `leverage.go` | Leverage config and validation |
-| `liquidation.go` | Approximate liquidation price, distance, and risk classification |
-| `slippage.go` | Slippage levels, warning/blocker policy |
-| `admission.go` | First-live admission gate |
-| `signing.go` / `signing_store.go` | Non-custodial signing request and signed action contracts |
+```text
+src/App.tsx             primary page and opportunity table
+src/components/        charts, panels, dialogs, and shared UI
+src/hooks/             API queries and live/paper flows
+src/lib/               formatting and calculation helpers
+src/providers/         beta gate and Solana/EVM wallet providers
+tests/                 Node-based unit tests
+```
 
-### Scanner Pipeline
+`apps/web/vite.config.ts` proxies `/api` to the local Go service and `/gate` to
+the optional local Worker.
 
-| File | Purpose |
-|---|---|
-| `scanner.go` | Main scan loop and pairwise opportunity comparison |
-| `classifier.go` | Confidence and risk-tier classification |
-| `planner.go` | Fresh execution plan builder with pre-trade checks |
-| `sizing.go` | BBO-depth-first sizing model |
-| `liquidity_check.go` | Fake-liquidity and market-quality signals |
+### `apps/gate-worker`
 
-### Paper Trading Engine
+Cloudflare Worker that redeems invite codes from KV, issues the shared beta JWT
+cookie, and protects the production application origin.
 
-| File | Purpose |
-|---|---|
-| `position.go` | Paper position struct, execution states, fills, events |
-| `executor.go` | State machine: planned -> leg1 -> leg2 -> open/degraded/failed |
-| `monitor.go` | Background monitoring: PnL, funding, basis, liquidation, auto-close |
-| `store.go` | In-memory store |
-| `dbstore.go` | SQLite-backed store and analytics persistence |
+```text
+src/index.ts       request routing and JWT gate
+scripts/           invite-code tooling
+wrangler.toml      committed Worker configuration template
+```
 
-### Live Execution Layer
+Local and production procedures are in `apps/gate-worker/README.md`.
 
-| Area | Status |
-|---|---|
-| Pacifica live open/close | Implemented via signed payloads and live client submit path |
-| Pacifica private account streams | Started from connected wallet accounts during live prepare |
-| Hyperliquid live open/close | Implemented via EIP-712 signed payloads and live client submit path |
-| Hyperliquid account state | Started from connected wallet accounts via clearinghouse polling |
-| Hyperliquid fill tracking | Implemented via order/fill tracker |
-| Session live open flow | Implemented via prepare -> advance -> advance |
-| Live persistence | Implemented tables/store for positions, fills, events |
-| Live monitor | Implemented against persisted live positions |
-| Live API/UI | Implemented prepare/advance/positions/detail/close/kill surfaces |
-| Account balance readiness | Shows disconnected/empty state before wallet-triggered streams, real values after streams start |
+## Automation
 
-### Current Closed Beta Live Flow
+`.github/workflows/` contains deployments for the API and gate Worker. Both
+workflows run their relevant checks before deployment. The web application is
+deployed separately to Cloudflare Pages.
 
-The live open path for the internal closed beta is canonical:
-
-1. `POST /api/v1/live/prepare`
-2. frontend signs leg-1 open and leg-1 reduce-only unwind
-3. `POST /api/v1/live/advance`
-4. backend submits leg 1, waits for fill, and returns leg-2 signing request sized from actual leg-1 fill
-5. frontend signs leg 2
-6. `POST /api/v1/live/advance`
-7. backend submits leg 2, verifies hedge mismatch, and persists the terminal outcome
-
-`POST /api/v1/live/submit` is guarded against sessionless live-open usage and remains available for close/reduce-only signed actions.
-
-Normal close path:
-
-1. open live position detail
-2. click `Close Position`
-3. backend builds reduce-only close signing requests from persisted fills
-4. frontend signs and submits each close action through `/api/v1/live/submit`
-
-Emergency path:
-
-- `POST /api/v1/live/kill` prepares close signing requests for open/degraded positions
-
-Known beta limitations:
-
-- sessions are in-memory
-- retry-once before unwind is deferred
-- leg-2 residuals may require operator recovery
-- venue tracker and reduce-only behavior still need real live validation
-
-### DB Migrations
-
-| Migration | Purpose |
-|---|---|
-| `001_paper_positions.sql` | Paper positions, fills, events |
-| `002_market_snapshots.sql` | Market snapshots |
-| `003_break_even.sql` | Break-even and analytics fields |
-| `004_live_positions.sql` | Live positions, fills, execution events |
-| `005_live_monitoring.sql` | Live monitoring fields |
-
-## Frontend: `apps/web`
-
-React 19, Vite 8, TypeScript 6, Tailwind 4, shadcn/ui, Solana wallet adapter, wagmi/viem.
-
-**Entry point:** `src/main.tsx` -> `src/App.tsx`
-
-### Components
-
-| Component | Purpose |
-|---|---|
-| `App.tsx` | Main layout, navigation, trade surface, account panel state |
-| `OpportunityPanel` | Opportunity details, leverage, plan summary, live execution trigger |
-| `LiveExecutionModal` | Prepare/sign/submit flow status and confirmation UI |
-| `ConnectAccounts` | Multi-venue wallet/account readiness panel |
-| `PaperPositions` | Paper position list and manual close actions |
-| `PositionDetail` | Paper position fill, PnL, basis, liquidation, event detail |
-| `LivePositions` | Live position list |
-| `LivePositionDetail` | Live position fills/events, monitoring detail, and per-position close flow |
-| `AnalyticsDashboard` | Paper analytics and account overview style metrics |
-| `FundingChart` | Historical basis and annualized edge chart from backend snapshots |
-| `FeeRebates` | GTM/demo narrative surface |
-| `ForAgents` | Agent-control-layer narrative surface |
-| `ui/*` | shadcn/ui primitives |
-
-### Hooks And Client Helpers
-
-| File | Purpose |
-|---|---|
-| `useOpportunities` | Polls opportunities |
-| `usePlan` | Fetches execution plan with leverage |
-| `usePaperPositions` | Polls paper positions and closes paper positions |
-| `useLivePositions` | Polls live positions |
-| `useLiveExecution` | Frontend live prepare/sign/submit orchestration |
-| `useLivePositionDetail` | Fetches live position detail with fills and events |
-| `useLiveClose` | Builds/signs/submits per-position reduce-only live close actions |
-| `useKillSwitch` | Emergency close signing/submission flow |
-| `useVenueAuthority` | Connected Solana/EVM account authority state |
-| `useAnalytics` | Polls paper analytics |
-| `useHistory` | Fetches historical snapshot series |
-| `lib/signing/*` | Pacifica and Hyperliquid signing helpers |
-| `types/signing.ts` | Frontend signing contracts |
-
-## Venue Support
-
-| Venue | Market Data | BBO | Account State | Live Orders | Status |
-|---|---|---|---|---|---|
-| Pacifica | WS prices | WS BBO | Private WS account streams | Signed open + close/unwind | Primary live venue |
-| Hyperliquid | REST metadata + WS BBO | WS BBO | Clearinghouse polling + trackers | Signed open + close/unwind | Primary live venue |
-
-## Build And Run
+## Common commands
 
 ```bash
-make api-run
-cd apps/web && npm run dev
-make api-build
-make api-test
+# API
+cd apps/api && go test ./...
+cd apps/api && go run ./cmd/server
+
+# Web
+cd apps/web && pnpm install
+cd apps/web && pnpm dev
+cd apps/web && pnpm test && pnpm lint && pnpm build
+
+# Gate Worker
+cd apps/gate-worker && pnpm typecheck
+cd apps/gate-worker && pnpm dev
 ```
-
-Frontend build:
-
-```bash
-cd apps/web && npm run build
-```
-
-## Documentation Map
-
-| File | Purpose |
-|---|---|
-| `.claude/CLAUDE.md` | Product steering and scope constraints |
-| `.claude/ARCHITECTURE.md` | Off-chain-first architecture |
-| `.claude/EXECUTION.md` | Execution state machine and signing rules |
-| `.claude/RISK_MODEL.md` | Risk model and guardrails |
-| `.claude/PROGRESS.md` | Progress log and immediate priorities |
-| `.claude/CLOSED_BETA_RUNBOOK.md` | Minimal internal live test runbook |
-| `.claude/SESSION_HANDOFF.md` | Current handoff for new sessions |
-| `.claude/SPEC_GAP_ANALYSIS.md` | Gap analysis against engine spec |
-| `.claude/UI_CHANGELOG.md` | UI evolution notes |

@@ -74,4 +74,6 @@ Then in the CF dashboard, bind the Worker to:
 - `app.<domain>/gate/*`
 - `app.<domain>/*`
 
-Rate-limit rule on `/gate/redeem`: 5 req/min per IP (see `.claude/DEPLOY.md`).
+Configure a Cloudflare rate-limit rule on `/gate/redeem` at 5 requests per
+minute per IP. Keep dashboard-only production settings in the operator's secret
+store rather than duplicating environment-specific identifiers in this repo.
