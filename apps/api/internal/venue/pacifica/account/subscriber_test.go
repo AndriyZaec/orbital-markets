@@ -1,8 +1,19 @@
 package account
 
 import (
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
 	"testing"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestParseRESTAccountInfo(t *testing.T) {
 	raw := []byte(`{
@@ -32,5 +43,70 @@ func TestParseRESTAccountInfo(t *testing.T) {
 	}
 	if info.AvailableToWithdraw != 46.159179 {
 		t.Fatalf("AvailableToWithdraw = %v, want 46.159179", info.AvailableToWithdraw)
+	}
+}
+
+func TestRefreshAccountInfoBootstrapsEmptyPositions(t *testing.T) {
+	state := NewAccountState()
+	state.ResetForAccount("wallet")
+	positionsRequested := false
+	subscriber := NewSubscriber(slog.New(slog.NewTextHandler(io.Discard, nil)), state, "wallet", nil)
+	subscriber.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body string
+		switch req.URL.Path {
+		case "/api/v1/account":
+			body = `{"success":true,"data":{"account_equity":"46.16","available_to_spend":"46.16","available_to_withdraw":"46.16","total_margin_used":"0","cross_mmr":"0"}}`
+		case "/api/v1/positions":
+			positionsRequested = true
+			body = `{"success":true,"data":[]}`
+		default:
+			t.Fatalf("unexpected request path %q", req.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	if err := subscriber.refreshAccountInfo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !positionsRequested {
+		t.Fatal("positions snapshot was not requested")
+	}
+	if state.Snapshot().PositionsUpdatedAt.IsZero() {
+		t.Fatal("empty positions snapshot did not mark position state ready")
+	}
+}
+
+func TestParseRESTPositions(t *testing.T) {
+	raw := []byte(`{
+		"success": true,
+		"data": [
+			{"symbol":"SOL","side":"bid","amount":"1.25","entry_price":"185.50","margin":"20","liquidation_price":"140.25"},
+			{"symbol":"BTC","side":"ask","amount":"0.01","entry_price":"105000","margin":"50","liquidation_price":null},
+			{"symbol":"ETH","side":"bid","amount":"0","entry_price":"3000","margin":"0","liquidation_price":null}
+		]
+	}`)
+
+	positions, err := parseRESTPositions(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 2 {
+		t.Fatalf("positions = %d, want 2", len(positions))
+	}
+	if got := positions[0]; got.Symbol != "SOL" || got.Side != "long" || got.Size != 1.25 || got.EntryPrice != 185.50 || got.MarginUsed != 20 || got.LiqPrice != 140.25 {
+		t.Fatalf("long position = %+v", got)
+	}
+	if got := positions[1]; got.Symbol != "BTC" || got.Side != "short" || got.Size != 0.01 || got.EntryPrice != 105000 || got.MarginUsed != 50 || got.LiqPrice != 0 {
+		t.Fatalf("short position = %+v", got)
+	}
+}
+
+func TestParseRESTPositionsRejectsMissingData(t *testing.T) {
+	if _, err := parseRESTPositions([]byte(`{"success":true,"data":null}`)); err == nil {
+		t.Fatal("expected missing positions data error")
 	}
 }

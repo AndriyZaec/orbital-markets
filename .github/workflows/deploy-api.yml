@@ -6,9 +6,6 @@ on:
     paths:
       - 'apps/api/**'
       - '.github/workflows/deploy-api.yml'
-    tags:
-      - 'v*'           # any version tag (v0.1.0, v1.0.0-rc1, etc.)
-      - 'api-v*'       # API-specific tag if you want to ship API in isolation
   workflow_dispatch:  # manual trigger from the Actions tab
 
 concurrency:

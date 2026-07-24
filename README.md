@@ -43,14 +43,14 @@ Orbital is built to close that gap.
 
 ## Venues
 
-Orbital is currently built around:
+Orbital currently supports:
 
-- **Pacifica** — Solana
-- **Hyperliquid** — Hyperliquid L1
+- **Pacifica** - Solana
+- **Hyperliquid** - Hyperliquid L1
 
-The current live execution foundation is being built venue-by-venue, starting with Pacifica.
+Both venues provide live market data, account readiness, signed order submission, fill tracking, and reduce-only close paths.
 
-The product architecture is intentionally adapter-based, so additional venues can be added without rewriting the execution and monitoring layers.
+The product architecture is intentionally adapter-based, so additional venues can be added without rewriting the execution and monitoring layers. Venue expansion remains secondary to validating retention and executable economics on the current pair.
 
 ## Why It Matters
 
@@ -73,7 +73,7 @@ Orbital is not just another trading UI.
 
 It helps the Solana ecosystem by making fragmented perp liquidity more usable:
 
-- it routes attention and eventually execution toward Solana-native trading venues
+- it routes attention and execution toward Solana-native trading venues
 - it gives traders a cleaner way to compare funding opportunities instead of leaving liquidity fragmented and opaque
 - it improves capital efficiency by helping users size and manage hedged positions more intelligently
 - it creates a control layer that future Solana agents, allocators, and automation systems can build on top of
@@ -84,12 +84,16 @@ For the hackathon context, Orbital shows how Solana trading infrastructure can e
 
 ### Trading Core
 - Pacifica + Hyperliquid market ingestion
-- normalized scanner across 292 markets
+- normalized cross-venue scanner
 - execution preview for two-leg trades
 - canonical funding and edge model
-- BBO-first sizing model
+- annualized funding and potential-return views
+- direction-aware BBO capacity for long asks and short bids
+- advisory suggested notional at 25% of the weaker leg's visible BBO
 - liquidity labels: `deep`, `medium`, `thin`, `toxic`
 - fake-liquidity detection and slippage blockers
+
+The suggested notional is advisory, not a profitability guarantee. Users can override it; the planner warns when requested size exceeds visible top-of-book capacity.
 
 ### Paper Trading Engine
 - paper execution state machine
@@ -113,61 +117,61 @@ For the hackathon context, Orbital shows how Solana trading infrastructure can e
 - DB-backed paper analytics
 - break-even tracking
 - risk-tier and asset breakdowns
-- historical edge persistence chart based on real recorded snapshots
+- historical funding and potential-return charts based on recorded snapshots
 
 ### Product Surfaces
 - `Fee Rebates` page for GTM narrative
-- `Connect Accounts` side panel for multi-venue ops UX
+- `Connect Accounts` side panel for multi-venue operations
 - `For Agents` page positioning Orbital as a control layer for autonomous capital
-- demo-friendly `Account Overview` focused on health, exposure, risk, and carry
+- `Portfolio` view focused on health, exposure, risk, and carry
 
 ## Technical Highlights
 
 ### Stack
-- `apps/api` — Go backend
-- `apps/web` — React + Tailwind frontend
+- `apps/api` - Go backend
+- `apps/web` - React 19 + TypeScript + Tailwind frontend
+- `apps/gate-worker` - Cloudflare Worker for closed-beta access
 - `SQLite` + embedded migrations + `sqlc`
 
 ### Core Models
-- `Opportunity` — scan and ranking object
-- `ExecutionPlan` — concrete open/close plan
-- `Position` — tracked trade lifecycle object
+- `Opportunity` - scan and ranking object
+- `ExecutionPlan` - concrete open/close plan
+- `Position` - tracked trade lifecycle object
 
 ### Current Architecture
 - off-chain-first execution architecture
 - normalized venue adapters
 - canonical hourly-normalized funding model
 - BBO-first liquidity model with OI as secondary context
-- paper execution before live execution
+- SQLite-backed paper positions, live positions, sessions, and market history
+- browser-held signing; the API does not custody user private keys
 
 ## Execution Semantics
 
-Orbital already models the hard parts of two-leg execution:
+Orbital implements the hard parts of two-leg execution:
 
 - riskier leg first
 - leg 2 sized from actual leg 1 fill
-- minimum hedgeable fill threshold
-- acceptable hedge mismatch band
-- retry once -> unwind -> degraded recovery policy
-- explicit degraded state in backend and UI
+- at least 50% leg-1 fill required before hedging
+- at most 5% residual hedge mismatch
+- one residual leg-2 retry before unwind or degraded recovery
+- durable live session transitions
+- explicit recovery and degraded states in backend and UI
 
 ## Live Trading Progress
 
-Pacifica live execution groundwork is already in place:
+The constrained Pacifica + Hyperliquid live path is implemented for the closed beta:
 
-- private account streams modeled:
-  - `account_info`
-  - `account_positions`
-  - `account_margin`
-  - `account_leverage`
-  - `account_order_updates`
-  - `account_trades`
-- pre-trade account validation
-- live market-order submit path
-- fill/status confirmation model
-- live close / unwind path
+- browser-signed, non-custodial venue actions
+- account readiness and pre-trade validation
+- sequential two-leg open flow
+- fill/status confirmation and hedge verification
+- durable session recovery across API restarts
+- persisted live positions, fills, events, and close outcomes
+- per-position reduce-only close
+- emergency kill-switch preparation
 
-The next major trading milestone is completing the second venue live path and then wiring the first constrained real two-leg execution loop.
+The next milestone is controlled live validation of partial fills, stale plans, retries, unwind, restart recovery, and close behavior. A universal full-plan simulation gate remains a target control rather than an implemented guarantee.
 
 ## What Makes Orbital Defensible
 
@@ -188,26 +192,28 @@ This is the layer that traders, desks, and future agents do not want to rebuild 
 Orbital can grow in three directions:
 
 1. trader-facing carry execution workflow
-2. premium analytics and monitoring
+2. premium analytics and cross-venue risk monitoring
 3. future agent-ready execution and control layer
 
 The product is designed so that humans can use it today, while autonomous capital workflows can build on top of it later.
 
 ## Roadmap
 
-### Core execution roadmap
-- finish constrained live execution for the first supported venue pair
-- harden recovery, unwind, and degraded-state handling
-- persist and monitor live positions with the same discipline as paper execution
+### Product validation
+- determine whether BBO-based suggested size is economically useful or should remain a liquidity warning
+- measure closed-beta activation, repeated use, plan creation, and live-open completion
+- validate opportunity frequency and executable economics before adding venues
 
-### Product improvements we can learn from the market
-Without changing Orbital's core thesis, there are several things worth borrowing from broader competitors:
+### Execution hardening
+- validate recovery, unwind, close, and kill-switch paths with controlled live capital
+- add venue-specific pre-submit simulation where available
+- improve operational alerts, deploy smoke checks, and SQLite backup drills
 
+### Future product surface
 - stronger connected-account and signer UX
-- more operational portfolio and account surfaces
-- cleaner onboarding into venue-linked execution
-- better capital mobility and funding/deposit workflows
-- a clearer agent-facing control layer once live execution is stable
+- more operational portfolio and risk surfaces
+- clearer onboarding into venue-linked execution
+- delegated browser-held session keys after live execution is stable
 
 Our direction remains the same:
 
@@ -221,23 +227,24 @@ Our direction remains the same:
 make api-run
 ```
 
-This starts the Go API from `apps/api`, runs embedded SQLite migrations automatically, and creates/updates `apps/api/orbital.db`.
+This starts the Go API from `apps/api`, runs embedded SQLite migrations automatically, and creates or updates `apps/api/orbital.db`.
 
 ### Frontend
 
 ```bash
 cd apps/web
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
-The frontend runs on Vite and talks to the local API.
+The frontend runs on Vite and proxies `/api` to the local API on port 8080.
 
-### Build
+### Build and test
 
 Backend:
 
 ```bash
+make api-test
 make api-build
 ```
 
@@ -245,18 +252,20 @@ Frontend:
 
 ```bash
 cd apps/web
-npm run build
+pnpm test
+pnpm lint
+pnpm build
 ```
 
 ## Status
 
-Today it already has:
+Today Orbital has:
 
-- live venue data
-- normalized scanner
-- execution preview
-- paper execution engine
-- monitoring and analytics
-- early live venue plumbing
+- live Pacifica and Hyperliquid market data
+- normalized opportunity discovery and BBO-based sizing
+- funding and potential-return projections
+- paper execution, monitoring, and analytics
+- non-custodial live open, recovery, close, and kill-switch flows
+- closed-beta access and production deployment infrastructure
 
-The remaining work is not product definition. It is execution hardening.
+The current focus is product validation and live execution hardening, not basic venue plumbing.

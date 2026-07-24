@@ -186,8 +186,12 @@ export function useLiveExecution() {
         }),
       })
       if (!prepResp.ok) {
-        const b = await prepResp.json().catch(() => ({}))
-        throw new Error(b.error || `Prepare failed: HTTP ${prepResp.status}`)
+        const b: { error?: string; code?: string; reasons?: unknown } = await prepResp.json().catch(() => ({}))
+        const reasons = Array.isArray(b.reasons)
+          ? b.reasons.filter((reason): reason is string => typeof reason === 'string')
+          : []
+        const message = b.error || `Prepare failed: HTTP ${prepResp.status}`
+        throw new Error(reasons.length > 0 ? `${message}: ${reasons.join('; ')}` : message)
       }
       const prep: PrepareResp = await prepResp.json()
       const leg1Requests = prep.signing_requests || []

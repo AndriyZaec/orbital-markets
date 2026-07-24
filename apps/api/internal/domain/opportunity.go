@@ -59,6 +59,7 @@ type Opportunity struct {
 
 	// Sizing
 	AvailableNotional   float64 `json:"available_notional"`
+	BestPriceCapacity   float64 `json:"best_price_capacity"`
 	RecommendedNotional float64 `json:"recommended_notional"`
 	MaxLeverage         int     `json:"max_leverage"`
 

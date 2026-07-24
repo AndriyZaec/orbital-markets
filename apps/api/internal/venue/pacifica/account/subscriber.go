@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	privateWSURL   = "wss://ws.pacifica.fi/ws"
-	accountRESTURL = "https://api.pacifica.fi/api/v1/account"
-	reconnectDelay = 5 * time.Second
+	privateWSURL            = "wss://ws.pacifica.fi/ws"
+	accountRESTURL          = "https://api.pacifica.fi/api/v1/account"
+	positionsRESTURL        = "https://api.pacifica.fi/api/v1/positions"
+	reconnectDelay          = 5 * time.Second
+	snapshotRefreshInterval = 10 * time.Second
 )
 
 // StreamHandler receives raw channel data for order/trade events.
@@ -56,23 +58,47 @@ func NewSubscriber(
 
 // Run connects and listens to account streams until ctx is cancelled.
 func (s *Subscriber) Run(ctx context.Context) {
+	if err := s.refreshAccountInfo(ctx); err != nil && ctx.Err() == nil {
+		s.logger.Warn("pacifica: initial account snapshot failed", "err", err)
+	}
+	go s.refreshAccountLoop(ctx)
+
 	for {
-		// Account websocket subscriptions stream changes only; they do not send
-		// an initial snapshot for a quiet account. Bootstrap state from REST on
-		// startup and every reconnect, then let websocket updates keep it fresh.
-		if err := s.refreshAccountInfo(ctx); err != nil && ctx.Err() == nil {
-			s.logger.Warn("pacifica: initial account snapshot failed", "err", err)
-		}
 		err := s.connectAndListen(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		s.state.SetConnectedForAccount(s.account, false)
+		s.state.InvalidatePositionsForAccount(s.account)
 		s.logger.Error("pacifica account ws disconnected, reconnecting", "err", err)
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(reconnectDelay):
+		}
+		if err := s.refreshPositions(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Warn("pacifica: positions snapshot refresh failed", "err", err)
+		}
+	}
+}
+
+func (s *Subscriber) refreshAccountLoop(ctx context.Context) {
+	ticker := time.NewTicker(snapshotRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			info, err := s.refreshAccountBalance(ctx)
+			if err != nil && ctx.Err() == nil {
+				s.logger.Warn("pacifica: account snapshot refresh failed", "err", err)
+			} else if err == nil {
+				s.logger.Debug("pacifica: account state refreshed",
+					"equity", fmt.Sprintf("%.2f", info.Equity),
+					"available", fmt.Sprintf("%.2f", info.AvailableToSpend),
+				)
+			}
 		}
 	}
 }
@@ -86,9 +112,24 @@ type accountInfo struct {
 }
 
 func (s *Subscriber) refreshAccountInfo(ctx context.Context) error {
+	info, err := s.refreshAccountBalance(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.refreshPositions(ctx); err != nil {
+		return err
+	}
+	s.logger.Info("pacifica: initial account state loaded",
+		"equity", fmt.Sprintf("%.2f", info.Equity),
+		"available", fmt.Sprintf("%.2f", info.AvailableToSpend),
+	)
+	return nil
+}
+
+func (s *Subscriber) refreshAccountBalance(ctx context.Context) (accountInfo, error) {
 	u, err := url.Parse(accountRESTURL)
 	if err != nil {
-		return fmt.Errorf("parse account URL: %w", err)
+		return accountInfo{}, fmt.Errorf("parse account URL: %w", err)
 	}
 	q := u.Query()
 	q.Set("account", s.account)
@@ -96,23 +137,23 @@ func (s *Subscriber) refreshAccountInfo(ctx context.Context) error {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return fmt.Errorf("build account request: %w", err)
+		return accountInfo{}, fmt.Errorf("build account request: %w", err)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("fetch account: %w", err)
+		return accountInfo{}, fmt.Errorf("fetch account: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch account: HTTP %d", resp.StatusCode)
+		return accountInfo{}, fmt.Errorf("fetch account: HTTP %d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read account response: %w", err)
+		return accountInfo{}, fmt.Errorf("read account response: %w", err)
 	}
 	info, err := parseRESTAccountInfo(raw)
 	if err != nil {
-		return err
+		return accountInfo{}, err
 	}
 	s.state.UpdateEquityForAccount(
 		s.account,
@@ -122,11 +163,89 @@ func (s *Subscriber) refreshAccountInfo(ctx context.Context) error {
 		info.TotalMarginUsed,
 		info.MaintenanceMargin,
 	)
-	s.logger.Info("pacifica: initial account state loaded",
-		"equity", fmt.Sprintf("%.2f", info.Equity),
-		"available", fmt.Sprintf("%.2f", info.AvailableToSpend),
-	)
+	return info, nil
+}
+
+func (s *Subscriber) refreshPositions(ctx context.Context) error {
+	u, err := url.Parse(positionsRESTURL)
+	if err != nil {
+		return fmt.Errorf("parse positions URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("account", s.account)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("build positions request: %w", err)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch positions: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch positions: HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read positions response: %w", err)
+	}
+	positions, err := parseRESTPositions(raw)
+	if err != nil {
+		return err
+	}
+	s.state.UpdatePositionsForAccount(s.account, positions)
 	return nil
+}
+
+func parseRESTPositions(raw []byte) ([]AccountPosition, error) {
+	var resp struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			Symbol           string  `json:"symbol"`
+			Side             string  `json:"side"`
+			Amount           string  `json:"amount"`
+			EntryPrice       string  `json:"entry_price"`
+			Margin           string  `json:"margin"`
+			LiquidationPrice *string `json:"liquidation_price"`
+		} `json:"data"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse positions response: %w", err)
+	}
+	if !resp.Success || resp.Data == nil {
+		if resp.Error == "" {
+			resp.Error = "missing positions data"
+		}
+		return nil, fmt.Errorf("fetch positions: %s", resp.Error)
+	}
+
+	positions := make([]AccountPosition, 0, len(resp.Data))
+	for _, p := range resp.Data {
+		amount := parseFloat(p.Amount)
+		if amount == 0 {
+			continue
+		}
+		side := "long"
+		if p.Side == "ask" {
+			side = "short"
+		}
+		var liquidationPrice float64
+		if p.LiquidationPrice != nil {
+			liquidationPrice = parseFloat(*p.LiquidationPrice)
+		}
+		positions = append(positions, AccountPosition{
+			Symbol:     p.Symbol,
+			Side:       side,
+			Size:       amount,
+			EntryPrice: parseFloat(p.EntryPrice),
+			MarginUsed: parseFloat(p.Margin),
+			LiqPrice:   liquidationPrice,
+		})
+	}
+	return positions, nil
 }
 
 func parseRESTAccountInfo(raw []byte) (accountInfo, error) {

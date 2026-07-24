@@ -16,6 +16,12 @@ import (
 	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
+const (
+	livePrepareAccountStateNotReady  = "ACCOUNT_STATE_NOT_READY"
+	livePreparePositionStateNotReady = "POSITION_STATE_NOT_READY"
+	livePrepareExistingPosition      = "EXISTING_POSITION"
+)
+
 // handleLivePrepare builds unsigned signing requests for a live trade.
 //
 // POST /api/v1/live/prepare
@@ -115,16 +121,45 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		notReady = append(notReady, fmt.Sprintf("Hyperliquid: %s", hlStatus.Reason))
 	}
 	if len(notReady) > 0 {
-		s.logger.Warn("live prepare: account state not ready", "reasons", notReady)
+		s.logger.Warn("live prepare: account state not ready",
+			"code", livePrepareAccountStateNotReady,
+			"opportunity_id", req.OpportunityID,
+			"reasons", notReady,
+			"pacifica_connected", pacStatus.Connected,
+			"pacifica_stream_ready", pacStatus.StreamReady,
+			"pacifica_age_seconds", pacStatus.AgeSeconds,
+			"hyperliquid_connected", hlStatus.Connected,
+			"hyperliquid_stream_ready", hlStatus.StreamReady,
+			"hyperliquid_age_seconds", hlStatus.AgeSeconds,
+		)
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":   "account state not ready",
+			"code":    livePrepareAccountStateNotReady,
 			"reasons": notReady,
 		})
 		return
 	}
-	if !s.venuePositionStateReady("pacifica") || !s.venuePositionStateReady("hyperliquid") {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "venue position state not yet received; retry shortly",
+	pacPositionReady := s.venuePositionStateReady("pacifica")
+	hlPositionReady := s.venuePositionStateReady("hyperliquid")
+	if !pacPositionReady || !hlPositionReady {
+		var reasons []string
+		if !pacPositionReady {
+			reasons = append(reasons, "Pacifica: position state not yet received")
+		}
+		if !hlPositionReady {
+			reasons = append(reasons, "Hyperliquid: position state not yet received")
+		}
+		s.logger.Warn("live prepare: position state not ready",
+			"code", livePreparePositionStateNotReady,
+			"opportunity_id", req.OpportunityID,
+			"reasons", reasons,
+			"pacifica_positions_updated_at", s.live.pacState.Snapshot().PositionsUpdatedAt,
+			"hyperliquid_positions_updated_at", s.live.hlState.Snapshot().PositionsUpdatedAt,
+		)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":   "venue position state not yet received; retry shortly",
+			"code":    livePreparePositionStateNotReady,
+			"reasons": reasons,
 		})
 		return
 	}
@@ -148,8 +183,18 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	baselineLeg1Size, _ := s.currentVenuePosition(leg1.venue, leg1.symbol)
 	baselineLeg2Size, _ := s.currentVenuePosition(leg2.venue, leg2.symbol)
 	if math.Abs(baselineLeg1Size) > 1e-9 || math.Abs(baselineLeg2Size) > 1e-9 {
+		s.logger.Warn("live prepare: existing position blocks open",
+			"code", livePrepareExistingPosition,
+			"opportunity_id", req.OpportunityID,
+			"asset", opp.Asset,
+			"leg1_venue", leg1.venue,
+			"leg1_size", baselineLeg1Size,
+			"leg2_venue", leg2.venue,
+			"leg2_size", baselineLeg2Size,
+		)
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "existing position for this asset must be closed before starting a live session",
+			"code":  livePrepareExistingPosition,
 		})
 		return
 	}

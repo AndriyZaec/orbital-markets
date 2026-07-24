@@ -40,6 +40,7 @@ interface ExecutionPlan {
   asset: string
   direction: string
   notional: number
+  best_price_capacity: number
   max_leverage: number
   leverage: LeverageConfig
   leg_1: Leg

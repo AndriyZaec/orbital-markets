@@ -16,6 +16,7 @@ interface Opportunity {
   fee_estimate: number
   estimated_net_edge: number
   available_notional: number
+  best_price_capacity: number
   recommended_notional: number
   max_leverage: number
   liquidity: 'deep' | 'medium' | 'thin' | 'toxic'
