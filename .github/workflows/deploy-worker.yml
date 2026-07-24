@@ -9,7 +9,6 @@ on:
       - 'pnpm-lock.yaml'
       - '.github/workflows/deploy-worker.yml'
     tags:
-      - 'v*'
       - 'worker-v*'
   workflow_dispatch:
 

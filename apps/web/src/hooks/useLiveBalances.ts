@@ -32,29 +32,48 @@ const EMPTY: Balances = {
 // low while still catching a broken stream well within the 5-minute display
 // staleness window. Consumers refresh on intent (opening trade panel /
 // clicking Execute Live) via balances.refetch().
-export function useLiveBalances(pollInterval = 30_000) {
-  const [balances, setBalances] = useState<Balances>(EMPTY)
+export function useLiveBalances(
+  accountPacifica: string | null,
+  accountHyperliquid: string | null,
+  pollInterval = 30_000,
+) {
+  const pair = accountPacifica && accountHyperliquid
+    ? `${accountPacifica}|${accountHyperliquid.toLowerCase()}`
+    : null
+  const [result, setResult] = useState<{ pair: string | null; balances: Balances }>({
+    pair: null,
+    balances: EMPTY,
+  })
 
   const fetch_ = useCallback(async () => {
+    if (!pair || !accountPacifica || !accountHyperliquid) return
     try {
-      const resp = await apiFetch('/api/v1/live/balances')
+      const query = new URLSearchParams({
+        account_pacifica: accountPacifica,
+        account_hyperliquid: accountHyperliquid,
+      })
+      const resp = await apiFetch(`/api/v1/live/balances?${query}`)
       if (!resp.ok) return
       const data: Balances = await resp.json()
-      setBalances(data)
+      setResult({ pair, balances: data })
     } catch {
       // silently ignore — balance display is best-effort
     }
-  }, [])
+  }, [pair, accountPacifica, accountHyperliquid])
 
   useEffect(() => {
-    fetch_()
-    const id = setInterval(fetch_, pollInterval)
-    return () => clearInterval(id)
+    const initialId = setTimeout(fetch_, 0)
+    const intervalId = setInterval(fetch_, pollInterval)
+    return () => {
+      clearTimeout(initialId)
+      clearInterval(intervalId)
+    }
   }, [fetch_, pollInterval])
 
   // Expose refetch so ensure-account-streams callers can force a poll and
   // move the UI to "ready" without waiting for the next 5s tick. Returned
   // shape is a superset of Balances (adds `refetch`); existing consumers
   // that only read pacifica/hyperliquid are unaffected.
+  const balances = result.pair === pair ? result.balances : EMPTY
   return { ...balances, refetch: fetch_ }
 }

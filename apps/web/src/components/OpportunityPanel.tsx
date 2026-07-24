@@ -4,7 +4,8 @@ import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 
 interface Props {
@@ -48,10 +49,10 @@ function fmtLiqPrice(leg: { liquidation_price: number; leverage: number } | null
 // Show a real number only when the venue is actually connected AND we have
 // a positive balance. When disconnected (or before first snapshot) render
 // "--" so we don't misleadingly show $0.00.
-function fmtVenueBalance(available: number | null): string {
-  if (available === null || !Number.isFinite(available)) return '--'
-  if (available <= 0) return '--'
-  return fmtUsd(available)
+function venueLabel(venue: string): string {
+  if (venue.toLowerCase() === 'hyperliquid') return 'Hyperliquid'
+  if (venue.toLowerCase() === 'pacifica') return 'Pacifica'
+  return venue
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -168,6 +169,28 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
   const shortLeg = plan ? (plan.leg_1.side === 'short' ? plan.leg_1 : plan.leg_2) : null
+  const marginShortfalls = plan
+    ? [plan.leg_1, plan.leg_2].flatMap((leg) => {
+        const available = balanceByVenue(leg.venue)
+        return available !== null && available < leg.margin_required
+          ? [`${venueLabel(leg.venue)} ${fmtUsd(leg.margin_required)}`]
+          : []
+      })
+    : []
+  const hasMarginShortfall = marginShortfalls.length > 0
+  const experimentalWarning = plan?.risk_tier === 'experimental'
+    ? plan.warnings?.find((warning) => warning.startsWith('Experimental opportunity:')) ?? null
+    : null
+  const [riskAcknowledgement, setRiskAcknowledgement] = useState({
+    opportunityId: '',
+    acknowledged: false,
+  })
+  const experimentalRiskAcknowledged = !experimentalWarning || (
+    riskAcknowledgement.opportunityId === opp.id && riskAcknowledgement.acknowledged
+  )
+  const detailWarnings = plan?.warnings?.filter(
+    (warning) => mode !== 'live' || warning !== experimentalWarning,
+  ) ?? []
 
   const handleExecute = async () => {
     setExecuting(true)
@@ -199,11 +222,6 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-foreground">{opp.asset}</h2>
-            {plan && (
-              <Badge variant={plan.confidence === 'high' ? 'default' : 'secondary'} className="text-[10px]">
-                {plan.confidence}
-              </Badge>
-            )}
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
@@ -277,25 +295,12 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
 
         {/* Entry Type */}
         <div className="px-5 py-4 border-b border-border">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-muted-foreground">Entry Type</span>
-            <span className="text-[10px] text-muted-foreground/70">Market only in v1</span>
-          </div>
+          <p className="mb-2 text-sm text-muted-foreground">Entry Type</p>
           <div className="flex items-center gap-0">
             <EntryTypeBtn label="Market" active first />
             <EntryTypeBtn label="Limit" disabled />
             <EntryTypeBtn label="TWAP" disabled last />
           </div>
-          <p className="text-[11px] text-muted-foreground/70 mt-2">
-            Both legs execute as market orders. Limit and TWAP coming soon.
-          </p>
-        </div>
-
-        {/* Available balance */}
-        <div className="px-5 py-3 border-b border-border">
-          <p className="text-[11px] text-muted-foreground mb-1.5">Available balance</p>
-          <Row label={longVenue} value={fmtVenueBalance(balanceByVenue(longVenue))} capitalize />
-          <Row label={shortVenue} value={fmtVenueBalance(balanceByVenue(shortVenue))} capitalize />
         </div>
 
         {/* Long Section */}
@@ -355,10 +360,10 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
         </div>
 
         {/* Warnings */}
-        {plan?.warnings && plan.warnings.length > 0 && (
+        {detailWarnings.length > 0 && (
           <div className="px-5 py-3 border-b border-border">
             <ul className="flex flex-col gap-1">
-              {plan.warnings.map((w, i) => (
+              {detailWarnings.map((w, i) => (
                 <li key={i} className="flex items-start gap-2 text-[12px] text-yellow-400/80">
                   <span className="mt-0.5 shrink-0">!</span>
                   <span>{w}</span>
@@ -388,6 +393,40 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
             <span className="text-[11px] text-yellow-400 ml-auto">Plan expired</span>
           )}
         </div>
+        {mode === 'live' && hasMarginShortfall && (
+          <p className="mb-2.5 text-center text-[11px] text-muted-foreground">
+            Add collateral · {marginShortfalls.join(' · ')}
+          </p>
+        )}
+        {mode === 'live' && experimentalWarning && (
+          <TooltipProvider>
+            <div className="mb-3 flex items-center gap-2 text-xs">
+              <label className="flex cursor-pointer items-center gap-2 text-foreground">
+                <Checkbox
+                  checked={experimentalRiskAcknowledged}
+                  onCheckedChange={(checked) => setRiskAcknowledgement({
+                    opportunityId: opp.id,
+                    acknowledged: checked,
+                  })}
+                  aria-label="Acknowledge experimental funding risk"
+                />
+                <span>I accept funding reversal risk</span>
+              </label>
+              <Tooltip>
+                <TooltipTrigger
+                  render={(
+                    <button type="button" className="text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                      Why?
+                    </button>
+                  )}
+                />
+                <TooltipContent side="top" align="end">
+                  {experimentalWarning.replace('Experimental opportunity: ', '')}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
+        )}
 
         {mode === 'paper' ? (
           <Button
@@ -409,13 +448,13 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
                 isFullyReady
-                  ? !plan?.executable || planExpired || planUpdating || !notionalValid
+                  ? !plan?.executable || planExpired || planUpdating || !notionalValid || hasMarginShortfall || !experimentalRiskAcknowledged
                   : false
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
             >
               {isFullyReady
-                ? 'Execute Live'
+                ? hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
                 : readinessAggregate.statusLabel === 'Not connected'
                   ? 'Connect Wallets to Go Live'
                   : 'Accounts Not Ready'}

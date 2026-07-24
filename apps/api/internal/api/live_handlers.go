@@ -12,7 +12,9 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
+	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
 	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
@@ -20,6 +22,7 @@ const (
 	livePrepareAccountStateNotReady  = "ACCOUNT_STATE_NOT_READY"
 	livePreparePositionStateNotReady = "POSITION_STATE_NOT_READY"
 	livePrepareExistingPosition      = "EXISTING_POSITION"
+	livePreparePreTradeBlocked       = "PRETRADE_BLOCKED"
 )
 
 // handleLivePrepare builds unsigned signing requests for a live trade.
@@ -177,6 +180,19 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if reasons := s.livePreTradeBlockers(plan); len(reasons) > 0 {
+		s.logger.Warn("live prepare: pre-trade blocked",
+			"code", livePreparePreTradeBlocked,
+			"opportunity_id", req.OpportunityID,
+			"reasons", reasons,
+		)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "pre-trade checks failed",
+			"code":    livePreparePreTradeBlocked,
+			"reasons": reasons,
+		})
+		return
+	}
 
 	// 4. Riskier leg first (higher slippage = thinner book → submit first).
 	leg1, leg2 := orderLegsByRisk(plan)
@@ -277,6 +293,38 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		"expires_at":       leg1Open.ExpiresAt,
 		"signing_requests": []*domain.SigningRequest{leg1Open, leg1Unwind},
 	})
+}
+
+func (s *Server) livePreTradeBlockers(plan *domain.ExecutionPlan) []string {
+	if s.live == nil || plan == nil {
+		return []string{"live execution not configured"}
+	}
+	var blockers []string
+	for _, leg := range []domain.Leg{plan.Leg1, plan.Leg2} {
+		switch leg.Venue {
+		case "pacifica":
+			result := pacaccount.ValidatePreTrade(
+				s.live.pacState.Snapshot(), leg.Asset, leg.MarginRequired, leg.Leverage,
+			)
+			if !result.CanProceed() {
+				for _, reason := range result.Reasons {
+					blockers = append(blockers, "Pacifica: "+reason)
+				}
+			}
+		case "hyperliquid":
+			result := hlaccount.ValidatePreTrade(
+				s.live.hlState.Snapshot(), leg.Asset, leg.MarginRequired, leg.Leverage,
+			)
+			if !result.CanProceed() {
+				for _, reason := range result.Reasons {
+					blockers = append(blockers, "Hyperliquid: "+reason)
+				}
+			}
+		default:
+			blockers = append(blockers, fmt.Sprintf("%s: unsupported venue", leg.Venue))
+		}
+	}
+	return blockers
 }
 
 // orderLegsByRisk resolves riskier-first ordering: the leg with higher slippage
@@ -511,13 +559,56 @@ func (s *Server) liveAccountStatuses(freshness time.Duration) (venueAccountStatu
 // Zero equity/available is NOT treated as pending; freshness is the only
 // gate on "Ready".
 //
-// GET /api/v1/live/balances
-func (s *Server) handleLiveBalances(w http.ResponseWriter, _ *http.Request) {
-	pac, hl := s.liveAccountStatuses(displayFreshness)
+// GET /api/v1/live/balances?account_pacifica=...&account_hyperliquid=...
+func (s *Server) handleLiveBalances(w http.ResponseWriter, r *http.Request) {
+	pac, hl := s.liveAccountStatusesFor(
+		r.URL.Query().Get("account_pacifica"),
+		r.URL.Query().Get("account_hyperliquid"),
+		displayFreshness,
+	)
 	writeJSON(w, http.StatusOK, map[string]venueAccountStatus{
 		"pacifica":    pac,
 		"hyperliquid": hl,
 	})
+}
+
+func (s *Server) liveAccountStatusesFor(pacAccount, hlAddress string, freshness time.Duration) (venueAccountStatus, venueAccountStatus) {
+	unavailable := func(venue string) venueAccountStatus {
+		status := buildVenueAccountStatus(venue, false, time.Time{}, 0, 0, freshness)
+		status.Reason = "account streams not active for requested wallets"
+		return status
+	}
+	if s.live == nil {
+		return unavailable("pacifica"), unavailable("hyperliquid")
+	}
+
+	pacAccount = strings.TrimSpace(pacAccount)
+	hlAddress = strings.ToLower(strings.TrimSpace(hlAddress))
+	s.live.mu.Lock()
+	defer s.live.mu.Unlock()
+	if s.live.accountCancel == nil ||
+		s.live.pacificaAccount != pacAccount ||
+		s.live.hyperliquidAccount != hlAddress {
+		return unavailable("pacifica"), unavailable("hyperliquid")
+	}
+
+	pacSnapshot := s.live.pacState.Snapshot()
+	hlSnapshot := s.live.hlState.Snapshot()
+	return buildVenueAccountStatus(
+			"pacifica",
+			pacSnapshot.Connected,
+			pacSnapshot.LastUpdated,
+			pacSnapshot.Equity,
+			pacSnapshot.AvailableToSpend,
+			freshness,
+		), buildVenueAccountStatus(
+			"hyperliquid",
+			hlSnapshot.Connected,
+			hlSnapshot.LastUpdated,
+			hlSnapshot.Margin.AccountEquity,
+			hlSnapshot.Margin.AvailableBalance,
+			freshness,
+		)
 }
 
 // handleLiveAccountsEnsure starts the venue account subscribers up front so

@@ -48,6 +48,7 @@ interface ExecutionPlan {
   expected_spread: number
   estimated_net_edge: number
   bounds: Bounds
+  risk_tier: 'conservative' | 'standard' | 'aggressive' | 'experimental'
   confidence: 'low' | 'medium' | 'high'
   executable: boolean
   warnings: string[] | null

@@ -167,7 +167,9 @@ function buildReadiness(args: {
 
 export function useVenueReadiness(): UseVenueReadinessResult {
   const authority = useVenueAuthority()
-  const balances = useLiveBalances()
+  const pacAddr = authority.pacifica.address
+  const hlAddr = authority.hyperliquid.address
+  const balances = useLiveBalances(pacAddr, hlAddr)
 
   // Ensure state — kick /live/accounts/ensure once per (pacAddr|hlAddr) pair
   // so backend account subscribers can start BEFORE Execute Live. Without
@@ -178,8 +180,6 @@ export function useVenueReadiness(): UseVenueReadinessResult {
   const inflightRef = useRef<string | null>(null)   // pair currently being ensured
   const attemptedRef = useRef<Set<string>>(new Set()) // pairs already auto-attempted
 
-  const pacAddr = authority.pacifica.address
-  const hlAddr = authority.hyperliquid.address
   const pacSignerReady = authority.pacifica.readiness === 'ready'
   const hlSignerReady = authority.hyperliquid.readiness === 'ready'
 
