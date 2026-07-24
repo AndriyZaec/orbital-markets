@@ -126,6 +126,30 @@ func (s *Scanner) BuildPlan(
 	slippageLevel := domain.ClassifySlippage(totalCosts)
 
 	var warnings []string
+	if opp.RiskTier == domain.RiskExperimental {
+		highEdge := opp.AnnualizedGrossEdge > 0.50
+		highEntryCost := opp.EntrySpreadEstimate > 0 && opp.AnnualizedGrossEdge > 0 &&
+			opp.EntrySpreadEstimate/opp.AnnualizedGrossEdge > 0.5
+		switch {
+		case highEdge && highEntryCost:
+			warnings = append(warnings, fmt.Sprintf(
+				"Experimental opportunity: projected gross funding edge %.2f%% annualized exceeds 50%% and estimated entry spread %.2f%% is unusually high. Funding can reverse before costs break even; verify current rates before signing.",
+				opp.AnnualizedGrossEdge*100,
+				opp.EntrySpreadEstimate*100,
+			))
+		case highEdge:
+			warnings = append(warnings, fmt.Sprintf(
+				"Experimental opportunity: projected gross funding edge %.2f%% annualized exceeds 50%%. Funding can reverse quickly; verify current rates before signing.",
+				opp.AnnualizedGrossEdge*100,
+			))
+		default:
+			warnings = append(warnings, fmt.Sprintf(
+				"Experimental opportunity: estimated entry spread %.2f%% is unusually high relative to the %.2f%% annualized gross edge. Break-even may take longer than the funding signal persists.",
+				opp.EntrySpreadEstimate*100,
+				opp.AnnualizedGrossEdge*100,
+			))
+		}
+	}
 	if !hasBidAsk(snapA) {
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid/ask", snapA.Venue))
 	}
