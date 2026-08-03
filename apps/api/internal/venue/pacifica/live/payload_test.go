@@ -69,6 +69,7 @@ func TestSubmitSignedOrderReturnsTransportFailureAsAmbiguous(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := NewClient(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	tracker := NewTracker(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	client.sendSigned = func(context.Context, MarketOrderRequest) (*SubmitResult, error) {
 		return nil, errors.New("write: connection timed out")
 	}
@@ -76,8 +77,14 @@ func TestSubmitSignedOrderReturnsTransportFailureAsAmbiguous(t *testing.T) {
 	result, err := client.SubmitSignedOrder(context.Background(), domain.SignedAction{
 		RequestID: request.ID, ClientOrderID: request.ClientOrderID, Venue: "pacifica",
 		SignerAddress: "redacted-wallet", Signature: "redacted-signature",
-	}, request, nil)
+	}, request, tracker)
 	if err == nil || result != nil {
 		t.Fatalf("result = %+v, err = %v; transport failure must be ambiguous", result, err)
+	}
+	tracker.mu.RLock()
+	_, tracked := tracker.orders[request.ClientOrderID]
+	tracker.mu.RUnlock()
+	if !tracked {
+		t.Fatal("ambiguous submission was not registered for fill reconciliation")
 	}
 }

@@ -30,6 +30,7 @@ export interface SubmissionResult {
   venue: string
   order_id?: string
   accepted: boolean
+  uncertain?: boolean
   error?: string
   submitted_at: string
   responded_at: string

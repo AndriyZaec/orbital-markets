@@ -131,6 +131,31 @@ func TestLiveSessionStatusKeepsActiveRequestsRecovering(t *testing.T) {
 	}
 }
 
+func TestAmbiguousCloseSubmissionRemainsPending(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	recorded := server.recordAmbiguousCloseSubmission(&domain.SigningRequest{
+		PositionID: "position-residual", Leg: 1, Venue: "pacifica", Symbol: "SOL",
+		ClientOrderID: "close-uncertain", Amount: 2.75,
+	}, "connection timed out")
+	if !recorded {
+		t.Fatal("ambiguous close submission was not recorded")
+	}
+	progress, err := server.liveStore.GetCloseProgress(context.Background(), "position-residual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Pending != 1 || progress.Failed != 0 {
+		t.Fatalf("close progress = %+v, want one pending outcome", progress)
+	}
+	position, err := server.liveStore.GetPosition(context.Background(), "position-residual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position.State != string(executor.ExecStateClosing) {
+		t.Fatalf("position state = %q, want closing", position.State)
+	}
+}
+
 func newResidualExposureServer(t *testing.T) (*Server, *sql.DB) {
 	t.Helper()
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "residual.db"))

@@ -186,6 +186,12 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
                     <span className="text-red-400 font-medium">{kill.state.failed}</span>
                   </>
                 )}
+                {kill.state.uncertain > 0 && (
+                  <>
+                    <span className="text-muted-foreground ml-2">Reconciling:</span>
+                    <span className="text-yellow-400 font-medium">{kill.state.uncertain}</span>
+                  </>
+                )}
               </div>
 
               {/* Phase indicator */}
@@ -202,8 +208,11 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
                   Submitting order {kill.state.submitted + 1} of {kill.state.totalRequests}...
                 </p>
               )}
-              {kill.state.phase === 'done' && kill.state.failed === 0 && (
+              {kill.state.phase === 'done' && kill.state.failed === 0 && kill.state.uncertain === 0 && (
                 <p className="text-green-400 text-[11px]">All close orders submitted successfully.</p>
+              )}
+              {kill.state.phase === 'done' && kill.state.uncertain > 0 && (
+                <p className="text-yellow-400 text-[11px]">Some submission responses were uncertain. Position states are being reconciled before retry is safe.</p>
               )}
               {kill.state.phase === 'done' && kill.state.failed > 0 && (
                 <p className="text-yellow-400 text-[11px]">

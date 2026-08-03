@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
@@ -45,6 +46,13 @@ func (c *Client) SubmitSignedOrder(
 	}
 	submitResult, err := sendOrder(ctx, finalOrder)
 	if err != nil {
+		if tracker != nil {
+			tracker.Register(&SubmitResult{
+				ClientOrderID: req.ClientOrderID,
+				Symbol:        req.Symbol,
+				SubmittedAt:   time.Now(),
+			}, req.Amount)
+		}
 		return nil, fmt.Errorf("submit signed order: %w", err)
 	}
 
