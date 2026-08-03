@@ -12,6 +12,8 @@ interface Props {
   opportunity: Opportunity
   lastUpdated: Date | null
   mode: 'paper' | 'live'
+  notionalInput: string
+  onNotionalInputChange: (value: string) => void
   onClose: () => void
   onExecute: (
     opportunityId: string,
@@ -100,7 +102,17 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 
 const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
 
-export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions, onOpenAccounts }: Props) {
+export function OpportunityPanel({
+  opportunity: opp,
+  lastUpdated,
+  mode,
+  notionalInput,
+  onNotionalInputChange,
+  onClose,
+  onExecute,
+  onViewPositions,
+  onOpenAccounts,
+}: Props) {
   // Matches useOpportunities' 60s poll interval.
   const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
@@ -124,12 +136,6 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   // notional; user can override. The raw text is kept as a string so partial
   // input ("", "1000.") is not fought by number coercion. `notionalNum` is the
   // parsed numeric value sent to the backend (0 = fall back to recommended).
-  const suggestedNotionalInput = opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : ''
-  const [notionalSelection, setNotionalSelection] = useState({ opportunityId: opp.id, value: suggestedNotionalInput })
-  const notionalInput = notionalSelection.opportunityId === opp.id
-    ? notionalSelection.value
-    : suggestedNotionalInput
-  const setNotionalInput = (value: string) => setNotionalSelection({ opportunityId: opp.id, value })
   const notionalNum = Number(notionalInput)
   const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
   const notionalForPlan = notionalValid ? notionalNum : undefined
@@ -240,7 +246,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
                 type="text"
                 inputMode="decimal"
                 value={notionalInput}
-                onChange={(e) => setNotionalInput(e.target.value.replace(/[^\d.]/g, ''))}
+                onChange={(e) => onNotionalInputChange(e.target.value.replace(/[^\d.]/g, ''))}
                 placeholder={opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '0'}
                 className="w-full bg-transparent text-sm font-mono text-foreground outline-none"
               />
@@ -261,7 +267,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
             {opp.recommended_notional > 0 && (
               <button
                 type="button"
-                onClick={() => setNotionalInput(String(Math.round(opp.recommended_notional)))}
+                onClick={() => onNotionalInputChange(String(Math.round(opp.recommended_notional)))}
                 title="25% of the weaker leg's available best-price liquidity"
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >

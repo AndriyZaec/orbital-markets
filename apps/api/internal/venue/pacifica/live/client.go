@@ -18,7 +18,7 @@ import (
 const (
 	tradingWSURL   = "wss://ws.pacifica.fi/ws"
 	submitTimeout  = 10 * time.Second
-	expiryWindowMs = 5_000 // 5s signature expiry (matches SDK default)
+	expiryWindowMs = 60_000 // Leaves recovery time after sequential open/unwind wallet approvals.
 )
 
 // Signer produces signatures for trading payloads.
@@ -35,6 +35,7 @@ type Client struct {
 	signer       Signer // nil in non-custodial mode
 	accountState *account.AccountState
 	logger       *slog.Logger
+	sendSigned   func(context.Context, MarketOrderRequest) (*SubmitResult, error)
 
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -75,7 +76,7 @@ func (c *Client) SubmitMarketOrder(
 		c.logger.Warn("pacifica live: pre-trade blocked", "symbol", symbol, "reasons", validation.Reasons)
 		return &SubmitResult{
 			ClientOrderID: clientOrderID, Symbol: symbol, Accepted: false,
-			Error: fmt.Sprintf("pre-trade blocked: %v", validation.Reasons),
+			Error:       fmt.Sprintf("pre-trade blocked: %v", validation.Reasons),
 			SubmittedAt: time.Now(), RespondedAt: time.Now(),
 		}, nil
 	}
@@ -127,7 +128,7 @@ func (c *Client) SubmitCloseOrder(
 	if snap.LastUpdated.IsZero() || time.Since(snap.LastUpdated) > 30*time.Second {
 		return &SubmitResult{
 			ClientOrderID: clientOrderID, Symbol: symbol, Accepted: false,
-			Error: fmt.Sprintf("account state stale (%.0fs)", time.Since(snap.LastUpdated).Seconds()),
+			Error:       fmt.Sprintf("account state stale (%.0fs)", time.Since(snap.LastUpdated).Seconds()),
 			SubmittedAt: time.Now(), RespondedAt: time.Now(),
 		}, nil
 	}
@@ -250,9 +251,9 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 		Type string `json:"type"`
 		T    int64  `json:"t"`
 		Data struct {
-			I string `json:"I"` // client order ID (CLOID)
-			OrderID  int64  `json:"i"` // venue order ID
-			S string `json:"s"` // symbol
+			I       string `json:"I"` // client order ID (CLOID)
+			OrderID int64  `json:"i"` // venue order ID
+			S       string `json:"s"` // symbol
 		} `json:"data"`
 		// Error responses may have different shapes — code != 200 is rejection
 		Error string `json:"error,omitempty"`

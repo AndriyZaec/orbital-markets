@@ -16,6 +16,8 @@ interface Props {
   venueB: string
   direction: FundingDirection
   recommendedNotional: number
+  notional: number
+  onNotionalChange: (value: number) => void
   feeEstimate: number
   slippageEstimate: number
 }
@@ -73,6 +75,8 @@ export function FundingChart({
   venueB,
   direction,
   recommendedNotional,
+  notional: selectedNotional,
+  onNotionalChange,
   feeEstimate,
   slippageEstimate,
 }: Props) {
@@ -80,8 +84,7 @@ export function FundingChart({
   const [tf, setTf] = useState<Timeframe>('W')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const defaultNotional = Math.max(1, recommendedNotional || 10_000)
-  const [notionalOverride, setNotionalOverride] = useState<number | null>(null)
-  const notional = notionalOverride ?? defaultNotional
+  const notional = selectedNotional > 0 ? selectedNotional : defaultNotional
   const { data, loading, error } = useHistory(asset, venueA, venueB, rangeMap[tf])
 
   const stats = useMemo(() => calculateFundingStats(data, direction), [data, direction])
@@ -96,8 +99,8 @@ export function FundingChart({
     [data, direction, feeEstimate, notional, slippageEstimate, tf],
   )
   const notionalOptions = useMemo(
-    () => Array.from(new Set([defaultNotional, 1_000, 5_000, 10_000])),
-    [defaultNotional],
+    () => Array.from(new Set([defaultNotional, notional, 1_000, 5_000, 10_000])),
+    [defaultNotional, notional],
   )
 
   const labelA = venueLabel(venueA)
@@ -202,7 +205,7 @@ export function FundingChart({
                   {notionalOptions.map((value) => (
                     <button
                       key={value}
-                      onClick={() => setNotionalOverride(value === defaultNotional ? null : value)}
+                      onClick={() => onNotionalChange(value)}
                       className={`rounded border px-2 py-1 text-[10px] font-mono transition-colors ${
                         notional === value
                           ? 'border-blue-400/30 bg-blue-400/10 text-blue-300'

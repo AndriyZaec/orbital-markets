@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
@@ -40,17 +39,13 @@ func (c *Client) SubmitSignedOrder(
 	)
 
 	// Submit via the existing WS path
-	submitResult, err := c.sendOrder(ctx, finalOrder)
+	sendOrder := c.sendOrder
+	if c.sendSigned != nil {
+		sendOrder = c.sendSigned
+	}
+	submitResult, err := sendOrder(ctx, finalOrder)
 	if err != nil {
-		return &domain.SubmissionResult{
-			RequestID:     signed.RequestID,
-			ClientOrderID: req.ClientOrderID,
-			Venue:         "pacifica",
-			Accepted:      false,
-			Error:         err.Error(),
-			SubmittedAt:   time.Now(),
-			RespondedAt:   time.Now(),
-		}, nil
+		return nil, fmt.Errorf("submit signed order: %w", err)
 	}
 
 	// Register with tracker for fill monitoring

@@ -111,6 +111,20 @@ export default function App() {
   const isLive = countdown > 0
 
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
+  const suggestedNotionalInput = selected?.recommended_notional
+    ? String(Math.round(selected.recommended_notional))
+    : ''
+  const [notionalSelection, setNotionalSelection] = useState({ opportunityId: '', value: '' })
+  const selectedNotionalInput = selected && notionalSelection.opportunityId === selected.id
+    ? notionalSelection.value
+    : suggestedNotionalInput
+  const selectedNotional = Number(selectedNotionalInput)
+  const projectionNotional = Number.isFinite(selectedNotional) && selectedNotional > 0
+    ? selectedNotional
+    : 0
+  const setSelectedNotionalInput = useCallback((value: string) => {
+    if (selectedId) setNotionalSelection({ opportunityId: selectedId, value })
+  }, [selectedId])
 
   const selectOpportunity = useCallback((id: string) => {
     const url = new URL(window.location.href)
@@ -253,7 +267,12 @@ export default function App() {
             <>
               <div className="flex-1 flex flex-col min-h-0 bg-[#080b12]">
                 {selected ? (
-                  <OpportunityDetail opportunity={selected} onBack={closeOpportunity} />
+                  <OpportunityDetail
+                    opportunity={selected}
+                    notional={projectionNotional}
+                    onNotionalChange={(value) => setSelectedNotionalInput(String(value))}
+                    onBack={closeOpportunity}
+                  />
                 ) : (
                   <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={selectOpportunity} />
                 )}
@@ -297,6 +316,8 @@ export default function App() {
             opportunity={selected}
             lastUpdated={lastUpdated}
             mode={tradingMode}
+            notionalInput={selectedNotionalInput}
+            onNotionalInputChange={setSelectedNotionalInput}
             onClose={closeOpportunity}
             onExecute={handleExecutePaper}
             onViewPositions={closeOpportunity}
@@ -436,7 +457,12 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
 
 /* ── Opportunity Detail ────────────────────────────────── */
 
-function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportunity; onBack: () => void }) {
+function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBack }: {
+  opportunity: Opportunity
+  notional: number
+  onNotionalChange: (value: number) => void
+  onBack: () => void
+}) {
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
@@ -471,6 +497,8 @@ function OpportunityDetail({ opportunity: opp, onBack }: { opportunity: Opportun
           venueB={opp.venue_pair.venue_b}
           direction={opp.direction}
           recommendedNotional={opp.recommended_notional}
+          notional={notional}
+          onNotionalChange={onNotionalChange}
           feeEstimate={opp.fee_estimate}
           slippageEstimate={opp.slippage_estimate}
         />
