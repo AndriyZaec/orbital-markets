@@ -6,6 +6,7 @@ import { useVenueAuthority } from './useVenueAuthority'
 import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction } from '@/types/signing'
 import {
+  executionFailurePhase,
   executionPhaseFromStatus,
   normalizeHyperliquidAddress,
   normalizePacificaAddress,
@@ -170,6 +171,8 @@ export function useLiveExecution() {
 
     setState({ ...INITIAL_STATE, phase: 'preparing' })
 
+    let exposurePossible = false
+
     try {
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
       const prepResp = await apiFetch('/api/v1/live/prepare', {
@@ -274,6 +277,7 @@ export function useLiveExecution() {
 
       // 3. Advance step 1 — backend arms unwind, submits leg 1, waits for fill.
       setState((s) => ({ ...s, phase: 'submitting_leg1' }))
+      exposurePossible = true
       let adv1: AdvanceResp
       try {
         adv1 = await postAdvance({ session_id: prep.session_id, signed_actions: signedLeg1 })
@@ -464,8 +468,10 @@ export function useLiveExecution() {
     } catch (e) {
       setState((s) => ({
         ...s,
-        phase: 'failed',
-        error: e instanceof Error ? e.message : 'Unknown error',
+        phase: executionFailurePhase(exposurePossible),
+        ...(exposurePossible
+          ? { reason: `Execution response is uncertain: ${e instanceof Error ? e.message : 'Unknown error'}` }
+          : { error: e instanceof Error ? e.message : 'Unknown error' }),
       }))
     }
   }, [pacificaAddress, hyperliquidAddress, buildSigners])
