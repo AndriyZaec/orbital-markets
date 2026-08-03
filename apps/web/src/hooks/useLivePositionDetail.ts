@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
 
 export interface LiveFillDetail {
@@ -40,26 +40,43 @@ export function useLivePositionDetail(positionId: string | null) {
   const [data, setData] = useState<LivePositionDetailData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const requestSequence = useRef(0)
 
-  const fetch_ = useCallback(async () => {
-    if (!positionId) return
+  const fetch_ = useCallback(async (signal?: AbortSignal) => {
+    const request = ++requestSequence.current
+    if (signal?.aborted) return
+    setData(null)
+    setError(null)
+    if (!positionId) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
-      const resp = await apiFetch(`/api/v1/live/positions/${positionId}`)
+      const resp = await apiFetch(`/api/v1/live/positions/${positionId}`, { signal })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const d: LivePositionDetailData = await resp.json()
+      if (signal?.aborted || request !== requestSequence.current) return
       setData(d)
-      setError(null)
     } catch (e) {
+      if (signal?.aborted || request !== requestSequence.current) return
+      setData(null)
       setError(e instanceof Error ? e.message : 'Unknown error')
     } finally {
-      setLoading(false)
+      if (request === requestSequence.current) setLoading(false)
     }
   }, [positionId])
 
   useEffect(() => {
-    fetch_()
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => fetch_(controller.signal), 0)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
   }, [fetch_])
 
-  return { data, loading, error, refetch: fetch_ }
+  const refetch = useCallback(() => fetch_(), [fetch_])
+
+  return { data, loading, error, refetch }
 }
