@@ -9,16 +9,11 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
-	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
-	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
-	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
-// startLive creates the live execution runtime eagerly.
-// Venue clients and stores are always created. Account subscribers (which need
-// wallet addresses) start lazily on the first /live/prepare call, using the
-// addresses from the connected wallets. No env vars required.
+// startLive creates the shared registry and stores eagerly. Venue account
+// feeds start lazily on connect/prepare and are reused by normalized account.
 func startLive(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -29,13 +24,6 @@ func startLive(
 ) *api.LiveDeps {
 	logger.Info("live execution: starting runtime")
 
-	// --- Pacifica (eager — no address needed for client/tracker) ---
-	pacState := pacaccount.NewAccountState()
-	pacTracker := paclive.NewTracker(logger)
-	pacClient := paclive.NewClient(logger, nil, pacState)
-
-	// --- Hyperliquid (eager — client needs asset map, not address) ---
-	hlState := hlaccount.NewAccountState()
 	hlAssetMap := hl.AssetMap()
 
 	// --- Live position store + monitor ---
@@ -50,7 +38,6 @@ func startLive(
 	return api.NewLiveDeps(
 		ctx, logger,
 		signingStore, liveStore,
-		pacClient, pacTracker, pacState,
-		hlState, hlAssetMap,
+		hlAssetMap,
 	)
 }

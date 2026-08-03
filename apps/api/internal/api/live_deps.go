@@ -2,121 +2,161 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
-	"strings"
-	"sync"
+	"sort"
+	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
-	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
-	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
-	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
-// LiveDeps holds dependencies for live (non-custodial) execution.
-// Venue clients and stores are created eagerly at startup. Account subscribers
-// start lazily via EnsureAccountStreams when wallets connect.
+const (
+	defaultAccountFeedIdleTTL         = 10 * time.Minute
+	defaultAccountFeedCleanupInterval = time.Minute
+	defaultMaxAccountFeeds            = 100
+	defaultMaxAccountFeedsPerVenue    = 50
+	defaultRecoveryAccountFeedReserve = 10
+)
+
+// LiveDeps holds dependencies for live non-custodial execution. Account feeds
+// are started lazily and shared by normalized venue+account key.
 type LiveDeps struct {
 	signingStore *domain.SigningRequestStore
 	liveStore    *executor.Store
 	sessions     *SessionManager
-	pacClient    *paclive.Client
-	pacTracker   *paclive.Tracker
-	pacState     *pacaccount.AccountState
-	hlState      *hlaccount.AccountState
-	hlClient     *hllive.Client
+	accounts     *accountFeedRegistry
 	hlAssetMap   hllive.AssetMap
-
-	ctx                context.Context
-	logger             *slog.Logger
-	recoveryMu         sync.Mutex
-	mu                 sync.Mutex
-	accountCancel      context.CancelFunc
-	pacificaAccount    string
-	hyperliquidAccount string
 }
 
-// NewLiveDeps creates a LiveDeps. Venue clients are created eagerly; account
-// subscribers start lazily via EnsureAccountStreams when wallets connect.
 func NewLiveDeps(
 	ctx context.Context,
 	logger *slog.Logger,
 	signingStore *domain.SigningRequestStore,
 	liveStore *executor.Store,
-	pacClient *paclive.Client,
-	pacTracker *paclive.Tracker,
-	pacState *pacaccount.AccountState,
-	hlState *hlaccount.AccountState,
 	hlAssetMap hllive.AssetMap,
 ) *LiveDeps {
+	factories := map[string]accountFeedFactory{
+		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
+		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
+	}
 	return &LiveDeps{
-		ctx:          ctx,
-		logger:       logger,
 		signingStore: signingStore,
 		liveStore:    liveStore,
 		sessions:     NewSessionManager(),
-		pacClient:    pacClient,
-		pacTracker:   pacTracker,
-		pacState:     pacState,
-		hlState:      hlState,
 		hlAssetMap:   hlAssetMap,
+		accounts: newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
+			IdleTTL:         defaultAccountFeedIdleTTL,
+			CleanupInterval: defaultAccountFeedCleanupInterval,
+			MaxFeeds:        defaultMaxAccountFeeds,
+			MaxPerVenue:     defaultMaxAccountFeedsPerVenue,
+			RecoveryReserve: defaultRecoveryAccountFeedReserve,
+		}),
 	}
 }
 
-// EnsureAccountStreams starts venue account subscribers for the current wallet
-// pair. Repeated calls for the same pair are no-ops; a changed pair cancels the
-// old subscribers, clears their state, and starts fresh subscribers.
-func (d *LiveDeps) EnsureAccountStreams(pacAccount, hlAddress string) {
-	d.recoveryMu.Lock()
-	defer d.recoveryMu.Unlock()
-	d.ensureAccountStreams(pacAccount, hlAddress)
+type liveAccountContext struct {
+	leases map[string]*accountFeedLease
 }
 
-func (d *LiveDeps) ensureAccountStreams(pacAccount, hlAddress string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	pacAccount = strings.TrimSpace(pacAccount)
-	hlAddress = strings.ToLower(strings.TrimSpace(hlAddress))
-	if d.accountCancel != nil && d.pacificaAccount == pacAccount && d.hyperliquidAccount == hlAddress {
+func (d *LiveDeps) acquireAccounts(pacificaAccount, hyperliquidAccount string) (*liveAccountContext, error) {
+	return d.acquireAccountContext(map[string]string{
+		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
+	}, false)
+}
+
+func (d *LiveDeps) acquireRecoveryAccounts(pacificaAccount, hyperliquidAccount string) (*liveAccountContext, error) {
+	return d.acquireAccountContext(map[string]string{
+		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
+	}, true)
+}
+
+func (d *LiveDeps) acquireAccountContext(accounts map[string]string, recovery bool) (*liveAccountContext, error) {
+	if d == nil || d.accounts == nil {
+		return nil, fmt.Errorf("live account registry not configured")
+	}
+	venues := make([]string, 0, len(accounts))
+	for venue := range accounts {
+		venues = append(venues, venue)
+	}
+	sort.Strings(venues)
+	accountContext := &liveAccountContext{leases: make(map[string]*accountFeedLease, len(venues))}
+	for _, venue := range venues {
+		var lease *accountFeedLease
+		var err error
+		if recovery {
+			lease, err = d.accounts.AcquireRecovery(venue, accounts[venue])
+		} else {
+			lease, err = d.accounts.Acquire(venue, accounts[venue])
+		}
+		if err != nil {
+			for _, acquired := range accountContext.leases {
+				acquired.discardIfUnused()
+			}
+			return nil, err
+		}
+		accountContext.leases[venue] = lease
+	}
+	return accountContext, nil
+}
+
+func (c *liveAccountContext) Feed(venue string) (liveAccountFeed, bool) {
+	if c == nil {
+		return nil, false
+	}
+	lease := c.leases[venue]
+	if lease == nil {
+		return nil, false
+	}
+	return lease.Feed(), true
+}
+
+func (c *liveAccountContext) Lock() func() {
+	if c == nil {
+		return func() {}
+	}
+	leases := make([]*accountFeedLease, 0, len(c.leases))
+	for _, lease := range c.leases {
+		leases = append(leases, lease)
+	}
+	return lockAccountFeeds(leases...)
+}
+
+func (c *liveAccountContext) Release() {
+	if c == nil {
 		return
 	}
-	if d.accountCancel != nil {
-		d.logger.Info("live: connected wallet pair changed; restarting account streams")
-		d.accountCancel()
+	for _, lease := range c.leases {
+		lease.Release()
 	}
-	d.pacState.ResetForAccount(pacAccount)
-	d.hlState.ResetForAccount(hlAddress)
-	streamCtx, cancel := context.WithCancel(d.ctx)
-
-	// Pacifica account subscriber
-	pacSub := pacaccount.NewSubscriber(d.logger, d.pacState, pacAccount, d.pacTracker)
-	go pacSub.Run(streamCtx)
-	d.logger.Info("live: pacifica account subscriber started", "account", pacAccount)
-
-	// Hyperliquid account subscriber (REST polling)
-	hlAcctSub := hlaccount.NewSubscriber(d.logger, d.hlState, hlAddress)
-	go hlAcctSub.Run(streamCtx)
-	d.logger.Info("live: hyperliquid account subscriber started", "address", hlAddress)
-
-	// Hyperliquid order/fill tracker (WS)
-	hlTracker := hllive.NewTracker(d.logger, hlAddress)
-	go hlTracker.Run(streamCtx)
-	d.logger.Info("live: hyperliquid order tracker started", "address", hlAddress)
-
-	// Wire the HL client now that we have a tracker
-	d.hlClient = hllive.NewClient(d.logger, nil, d.hlAssetMap, d.hlState, hlTracker)
-	d.logger.Info("live: hyperliquid live client ready")
-
-	d.accountCancel = cancel
-	d.pacificaAccount = pacAccount
-	d.hyperliquidAccount = hlAddress
 }
 
-func (d *LiveDeps) accountStreamsMatch(pacAccount, hlAddress string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.accountCancel != nil &&
-		d.pacificaAccount == strings.TrimSpace(pacAccount) &&
-		d.hyperliquidAccount == strings.ToLower(strings.TrimSpace(hlAddress))
+func accountForVenue(venue, pacificaAccount, hyperliquidAccount string) string {
+	switch venue {
+	case "pacifica":
+		return pacificaAccount
+	case "hyperliquid":
+		return hyperliquidAccount
+	default:
+		return ""
+	}
+}
+
+func (d *LiveDeps) validateSigningAccount(request *domain.SigningRequest, signer string) error {
+	if request == nil || request.Account == "" {
+		return fmt.Errorf("signing request account missing")
+	}
+	expected, _, err := d.accounts.normalizedKey(request.Venue, request.Account)
+	if err != nil {
+		return err
+	}
+	actual, _, err := d.accounts.normalizedKey(request.Venue, signer)
+	if err != nil {
+		return err
+	}
+	if expected.account != actual.account {
+		return fmt.Errorf("signer account does not match prepared %s account", request.Venue)
+	}
+	return nil
 }

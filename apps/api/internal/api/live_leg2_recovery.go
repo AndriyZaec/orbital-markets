@@ -74,7 +74,8 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 
 	clientOrderID := fmt.Sprintf("orbital-l2retry-%d", time.Now().UnixNano())
 	retryReq, err := s.buildOpenSigningRequest(
-		session.Leg2, remaining, clientOrderID, session.AccountPacifica,
+		session.Leg2, remaining, clientOrderID,
+		session.AccountPacifica, session.AccountHyperliquid,
 	)
 	if err != nil {
 		s.recoverInvalidHedge(w, ctx, session, reason+"; retry payload build failed")
@@ -132,7 +133,7 @@ func (s *Server) advanceLeg2Retry(
 		s.recoverInvalidHedge(w, ctx, session, "leg-2 retry persistence failed")
 		return
 	}
-	sub, err := s.submitSignedAction(ctx, *retrySigned, retryReq)
+	sub, err := s.submitSignedActionForAccounts(ctx, *retrySigned, retryReq, session.accounts)
 	if err != nil || sub == nil {
 		s.live.sessions.remove(session.ID)
 		go func() {
@@ -155,7 +156,7 @@ func (s *Server) advanceLeg2Retry(
 	}
 
 	fillCtx, cancelFill := context.WithDeadline(ctx, retryReq.ExpiresAt)
-	retryFill, err := s.waitForLegFill(fillCtx, retryReq)
+	retryFill, err := s.waitForLegFillForAccounts(fillCtx, retryReq, session.accounts)
 	cancelFill()
 	if err != nil || retryFill == nil {
 		s.live.sessions.remove(session.ID)

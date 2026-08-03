@@ -51,6 +51,7 @@ type accountFeedRegistryConfig struct {
 	CleanupInterval time.Duration
 	MaxFeeds        int
 	MaxPerVenue     int
+	RecoveryReserve int
 	Now             func() time.Time
 }
 
@@ -100,6 +101,7 @@ func newAccountFeedRegistry(
 type accountFeedLease struct {
 	registry *accountFeedRegistry
 	entry    *accountFeedEntry
+	created  bool
 	once     sync.Once
 }
 
@@ -112,6 +114,14 @@ func (l *accountFeedLease) Key() string {
 }
 
 func (l *accountFeedLease) Release() {
+	l.release(false)
+}
+
+func (l *accountFeedLease) discardIfUnused() {
+	l.release(true)
+}
+
+func (l *accountFeedLease) release(discardIfUnused bool) {
 	if l == nil || l.registry == nil || l.entry == nil {
 		return
 	}
@@ -121,11 +131,23 @@ func (l *accountFeedLease) Release() {
 		if current := l.registry.entries[l.entry.key]; current == l.entry {
 			current.refs--
 			current.lastUsed = l.registry.config.Now()
+			if discardIfUnused && l.created && current.refs == 0 {
+				current.cancel()
+				delete(l.registry.entries, l.entry.key)
+			}
 		}
 	})
 }
 
 func (r *accountFeedRegistry) Acquire(venue, account string) (*accountFeedLease, error) {
+	return r.acquire(venue, account, false)
+}
+
+func (r *accountFeedRegistry) AcquireRecovery(venue, account string) (*accountFeedLease, error) {
+	return r.acquire(venue, account, true)
+}
+
+func (r *accountFeedRegistry) acquire(venue, account string, recovery bool) (*accountFeedLease, error) {
 	key, factory, err := r.normalizedKey(venue, account)
 	if err != nil {
 		return nil, err
@@ -141,7 +163,8 @@ func (r *accountFeedRegistry) Acquire(venue, account string) (*accountFeedLease,
 
 	now := r.config.Now()
 	r.cleanupIdleLocked(now)
-	if r.atCapacityLocked(key.venue) {
+	r.evictForCapacityLocked(key.venue, false)
+	if r.atCapacityLocked(key.venue, recovery) {
 		return nil, fmt.Errorf("%w for %s", errAccountFeedCapacity, key.venue)
 	}
 
@@ -156,7 +179,7 @@ func (r *accountFeedRegistry) Acquire(venue, account string) (*accountFeedLease,
 		refs: 1, lastUsed: now,
 	}
 	r.entries[key] = entry
-	return &accountFeedLease{registry: r, entry: entry}, nil
+	return &accountFeedLease{registry: r, entry: entry, created: true}, nil
 }
 
 // Lookup leases an existing feed without starting one for an arbitrary read request.
@@ -192,8 +215,12 @@ func (r *accountFeedRegistry) normalizedKey(venue, account string) (accountFeedK
 	return accountFeedKey{venue: venue, account: normalized}, factory, nil
 }
 
-func (r *accountFeedRegistry) atCapacityLocked(venue string) bool {
-	if r.config.MaxFeeds > 0 && len(r.entries) >= r.config.MaxFeeds {
+func (r *accountFeedRegistry) atCapacityLocked(venue string, recovery bool) bool {
+	reserve := 0
+	if recovery {
+		reserve = r.config.RecoveryReserve
+	}
+	if r.config.MaxFeeds > 0 && len(r.entries) >= r.config.MaxFeeds+reserve {
 		return true
 	}
 	if r.config.MaxPerVenue <= 0 {
@@ -205,7 +232,40 @@ func (r *accountFeedRegistry) atCapacityLocked(venue string) bool {
 			count++
 		}
 	}
-	return count >= r.config.MaxPerVenue
+	return count >= r.config.MaxPerVenue+reserve
+}
+
+func (r *accountFeedRegistry) evictForCapacityLocked(venue string, recovery bool) {
+	for r.atCapacityLocked(venue, recovery) {
+		venueFull := r.config.MaxPerVenue > 0
+		if venueFull {
+			count := 0
+			for key := range r.entries {
+				if key.venue == venue {
+					count++
+				}
+			}
+			reserve := 0
+			if recovery {
+				reserve = r.config.RecoveryReserve
+			}
+			venueFull = count >= r.config.MaxPerVenue+reserve
+		}
+		var oldest *accountFeedEntry
+		for _, entry := range r.entries {
+			if entry.refs != 0 || (venueFull && entry.key.venue != venue) {
+				continue
+			}
+			if oldest == nil || entry.lastUsed.Before(oldest.lastUsed) {
+				oldest = entry
+			}
+		}
+		if oldest == nil {
+			return
+		}
+		oldest.cancel()
+		delete(r.entries, oldest.key)
+	}
 }
 
 func (r *accountFeedRegistry) runCleanup() {

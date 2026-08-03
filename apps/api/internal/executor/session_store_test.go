@@ -92,7 +92,10 @@ func TestPersistFullResultAtomicWritesCompleteTerminalRecord(t *testing.T) {
 			Accepted: true, Filled: true, RequestedAmt: 10, FilledAmount: 10, FillRatio: 1,
 		},
 	}
-	if err := store.PersistFullResultAtomic(context.Background(), result, "pacifica", "hyperliquid", 10, 2); err != nil {
+	if err := store.PersistFullResultAtomic(
+		context.Background(), result, "pacifica", "hyperliquid",
+		"sol-wallet", "0xwallet", 10, 2,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,6 +107,20 @@ func TestPersistFullResultAtomicWritesCompleteTerminalRecord(t *testing.T) {
 		if got != want {
 			t.Fatalf("%s rows = %d, want %d", table, got, want)
 		}
+	}
+	positions, err := store.ListPositionsForAccounts(context.Background(), "sol-wallet", "0xWallet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 1 || positions[0].ID != "plan-1" {
+		t.Fatalf("scoped positions = %+v, want plan-1", positions)
+	}
+	other, err := store.ListPositionsForAccounts(context.Background(), "other-wallet", "0xother")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 0 {
+		t.Fatalf("other account positions = %+v, want none", other)
 	}
 }
 
@@ -148,7 +165,9 @@ func TestFlagDurableSessionKeepsPossibleExposureActive(t *testing.T) {
 	if records[1].ID != "healthy-session" || records[1].DecodeError != "" {
 		t.Fatalf("healthy record = %+v, corrupt row blocked another session", records[1])
 	}
-	if err := store.UpsertRecoveryBlockedPosition(ctx, "blocked-session", "SOL", "invalid payload"); err != nil {
+	if err := store.UpsertRecoveryBlockedPosition(
+		ctx, "blocked-session", "SOL", "sol-wallet", "0xwallet", "invalid payload",
+	); err != nil {
 		t.Fatal(err)
 	}
 	var state string
@@ -157,6 +176,21 @@ func TestFlagDurableSessionKeepsPossibleExposureActive(t *testing.T) {
 	}
 	if state != string(executor.ExecStateDegraded) {
 		t.Fatalf("operator-visible recovery position state = %q, want degraded", state)
+	}
+	if err := store.UpsertRecoveryBlockedPosition(
+		ctx, "blocked-session", "SOL", "sol-wallet", "0xwallet", "invalid payload",
+	); err != nil {
+		t.Fatal(err)
+	}
+	var events int
+	if err := database.QueryRow(`
+		SELECT COUNT(*) FROM live_events
+		WHERE position_id = 'recovery-blocked-session' AND event = 'session_recovery_blocked'
+	`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("recovery blocked events = %d, want 1", events)
 	}
 }
 

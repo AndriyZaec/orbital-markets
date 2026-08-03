@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,6 +53,9 @@ func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningR
 			req.Venue, signed.Venue,
 		)
 	}
+	if req.Account != "" && !signingAccountMatches(req.Venue, req.Account, signed.SignerAddress) {
+		return nil, fmt.Errorf("signer account does not match prepared %s account", req.Venue)
+	}
 
 	if time.Now().After(req.ExpiresAt) {
 		delete(s.requests, signed.RequestID)
@@ -74,6 +78,15 @@ func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningR
 	delete(s.requests, signed.RequestID)
 
 	return req, nil
+}
+
+func signingAccountMatches(venue, expected, actual string) bool {
+	expected = strings.TrimSpace(expected)
+	actual = strings.TrimSpace(actual)
+	if venue == "hyperliquid" {
+		return strings.EqualFold(expected, actual)
+	}
+	return expected == actual
 }
 
 // Cleanup removes expired requests older than maxAge beyond their expiry.

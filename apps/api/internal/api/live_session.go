@@ -102,6 +102,8 @@ type LiveSession struct {
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	accounts *liveAccountContext
 }
 
 func (s *LiveSession) expired() bool {

@@ -53,6 +53,8 @@ export interface LiveExecutionState {
   phase: ExecutionPhase
   asset: string | null
   sessionId: string | null
+  accountPacifica: string | null
+  accountHyperliquid: string | null
   riskierVenue: string | null
   hedgeVenue: string | null
   leg1Requests: SigningRequest[] // [open, unwind]
@@ -74,6 +76,8 @@ const INITIAL_STATE: LiveExecutionState = {
   phase: 'idle',
   asset: null,
   sessionId: null,
+  accountPacifica: null,
+  accountHyperliquid: null,
   riskierVenue: null,
   hedgeVenue: null,
   leg1Requests: [],
@@ -124,10 +128,15 @@ export function useLiveExecution() {
   const { signTypedDataAsync } = useSignTypedData()
 
   useEffect(() => {
-    if (state.phase !== 'recovering' || !state.sessionId) return
+    if (state.phase !== 'recovering' || !state.sessionId ||
+      !state.accountPacifica || !state.accountHyperliquid) return
 
     let cancelled = false
     const sessionId = state.sessionId
+    const query = new URLSearchParams({
+      account_pacifica: state.accountPacifica,
+      account_hyperliquid: state.accountHyperliquid,
+    })
     const poll = async () => {
       for (let attempt = 0; attempt < recoveryPollLimit && !cancelled; attempt++) {
         if (attempt > 0) {
@@ -136,7 +145,7 @@ export function useLiveExecution() {
         if (cancelled) return
 
         try {
-          const response = await apiFetch(`/api/v1/live/sessions/${sessionId}`)
+          const response = await apiFetch(`/api/v1/live/sessions/${sessionId}?${query}`)
           if (!response.ok) continue
           const result: AdvanceResp = await response.json()
           if (result.status === 'recovering') continue
@@ -169,7 +178,7 @@ export function useLiveExecution() {
 
     poll()
     return () => { cancelled = true }
-  }, [state.phase, state.sessionId])
+  }, [state.phase, state.sessionId, state.accountPacifica, state.accountHyperliquid])
 
   // Live refs of the currently connected accounts. The executeLive async
   // callback is created once and closes over stale addresses; refs let us
@@ -273,6 +282,8 @@ export function useLiveExecution() {
         phase: 'awaiting_leg1',
         asset: prep.asset,
         sessionId: prep.session_id,
+        accountPacifica: pacificaAddress,
+        accountHyperliquid: hyperliquidAddress,
         riskierVenue: prep.riskier_venue,
         hedgeVenue: prep.hedge_venue,
         leg1Requests,

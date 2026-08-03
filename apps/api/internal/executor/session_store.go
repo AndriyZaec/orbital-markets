@@ -194,15 +194,26 @@ func (s *Store) ClaimDurableSession(ctx context.Context, id, owner string, lease
 
 // UpsertRecoveryBlockedPosition surfaces an unreadable exposed session through
 // the existing live-position/operator UI without inventing actionable fills.
-func (s *Store) UpsertRecoveryBlockedPosition(ctx context.Context, sessionID, asset, detail string) error {
+func (s *Store) UpsertRecoveryBlockedPosition(
+	ctx context.Context,
+	sessionID, asset, accountPacifica, accountHyperliquid, detail string,
+) error {
 	positionID := "recovery-" + sessionID
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO live_positions (
+		INSERT INTO live_positions (
 			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_pacifica, account_hyperliquid,
 			notional, leverage, started_at, completed_at, updated_at
-		) VALUES (?, ?, 'recovery-blocked', ?, 'unknown', 'unknown', ?, 0, 0, ?, ?, ?)`,
-		positionID, sessionID, asset, string(ExecStateDegraded), now, now, now)
+		) VALUES (?, ?, 'recovery-blocked', ?, 'unknown', 'unknown', ?, ?, ?, 0, 0, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			account_pacifica = excluded.account_pacifica,
+			account_hyperliquid = excluded.account_hyperliquid,
+			updated_at = excluded.updated_at
+		WHERE live_positions.account_pacifica != excluded.account_pacifica
+		   OR live_positions.account_hyperliquid != excluded.account_hyperliquid`,
+		positionID, sessionID, asset, string(ExecStateDegraded), accountPacifica,
+		strings.ToLower(strings.TrimSpace(accountHyperliquid)), now, now, now)
 	if err != nil {
 		return err
 	}

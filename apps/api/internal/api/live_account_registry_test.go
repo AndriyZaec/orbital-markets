@@ -14,10 +14,11 @@ import (
 
 type fakeAccountFeed struct {
 	snapshot liveAccountSnapshot
+	blockers []string
 }
 
 func (f *fakeAccountFeed) Snapshot() liveAccountSnapshot        { return f.snapshot }
-func (f *fakeAccountFeed) PreTradeBlockers(domain.Leg) []string { return nil }
+func (f *fakeAccountFeed) PreTradeBlockers(domain.Leg) []string { return f.blockers }
 func (f *fakeAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error) {
 	return nil, nil
 }
@@ -26,9 +27,12 @@ func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (
 }
 
 type fakeAccountFeedFactory struct {
-	starts  atomic.Int64
-	stops   atomic.Int64
-	started chan struct{}
+	starts    atomic.Int64
+	stops     atomic.Int64
+	started   chan struct{}
+	snapshots map[string]liveAccountSnapshot
+	blockers  map[string][]string
+	startErr  error
 }
 
 func (f *fakeAccountFeedFactory) Normalize(account string) (string, error) {
@@ -41,6 +45,9 @@ func (f *fakeAccountFeedFactory) Normalize(account string) (string, error) {
 
 func (f *fakeAccountFeedFactory) Start(ctx context.Context, account string) (liveAccountFeed, error) {
 	f.starts.Add(1)
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
 	if f.started != nil {
 		f.started <- struct{}{}
 	}
@@ -48,7 +55,28 @@ func (f *fakeAccountFeedFactory) Start(ctx context.Context, account string) (liv
 		<-ctx.Done()
 		f.stops.Add(1)
 	}()
-	return &fakeAccountFeed{snapshot: liveAccountSnapshot{Account: account}}, nil
+	snapshot, ok := f.snapshots[account]
+	if !ok {
+		snapshot = liveAccountSnapshot{Account: account}
+	}
+	return &fakeAccountFeed{snapshot: snapshot, blockers: f.blockers[account]}, nil
+}
+
+func TestAcquireAccountsRollsBackNewPartialPair(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"pacifica":    &fakeAccountFeedFactory{startErr: errors.New("venue unavailable")},
+		"hyperliquid": &fakeAccountFeedFactory{},
+	}, accountFeedRegistryConfig{})
+	live := &LiveDeps{accounts: registry}
+
+	if _, err := live.acquireAccounts("pacifica-a", "0xaaa"); err == nil {
+		t.Fatal("acquire accounts succeeded with failed second venue")
+	}
+	if _, exists := registry.Lookup("hyperliquid", "0xaaa"); exists {
+		t.Fatal("new partial account pair remained allocated")
+	}
 }
 
 func TestAccountFeedRegistryDeduplicatesConcurrentAcquire(t *testing.T) {
@@ -108,6 +136,44 @@ func TestAccountFeedRegistryIsolatesAccounts(t *testing.T) {
 	}
 }
 
+func TestAccountFeedLocksSerializeOnlySharedAccounts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := newTestAccountFeedRegistry(ctx, &fakeAccountFeedFactory{}, accountFeedRegistryConfig{})
+	first, _ := registry.Acquire("venue", "account-a")
+	firstAgain, _ := registry.Acquire("venue", "account-a")
+	second, _ := registry.Acquire("venue", "account-b")
+	defer first.Release()
+	defer firstAgain.Release()
+	defer second.Release()
+
+	unlockFirst := lockAccountFeeds(first)
+	secondLocked := make(chan func(), 1)
+	go func() { secondLocked <- lockAccountFeeds(second) }()
+	select {
+	case unlockSecond := <-secondLocked:
+		unlockSecond()
+	case <-time.After(time.Second):
+		t.Fatal("independent account lock was globally serialized")
+	}
+
+	sharedLocked := make(chan func(), 1)
+	go func() { sharedLocked <- lockAccountFeeds(firstAgain) }()
+	select {
+	case unlockShared := <-sharedLocked:
+		unlockShared()
+		t.Fatal("shared account lock was not serialized")
+	case <-time.After(25 * time.Millisecond):
+	}
+	unlockFirst()
+	select {
+	case unlockShared := <-sharedLocked:
+		unlockShared()
+	case <-time.After(time.Second):
+		t.Fatal("shared account lock did not resume")
+	}
+}
+
 func TestAccountFeedRegistryEvictsOnlyIdleFeeds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -141,7 +207,7 @@ func TestAccountFeedRegistryEvictsOnlyIdleFeeds(t *testing.T) {
 	active.Release()
 }
 
-func TestAccountFeedRegistryRejectsCapacityUntilIdleEviction(t *testing.T) {
+func TestAccountFeedRegistryEvictsLRUIdleFeedAtCapacity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
@@ -157,15 +223,51 @@ func TestAccountFeedRegistryRejectsCapacityUntilIdleEviction(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.Release()
+	second, err := registry.Acquire("venue", "account-b")
+	if err != nil {
+		t.Fatalf("acquire after LRU eviction: %v", err)
+	}
+	second.Release()
+	if _, exists := registry.Lookup("venue", "account-a"); exists {
+		t.Fatal("idle LRU feed remained after capacity replacement")
+	}
+}
+
+func TestAccountFeedRegistryRejectsCapacityWhenAllFeedsAreLeased(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := newTestAccountFeedRegistry(ctx, &fakeAccountFeedFactory{}, accountFeedRegistryConfig{
+		MaxFeeds: 1, MaxPerVenue: 1,
+	})
+	first, err := registry.Acquire("venue", "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
 	if _, err := registry.Acquire("venue", "account-b"); !errors.Is(err, errAccountFeedCapacity) {
 		t.Fatalf("capacity error = %v", err)
 	}
-	now = now.Add(2 * time.Minute)
-	second, err := registry.Acquire("venue", "account-b")
+}
+
+func TestAccountFeedRegistryReservesBoundedRecoveryCapacity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := newTestAccountFeedRegistry(ctx, &fakeAccountFeedFactory{}, accountFeedRegistryConfig{
+		MaxFeeds: 1, MaxPerVenue: 1, RecoveryReserve: 1,
+	})
+	first, err := registry.Acquire("venue", "account-a")
 	if err != nil {
-		t.Fatalf("acquire after idle eviction: %v", err)
+		t.Fatal(err)
 	}
-	second.Release()
+	defer first.Release()
+	if _, err := registry.Acquire("venue", "account-b"); !errors.Is(err, errAccountFeedCapacity) {
+		t.Fatalf("normal capacity error = %v", err)
+	}
+	recovery, err := registry.AcquireRecovery("venue", "account-b")
+	if err != nil {
+		t.Fatalf("reserved recovery acquire: %v", err)
+	}
+	recovery.Release()
 }
 
 func newTestAccountFeedRegistry(

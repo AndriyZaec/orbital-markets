@@ -52,6 +52,9 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	if restored.ArmedUnwindReq == nil || string(restored.ArmedUnwindReq.UnsignedPayload) != `{"order":"payload"}` {
 		t.Fatalf("armed request not restored: %+v", restored.ArmedUnwindReq)
 	}
+	if restored.ArmedUnwindReq.Account != "sol-wallet" {
+		t.Fatalf("armed request account = %q, want persisted session account", restored.ArmedUnwindReq.Account)
+	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)
 	}

@@ -13,11 +13,11 @@ import (
 )
 
 const (
-	wsURL            = "wss://api.hyperliquid.xyz/ws"
-	fillTimeout      = 15 * time.Second
-	fillPollInterval = 200 * time.Millisecond
+	wsURL             = "wss://api.hyperliquid.xyz/ws"
+	fillTimeout       = 15 * time.Second
+	fillPollInterval  = 200 * time.Millisecond
 	fillFullThreshold = 0.995
-	reconnectDelay   = 5 * time.Second
+	reconnectDelay    = 5 * time.Second
 )
 
 // trackedOrder holds the evolving state of a submitted order.
@@ -46,11 +46,11 @@ type fillEvent struct {
 
 // Tracker subscribes to Hyperliquid WS orderUpdates and correlates fills.
 type Tracker struct {
-	mu       sync.RWMutex
-	byOID    map[string]*trackedOrder // keyed by orderID
-	byCloid  map[string]*trackedOrder // keyed by clientOrderID
-	address  string
-	logger   *slog.Logger
+	mu      sync.RWMutex
+	byOID   map[string]*trackedOrder // keyed by orderID
+	byCloid map[string]*trackedOrder // keyed by clientOrderID
+	address string
+	logger  *slog.Logger
 }
 
 func NewTracker(logger *slog.Logger, address string) *Tracker {
@@ -106,6 +106,15 @@ func (t *Tracker) connectAndListen(ctx context.Context) error {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+	closed := make(chan struct{})
+	defer close(closed)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-closed:
+		}
+	}()
 
 	// Subscribe to orderUpdates + userFills
 	for _, subType := range []string{"orderUpdates", "userFills"} {
@@ -158,13 +167,13 @@ type WsOrder struct {
 		Coin      string  `json:"coin"`
 		Side      string  `json:"side"`
 		LimitPx   string  `json:"limitPx"`
-		Sz        string  `json:"sz"`      // remaining size
+		Sz        string  `json:"sz"` // remaining size
 		OID       int64   `json:"oid"`
 		Timestamp int64   `json:"timestamp"`
 		OrigSz    string  `json:"origSz"`
 		Cloid     *string `json:"cloid"` // client order ID, may be null
 	} `json:"order"`
-	Status         string `json:"status"` // "open", "filled", "canceled", "triggered", "rejected", "marginCanceled"
+	Status          string `json:"status"` // "open", "filled", "canceled", "triggered", "rejected", "marginCanceled"
 	StatusTimestamp int64  `json:"statusTimestamp"`
 }
 
@@ -242,14 +251,14 @@ func (t *Tracker) handleUserFills(data json.RawMessage) {
 	var payload struct {
 		IsSnapshot bool `json:"isSnapshot"`
 		Fills      []struct {
-			Coin    string  `json:"coin"`
-			Px      string  `json:"px"`
-			Sz      string  `json:"sz"`
-			Side    string  `json:"side"`
-			Time    int64   `json:"time"`
-			Fee     string  `json:"fee"`
-			OID     int64   `json:"oid"`
-			Cloid   *string `json:"cloid"`
+			Coin  string  `json:"coin"`
+			Px    string  `json:"px"`
+			Sz    string  `json:"sz"`
+			Side  string  `json:"side"`
+			Time  int64   `json:"time"`
+			Fee   string  `json:"fee"`
+			OID   int64   `json:"oid"`
+			Cloid *string `json:"cloid"`
 		} `json:"fills"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {

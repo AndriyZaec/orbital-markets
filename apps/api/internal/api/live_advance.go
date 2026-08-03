@@ -12,14 +12,14 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
-	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
-	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
 const (
 	minHedgeableFillPct = 0.50
 	maxHedgeMismatchPct = 0.05
 )
+
+var errLiveSubmissionNotSent = errors.New("live submission not sent")
 
 // handleLiveAdvance drives the non-custodial two-leg open state machine.
 //
@@ -83,15 +83,16 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.live.recoveryMu.Lock()
-	defer s.live.recoveryMu.Unlock()
-	if !s.live.accountStreamsMatch(sess.AccountPacifica, sess.AccountHyperliquid) {
-		s.live.ensureAccountStreams(sess.AccountPacifica, sess.AccountHyperliquid)
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "session account streams restarted; retry when account state is ready",
-		})
+	accounts, err := s.live.acquireAccounts(sess.AccountPacifica, sess.AccountHyperliquid)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 		return
 	}
+	defer accounts.Release()
+	unlockAccounts := accounts.Lock()
+	defer unlockAccounts()
+	sess.accounts = accounts
+	defer func() { sess.accounts = nil }()
 
 	switch sess.State {
 	case sessAwaitingLeg1Signs:
@@ -120,7 +121,7 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 // the leg-2 signing request (sized from the actual fill) or fires the unwind.
 func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveSession, signed []domain.SignedAction, releaseDone <-chan struct{}) {
 	ctx := r.Context()
-	if reasons := s.livePreTradeBlockers(sess.Plan); len(reasons) > 0 {
+	if reasons := livePreTradeBlockers(sess.Plan, sess.accounts); len(reasons) > 0 {
 		s.logger.Warn("live advance: pre-trade blocked before leg 1",
 			"session_id", sess.ID,
 			"reasons", reasons,
@@ -132,12 +133,12 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		})
 		return
 	}
-	if !s.venuePositionStateReady(sess.Leg1.venue) || !s.venuePositionStateReady(sess.Leg2.venue) {
+	if !venuePositionStateReady(sess.accounts, sess.Leg1.venue) || !venuePositionStateReady(sess.accounts, sess.Leg2.venue) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "venue position state not ready; retry shortly"})
 		return
 	}
-	leg1Size, _ := s.currentVenuePosition(sess.Leg1.venue, sess.Leg1.symbol)
-	leg2Size, _ := s.currentVenuePosition(sess.Leg2.venue, sess.Leg2.symbol)
+	leg1Size, _ := currentVenuePosition(sess.accounts, sess.Leg1.venue, sess.Leg1.symbol)
+	leg2Size, _ := currentVenuePosition(sess.accounts, sess.Leg2.venue, sess.Leg2.symbol)
 	if math.Abs(leg1Size-sess.BaselineLeg1Size) > 1e-9 || math.Abs(leg2Size-sess.BaselineLeg2Size) > 1e-9 {
 		sess.State = sessFailed
 		s.finishLiveSession(ctx, sess, "venue position changed after prepare; no order submitted")
@@ -187,7 +188,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 
 	// Submit leg 1.
-	sub, err := s.submitSignedAction(ctx, *openSigned, openReq)
+	sub, err := s.submitSignedActionForAccounts(ctx, *openSigned, openReq, sess.accounts)
 	if err != nil || sub == nil {
 		s.live.sessions.remove(sess.ID)
 		go func() {
@@ -235,7 +236,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 
 	// Wait for leg 1 fill.
-	fill, err := s.waitForLegFill(ctx, openReq)
+	fill, err := s.waitForLegFillForAccounts(ctx, openReq, sess.accounts)
 	if err != nil || fill == nil {
 		ur := s.fireUnwind(ctx, sess)
 		sessState, persistState := terminalStateAfterUnwind(ur)
@@ -247,7 +248,9 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		resp := map[string]any{
 			"session_id": sess.ID, "status": string(sessState), "reason": reason,
 		}
-		for k, v := range unwindJSON(ur) { resp[k] = v }
+		for k, v := range unwindJSON(ur) {
+			resp[k] = v
+		}
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -285,14 +288,19 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 			"session_id": sess.ID, "status": string(sessState),
 			"leg1_fill": fillView(fill, fillRatio), "reason": reason,
 		}
-		for k, v := range unwindJSON(ur) { resp[k] = v }
+		for k, v := range unwindJSON(ur) {
+			resp[k] = v
+		}
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
 	// Build leg-2 open sized from the actual leg-1 fill.
 	leg2Cloid := fmt.Sprintf("orbital-l2open-%d", time.Now().UnixNano())
-	leg2Open, err := s.buildOpenSigningRequest(sess.Leg2, fill.FilledAmount, leg2Cloid, sess.AccountPacifica)
+	leg2Open, err := s.buildOpenSigningRequest(
+		sess.Leg2, fill.FilledAmount, leg2Cloid,
+		sess.AccountPacifica, sess.AccountHyperliquid,
+	)
 	if err != nil {
 		ur := s.fireUnwind(ctx, sess)
 		sessState, persistState := terminalStateAfterUnwind(ur)
@@ -304,7 +312,9 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		resp := map[string]any{
 			"session_id": sess.ID, "status": string(sessState), "reason": reason,
 		}
-		for k, v := range unwindJSON(ur) { resp[k] = v }
+		for k, v := range unwindJSON(ur) {
+			resp[k] = v
+		}
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -365,7 +375,9 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 		resp := map[string]any{
 			"session_id": sess.ID, "status": string(sessState), "reason": reason,
 		}
-		for k, v := range unwindJSON(ur) { resp[k] = v }
+		for k, v := range unwindJSON(ur) {
+			resp[k] = v
+		}
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -388,7 +400,7 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 
 	// Submit leg 2.
-	sub, err := s.submitSignedAction(ctx, *openSigned, leg2Req)
+	sub, err := s.submitSignedActionForAccounts(ctx, *openSigned, leg2Req, sess.accounts)
 	if err != nil || sub == nil {
 		s.live.sessions.remove(sess.ID)
 		go func() {
@@ -416,7 +428,7 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 
 	// Wait for leg 2 fill.
-	fill2, err := s.waitForLegFill(ctx, leg2Req)
+	fill2, err := s.waitForLegFillForAccounts(ctx, leg2Req, sess.accounts)
 	if err != nil || fill2 == nil {
 		s.live.sessions.remove(sess.ID)
 		go func() {
@@ -426,7 +438,7 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 		writeJSON(w, http.StatusOK, map[string]any{
 			"session_id": sess.ID, "status": string(sessRecovering),
 			"leg1_fill": fillView(sess.Leg1Fill, 0),
-			"reason": "leg 2 fill is unknown; venue reconciliation started",
+			"reason":    "leg 2 fill is unknown; venue reconciliation started",
 		})
 		return
 	}
@@ -476,7 +488,9 @@ func (s *Server) abortAfterLeg1(w http.ResponseWriter, r *http.Request, sess *Li
 	resp := map[string]any{
 		"session_id": sess.ID, "status": string(sessState), "reason": fullReason,
 	}
-	for k, v := range unwindJSON(ur) { resp[k] = v }
+	for k, v := range unwindJSON(ur) {
+		resp[k] = v
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -512,13 +526,13 @@ func (s *Server) fireUnwind(ctx context.Context, sess *LiveSession) unwindResult
 		expectedAmount = sess.Leg1Fill.FilledAmount
 	}
 	result := unwindResult{RequestedAmount: expectedAmount}
-	sub, err := s.submitSignedAction(ctx, *sess.ArmedUnwindSigned, sess.ArmedUnwindReq)
+	sub, err := s.submitSignedActionForAccounts(ctx, *sess.ArmedUnwindSigned, sess.ArmedUnwindReq, sess.accounts)
 	if err != nil || sub == nil || !sub.Accepted {
 		s.logger.Error("live advance: unwind submit failed", "session_id", sess.ID, "err", err)
 		result.Status = unwindSubmitFail
 		return result
 	}
-	fill, err := s.waitForLegFill(ctx, sess.ArmedUnwindReq)
+	fill, err := s.waitForLegFillForAccounts(ctx, sess.ArmedUnwindReq, sess.accounts)
 	if fill != nil {
 		result.FilledAmount = fill.FilledAmount
 	}
@@ -537,54 +551,67 @@ func (s *Server) fireUnwind(ctx context.Context, sess *LiveSession) unwindResult
 func (s *Server) submitSignedAction(
 	ctx context.Context, signed domain.SignedAction, req *domain.SigningRequest,
 ) (*domain.SubmissionResult, error) {
-	switch signed.Venue {
-	case "pacifica":
-		if s.live.pacClient == nil {
-			return nil, fmt.Errorf("pacifica live client not configured")
-		}
-		return s.live.pacClient.SubmitSignedOrder(ctx, signed, req, s.live.pacTracker)
-	case "hyperliquid":
-		if s.live.hlClient == nil {
-			return nil, fmt.Errorf("hyperliquid live client not configured")
-		}
-		return s.live.hlClient.SubmitSignedOrder(ctx, signed, req)
-	default:
-		return nil, fmt.Errorf("unsupported venue: %s", signed.Venue)
+	var lease *accountFeedLease
+	var err error
+	if req.ReduceOnly || req.Action == "close" {
+		lease, err = s.live.accounts.AcquireRecovery(req.Venue, req.Account)
+	} else {
+		lease, err = s.live.accounts.Acquire(req.Venue, req.Account)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errLiveSubmissionNotSent, err)
+	}
+	defer lease.Release()
+	unlock := lockAccountFeeds(lease)
+	defer unlock()
+	return s.submitSignedActionForFeed(ctx, signed, req, lease.Feed())
 }
 
-// waitForLegFill blocks on the venue tracker for the order's terminal fill state.
-func (s *Server) waitForLegFill(ctx context.Context, req *domain.SigningRequest) (*normFill, error) {
-	switch req.Venue {
-	case "pacifica":
-		fr, err := s.live.pacTracker.WaitForFill(ctx, req.ClientOrderID)
-		if err != nil {
-			return nil, err
-		}
-		return &normFill{
-			FilledAmount: fr.FilledAmount, AvgFillPrice: fr.AvgFillPrice, Fee: fr.TotalFee,
-			OrderID: fr.OrderID, Status: string(fr.Status),
-			Filled: fr.Status == paclive.OrderStatusFilled || fr.Status == paclive.OrderStatusPartialFill,
-		}, nil
-	case "hyperliquid":
-		var meta struct {
-			Cloid string `json:"cloid"`
-		}
-		if err := json.Unmarshal(req.VenueMetadata, &meta); err != nil {
-			return nil, fmt.Errorf("parse hl venue metadata: %w", err)
-		}
-		fr, err := s.live.hlClient.WaitForFill(ctx, meta.Cloid)
-		if err != nil {
-			return nil, err
-		}
-		return &normFill{
-			FilledAmount: fr.FilledAmount, AvgFillPrice: fr.AvgFillPrice, Fee: fr.TotalFee,
-			OrderID: fr.OrderID, Status: string(fr.Status),
-			Filled: fr.Status == hllive.OrderStatusFilled || fr.Status == hllive.OrderStatusPartialFill,
-		}, nil
-	default:
+func (s *Server) submitSignedActionForAccounts(
+	ctx context.Context,
+	signed domain.SignedAction,
+	req *domain.SigningRequest,
+	accounts *liveAccountContext,
+) (*domain.SubmissionResult, error) {
+	feed, ok := accounts.Feed(req.Venue)
+	if !ok {
 		return nil, fmt.Errorf("unsupported venue: %s", req.Venue)
 	}
+	return s.submitSignedActionForFeed(ctx, signed, req, feed)
+}
+
+func (s *Server) submitSignedActionForFeed(
+	ctx context.Context,
+	signed domain.SignedAction,
+	req *domain.SigningRequest,
+	feed liveAccountFeed,
+) (*domain.SubmissionResult, error) {
+	if err := s.live.validateSigningAccount(req, signed.SignerAddress); err != nil {
+		return nil, fmt.Errorf("%w: %v", errLiveSubmissionNotSent, err)
+	}
+	return feed.SubmitSigned(ctx, signed, req)
+}
+
+// waitForLegFill blocks on the account-scoped venue tracker.
+func (s *Server) waitForLegFill(ctx context.Context, req *domain.SigningRequest) (*normFill, error) {
+	lease, err := s.live.accounts.Acquire(req.Venue, req.Account)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+	return lease.Feed().WaitForFill(ctx, req)
+}
+
+func (s *Server) waitForLegFillForAccounts(
+	ctx context.Context,
+	req *domain.SigningRequest,
+	accounts *liveAccountContext,
+) (*normFill, error) {
+	feed, ok := accounts.Feed(req.Venue)
+	if !ok {
+		return nil, fmt.Errorf("unsupported venue: %s", req.Venue)
+	}
+	return feed.WaitForFill(ctx, req)
 }
 
 // persistSession writes the session's final outcome to the live store so it
@@ -614,6 +641,7 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 	}
 	if err := s.live.liveStore.PersistFullResultAtomic(
 		ctx, res, sess.Plan.Leg1.Venue, sess.Plan.Leg2.Venue,
+		sess.AccountPacifica, sess.AccountHyperliquid,
 		sess.Plan.Notional, sess.Plan.Leverage.Leverage,
 	); err != nil {
 		s.logger.Error("live session: persist terminal result", "err", err, "session_id", sess.ID)
@@ -656,8 +684,8 @@ func legResultFrom(leg legPlan, fill *normFill, clientOrderID string, requestedA
 // unwindJSON returns the API-facing fields for an unwind result.
 func unwindJSON(ur unwindResult) map[string]any {
 	return map[string]any{
-		"unwound":       ur.Confirmed(),
-		"unwind_status": string(ur.Status),
+		"unwound":        ur.Confirmed(),
+		"unwind_status":  string(ur.Status),
 		"unwound_amount": ur.FilledAmount,
 	}
 }
