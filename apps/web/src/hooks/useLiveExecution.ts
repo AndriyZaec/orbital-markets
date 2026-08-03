@@ -114,11 +114,62 @@ interface AdvanceResp {
   remaining_exposure?: RemainingExposure[]
 }
 
+const recoveryPollLimit = 300
+const recoveryPollIntervalMs = 1_000
+
 export function useLiveExecution() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
   const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
   const { signTypedDataAsync } = useSignTypedData()
+
+  useEffect(() => {
+    if (state.phase !== 'recovering' || !state.sessionId) return
+
+    let cancelled = false
+    const sessionId = state.sessionId
+    const poll = async () => {
+      for (let attempt = 0; attempt < recoveryPollLimit && !cancelled; attempt++) {
+        if (attempt > 0) {
+          await new Promise(resolve => window.setTimeout(resolve, recoveryPollIntervalMs))
+        }
+        if (cancelled) return
+
+        try {
+          const response = await apiFetch(`/api/v1/live/sessions/${sessionId}`)
+          if (!response.ok) continue
+          const result: AdvanceResp = await response.json()
+          if (result.status === 'recovering') continue
+
+          setState((current) => ({
+            ...current,
+            phase: executionPhaseFromStatus(result.status),
+            leg1Fill: result.leg1_fill ?? current.leg1Fill,
+            leg2Fill: result.leg2_fill ?? current.leg2Fill,
+            mismatch: result.mismatch ?? current.mismatch,
+            positionId: result.position_id ?? current.positionId,
+            reason: result.reason ?? current.reason,
+            unwound: result.unwound ?? false,
+            unwindStatus: (result.unwind_status ?? null) as UnwindStatus,
+            remainingExposure: result.remaining_exposure ?? [],
+          }))
+          return
+        } catch {
+          // Keep polling because the original submission and this status request may both be transiently unavailable.
+        }
+      }
+      if (!cancelled) {
+        setState((current) => ({
+          ...current,
+          phase: 'degraded',
+          reason: 'Venue reconciliation did not finish in time. Review venue positions before retrying.',
+        }))
+      }
+    }
+
+    poll()
+    return () => { cancelled = true }
+  }, [state.phase, state.sessionId])
 
   // Live refs of the currently connected accounts. The executeLive async
   // callback is created once and closes over stale addresses; refs let us

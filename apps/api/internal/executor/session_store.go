@@ -21,6 +21,8 @@ type DurableSessionRecord struct {
 	ExpiresAt          time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	RecoveryDetail     string
+	Terminal           bool
 	DecodeError        string
 }
 
@@ -100,6 +102,27 @@ func (s *Store) ListActiveDurableSessions(ctx context.Context) ([]DurableSession
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+// GetDurableSession returns active or terminal session state for client recovery polling.
+func (s *Store) GetDurableSession(ctx context.Context, id string) (DurableSessionRecord, error) {
+	var record DurableSessionRecord
+	var payload string
+	var hasExposure int64
+	var terminalAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, state, payload, account_pacifica, account_hyperliquid, asset,
+			has_exposure, recovery_detail, terminal_at
+		FROM live_sessions
+		WHERE id = ?`, id).Scan(
+		&record.ID, &record.State, &payload,
+		&record.AccountPacifica, &record.AccountHyperliquid, &record.Asset,
+		&hasExposure, &record.RecoveryDetail, &terminalAt,
+	)
+	record.Payload = []byte(payload)
+	record.HasExposure = hasExposure != 0
+	record.Terminal = terminalAt.Valid
+	return record, err
 }
 
 // FinishDurableSession keeps the journal row for audit while removing it from
