@@ -74,7 +74,10 @@ func (s *Server) restoreLiveSessions() {
 			if record.HasExposure {
 				detail := "invalid exposed session envelope: " + record.DecodeError
 				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-				_ = s.liveStore.UpsertRecoveryBlockedPosition(s.ctx, record.ID, record.Asset, detail)
+				_ = s.liveStore.UpsertRecoveryBlockedPosition(
+					s.ctx, record.ID, record.Asset,
+					record.AccountPacifica, record.AccountHyperliquid, detail,
+				)
 			} else {
 				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", record.DecodeError)
 			}
@@ -86,7 +89,10 @@ func (s *Server) restoreLiveSessions() {
 			if record.HasExposure {
 				detail := "invalid exposed session payload: " + err.Error()
 				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-				_ = s.liveStore.UpsertRecoveryBlockedPosition(s.ctx, record.ID, record.Asset, detail)
+				_ = s.liveStore.UpsertRecoveryBlockedPosition(
+					s.ctx, record.ID, record.Asset,
+					record.AccountPacifica, record.AccountHyperliquid, detail,
+				)
 			} else {
 				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", err.Error())
 			}
@@ -160,24 +166,31 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 		s.logger.Info("live recovery: session owned by another server", "session_id", session.ID)
 		return
 	}
+	accounts, err := s.live.acquireRecoveryAccounts(session.AccountPacifica, session.AccountHyperliquid)
+	if err != nil {
+		s.logger.Error("live recovery: account feeds unavailable", "err", err, "session_id", session.ID)
+		return
+	}
+	defer accounts.Release()
+	unlockAccounts := accounts.Lock()
+	defer unlockAccounts()
+	session.accounts = accounts
+	defer func() { session.accounts = nil }()
 	s.live.sessions.put(session)
 	_, found, claimed := s.live.sessions.claim(session.ID)
 	if !found || !claimed {
 		return
 	}
 	defer s.live.sessions.release(session.ID)
-	s.live.recoveryMu.Lock()
-	defer s.live.recoveryMu.Unlock()
 	originalState := session.State
-	s.live.ensureAccountStreams(session.AccountPacifica, session.AccountHyperliquid)
 	ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
 	defer cancel()
 
 	needLeg2 := originalState == sessAwaitingLeg2RetrySign ||
 		originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
 	truthReady := s.waitForRecoveryAccountState(ctx, session, needLeg2)
-	leg1Size, leg1Price := s.currentVenuePosition(session.Leg1.venue, session.Leg1.symbol)
-	leg2Size, leg2Price := s.currentVenuePosition(session.Leg2.venue, session.Leg2.symbol)
+	leg1Size, leg1Price := currentVenuePosition(accounts, session.Leg1.venue, session.Leg1.symbol)
+	leg2Size, leg2Price := currentVenuePosition(accounts, session.Leg2.venue, session.Leg2.symbol)
 	leg1Delta := leg1Size - session.BaselineLeg1Size
 	leg2Delta := leg2Size - session.BaselineLeg2Size
 
@@ -268,8 +281,8 @@ func (s *Server) waitForRecoveryAccountState(ctx context.Context, session *LiveS
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		leg1Ready := s.venuePositionStateReadyAfter(session.Leg1.venue, session.UpdatedAt)
-		leg2Ready := !needLeg2 || s.venuePositionStateReadyAfter(session.Leg2.venue, session.UpdatedAt)
+		leg1Ready := venuePositionStateReadyAfter(session.accounts, session.Leg1.venue, session.UpdatedAt)
+		leg2Ready := !needLeg2 || venuePositionStateReadyAfter(session.accounts, session.Leg2.venue, session.UpdatedAt)
 		if leg1Ready && leg2Ready {
 			// Position snapshots can arrive just after account equity readiness.
 			select {
@@ -287,21 +300,16 @@ func (s *Server) waitForRecoveryAccountState(ctx context.Context, session *LiveS
 	}
 }
 
-func (s *Server) venuePositionStateReady(venue string) bool {
-	return s.venuePositionStateReadyAfter(venue, time.Time{})
+func venuePositionStateReady(accounts *liveAccountContext, venue string) bool {
+	return venuePositionStateReadyAfter(accounts, venue, time.Time{})
 }
 
-func (s *Server) venuePositionStateReadyAfter(venue string, after time.Time) bool {
-	var updatedAt time.Time
-	switch venue {
-	case "pacifica":
-		updatedAt = s.live.pacState.Snapshot().PositionsUpdatedAt
-	case "hyperliquid":
-		updatedAt = s.live.hlState.Snapshot().PositionsUpdatedAt
-	default:
+func venuePositionStateReadyAfter(accounts *liveAccountContext, venue string, after time.Time) bool {
+	feed, ok := accounts.Feed(venue)
+	if !ok {
 		return false
 	}
-	return positionStateReady(updatedAt, after)
+	return positionStateReady(feed.Snapshot().PositionsUpdatedAt, after)
 }
 
 func positionStateReady(updatedAt, after time.Time) bool {
@@ -314,19 +322,14 @@ func positionStateReady(updatedAt, after time.Time) bool {
 	return updatedAt.After(after) && time.Since(updatedAt) <= admissionFreshness
 }
 
-func (s *Server) currentVenuePosition(venue, symbol string) (float64, float64) {
-	switch venue {
-	case "pacifica":
-		for _, position := range s.live.pacState.Snapshot().Positions {
-			if strings.EqualFold(position.Symbol, symbol) {
-				return signedSize(position.Side, position.Size), position.EntryPrice
-			}
-		}
-	case "hyperliquid":
-		for _, position := range s.live.hlState.Snapshot().Positions {
-			if strings.EqualFold(position.Coin, symbol) {
-				return signedSize(position.Side, position.Size), position.EntryPx
-			}
+func currentVenuePosition(accounts *liveAccountContext, venue, symbol string) (float64, float64) {
+	feed, ok := accounts.Feed(venue)
+	if !ok {
+		return 0, 0
+	}
+	for _, position := range feed.Snapshot().Positions {
+		if strings.EqualFold(position.Symbol, symbol) {
+			return signedSize(position.Side, position.Size), position.EntryPrice
 		}
 	}
 	return 0, 0

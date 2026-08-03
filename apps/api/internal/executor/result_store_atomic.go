@@ -13,6 +13,7 @@ func (s *Store) PersistFullResultAtomic(
 	ctx context.Context,
 	result *ExecutionResult,
 	venueA, venueB string,
+	accountPacifica, accountHyperliquid string,
 	notional, leverage float64,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -32,11 +33,13 @@ func (s *Store) PersistFullResultAtomic(
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO live_positions (
 			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_pacifica, account_hyperliquid,
 			notional, leverage, entry_spread, hedge_mismatch,
 			started_at, opened_at, completed_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
 		result.PlanID, result.PlanID, result.OpportunityID, result.Asset,
-		venueA, venueB, string(result.State), notional, leverage,
+		venueA, venueB, string(result.State), accountPacifica, accountHyperliquid,
+		notional, leverage,
 		result.StartedAt.UTC().Format(time.RFC3339Nano), openedAt, completedAt, now,
 	)
 	if err != nil {

@@ -28,9 +28,13 @@ const INITIAL: CloseState = {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-async function waitForClose(positionId: string): Promise<void> {
+async function waitForClose(positionId: string, pacificaAccount: string, hyperliquidAccount: string): Promise<void> {
+	const query = new URLSearchParams({
+		account_pacifica: pacificaAccount,
+		account_hyperliquid: hyperliquidAccount,
+	})
   for (let attempt = 0; attempt < 22; attempt++) {
-    const resp = await apiFetch(`/api/v1/live/positions/${positionId}`)
+    const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
     if (!resp.ok) throw new Error(`Close confirmation failed: HTTP ${resp.status}`)
     const data: { position: { state: string } } = await resp.json()
     if (data.position.state === 'closed') return
@@ -143,7 +147,7 @@ export function useLiveClose() {
       }
 
       setState(s => ({ ...s, phase: 'confirming' }))
-      await waitForClose(positionId)
+      await waitForClose(positionId, pacificaAddress, hyperliquidAddress)
       setState(s => ({ ...s, phase: 'done', succeeded: requests.length }))
     } catch (e) {
       setState(s => ({

@@ -5,6 +5,7 @@ export interface SigningRequest {
   leg?: number
   venue: 'pacifica' | 'hyperliquid'
   action: 'open' | 'close'
+  account: string
   symbol: string
   side: 'buy' | 'sell'
   amount: number

@@ -19,6 +19,15 @@ func (s *Server) handleLiveSessionStatus(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "live session not found"})
 		return
 	}
+	pacificaAccount, hyperliquidAccount, ok := liveAccountsFromQuery(w, r)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(record.AccountPacifica) != strings.TrimSpace(pacificaAccount) ||
+		!strings.EqualFold(strings.TrimSpace(record.AccountHyperliquid), strings.TrimSpace(hyperliquidAccount)) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "live session not found"})
+		return
+	}
 
 	status := publicLiveSessionStatus(record.State, record.Terminal)
 	response := map[string]any{
@@ -36,7 +45,9 @@ func (s *Server) handleLiveSessionStatus(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
-	position, err := s.liveStore.GetPosition(r.Context(), session.Plan.ID)
+	position, err := s.liveStore.GetPositionForAccounts(
+		r.Context(), session.Plan.ID, session.AccountPacifica, session.AccountHyperliquid,
+	)
 	if err != nil {
 		writeJSON(w, http.StatusOK, response)
 		return

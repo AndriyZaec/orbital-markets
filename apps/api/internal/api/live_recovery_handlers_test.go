@@ -38,7 +38,8 @@ func TestLiveCloseUsesPersistedResidualExposure(t *testing.T) {
 		t.Fatalf("signing requests = %d, want 1", len(body.SigningRequests))
 	}
 	requestToSign := body.SigningRequests[0]
-	if requestToSign.PositionID != "position-residual" || requestToSign.Leg != 1 || requestToSign.Amount != 2.75 {
+	if requestToSign.PositionID != "position-residual" || requestToSign.Leg != 1 ||
+		requestToSign.Amount != 2.75 || requestToSign.Account != "sol-wallet" {
 		t.Fatalf("close request = %+v, want position/leg residual amount 2.75", requestToSign)
 	}
 }
@@ -79,11 +80,47 @@ func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	}
 }
 
+func TestLiveCloseDoesNotExposeAnotherAccountPosition(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "other-wallet", "account_hyperliquid": "0xother",
+	}))
+	response := httptest.NewRecorder()
+
+	server.handleLiveClose(response, request)
+	if response.Code != 404 {
+		t.Fatalf("status = %d body = %s, want not found", response.Code, response.Body.String())
+	}
+}
+
+func TestKillSwitchTargetsOnlyMatchingAccountPositions(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{
+		"account_pacifica": "other-wallet", "account_hyperliquid": "0xother",
+	}))
+	response := httptest.NewRecorder()
+
+	server.handleLiveKill(response, request)
+	if response.Code != 200 {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Targeted int `json:"targeted"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Targeted != 0 {
+		t.Fatalf("targeted = %d, want 0", body.Targeted)
+	}
+}
+
 func TestLiveSessionStatusReturnsTerminalRecoveryOutcome(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	now := time.Now()
 	payload, err := marshalLiveSession(&LiveSession{
 		ID: "session-recovered", Plan: &domain.ExecutionPlan{ID: "position-residual"},
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
 		CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
@@ -100,7 +137,11 @@ func TestLiveSessionStatusReturnsTerminalRecoveryOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest("GET", "/api/v1/live/sessions/session-recovered", nil)
+	request := httptest.NewRequest(
+		"GET",
+		"/api/v1/live/sessions/session-recovered?account_pacifica=sol-wallet&account_hyperliquid=0xwallet",
+		nil,
+	)
 	response := httptest.NewRecorder()
 	server.handleLiveSessionStatus(response, request)
 	if response.Code != 200 {
@@ -122,6 +163,36 @@ func TestLiveSessionStatusReturnsTerminalRecoveryOutcome(t *testing.T) {
 	}
 	if len(body.RemainingExposure) != 1 || body.RemainingExposure[0].Amount != 2.75 {
 		t.Fatalf("remaining exposure = %+v, want 2.75", body.RemainingExposure)
+	}
+}
+
+func TestLiveSessionStatusRejectsAnotherAccountPair(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	now := time.Now()
+	payload, err := marshalLiveSession(&LiveSession{
+		ID: "session-private", Plan: &domain.ExecutionPlan{ID: "position-residual"},
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.liveStore.UpsertDurableSession(context.Background(), executor.DurableSessionRecord{
+		ID: "session-private", State: string(sessRecovering), Payload: payload,
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",
+		HasExposure: true, ExpiresAt: now.Add(time.Minute), CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		"GET",
+		"/api/v1/live/sessions/session-private?account_pacifica=other&account_hyperliquid=0xother",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	server.handleLiveSessionStatus(response, request)
+	if response.Code != 404 {
+		t.Fatalf("status = %d body = %s, want not found", response.Code, response.Body.String())
 	}
 }
 
@@ -156,6 +227,73 @@ func TestAmbiguousCloseSubmissionRemainsPending(t *testing.T) {
 	}
 }
 
+func TestWrongCloseSignerIsRejectedBeforeReconciliation(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	requestToSign := &domain.SigningRequest{
+		ID: "close-request", ClientOrderID: "close-order", PositionID: "position-residual",
+		Leg: 1, Venue: "pacifica", Account: "sol-wallet", Action: "close", ReduceOnly: true,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	server.live.signingStore.Store(requestToSign)
+	request := httptest.NewRequest("POST", "/api/v1/live/submit", jsonBody(t, domain.SignedAction{
+		RequestID: requestToSign.ID, ClientOrderID: requestToSign.ClientOrderID,
+		Venue: "pacifica", SignerAddress: "wrong-wallet", Signature: "signature",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveSubmit(response, request)
+	if response.Code != 400 {
+		t.Fatalf("status = %d body = %s, want bad request", response.Code, response.Body.String())
+	}
+	position, err := server.liveStore.GetPosition(context.Background(), "position-residual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position.State != string(executor.ExecStateDegraded) {
+		t.Fatalf("position state = %q, wrong signer started reconciliation", position.State)
+	}
+}
+
+func TestCloseCapacityFailureDoesNotStartReconciliation(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.live.accounts = newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{},
+	}, accountFeedRegistryConfig{MaxFeeds: 1, MaxPerVenue: 1})
+	occupied, err := server.live.accounts.Acquire("pacifica", "occupied-wallet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Release()
+
+	requestToSign := &domain.SigningRequest{
+		ID: "close-capacity", ClientOrderID: "close-capacity-order", PositionID: "position-residual",
+		Leg: 1, Venue: "pacifica", Account: "sol-wallet", Action: "close", ReduceOnly: true,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	server.live.signingStore.Store(requestToSign)
+	signed := domain.SignedAction{
+		RequestID: requestToSign.ID, ClientOrderID: requestToSign.ClientOrderID,
+		Venue: "pacifica", SignerAddress: "sol-wallet", Signature: "signature",
+	}
+	request := httptest.NewRequest("POST", "/api/v1/live/submit", jsonBody(t, signed))
+	response := httptest.NewRecorder()
+	server.handleLiveSubmit(response, request)
+	if response.Code != 503 {
+		t.Fatalf("status = %d body = %s, want service unavailable", response.Code, response.Body.String())
+	}
+	position, err := server.liveStore.GetPosition(context.Background(), "position-residual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position.State != string(executor.ExecStateDegraded) {
+		t.Fatalf("position state = %q, local capacity failure started reconciliation", position.State)
+	}
+	if _, err := server.live.signingStore.ValidateAndConsume(signed); err != nil {
+		t.Fatalf("unsent signing request was not restored: %v", err)
+	}
+}
+
 func newResidualExposureServer(t *testing.T) (*Server, *sql.DB) {
 	t.Helper()
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "residual.db"))
@@ -167,9 +305,11 @@ func newResidualExposureServer(t *testing.T) (*Server, *sql.DB) {
 	_, err = database.Exec(`
 		INSERT INTO live_positions (
 			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_pacifica, account_hyperliquid,
 			notional, leverage, started_at, opened_at, completed_at, updated_at
 		) VALUES (
 			'position-residual', 'plan-1', 'opportunity-1', 'SOL', 'pacifica', 'hyperliquid', 'degraded',
+			'sol-wallet', '0xwallet',
 			10, 2, ?, ?, ?, ?
 		)`, now, now, now, now)
 	if err != nil {

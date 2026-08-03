@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -293,7 +294,7 @@ func (s *Store) MarkCloseDegraded(ctx context.Context, positionID string) error 
 
 // livePositionCols is the column list for live_positions queries.
 const livePositionCols = `id, plan_id, opportunity_id, asset,
-	venue_a, venue_b, state,
+	venue_a, venue_b, state, account_pacifica, account_hyperliquid,
 	notional, leverage,
 	entry_spread, hedge_mismatch,
 	current_spread, current_basis, entry_basis, basis_change,
@@ -310,7 +311,7 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 	var openedAt, completedAt, monitorAt sql.NullString
 	err := scanner.Scan(
 		&p.ID, &p.PlanID, &p.OpportunityID, &p.Asset,
-		&p.VenueA, &p.VenueB, &p.State,
+		&p.VenueA, &p.VenueB, &p.State, &p.AccountPacifica, &p.AccountHyperliquid,
 		&p.Notional, &p.Leverage,
 		&p.EntrySpread, &p.HedgeMismatch,
 		&p.CurrentSpread, &p.CurrentBasis, &p.EntryBasis, &p.BasisChange,
@@ -338,10 +339,25 @@ func (s *Store) GetPosition(ctx context.Context, id string) (*LivePosition, erro
 	return scanLivePosition(row)
 }
 
+func (s *Store) GetPositionForAccounts(ctx context.Context, id, pacifica, hyperliquid string) (*LivePosition, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE id = ? AND account_pacifica = ? AND account_hyperliquid = ?`,
+		id, strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+	return scanLivePosition(row)
+}
+
 // ListPositions returns all live positions, newest first.
 func (s *Store) ListPositions(ctx context.Context) ([]LivePosition, error) {
 	return s.queryPositions(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions ORDER BY started_at DESC`)
+}
+
+func (s *Store) ListPositionsForAccounts(ctx context.Context, pacifica, hyperliquid string) ([]LivePosition, error) {
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE account_pacifica = ? AND account_hyperliquid = ? ORDER BY started_at DESC`,
+		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
 }
 
 // ListOpenPositions returns positions in open or degraded state.
@@ -350,8 +366,16 @@ func (s *Store) ListOpenPositions(ctx context.Context) ([]LivePosition, error) {
 		`SELECT `+livePositionCols+` FROM live_positions WHERE state IN ('open', 'degraded') ORDER BY started_at DESC`)
 }
 
-func (s *Store) queryPositions(ctx context.Context, query string) ([]LivePosition, error) {
-	rows, err := s.db.QueryContext(ctx, query)
+func (s *Store) ListOpenPositionsForAccounts(ctx context.Context, pacifica, hyperliquid string) ([]LivePosition, error) {
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE state IN ('open', 'degraded') AND account_pacifica = ? AND account_hyperliquid = ?
+		 ORDER BY started_at DESC`,
+		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+}
+
+func (s *Store) queryPositions(ctx context.Context, query string, args ...any) ([]LivePosition, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -422,22 +446,22 @@ func (s *Store) GetEvents(ctx context.Context, positionID string) ([]LiveEvent, 
 
 // MonitorUpdate holds the fields written by the live monitor on each tick.
 type MonitorUpdate struct {
-	CurrentSpread  float64
-	CurrentBasis   float64
-	EntryBasis     float64
-	BasisChange    float64
-	PricePnL       float64
-	FundingPnL     float64
-	TotalPnL       float64
-	Leg1CurPrice   float64
-	Leg2CurPrice   float64
-	Leg1LiqPrice   float64
-	Leg2LiqPrice   float64
-	Leg1LiqDist    float64
-	Leg2LiqDist    float64
-	Leg1LiqRisk    string
-	Leg2LiqRisk    string
-	HoldHours      float64
+	CurrentSpread float64
+	CurrentBasis  float64
+	EntryBasis    float64
+	BasisChange   float64
+	PricePnL      float64
+	FundingPnL    float64
+	TotalPnL      float64
+	Leg1CurPrice  float64
+	Leg2CurPrice  float64
+	Leg1LiqPrice  float64
+	Leg2LiqPrice  float64
+	Leg1LiqDist   float64
+	Leg2LiqDist   float64
+	Leg1LiqRisk   string
+	Leg2LiqRisk   string
+	HoldHours     float64
 }
 
 // UpdateMonitoring writes monitoring-derived fields to a live position.
@@ -491,38 +515,40 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 
 // LivePosition is the read model for a live position.
 type LivePosition struct {
-	ID             string  `json:"id"`
-	PlanID         string  `json:"plan_id"`
-	OpportunityID  string  `json:"opportunity_id"`
-	Asset          string  `json:"asset"`
-	VenueA         string  `json:"venue_a"`
-	VenueB         string  `json:"venue_b"`
-	State          string  `json:"state"`
-	Notional       float64 `json:"notional"`
-	Leverage       float64 `json:"leverage"`
-	EntrySpread    float64 `json:"entry_spread"`
-	HedgeMismatch  float64 `json:"hedge_mismatch"`
-	CurrentSpread  float64 `json:"current_spread"`
-	CurrentBasis   float64 `json:"current_basis"`
-	EntryBasis     float64 `json:"entry_basis"`
-	BasisChange    float64 `json:"basis_change"`
-	PricePnL       float64 `json:"price_pnl"`
-	FundingPnL     float64 `json:"funding_pnl"`
-	TotalPnL       float64 `json:"total_pnl"`
-	Leg1CurPrice   float64 `json:"leg1_current_price"`
-	Leg2CurPrice   float64 `json:"leg2_current_price"`
-	Leg1LiqPrice   float64 `json:"leg1_liq_price"`
-	Leg2LiqPrice   float64 `json:"leg2_liq_price"`
-	Leg1LiqDist    float64 `json:"leg1_liq_dist"`
-	Leg2LiqDist    float64 `json:"leg2_liq_dist"`
-	Leg1LiqRisk    string  `json:"leg1_liq_risk"`
-	Leg2LiqRisk    string  `json:"leg2_liq_risk"`
-	HoldHours      float64 `json:"hold_hours"`
-	StartedAt      string  `json:"started_at"`
-	OpenedAt       string  `json:"opened_at,omitempty"`
-	CompletedAt    string  `json:"completed_at,omitempty"`
-	MonitorAt      string  `json:"monitor_at,omitempty"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID                 string  `json:"id"`
+	PlanID             string  `json:"plan_id"`
+	OpportunityID      string  `json:"opportunity_id"`
+	Asset              string  `json:"asset"`
+	VenueA             string  `json:"venue_a"`
+	VenueB             string  `json:"venue_b"`
+	State              string  `json:"state"`
+	AccountPacifica    string  `json:"-"`
+	AccountHyperliquid string  `json:"-"`
+	Notional           float64 `json:"notional"`
+	Leverage           float64 `json:"leverage"`
+	EntrySpread        float64 `json:"entry_spread"`
+	HedgeMismatch      float64 `json:"hedge_mismatch"`
+	CurrentSpread      float64 `json:"current_spread"`
+	CurrentBasis       float64 `json:"current_basis"`
+	EntryBasis         float64 `json:"entry_basis"`
+	BasisChange        float64 `json:"basis_change"`
+	PricePnL           float64 `json:"price_pnl"`
+	FundingPnL         float64 `json:"funding_pnl"`
+	TotalPnL           float64 `json:"total_pnl"`
+	Leg1CurPrice       float64 `json:"leg1_current_price"`
+	Leg2CurPrice       float64 `json:"leg2_current_price"`
+	Leg1LiqPrice       float64 `json:"leg1_liq_price"`
+	Leg2LiqPrice       float64 `json:"leg2_liq_price"`
+	Leg1LiqDist        float64 `json:"leg1_liq_dist"`
+	Leg2LiqDist        float64 `json:"leg2_liq_dist"`
+	Leg1LiqRisk        string  `json:"leg1_liq_risk"`
+	Leg2LiqRisk        string  `json:"leg2_liq_risk"`
+	HoldHours          float64 `json:"hold_hours"`
+	StartedAt          string  `json:"started_at"`
+	OpenedAt           string  `json:"opened_at,omitempty"`
+	CompletedAt        string  `json:"completed_at,omitempty"`
+	MonitorAt          string  `json:"monitor_at,omitempty"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 // LiveFill is the read model for a leg fill.

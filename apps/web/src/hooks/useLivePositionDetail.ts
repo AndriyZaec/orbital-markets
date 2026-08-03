@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import { useVenueAuthority } from './useVenueAuthority'
 
 export interface LiveFillDetail {
   id: number
@@ -41,19 +42,24 @@ export function useLivePositionDetail(positionId: string | null) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
+  const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
     const request = ++requestSequence.current
     if (signal?.aborted) return
     setData(null)
     setError(null)
-    if (!positionId) {
+    if (!positionId || !pacificaAddress || !hyperliquidAddress) {
       setLoading(false)
       return
     }
     setLoading(true)
     try {
-      const resp = await apiFetch(`/api/v1/live/positions/${positionId}`, { signal })
+      const query = new URLSearchParams({
+        account_pacifica: pacificaAddress,
+        account_hyperliquid: hyperliquidAddress,
+      })
+      const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`, { signal })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const d: LivePositionDetailData = await resp.json()
       if (signal?.aborted || request !== requestSequence.current) return
@@ -65,7 +71,7 @@ export function useLivePositionDetail(positionId: string | null) {
     } finally {
       if (request === requestSequence.current) setLoading(false)
     }
-  }, [positionId])
+  }, [positionId, pacificaAddress, hyperliquidAddress])
 
   useEffect(() => {
     const controller = new AbortController()

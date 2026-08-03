@@ -19,8 +19,9 @@ type SigningRequest struct {
 	Leg           int    `json:"leg,omitempty"`
 
 	// Venue context
-	Venue  string `json:"venue"`  // "pacifica" or "hyperliquid"
-	Action string `json:"action"` // "open" or "close"
+	Venue   string `json:"venue"`   // "pacifica" or "hyperliquid"
+	Action  string `json:"action"`  // "open" or "close"
+	Account string `json:"account"` // normalized venue account that must sign and submit
 
 	// Order fields (venue-agnostic summary for frontend display)
 	Symbol     string  `json:"symbol"`

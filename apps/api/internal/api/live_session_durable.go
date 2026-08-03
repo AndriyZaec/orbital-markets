@@ -85,7 +85,7 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("updated_at: %w", err)
 	}
-	return &LiveSession{
+	session := &LiveSession{
 		ID: durable.ID, Plan: durable.Plan,
 		Leg1:            legPlan{venue: durable.Leg1.Venue, symbol: durable.Leg1.Symbol, side: durable.Leg1.Side, price: durable.Leg1.Price},
 		Leg2:            legPlan{venue: durable.Leg2.Venue, symbol: durable.Leg2.Symbol, side: durable.Leg2.Side, price: durable.Leg2.Price},
@@ -101,7 +101,25 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 		BaselineLeg1Size: durable.BaselineLeg1Size,
 		BaselineLeg2Size: durable.BaselineLeg2Size,
 		CreatedAt:        createdAt, UpdatedAt: updatedAt,
-	}, nil
+	}
+	backfillSigningRequestAccounts(session)
+	return session, nil
+}
+
+// Persisted sessions created before account-scoped feeds did not store the
+// request account. Backfill it so an armed unwind remains usable after deploy.
+func backfillSigningRequestAccounts(session *LiveSession) {
+	requests := []*domain.SigningRequest{
+		session.Leg1OpenReq, session.Leg1UnwindReq,
+		session.Leg2OpenReq, session.Leg2RetryReq, session.ArmedUnwindReq,
+	}
+	for _, request := range requests {
+		if request != nil && request.Account == "" {
+			request.Account = accountForVenue(
+				request.Venue, session.AccountPacifica, session.AccountHyperliquid,
+			)
+		}
+	}
 }
 
 const timeFormat = "2006-01-02T15:04:05.999999999Z07:00"
