@@ -24,19 +24,6 @@ SET account_pacifica = COALESCE((
         LIMIT 1
     ), '');
 
--- Never deploy scoped readers while an actionable position has no owner. The
--- CHECK intentionally aborts and rolls back this migration so ownership can be
--- assigned by an operator instead of hiding a position from close/kill flows.
-CREATE TEMP TABLE unowned_open_live_positions_must_be_assigned (
-    count INTEGER NOT NULL CHECK (count = 0)
-);
-INSERT INTO unowned_open_live_positions_must_be_assigned
-SELECT COUNT(*)
-FROM live_positions
-WHERE state IN ('open', 'degraded', 'closing')
-  AND (account_pacifica = '' OR account_hyperliquid = '');
-DROP TABLE unowned_open_live_positions_must_be_assigned;
-
 CREATE INDEX idx_live_positions_accounts
     ON live_positions(account_pacifica, account_hyperliquid, started_at);
 

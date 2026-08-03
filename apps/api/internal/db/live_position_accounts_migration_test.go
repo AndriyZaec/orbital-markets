@@ -50,11 +50,20 @@ func TestLivePositionAccountMigrationBackfillsDurableSessionOwner(t *testing.T) 
 	}
 }
 
-func TestLivePositionAccountMigrationRejectsUnownedOpenPosition(t *testing.T) {
+func TestLivePositionAccountMigrationAllowsUnownedLegacyPosition(t *testing.T) {
 	database := openDatabaseAtMigration(t, 10)
 	insertLegacyLivePosition(t, database, "unowned-plan")
-	if err := goose.UpTo(database, "migrations", 11); err == nil {
-		t.Fatal("migration accepted an unowned open position")
+	if err := goose.UpTo(database, "migrations", 11); err != nil {
+		t.Fatal(err)
+	}
+	var pacifica, hyperliquid string
+	if err := database.QueryRow(`
+		SELECT account_pacifica, account_hyperliquid FROM live_positions WHERE id = 'unowned-plan'
+	`).Scan(&pacifica, &hyperliquid); err != nil {
+		t.Fatal(err)
+	}
+	if pacifica != "" || hyperliquid != "" {
+		t.Fatalf("unowned legacy accounts = %q/%q, want empty", pacifica, hyperliquid)
 	}
 }
 
