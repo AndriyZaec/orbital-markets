@@ -104,6 +104,7 @@ func (s *Server) routes() {
 	// Live execution (non-custodial signing flow)
 	s.mux.HandleFunc("POST /api/v1/live/prepare", s.handleLivePrepare)
 	s.mux.HandleFunc("POST /api/v1/live/advance", s.handleLiveAdvance)
+	s.mux.HandleFunc("GET /api/v1/live/sessions/", s.handleLiveSessionStatus)
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
 	s.mux.HandleFunc("GET /api/v1/live/balances", s.handleLiveBalances)
 	s.mux.HandleFunc("POST /api/v1/live/accounts/ensure", s.handleLiveAccountsEnsure)

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
 import { useLiveClose } from '@/hooks/useLiveClose'
+import { hasActionableRecordedFills } from '@/lib/degraded-execution'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
@@ -82,13 +83,14 @@ function needsAttention(state: string) {
 }
 
 export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props) {
-  const { data, loading } = useLivePositionDetail(pos.id)
+  const { data, loading, error: detailError } = useLivePositionDetail(pos.id)
   const fills = data?.fills ?? []
   const events = data?.events ?? []
   const liveClose = useLiveClose()
   const [confirmClose, setConfirmClose] = useState(false)
 
-  const canClose = (pos.state === 'open' || pos.state === 'degraded') && pos.notional > 0
+  const hasRecordedExposure = hasActionableRecordedFills(fills)
+  const canClose = (pos.state === 'open' || pos.state === 'degraded') && !loading && hasRecordedExposure
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
@@ -131,27 +133,38 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
         </div>
 
         {/* Reason banner for non-open states */}
-        {needsAttention(pos.state) && reason && (
+        {needsAttention(pos.state) && (
           <div className={`px-5 py-3 border-b ${
             pos.state === 'degraded' ? 'border-orange-500/20 bg-orange-500/[0.04]'
             : 'border-red-500/20 bg-red-500/[0.04]'
           }`}>
             <p className={`text-[11px] font-medium mb-1 ${pos.state === 'degraded' ? 'text-orange-400' : 'text-red-400'}`}>
-              {pos.state === 'degraded' ? 'Manual action may be required' : 'Execution failed'}
+              {pos.state === 'degraded'
+                ? hasRecordedExposure ? 'Recorded exposure needs attention' : 'Exposure could not be reconstructed'
+                : 'Execution failed'}
             </p>
-            <p className="text-[10px] text-muted-foreground">{reason}</p>
+            <p className="text-[10px] text-muted-foreground">
+              {pos.state === 'degraded' && !hasRecordedExposure
+                ? 'No actionable filled leg is recorded. Verify both venues directly before trading again.'
+                : reason ?? 'Review the recorded fills and event timeline before taking another action.'}
+            </p>
           </div>
         )}
 
         {/* Leg Fills */}
         <div className="px-5 py-4 border-b border-border">
           <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">
-            {pos.state === 'degraded' ? 'Remaining Exposure' : 'Leg Fills'}
+            {pos.state === 'degraded' ? 'Recorded fills / possible exposure' : 'Leg Fills'}
           </p>
           {loading && <p className="text-[10px] text-muted-foreground">Loading...</p>}
           {!loading && fills.length === 0 && (
-            <p className="text-[10px] text-muted-foreground">No fills recorded.</p>
+            <p className="text-[10px] text-muted-foreground">
+              {pos.state === 'degraded'
+                ? 'No fills recorded. Verify this account directly on both venues.'
+                : 'No fills recorded.'}
+            </p>
           )}
+          {detailError && <p className="text-[10px] text-red-400">Could not load recorded fills: {detailError}</p>}
           {fills.length > 0 && (
             <div className="space-y-2">
               {fills.map((f) => (
@@ -225,12 +238,16 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {/* Confirm prompt */}
             {canClose && !confirmClose && !isClosing && !closeDone && (
               <Button variant="destructive" size="sm" className="w-full" onClick={() => setConfirmClose(true)}>
-                Close Position
+                {pos.state === 'degraded' ? 'Close Recorded Exposure' : 'Close Position'}
               </Button>
             )}
             {confirmClose && !isClosing && (
               <div className="flex items-center gap-2">
-                <p className="text-[11px] text-muted-foreground flex-1">Close both legs? Your wallet will sign each close order.</p>
+                <p className="text-[11px] text-muted-foreground flex-1">
+                  {pos.state === 'degraded'
+                    ? 'Close every remaining recorded leg? Your wallet will sign each close order.'
+                    : 'Close both legs? Your wallet will sign each close order.'}
+                </p>
                 <Button variant="outline" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
                 <Button variant="destructive" size="xs" onClick={handleClose}>Confirm</Button>
               </div>
@@ -328,7 +345,7 @@ function EventRow({ event: ev }: { event: LiveEventDetail }) {
       <span className={`font-medium shrink-0 w-[100px] ${
         isComplete && isError ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-foreground'
       }`}>{ev.event}</span>
-      {ev.detail && <span className="text-muted-foreground truncate">{ev.detail}</span>}
+      {ev.detail && <span className="text-muted-foreground break-words">{ev.detail}</span>}
     </div>
   )
 }

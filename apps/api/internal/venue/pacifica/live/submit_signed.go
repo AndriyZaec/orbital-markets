@@ -40,17 +40,20 @@ func (c *Client) SubmitSignedOrder(
 	)
 
 	// Submit via the existing WS path
-	submitResult, err := c.sendOrder(ctx, finalOrder)
+	sendOrder := c.sendOrder
+	if c.sendSigned != nil {
+		sendOrder = c.sendSigned
+	}
+	submitResult, err := sendOrder(ctx, finalOrder)
 	if err != nil {
-		return &domain.SubmissionResult{
-			RequestID:     signed.RequestID,
-			ClientOrderID: req.ClientOrderID,
-			Venue:         "pacifica",
-			Accepted:      false,
-			Error:         err.Error(),
-			SubmittedAt:   time.Now(),
-			RespondedAt:   time.Now(),
-		}, nil
+		if tracker != nil {
+			tracker.Register(&SubmitResult{
+				ClientOrderID: req.ClientOrderID,
+				Symbol:        req.Symbol,
+				SubmittedAt:   time.Now(),
+			}, req.Amount)
+		}
+		return nil, fmt.Errorf("submit signed order: %w", err)
 	}
 
 	// Register with tracker for fill monitoring

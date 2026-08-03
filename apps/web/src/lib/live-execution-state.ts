@@ -23,3 +23,7 @@ export function executionPhaseFromStatus(status: AdvanceStatus) {
     default: return status
   }
 }
+
+export function executionFailurePhase(exposurePossible: boolean) {
+  return exposurePossible ? 'recovering' as const : 'failed' as const
+}

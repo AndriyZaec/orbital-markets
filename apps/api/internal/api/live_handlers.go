@@ -430,26 +430,30 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	result, err := s.submitSignedAction(r.Context(), signed, sigReq)
 
 	if err != nil {
-		s.recordCloseSubmissionFailure(r.Context(), sigReq, err.Error())
+		s.trackAmbiguousCloseSubmission(sigReq, err.Error())
 		s.logger.Error("live submit: submission error",
 			"request_id", signed.RequestID,
 			"venue", signed.Venue,
 			"err", err,
 		)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("submission failed: %s", err),
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"request_id": sigReq.ID, "client_order_id": sigReq.ClientOrderID,
+			"venue": sigReq.Venue, "accepted": false, "uncertain": true,
+			"error": fmt.Sprintf("submission response uncertain: %s", err),
 		})
 		return
 	}
 
 	if result == nil {
-		s.recordCloseSubmissionFailure(r.Context(), sigReq, "submission returned no result")
+		s.trackAmbiguousCloseSubmission(sigReq, "submission returned no result")
 		s.logger.Error("live submit: nil result without error",
 			"request_id", signed.RequestID,
 			"venue", signed.Venue,
 		)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": "submission returned no result",
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"request_id": sigReq.ID, "client_order_id": sigReq.ClientOrderID,
+			"venue": sigReq.Venue, "accepted": false, "uncertain": true,
+			"error": "submission response uncertain: no result",
 		})
 		return
 	}

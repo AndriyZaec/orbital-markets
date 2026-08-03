@@ -6,6 +6,7 @@ import { useVenueAuthority } from './useVenueAuthority'
 import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction } from '@/types/signing'
 import {
+  executionFailurePhase,
   executionPhaseFromStatus,
   normalizeHyperliquidAddress,
   normalizePacificaAddress,
@@ -113,11 +114,62 @@ interface AdvanceResp {
   remaining_exposure?: RemainingExposure[]
 }
 
+const recoveryPollLimit = 300
+const recoveryPollIntervalMs = 1_000
+
 export function useLiveExecution() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
   const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
   const { signTypedDataAsync } = useSignTypedData()
+
+  useEffect(() => {
+    if (state.phase !== 'recovering' || !state.sessionId) return
+
+    let cancelled = false
+    const sessionId = state.sessionId
+    const poll = async () => {
+      for (let attempt = 0; attempt < recoveryPollLimit && !cancelled; attempt++) {
+        if (attempt > 0) {
+          await new Promise(resolve => window.setTimeout(resolve, recoveryPollIntervalMs))
+        }
+        if (cancelled) return
+
+        try {
+          const response = await apiFetch(`/api/v1/live/sessions/${sessionId}`)
+          if (!response.ok) continue
+          const result: AdvanceResp = await response.json()
+          if (result.status === 'recovering') continue
+
+          setState((current) => ({
+            ...current,
+            phase: executionPhaseFromStatus(result.status),
+            leg1Fill: result.leg1_fill ?? current.leg1Fill,
+            leg2Fill: result.leg2_fill ?? current.leg2Fill,
+            mismatch: result.mismatch ?? current.mismatch,
+            positionId: result.position_id ?? current.positionId,
+            reason: result.reason ?? current.reason,
+            unwound: result.unwound ?? false,
+            unwindStatus: (result.unwind_status ?? null) as UnwindStatus,
+            remainingExposure: result.remaining_exposure ?? [],
+          }))
+          return
+        } catch {
+          // Keep polling because the original submission and this status request may both be transiently unavailable.
+        }
+      }
+      if (!cancelled) {
+        setState((current) => ({
+          ...current,
+          phase: 'degraded',
+          reason: 'Venue reconciliation did not finish in time. Review venue positions before retrying.',
+        }))
+      }
+    }
+
+    poll()
+    return () => { cancelled = true }
+  }, [state.phase, state.sessionId])
 
   // Live refs of the currently connected accounts. The executeLive async
   // callback is created once and closes over stale addresses; refs let us
@@ -169,6 +221,8 @@ export function useLiveExecution() {
     }
 
     setState({ ...INITIAL_STATE, phase: 'preparing' })
+
+    let exposurePossible = false
 
     try {
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
@@ -274,6 +328,7 @@ export function useLiveExecution() {
 
       // 3. Advance step 1 — backend arms unwind, submits leg 1, waits for fill.
       setState((s) => ({ ...s, phase: 'submitting_leg1' }))
+      exposurePossible = true
       let adv1: AdvanceResp
       try {
         adv1 = await postAdvance({ session_id: prep.session_id, signed_actions: signedLeg1 })
@@ -464,8 +519,10 @@ export function useLiveExecution() {
     } catch (e) {
       setState((s) => ({
         ...s,
-        phase: 'failed',
-        error: e instanceof Error ? e.message : 'Unknown error',
+        phase: executionFailurePhase(exposurePossible),
+        ...(exposurePossible
+          ? { reason: `Execution response is uncertain: ${e instanceof Error ? e.message : 'Unknown error'}` }
+          : { error: e instanceof Error ? e.message : 'Unknown error' }),
       }))
     }
   }, [pacificaAddress, hyperliquidAddress, buildSigners])

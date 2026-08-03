@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { LiveExecutionState, ExecutionPhase, LegFillView, UnwindStatus } from '@/hooks/useLiveExecution'
+import { recoveryPresentation, type RecoveryTone } from '@/lib/degraded-execution'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -32,7 +33,7 @@ function useCountdownToExpiry(expiresAt: string | null) {
   return remaining
 }
 
-type LegStatus = 'pending' | 'signing' | 'submitting' | 'accepted' | 'failed' | 'unwound' | 'skipped'
+type LegStatus = 'pending' | 'signing' | 'submitting' | 'checking' | 'accepted' | 'partial' | 'failed' | 'unwound' | 'skipped'
 
 function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatus {
   switch (phase) {
@@ -44,6 +45,7 @@ function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatu
     case 'awaiting_leg2_retry':
     case 'submitting_leg2_retry':
     case 'open': return 'accepted'
+    case 'recovering': return 'checking'
     case 'degraded':
     case 'aborted':
       if (unwindStatus === 'confirmed') return 'unwound'
@@ -54,14 +56,15 @@ function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatu
   }
 }
 
-function leg2Status(phase: ExecutionPhase): LegStatus {
+function leg2Status(phase: ExecutionPhase, fill: LegFillView | null): LegStatus {
   switch (phase) {
     case 'awaiting_leg2': return 'signing'
     case 'submitting_leg2': return 'submitting'
     case 'awaiting_leg2_retry': return 'signing'
     case 'submitting_leg2_retry': return 'submitting'
     case 'open': return 'accepted'
-    case 'degraded': return 'failed'
+    case 'recovering': return 'checking'
+    case 'degraded': return fill && fill.filled_amount > 0 ? 'partial' : 'failed'
     case 'aborted': return 'skipped'
     default: return 'pending'
   }
@@ -71,7 +74,9 @@ const STATUS_STYLE: Record<LegStatus, { dot: string; text: string; label: string
   pending: { dot: 'bg-zinc-500', text: 'text-muted-foreground', label: 'Pending' },
   signing: { dot: 'bg-yellow-400 animate-pulse', text: 'text-yellow-400', label: 'Awaiting Signature...' },
   submitting: { dot: 'bg-blue-400 animate-pulse', text: 'text-blue-400', label: 'Submitting...' },
+  checking: { dot: 'bg-blue-400 animate-pulse', text: 'text-blue-400', label: 'Checking venue state' },
   accepted: { dot: 'bg-green-400', text: 'text-green-400', label: 'Filled' },
+  partial: { dot: 'bg-orange-400', text: 'text-orange-400', label: 'Partial fill' },
   failed: { dot: 'bg-red-400', text: 'text-red-400', label: 'Failed' },
   unwound: { dot: 'bg-orange-400', text: 'text-orange-400', label: 'Unwound' },
   skipped: { dot: 'bg-zinc-600', text: 'text-muted-foreground', label: 'Not attempted' },
@@ -87,6 +92,8 @@ function LegCard({
   return (
     <div className={`rounded-lg border px-4 py-3 ${
       status === 'accepted' ? 'border-green-500/20 bg-green-500/[0.03]'
+      : status === 'partial' ? 'border-orange-500/20 bg-orange-500/[0.03]'
+      : status === 'checking' ? 'border-blue-500/20 bg-blue-500/[0.03]'
       : status === 'failed' ? 'border-red-500/20 bg-red-500/[0.03]'
       : status === 'unwound' ? 'border-orange-500/20 bg-orange-500/[0.03]'
       : status === 'signing' || status === 'submitting' ? 'border-yellow-500/20 bg-yellow-500/[0.03]'
@@ -156,6 +163,13 @@ const PHASE_HINT: Partial<Record<ExecutionPhase, string>> = {
   recovering: 'Reconciling venue positions after an uncertain result...',
 }
 
+const TONE_STYLE: Record<RecoveryTone, { border: string; background: string; title: string; button: string }> = {
+  green: { border: 'border-green-500/20', background: 'bg-green-500/[0.04]', title: 'text-green-400', button: 'bg-green-600 hover:bg-green-500' },
+  blue: { border: 'border-blue-500/20', background: 'bg-blue-500/[0.04]', title: 'text-blue-400', button: 'bg-blue-600 hover:bg-blue-500' },
+  orange: { border: 'border-orange-500/20', background: 'bg-orange-500/[0.04]', title: 'text-orange-400', button: 'bg-orange-600 hover:bg-orange-500' },
+  red: { border: 'border-red-500/20', background: 'bg-red-500/[0.04]', title: 'text-red-400', button: 'bg-red-600 hover:bg-red-500' },
+}
+
 export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }: Props) {
   const countdown = useCountdownToExpiry(state.expiresAt)
   const isTerminal = TERMINAL.includes(state.phase)
@@ -163,6 +177,10 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
   const leg2Venue = state.hedgeVenue
   const leg1Amount = state.leg1Requests[0]?.amount
   const leg2Amount = state.leg2Request?.amount
+  const terminalPresentation = isTerminal
+    ? recoveryPresentation(state.phase as 'open' | 'recovering' | 'degraded' | 'aborted' | 'failed', state.unwindStatus, state.remainingExposure.length)
+    : null
+  const terminalStyle = terminalPresentation ? TONE_STYLE[terminalPresentation.tone] : null
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -203,7 +221,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           {state.phase !== 'idle' && (
             <div className="flex flex-col gap-3 mb-4">
               <LegCard label="Leg 1 · Riskier" venue={leg1Venue} status={leg1Status(state.phase, state.unwindStatus)} amount={leg1Amount} fill={state.leg1Fill} />
-              <LegCard label="Leg 2 · Hedge" venue={leg2Venue} status={leg2Status(state.phase)} amount={leg2Amount} fill={state.leg2Fill} />
+              <LegCard label="Leg 2 · Hedge" venue={leg2Venue} status={leg2Status(state.phase, state.leg2Fill)} amount={leg2Amount} fill={state.leg2Fill} />
             </div>
           )}
 
@@ -223,42 +241,28 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           )}
 
           {/* Terminal banners */}
-          {state.phase === 'open' && (
-            <div className="rounded border border-green-500/20 bg-green-500/[0.04] px-4 py-3 text-center">
-              <p className="text-xs text-green-400 font-medium">Hedge opened</p>
-              <p className="text-[10px] text-muted-foreground mt-1">Both legs filled within the hedge tolerance.</p>
-            </div>
-          )}
-          {(state.phase === 'degraded' || state.phase === 'aborted') && (
-            <div className="rounded border border-orange-500/20 bg-orange-500/[0.04] px-4 py-3">
-              <p className="text-xs text-orange-400 font-medium mb-1">
-                {state.phase === 'degraded' ? 'Hedge not established' : 'Open aborted'}
-              </p>
-              {state.reason && <p className="text-[11px] text-orange-400/70">{state.reason}</p>}
-              <UnwindNotice status={state.unwindStatus} />
-              {state.remainingExposure.length > 0 && (
-                <div className="mt-2 space-y-1">
-                  <p className="text-[10px] text-muted-foreground">Remaining exposure:</p>
-                  {state.remainingExposure.map((exposure) => (
-                    <p key={`${exposure.leg}-${exposure.venue}`} className="text-[10px] font-mono text-orange-300">
-                      Leg {exposure.leg} · {exposure.venue} · {exposure.side} {fmtAmount(exposure.amount)} {exposure.symbol}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {state.phase === 'recovering' && (
-            <div className="rounded border border-blue-500/20 bg-blue-500/[0.04] px-4 py-3 text-center">
-              <p className="text-xs text-blue-400 font-medium">Venue reconciliation started</p>
-              <p className="text-[10px] text-muted-foreground mt-1">Check Live Positions for the recovered open, failed, or degraded result.</p>
-            </div>
-          )}
-          {state.phase === 'failed' && (
-            <div className="rounded border border-red-500/20 bg-red-500/[0.04] px-4 py-3">
-              <p className="text-xs text-red-400 font-medium mb-1">Execution failed</p>
+          {terminalPresentation && terminalStyle && (
+            <div className={`rounded border px-4 py-3 ${terminalStyle.border} ${terminalStyle.background}`}>
+              <p className={`text-xs font-medium ${terminalStyle.title}`}>{terminalPresentation.title}</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">{terminalPresentation.description}</p>
               {(state.error || state.reason) && (
-                <p className="text-[11px] text-red-400/70">{state.error || state.reason}</p>
+                <p className={`mt-2 text-[11px] ${terminalStyle.title} opacity-75`}>{state.error || state.reason}</p>
+              )}
+              {(state.phase === 'degraded' || state.phase === 'aborted') && <UnwindNotice status={state.unwindStatus} />}
+              {state.remainingExposure.length > 0 && (
+                <div className="mt-3 space-y-1.5 rounded border border-orange-500/15 bg-black/10 px-3 py-2">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Last reported exposure</p>
+                  {state.remainingExposure.map((exposure) => {
+                    const fill = exposure.leg === 1 ? state.leg1Fill : state.leg2Fill
+                    const usd = fill && fill.avg_price > 0 ? exposure.amount * fill.avg_price : null
+                    return (
+                      <p key={`${exposure.leg}-${exposure.venue}`} className="text-[10px] font-mono text-orange-300">
+                        {exposure.venue} · {exposure.side} {fmtAmount(exposure.amount)} {exposure.symbol}
+                        {usd !== null ? ` · ≈$${usd.toFixed(2)}` : ''}
+                      </p>
+                    )
+                  })}
+                </div>
               )}
             </div>
           )}
@@ -267,19 +271,12 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
         {/* Footer actions */}
         {isTerminal && (
           <div className="px-5 py-4 border-t border-border flex gap-2">
-            {state.phase === 'open' || state.phase === 'recovering' ? (
+            {terminalPresentation && terminalStyle && (
               <button
-                onClick={onViewPositions}
-                className="flex-1 py-2 rounded-lg text-xs font-medium bg-green-600 text-white hover:bg-green-500 transition-colors"
+                onClick={terminalPresentation.action === 'retry' ? onRetry : onViewPositions}
+                className={`flex-1 py-2 rounded-lg text-xs font-medium text-white transition-colors ${terminalStyle.button}`}
               >
-                View Positions
-              </button>
-            ) : (
-              <button
-                onClick={onRetry}
-                className="flex-1 py-2 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-              >
-                Try Again
+                {terminalPresentation.actionLabel}
               </button>
             )}
             <button

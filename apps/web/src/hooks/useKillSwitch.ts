@@ -37,6 +37,7 @@ export interface KillState {
   submitted: number
   succeeded: number
   failed: number
+  uncertain: number
   positions: KillPositionInfo[]
   errors: string[]
 }
@@ -49,6 +50,7 @@ const INITIAL: KillState = {
   submitted: 0,
   succeeded: 0,
   failed: 0,
+  uncertain: 0,
   positions: [],
   errors: [],
 }
@@ -84,7 +86,15 @@ export function useKillSwitch() {
     })
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}))
-      throw new Error(body.error || `Submit failed: HTTP ${resp.status}`)
+      return {
+        request_id: signed.request_id,
+        client_order_id: signed.client_order_id,
+        venue: signed.venue,
+        accepted: false,
+        error: body.error || `Submit failed: HTTP ${resp.status}`,
+        submitted_at: '',
+        responded_at: '',
+      }
     }
     return resp.json()
   }
@@ -137,36 +147,43 @@ export function useKillSwitch() {
       const errors: string[] = []
       let succeeded = 0
       let failed = 0
+      let uncertain = 0
 
       for (let i = 0; i < requests.length; i++) {
         const req = requests[i]
 
+        let signed: SignedAction
         try {
-          // Sign
           setState(s => ({ ...s, phase: 'signing', signed: i }))
-          const signed = await signRequest(req, signers)
+          signed = await signRequest(req, signers)
+        } catch (e) {
+          failed++
+          errors.push(`${req.venue} ${req.symbol}: ${e instanceof Error ? e.message : 'signing failed'}`)
+          setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
+          continue
+        }
 
-          // Submit
+        try {
           setState(s => ({ ...s, phase: 'submitting', signed: i + 1, submitted: i }))
           const result = await submitSigned(signed)
 
           if (result.accepted) {
             succeeded++
+          } else if (result.uncertain) {
+            uncertain++
           } else {
             failed++
             errors.push(`${req.venue} ${req.symbol}: ${result.error || 'rejected'}`)
           }
 
-          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors] }))
-        } catch (e) {
-          failed++
-          const msg = `${req.venue} ${req.symbol}: ${e instanceof Error ? e.message : 'unknown error'}`
-          errors.push(msg)
-          setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
+          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, uncertain, errors: [...errors] }))
+        } catch {
+          uncertain++
+          setState(s => ({ ...s, submitted: i + 1, uncertain }))
         }
       }
 
-      setState(s => ({ ...s, phase: 'done', succeeded, failed, errors: [...errors] }))
+      setState(s => ({ ...s, phase: 'done', succeeded, failed, uncertain, errors: [...errors] }))
     } catch (e) {
       setState(s => ({
         ...s,

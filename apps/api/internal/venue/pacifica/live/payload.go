@@ -11,6 +11,7 @@ import (
 const (
 	defaultOpenSlippagePct  = "0.5" // 0.5% for open
 	defaultCloseSlippagePct = "1.0" // 1.0% for close/unwind
+	signingRequestTTL       = 30 * time.Second
 )
 
 // PacificaUnsignedOrder is the order payload the frontend must sign.
@@ -113,6 +114,7 @@ func buildPayload(
 		SlippagePct:   slippagePct,
 		ClientOrderID: clientOrderID,
 	}
+	requestExpiresAt := time.UnixMilli(unsigned.Timestamp).Add(signingRequestTTL)
 
 	unsignedBytes, err := json.Marshal(unsigned)
 	if err != nil {
@@ -140,7 +142,7 @@ func buildPayload(
 		ReduceOnly:      reduceOnly,
 		UnsignedPayload: unsignedBytes,
 		VenueMetadata:   metaBytes,
-		ExpiresAt:       now.Add(30 * time.Second),
+		ExpiresAt:       requestExpiresAt,
 		CreatedAt:       now,
 	}, nil
 }

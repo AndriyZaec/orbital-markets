@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	appdb "github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -75,6 +76,83 @@ func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	}
 	if len(body.SigningRequests) != 1 || body.SigningRequests[0].Amount != 2.75 {
 		t.Fatalf("signing requests = %+v, want residual amount 2.75", body.SigningRequests)
+	}
+}
+
+func TestLiveSessionStatusReturnsTerminalRecoveryOutcome(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	now := time.Now()
+	payload, err := marshalLiveSession(&LiveSession{
+		ID: "session-recovered", Plan: &domain.ExecutionPlan{ID: "position-residual"},
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.liveStore.UpsertDurableSession(context.Background(), executor.DurableSessionRecord{
+		ID: "session-recovered", State: string(sessRecovering), Payload: payload,
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",
+		HasExposure: true, ExpiresAt: now.Add(time.Minute), CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.liveStore.FinishDurableSession(context.Background(), "session-recovered", string(sessDegraded), "unwind unconfirmed"); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest("GET", "/api/v1/live/sessions/session-recovered", nil)
+	response := httptest.NewRecorder()
+	server.handleLiveSessionStatus(response, request)
+	if response.Code != 200 {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Status            string `json:"status"`
+		Reason            string `json:"reason"`
+		PositionID        string `json:"position_id"`
+		RemainingExposure []struct {
+			Amount float64 `json:"amount"`
+		} `json:"remaining_exposure"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != string(sessDegraded) || body.Reason != "unwind unconfirmed" || body.PositionID != "position-residual" {
+		t.Fatalf("session status = %+v", body)
+	}
+	if len(body.RemainingExposure) != 1 || body.RemainingExposure[0].Amount != 2.75 {
+		t.Fatalf("remaining exposure = %+v, want 2.75", body.RemainingExposure)
+	}
+}
+
+func TestLiveSessionStatusKeepsActiveRequestsRecovering(t *testing.T) {
+	if status := publicLiveSessionStatus(string(sessAwaitingLeg1Signs), false); status != string(sessRecovering) {
+		t.Fatalf("status = %q, want recovering", status)
+	}
+}
+
+func TestAmbiguousCloseSubmissionRemainsPending(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	recorded := server.recordAmbiguousCloseSubmission(&domain.SigningRequest{
+		PositionID: "position-residual", Leg: 1, Venue: "pacifica", Symbol: "SOL",
+		ClientOrderID: "close-uncertain", Amount: 2.75,
+	}, "connection timed out")
+	if !recorded {
+		t.Fatal("ambiguous close submission was not recorded")
+	}
+	progress, err := server.liveStore.GetCloseProgress(context.Background(), "position-residual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Pending != 1 || progress.Failed != 0 {
+		t.Fatalf("close progress = %+v, want one pending outcome", progress)
+	}
+	position, err := server.liveStore.GetPosition(context.Background(), "position-residual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position.State != string(executor.ExecStateClosing) {
+		t.Fatalf("position state = %q, want closing", position.State)
 	}
 }
 

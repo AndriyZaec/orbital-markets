@@ -119,18 +119,20 @@ export function useLiveClose() {
           })
           if (!submitResp.ok) {
             const b = await submitResp.json().catch(() => ({}))
-            throw new Error(b.error || `HTTP ${submitResp.status}`)
+            failed++
+            errors.push(`${req.venue} ${req.symbol}: ${b.error || `HTTP ${submitResp.status}`}`)
+            setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
+            continue
           }
           const result: SubmissionResult = await submitResp.json()
 
-          if (!result.accepted) {
+          if (!result.accepted && !result.uncertain) {
             failed++
             errors.push(`${req.venue} ${req.symbol}: ${result.error || 'rejected'}`)
           }
           setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
-        } catch (e) {
-          failed++
-          errors.push(`${req.venue} ${req.symbol}: ${e instanceof Error ? e.message : 'unknown'}`)
+        } catch {
+          errors.push(`${req.venue} ${req.symbol}: submission response uncertain; checking position state`)
           setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
         }
       }

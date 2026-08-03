@@ -42,16 +42,32 @@ func (s *Server) trackCloseSubmission(req *domain.SigningRequest, result *domain
 	go s.awaitCloseFill(req, result.OrderID)
 }
 
-func (s *Server) recordCloseSubmissionFailure(ctx context.Context, req *domain.SigningRequest, reason string) {
-	if req == nil || req.PositionID == "" || req.Leg == 0 {
+func (s *Server) trackAmbiguousCloseSubmission(req *domain.SigningRequest, reason string) {
+	if !s.recordAmbiguousCloseSubmission(req, reason) {
 		return
 	}
-	_ = s.liveStore.UpsertCloseOutcome(ctx, executor.CloseOutcome{
+	go s.awaitCloseFill(req, "")
+}
+
+func (s *Server) recordAmbiguousCloseSubmission(req *domain.SigningRequest, reason string) bool {
+	if req == nil || req.PositionID == "" || req.Leg == 0 {
+		return false
+	}
+	if err := s.liveStore.UpsertCloseOutcome(s.ctx, executor.CloseOutcome{
 		PositionID: req.PositionID, Leg: req.Leg, Venue: req.Venue,
 		ClientOrderID: req.ClientOrderID, RequestedAmount: req.Amount,
-		Resolved: true, Error: reason,
-	})
-	s.markCloseFailed(ctx, req, reason)
+		Resolved: false, Error: reason,
+	}); err != nil {
+		s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID)
+		return false
+	}
+	if err := s.liveStore.MarkClosing(s.ctx, req.PositionID); err != nil {
+		s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID)
+		return false
+	}
+	s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_leg_uncertain", executor.ExecStateClosing,
+		fmt.Sprintf("leg=%d venue=%s client_order_id=%s", req.Leg, req.Venue, req.ClientOrderID))
+	return true
 }
 
 func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {

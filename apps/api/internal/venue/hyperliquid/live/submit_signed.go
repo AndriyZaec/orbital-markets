@@ -67,20 +67,14 @@ func (c *Client) SubmitSignedOrder(
 			"symbol", req.Symbol,
 			"err", err,
 		)
-		return &domain.SubmissionResult{
-			RequestID:     signed.RequestID,
-			ClientOrderID: req.ClientOrderID,
-			Venue:         "hyperliquid",
-			Accepted:      false,
-			Error:         err.Error(),
-			SubmittedAt:   submittedAt,
-			RespondedAt:   time.Now(),
-		}, nil
+		c.registerAmbiguousSubmission(meta.Cloid, req, submittedAt)
+		return nil, fmt.Errorf("submit signed order: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.registerAmbiguousSubmission(meta.Cloid, req, submittedAt)
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
@@ -118,4 +112,15 @@ func (c *Client) SubmitSignedOrder(
 		SubmittedAt:   submitResult.SubmittedAt,
 		RespondedAt:   submitResult.RespondedAt,
 	}, nil
+}
+
+func (c *Client) registerAmbiguousSubmission(cloid string, req *domain.SigningRequest, submittedAt time.Time) {
+	if c.tracker == nil {
+		return
+	}
+	c.tracker.Register(&SubmitResult{
+		ClientOrderID: cloid,
+		Symbol:        req.Symbol,
+		SubmittedAt:   submittedAt,
+	}, req.Amount)
 }

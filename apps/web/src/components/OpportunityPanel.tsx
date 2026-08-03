@@ -12,6 +12,8 @@ interface Props {
   opportunity: Opportunity
   lastUpdated: Date | null
   mode: 'paper' | 'live'
+  notionalInput: string
+  onNotionalInputChange: (value: string) => void
   onClose: () => void
   onExecute: (
     opportunityId: string,
@@ -98,9 +100,17 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced
 }
 
-const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
-
-export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose, onExecute, onViewPositions, onOpenAccounts }: Props) {
+export function OpportunityPanel({
+  opportunity: opp,
+  lastUpdated,
+  mode,
+  notionalInput,
+  onNotionalInputChange,
+  onClose,
+  onExecute,
+  onViewPositions,
+  onOpenAccounts,
+}: Props) {
   // Matches useOpportunities' 60s poll interval.
   const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
@@ -115,8 +125,6 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
     ? leverageSelection.value
     : opportunityMaxLev
   const setLeverage = (value: number) => setLeverageSelection({ opportunityId: opp.id, value })
-  const [longSlippage, setLongSlippage] = useState(1)
-  const [shortSlippage, setShortSlippage] = useState(1)
   const [longOpen, setLongOpen] = useState(true)
   const [shortOpen, setShortOpen] = useState(true)
 
@@ -124,12 +132,6 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
   // notional; user can override. The raw text is kept as a string so partial
   // input ("", "1000.") is not fought by number coercion. `notionalNum` is the
   // parsed numeric value sent to the backend (0 = fall back to recommended).
-  const suggestedNotionalInput = opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : ''
-  const [notionalSelection, setNotionalSelection] = useState({ opportunityId: opp.id, value: suggestedNotionalInput })
-  const notionalInput = notionalSelection.opportunityId === opp.id
-    ? notionalSelection.value
-    : suggestedNotionalInput
-  const setNotionalInput = (value: string) => setNotionalSelection({ opportunityId: opp.id, value })
   const notionalNum = Number(notionalInput)
   const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
   const notionalForPlan = notionalValid ? notionalNum : undefined
@@ -240,7 +242,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
                 type="text"
                 inputMode="decimal"
                 value={notionalInput}
-                onChange={(e) => setNotionalInput(e.target.value.replace(/[^\d.]/g, ''))}
+                onChange={(e) => onNotionalInputChange(e.target.value.replace(/[^\d.]/g, ''))}
                 placeholder={opp.recommended_notional > 0 ? String(Math.round(opp.recommended_notional)) : '0'}
                 className="w-full bg-transparent text-sm font-mono text-foreground outline-none"
               />
@@ -261,7 +263,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
             {opp.recommended_notional > 0 && (
               <button
                 type="button"
-                onClick={() => setNotionalInput(String(Math.round(opp.recommended_notional)))}
+                onClick={() => onNotionalInputChange(String(Math.round(opp.recommended_notional)))}
                 title="25% of the weaker leg's available best-price liquidity"
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >
@@ -318,8 +320,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               <div className="rounded border border-border bg-white/[0.03] px-3 py-2 mb-3">
                 <p className="text-sm text-muted-foreground">Market</p>
               </div>
-              <SlippageSelector value={longSlippage} onChange={setLongSlippage} />
-              <div className="mt-3 flex flex-col gap-0">
+              <div className="flex flex-col gap-0">
                 <Row label="Required Margin" value={longLeg ? `${fmtUsd(longLeg.margin_required)} · ${longLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && longLeg ? fmtUsd(plan.notional) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
@@ -346,8 +347,7 @@ export function OpportunityPanel({ opportunity: opp, lastUpdated, mode, onClose,
               <div className="rounded border border-border bg-white/[0.03] px-3 py-2 mb-3">
                 <p className="text-sm text-muted-foreground">Market</p>
               </div>
-              <SlippageSelector value={shortSlippage} onChange={setShortSlippage} />
-              <div className="mt-3 flex flex-col gap-0">
+              <div className="flex flex-col gap-0">
                 <Row label="Required Margin" value={shortLeg ? `${fmtUsd(shortLeg.margin_required)} · ${shortLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && shortLeg ? fmtUsd(plan.notional) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
@@ -534,29 +534,5 @@ function EntryTypeBtn({ label, active, disabled, first, last }: {
       {label}
       {disabled && <span className="ml-1 text-[9px] uppercase tracking-wide opacity-60">soon</span>}
     </button>
-  )
-}
-
-function SlippageSelector({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  return (
-    <div className="flex items-center gap-0">
-      <div className="flex-1 rounded-l border border-border bg-white/[0.03] px-3 py-1.5">
-        <span className="text-sm text-muted-foreground">Slippage</span>
-      </div>
-      {SLIPPAGE_OPTIONS.map((opt, i) => {
-        const isActive = i === value
-        return (
-          <button
-            key={opt}
-            onClick={() => onChange(i)}
-            className={`px-2.5 py-1.5 text-xs font-medium border border-l-0 border-border transition-colors ${
-              i === SLIPPAGE_OPTIONS.length - 1 ? 'rounded-r' : ''
-            } ${isActive ? 'bg-white/[0.08] text-foreground' : 'bg-white/[0.02] text-muted-foreground hover:text-foreground'}`}
-          >
-            {opt}
-          </button>
-        )
-      })}
-    </div>
   )
 }
