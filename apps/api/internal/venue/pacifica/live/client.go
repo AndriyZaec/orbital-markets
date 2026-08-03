@@ -18,7 +18,7 @@ import (
 const (
 	tradingWSURL   = "wss://ws.pacifica.fi/ws"
 	submitTimeout  = 10 * time.Second
-	expiryWindowMs = 60_000 // Leaves recovery time after sequential open/unwind wallet approvals.
+	expiryWindowMs = 120_000 // Keeps the pre-signed unwind valid through worst-case recovery.
 )
 
 // Signer produces signatures for trading payloads.

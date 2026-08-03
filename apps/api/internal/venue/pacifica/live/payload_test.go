@@ -53,8 +53,13 @@ func TestBuildOpenPayloadVenueExpiryCoversRequestLifetime(t *testing.T) {
 	if venueExpiry.Before(request.ExpiresAt) {
 		t.Fatalf("venue payload expires at %s before signing request expires at %s", venueExpiry, request.ExpiresAt)
 	}
-	if recoveryWindow := venueExpiry.Sub(request.ExpiresAt); recoveryWindow < submitTimeout+fillTimeout {
-		t.Fatalf("recovery window = %s, want at least %s", recoveryWindow, submitTimeout+fillTimeout)
+	const (
+		accountReconciliationTimeout = 20 * time.Second
+		unwindTimeout                = 20 * time.Second
+	)
+	recoveryBudget := submitTimeout + accountReconciliationTimeout + unwindTimeout
+	if recoveryWindow := venueExpiry.Sub(request.ExpiresAt); recoveryWindow < recoveryBudget {
+		t.Fatalf("recovery window = %s, want at least %s", recoveryWindow, recoveryBudget)
 	}
 }
 
