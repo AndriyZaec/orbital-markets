@@ -100,8 +100,6 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced
 }
 
-const SLIPPAGE_OPTIONS = ['.5%', '1%', '3%', '1'] as const
-
 export function OpportunityPanel({
   opportunity: opp,
   lastUpdated,
@@ -127,8 +125,6 @@ export function OpportunityPanel({
     ? leverageSelection.value
     : opportunityMaxLev
   const setLeverage = (value: number) => setLeverageSelection({ opportunityId: opp.id, value })
-  const [longSlippage, setLongSlippage] = useState(1)
-  const [shortSlippage, setShortSlippage] = useState(1)
   const [longOpen, setLongOpen] = useState(true)
   const [shortOpen, setShortOpen] = useState(true)
 
@@ -324,8 +320,7 @@ export function OpportunityPanel({
               <div className="rounded border border-border bg-white/[0.03] px-3 py-2 mb-3">
                 <p className="text-sm text-muted-foreground">Market</p>
               </div>
-              <SlippageSelector value={longSlippage} onChange={setLongSlippage} />
-              <div className="mt-3 flex flex-col gap-0">
+              <div className="flex flex-col gap-0">
                 <Row label="Required Margin" value={longLeg ? `${fmtUsd(longLeg.margin_required)} · ${longLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && longLeg ? fmtUsd(plan.notional) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
@@ -352,8 +347,7 @@ export function OpportunityPanel({
               <div className="rounded border border-border bg-white/[0.03] px-3 py-2 mb-3">
                 <p className="text-sm text-muted-foreground">Market</p>
               </div>
-              <SlippageSelector value={shortSlippage} onChange={setShortSlippage} />
-              <div className="mt-3 flex flex-col gap-0">
+              <div className="flex flex-col gap-0">
                 <Row label="Required Margin" value={shortLeg ? `${fmtUsd(shortLeg.margin_required)} · ${shortLeg.leverage}x` : '--'} />
                 <Row label="Position Size" value={plan && shortLeg ? fmtUsd(plan.notional) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
@@ -540,29 +534,5 @@ function EntryTypeBtn({ label, active, disabled, first, last }: {
       {label}
       {disabled && <span className="ml-1 text-[9px] uppercase tracking-wide opacity-60">soon</span>}
     </button>
-  )
-}
-
-function SlippageSelector({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  return (
-    <div className="flex items-center gap-0">
-      <div className="flex-1 rounded-l border border-border bg-white/[0.03] px-3 py-1.5">
-        <span className="text-sm text-muted-foreground">Slippage</span>
-      </div>
-      {SLIPPAGE_OPTIONS.map((opt, i) => {
-        const isActive = i === value
-        return (
-          <button
-            key={opt}
-            onClick={() => onChange(i)}
-            className={`px-2.5 py-1.5 text-xs font-medium border border-l-0 border-border transition-colors ${
-              i === SLIPPAGE_OPTIONS.length - 1 ? 'rounded-r' : ''
-            } ${isActive ? 'bg-white/[0.08] text-foreground' : 'bg-white/[0.02] text-muted-foreground hover:text-foreground'}`}
-          >
-            {opt}
-          </button>
-        )
-      })}
-    </div>
   )
 }
