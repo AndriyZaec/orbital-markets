@@ -372,7 +372,6 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
       <div className="px-5 pt-5 pb-3 shrink-0 bg-[#080b12] flex items-end justify-between gap-4">
         <div>
           <h2 className="text-base font-bold text-foreground">Funding Opportunities</h2>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Compare hedged funding carry across venues</p>
         </div>
         <span className="mb-0.5 rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
           {sorted.length} live
