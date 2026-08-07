@@ -84,11 +84,11 @@ function useCountdown(lastUpdated: Date | null, intervalSec: number) {
 
 function OrbitalLogo() {
   return (
-    <div className="relative size-8 flex items-center justify-center">
-      <div className="orbital-logo-outer absolute inset-0 rounded-full border-2 border-slate-500/40" />
-      <div className="orbital-logo-inner absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
-      <div className="orbital-logo-core absolute size-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
-    </div>
+    <span className="orbital-logo" aria-hidden="true">
+      <i />
+      <i />
+      <b />
+    </span>
   )
 }
 
@@ -363,12 +363,8 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
     <>
       {loading ? (
         <div className="flex-1 flex flex-col items-center justify-center bg-[#080b12]">
-          <div className="relative size-10 animate-[loader-pulse_2s_ease-in-out_infinite]">
-            <div className="absolute inset-0 rounded-full border-2 border-slate-500/40" />
-            <div className="absolute inset-1.5 rounded-full border-[1.5px] border-slate-400/50" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="size-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
-            </div>
+          <div className="animate-[loader-pulse_2s_ease-in-out_infinite]">
+            <OrbitalLogo />
           </div>
           <p className="text-muted-foreground text-xs mt-3">Scanning opportunities...</p>
         </div>
