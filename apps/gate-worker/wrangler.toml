@@ -12,6 +12,15 @@ workers_dev = false
 binding = "BETA_INVITES"
 id = "00000000000000000000000000000000"
 
+[[d1_databases]]
+binding = "WAITLIST_DB"
+database_name = "orbital-waitlist"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+LANDING_ORIGIN = "https://orbitalmarkets.xyz"
+
 # Secrets — set via `wrangler secret put` (never committed):
 #   JWT_SECRET        shared with apps/api (HS256 cookie signing)
 #   COOKIE_DOMAIN     e.g. ".your-domain.example" — sets the __beta cookie scope

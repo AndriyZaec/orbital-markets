@@ -35,10 +35,10 @@ jobs:
       - name: Install root deps (wrangler)
         run: pnpm install --frozen-lockfile
 
-      - name: Materialize wrangler config with real KV id
+      - name: Materialize wrangler config with real resource ids
         working-directory: apps/gate-worker
-        # The committed wrangler.toml has a placeholder; here we write the
-        # gitignored wrangler.local.toml using the BETA_INVITES_KV_ID secret.
+        # The committed wrangler.toml has placeholders; production resource ids
+        # are supplied through GitHub secrets.
         run: |
           cat > wrangler.local.toml <<EOF
           name = "orbital-gate"
@@ -49,15 +49,33 @@ jobs:
           [[kv_namespaces]]
           binding = "BETA_INVITES"
           id = "${BETA_INVITES_KV_ID}"
+
+          [[d1_databases]]
+          binding = "WAITLIST_DB"
+          database_name = "orbital-waitlist"
+          database_id = "${WAITLIST_D1_ID}"
+          migrations_dir = "migrations"
+
+          [vars]
+          LANDING_ORIGIN = "https://orbitalmarkets.xyz"
           EOF
         env:
           BETA_INVITES_KV_ID: ${{ secrets.BETA_INVITES_KV_ID }}
+          WAITLIST_D1_ID: ${{ secrets.WAITLIST_D1_ID }}
 
       - name: Typecheck
         working-directory: apps/gate-worker
         run: |
           pnpm install --frozen-lockfile
           pnpm typecheck
+          pnpm test
+
+      - name: Apply D1 migrations
+        working-directory: apps/gate-worker
+        run: pnpm d1:migrate:remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy
         working-directory: apps/gate-worker

@@ -88,7 +88,14 @@ export function LandingPage() {
         }),
         signal: controller.signal,
       })
-      if (!response.ok) throw new Error(`Waitlist request failed with ${response.status}`)
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!response.ok || !contentType.includes('application/json')) {
+        throw new Error(`Waitlist request failed with ${response.status}`)
+      }
+      const result: unknown = await response.json()
+      if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
+        throw new Error('Waitlist request returned an invalid response')
+      }
       requestRef.current = null
       setScene('received')
     } catch (requestError) {
@@ -115,7 +122,7 @@ export function LandingPage() {
       <section className="hero" aria-hidden={accessVisible} inert={accessVisible}>
         <p>Delta-neutral execution for perpetual markets</p>
         <h1>Trade the spread.<span>Not the market.</span></h1>
-        <p>One non-custodial execution flow for market-neutral positions across perpetual venues.</p>
+        <p>One non-custodial execution flow for hedged positions across perpetual venues, subject to execution, basis, and liquidation risk.</p>
         <button ref={heroButtonRef} type="button" onClick={openAccess}>Join Orbital <RocketIcon /></button>
       </section>
 
