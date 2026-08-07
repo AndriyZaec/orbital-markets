@@ -35,6 +35,20 @@ HTTP routes are registered in `apps/api/internal/api/server.go`:
 Deployment configuration is in `apps/api/fly.toml`; automation is defined in
 `.github/workflows/deploy-api.yml`.
 
+### `apps/landing`
+
+Public React landing page for `orbitalmarkets.xyz`. It contains the selected
+ambient orbital visual, closed-beta request flow, and link to the gated app.
+
+```text
+src/LandingPage.tsx    landing states and waitlist API contract
+src/OrbitalField.tsx   progressive WebGL glyph field
+src/styles.css         responsive visual system
+```
+
+Cloudflare Pages setup and environment variables are documented in
+`apps/landing/README.md`.
+
 ### `apps/web`
 
 React 19 application for opportunity discovery, funding and return charts,
@@ -68,8 +82,8 @@ Local and production procedures are in `apps/gate-worker/README.md`.
 ## Automation
 
 `.github/workflows/` contains deployments for the API and gate Worker. Both
-workflows run their relevant checks before deployment. The web application is
-deployed separately to Cloudflare Pages.
+workflows run their relevant checks before deployment. The landing and gated
+web application are deployed as separate Cloudflare Pages projects.
 
 ## Common commands
 
@@ -82,6 +96,11 @@ cd apps/api && go run ./cmd/server
 cd apps/web && pnpm install
 cd apps/web && pnpm dev
 cd apps/web && pnpm test && pnpm lint && pnpm build
+
+# Landing
+cd apps/landing && pnpm install
+cd apps/landing && pnpm dev
+cd apps/landing && pnpm build
 
 # Gate Worker
 cd apps/gate-worker && pnpm typecheck
