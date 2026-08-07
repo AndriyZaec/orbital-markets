@@ -149,6 +149,22 @@ body {
   50% { opacity: 0.5; transform: scale(1.15); }
 }
 
+@keyframes orbital-outer-spin {
+  0% { transform: rotate(-22deg) scaleY(0.52) skewX(0deg); }
+  25% { transform: rotate(68deg) scaleY(0.22) skewX(8deg); }
+  50% { transform: rotate(158deg) scaleY(0.64) skewX(0deg); }
+  75% { transform: rotate(248deg) scaleY(0.34) skewX(-8deg); }
+  100% { transform: rotate(338deg) scaleY(0.52) skewX(0deg); }
+}
+
+@keyframes orbital-inner-spin {
+  0% { transform: rotate(35deg) scaleY(0.65) skewX(0deg); }
+  25% { transform: rotate(-55deg) scaleY(0.38) skewX(-10deg); }
+  50% { transform: rotate(-145deg) scaleY(0.18) skewX(0deg); }
+  75% { transform: rotate(-235deg) scaleY(0.52) skewX(10deg); }
+  100% { transform: rotate(-325deg) scaleY(0.65) skewX(0deg); }
+}
+
 @keyframes chart-reveal {
   from { transform: scaleX(0); }
   to { transform: scaleX(1); }
@@ -169,15 +185,18 @@ body {
   animation: chart-endpoint 180ms ease-out 500ms both;
 }
 
-.orbital-logo { position: relative; width: 25px; height: 25px; flex: none; }
-.orbital-logo i { position: absolute; border: 1px solid rgba(148, 163, 184, 0.55); border-radius: 50%; }
+.orbital-logo { display: block; position: relative; width: 28px; height: 28px; flex: none; }
+.orbital-logo i { position: absolute; border: 1px solid rgba(148, 163, 184, 0.55); border-radius: 50%; transform-origin: center; }
 .orbital-logo i:first-child { inset: 1px; transform: rotate(-22deg) scaleY(0.52); }
-.orbital-logo i:nth-child(2) { inset: 5px; transform: rotate(35deg) scaleY(0.65); }
-.orbital-logo b { position: absolute; top: 10px; left: 10px; width: 5px; height: 5px; border-radius: 50%; background: #06b6d4; box-shadow: 0 0 8px rgba(6, 182, 212, 0.8); }
+.orbital-logo i:nth-child(2) { inset: 6px; transform: rotate(35deg) scaleY(0.65); }
+.orbital-logo b { position: absolute; inset: 0; margin: auto; width: 6px; height: 6px; border-radius: 50%; background: #06b6d4; box-shadow: 0 0 8px rgba(6, 182, 212, 0.8); }
+.orbital-brand:hover .orbital-logo i:first-child { animation: orbital-outer-spin 3.6s linear infinite; }
+.orbital-brand:hover .orbital-logo i:nth-child(2) { animation: orbital-inner-spin 2.9s linear infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   .chart-reveal,
-  .chart-endpoint {
+  .chart-endpoint,
+  .orbital-brand:hover .orbital-logo i {
     animation: none;
   }
 }
