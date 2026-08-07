@@ -38,6 +38,7 @@ dist/
 apps/api/DEPLOY.md
 apps/gate-worker/.dev.vars
 apps/gate-worker/wrangler.local.toml
+apps/gate-worker/.wrangler/
 apps/gate-worker/scripts/output/
 waitlist-export-*.csv
 invites-*.txt

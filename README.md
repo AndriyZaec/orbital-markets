@@ -129,6 +129,7 @@ The suggested notional is advisory, not a profitability guarantee. Users can ove
 
 ### Stack
 - `apps/api` - Go backend
+- `apps/landing` - public React 19 landing and closed-beta request UI
 - `apps/web` - React 19 + TypeScript + Tailwind frontend
 - `apps/gate-worker` - Cloudflare Worker for closed-beta access
 - `SQLite` + embedded migrations + `sqlc`

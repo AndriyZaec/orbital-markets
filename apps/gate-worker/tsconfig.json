@@ -4,7 +4,7 @@
     "module": "ES2022",
     "moduleResolution": "Bundler",
     "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types", "node"],
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "node"],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -15,5 +15,5 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src/**/*", "scripts/**/*"]
+  "include": ["src/**/*", "scripts/**/*", "test/**/*", "vitest.config.ts"]
 }
