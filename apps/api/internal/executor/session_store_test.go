@@ -222,6 +222,68 @@ func TestDurableSessionsAllowOnlyOneActiveSessionPerAccountAsset(t *testing.T) {
 	}
 }
 
+func TestSupersedeSafeDurableSessionsAllowsImmediateRetry(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "supersede-safe.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	record := executor.DurableSessionRecord{
+		ID: "session-1", State: "awaiting_leg1_signs", Payload: []byte(`{}`),
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	if err := store.UpsertDurableSession(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := store.SupersedeSafeDurableSessions(ctx, "sol-wallet", "0xwallet", "SOL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "session-1" {
+		t.Fatalf("superseded sessions = %v, want session-1", ids)
+	}
+	record.ID = "session-2"
+	if err := store.UpsertDurableSession(ctx, record); err != nil {
+		t.Fatalf("immediate retry after safe session: %v", err)
+	}
+}
+
+func TestSupersedeSafeDurableSessionsPreservesPossibleExposure(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "preserve-exposure.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	record := executor.DurableSessionRecord{
+		ID: "session-1", State: "leg1_submitting", Payload: []byte(`{}`),
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",
+		HasExposure: true, ExpiresAt: time.Now().Add(time.Minute),
+	}
+	if err := store.UpsertDurableSession(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.SupersedeSafeDurableSessions(ctx, "sol-wallet", "0xwallet", "SOL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("superseded exposed sessions = %v, want none", ids)
+	}
+	active, err := store.ActiveDurableSessionForAccountAsset(ctx, "sol-wallet", "0xwallet", "SOL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.ID != "session-1" || !active.HasExposure {
+		t.Fatalf("active session = %+v, want exposed session-1", active)
+	}
+}
+
 func TestDurableSessionRecoveryLeasePreventsOverlappingOwners(t *testing.T) {
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "lease.db"))
 	if err != nil {

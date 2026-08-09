@@ -17,6 +17,9 @@ export async function signHyperliquid(
   }) => Promise<string>,
 ): Promise<string> {
   const typed = unsignedPayload as HyperliquidTypedData
+  if (!typed?.primaryType || !typed.types?.[typed.primaryType]) {
+    throw new Error('Invalid Hyperliquid EIP-712 signing payload')
+  }
   return signTypedDataAsync({
     domain: typed.domain,
     types: typed.types,

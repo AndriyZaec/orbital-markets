@@ -60,6 +60,60 @@ func (s *Store) UpsertDurableSession(ctx context.Context, record DurableSessionR
 	return err
 }
 
+// SupersedeSafeDurableSessions releases the account/asset slot held by an
+// abandoned prepare that never reached order submission. Sessions with
+// possible exposure are deliberately excluded and must complete recovery.
+func (s *Store) SupersedeSafeDurableSessions(
+	ctx context.Context,
+	accountPacifica, accountHyperliquid, asset string,
+) ([]string, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	rows, err := s.db.QueryContext(ctx, `
+		UPDATE live_sessions
+		SET state = 'superseded_safe',
+			recovery_detail = 'superseded by a new prepare before order submission',
+			updated_at = ?, terminal_at = ?
+		WHERE account_pacifica = ? AND account_hyperliquid = ? AND asset = ?
+			AND terminal_at IS NULL AND has_exposure = 0
+		RETURNING id`,
+		now, now,
+		strings.TrimSpace(accountPacifica), strings.ToLower(strings.TrimSpace(accountHyperliquid)), asset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ActiveDurableSessionForAccountAsset returns the session currently owning
+// the unique account/asset slot.
+func (s *Store) ActiveDurableSessionForAccountAsset(
+	ctx context.Context,
+	accountPacifica, accountHyperliquid, asset string,
+) (DurableSessionRecord, error) {
+	var record DurableSessionRecord
+	var hasExposure int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, state, has_exposure
+		FROM live_sessions
+		WHERE account_pacifica = ? AND account_hyperliquid = ? AND asset = ?
+			AND terminal_at IS NULL
+		LIMIT 1`,
+		strings.TrimSpace(accountPacifica), strings.ToLower(strings.TrimSpace(accountHyperliquid)), asset,
+	).Scan(&record.ID, &record.State, &hasExposure)
+	record.HasExposure = hasExposure != 0
+	return record, err
+}
+
 // ListActiveDurableSessions returns non-terminal sessions for startup recovery.
 func (s *Store) ListActiveDurableSessions(ctx context.Context) ([]DurableSessionRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
