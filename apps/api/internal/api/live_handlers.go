@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ const (
 	livePrepareAccountStateNotReady  = "ACCOUNT_STATE_NOT_READY"
 	livePreparePositionStateNotReady = "POSITION_STATE_NOT_READY"
 	livePrepareExistingPosition      = "EXISTING_POSITION"
+	livePrepareExistingSession       = "EXISTING_SESSION"
 	livePreparePreTradeBlocked       = "PRETRADE_BLOCKED"
 )
 
@@ -223,6 +225,40 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	superseded, err := s.liveStore.SupersedeSafeDurableSessions(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, plan.Asset,
+	)
+	if err != nil {
+		s.logger.Error("live prepare: supersede safe sessions", "err", err, "asset", plan.Asset)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to prepare live session slot"})
+		return
+	}
+	for _, sessionID := range superseded {
+		s.live.sessions.remove(sessionID)
+	}
+	activeSession, err := s.liveStore.ActiveDurableSessionForAccountAsset(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, plan.Asset,
+	)
+	if err == nil {
+		s.logger.Warn("live prepare: existing session blocks open",
+			"code", livePrepareExistingSession,
+			"session_id", activeSession.ID,
+			"state", activeSession.State,
+			"has_exposure", activeSession.HasExposure,
+		)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":      "existing live session for this asset requires recovery before retrying",
+			"code":       livePrepareExistingSession,
+			"session_id": activeSession.ID,
+			"state":      activeSession.State,
+		})
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		s.logger.Error("live prepare: inspect active session", "err", err, "asset", plan.Asset)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to inspect live session slot"})
+		return
+	}
 
 	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
 	// Both are on the riskier leg's venue/wallet and signed together up front,
@@ -278,6 +314,18 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	if err := s.saveLiveSession(r.Context(), sess); err != nil {
 		s.live.sessions.remove(sess.ID)
 		s.logger.Error("live prepare: persist session", "err", err, "session_id", sess.ID)
+		activeSession, activeErr := s.liveStore.ActiveDurableSessionForAccountAsset(
+			r.Context(), req.AccountPacifica, req.AccountHyperliquid, plan.Asset,
+		)
+		if activeErr == nil && activeSession.ID != sess.ID {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":      "another live session for this asset started concurrently",
+				"code":       livePrepareExistingSession,
+				"session_id": activeSession.ID,
+				"state":      activeSession.State,
+			})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist live session"})
 		return
 	}
