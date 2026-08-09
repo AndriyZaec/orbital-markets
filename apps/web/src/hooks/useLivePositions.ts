@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import { runSingleFlight } from '@/lib/polling'
 import { useVenueAuthority } from './useVenueAuthority'
 
 export interface LivePosition {
@@ -43,13 +44,13 @@ export function useLivePositions(pollInterval = 5_000) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
+  const polling = useRef({ running: false })
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
   const accountKey = pacificaAddress && hyperliquidAddress
     ? `${pacificaAddress}:${hyperliquidAddress.toLowerCase()}`
     : ''
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
-    const request = ++requestSequence.current
     if (signal?.aborted) return
     if (!pacificaAddress || !hyperliquidAddress) {
       setPositions([])
@@ -58,27 +59,30 @@ export function useLivePositions(pollInterval = 5_000) {
       setError(null)
       return
     }
-    try {
-      const query = new URLSearchParams({
-        account_pacifica: pacificaAddress,
-        account_hyperliquid: hyperliquidAddress,
-      })
-      const resp = await apiFetch(`/api/v1/live/positions?${query}`, { signal })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const data: LivePosition[] = await resp.json()
-      if (signal?.aborted || request !== requestSequence.current) return
-      data.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
-      setPositions(data)
-      setLoadedAccountKey(accountKey)
-      setError(null)
-    } catch (e) {
-      if (signal?.aborted || request !== requestSequence.current) return
-      setPositions([])
-      setLoadedAccountKey(accountKey)
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      if (!signal?.aborted && request === requestSequence.current) setLoading(false)
-    }
+    await runSingleFlight(polling.current, async () => {
+      const request = ++requestSequence.current
+      try {
+        const query = new URLSearchParams({
+          account_pacifica: pacificaAddress,
+          account_hyperliquid: hyperliquidAddress,
+        })
+        const resp = await apiFetch(`/api/v1/live/positions?${query}`, { signal })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data: LivePosition[] = await resp.json()
+        if (signal?.aborted || request !== requestSequence.current) return
+        data.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+        setPositions(data)
+        setLoadedAccountKey(accountKey)
+        setError(null)
+      } catch (e) {
+        if (signal?.aborted || request !== requestSequence.current) return
+        setPositions([])
+        setLoadedAccountKey(accountKey)
+        setError(e instanceof Error ? e.message : 'Unknown error')
+      } finally {
+        if (!signal?.aborted && request === requestSequence.current) setLoading(false)
+      }
+    })
   }, [pacificaAddress, hyperliquidAddress, accountKey])
 
   useEffect(() => {

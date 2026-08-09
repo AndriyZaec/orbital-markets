@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import { runSingleFlight } from '@/lib/polling'
 
 interface VenueBalance {
   venue: string
@@ -44,21 +45,24 @@ export function useLiveBalances(
     pair: null,
     balances: EMPTY,
   })
+  const polling = useRef({ running: false })
 
   const fetch_ = useCallback(async () => {
     if (!pair || !accountPacifica || !accountHyperliquid) return
-    try {
-      const query = new URLSearchParams({
-        account_pacifica: accountPacifica,
-        account_hyperliquid: accountHyperliquid,
-      })
-      const resp = await apiFetch(`/api/v1/live/balances?${query}`)
-      if (!resp.ok) return
-      const data: Balances = await resp.json()
-      setResult({ pair, balances: data })
-    } catch {
-      // silently ignore — balance display is best-effort
-    }
+    await runSingleFlight(polling.current, async () => {
+      try {
+        const query = new URLSearchParams({
+          account_pacifica: accountPacifica,
+          account_hyperliquid: accountHyperliquid,
+        })
+        const resp = await apiFetch(`/api/v1/live/balances?${query}`)
+        if (!resp.ok) return
+        const data: Balances = await resp.json()
+        setResult({ pair, balances: data })
+      } catch {
+        // silently ignore — balance display is best-effort
+      }
+    })
   }, [pair, accountPacifica, accountHyperliquid])
 
   useEffect(() => {

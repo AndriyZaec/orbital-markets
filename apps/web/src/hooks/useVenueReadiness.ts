@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { apiFetch } from '@/lib/api'
 import { useVenueAuthority, type SigningReadiness } from './useVenueAuthority'
 import { useLiveBalances } from './useLiveBalances'
@@ -69,6 +69,8 @@ export interface UseVenueReadinessResult {
   // the moments that matter.
   refreshBalances: () => Promise<void>
 }
+
+const VenueReadinessContext = createContext<UseVenueReadinessResult | null>(null)
 
 const LABELS: Record<VenueId, string> = {
   pacifica: 'Pacifica',
@@ -165,7 +167,7 @@ function buildReadiness(args: {
   }
 }
 
-export function useVenueReadiness(): UseVenueReadinessResult {
+function useVenueReadinessState(): UseVenueReadinessResult {
   const authority = useVenueAuthority()
   const pacAddr = authority.pacifica.address
   const hlAddr = authority.hyperliquid.address
@@ -273,4 +275,15 @@ export function useVenueReadiness(): UseVenueReadinessResult {
       },
     }
   }, [authority.pacifica, authority.hyperliquid, balances, ensureStatus, ensureError, ensureAccounts])
+}
+
+export function VenueReadinessProvider({ children }: { children: ReactNode }) {
+  const value = useVenueReadinessState()
+  return createElement(VenueReadinessContext.Provider, { value }, children)
+}
+
+export function useVenueReadiness(): UseVenueReadinessResult {
+  const value = useContext(VenueReadinessContext)
+  if (!value) throw new Error('useVenueReadiness must be used within VenueReadinessProvider')
+  return value
 }
