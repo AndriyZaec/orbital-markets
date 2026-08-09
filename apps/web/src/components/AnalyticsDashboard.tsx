@@ -1,5 +1,8 @@
 import { useAnalytics } from '@/hooks/useAnalytics'
 import { usePaperPositions } from '@/hooks/usePaperPositions'
+import { useEffect, useState } from 'react'
+
+const INITIAL_NOW = Date.now()
 
 function fmtUsd(n: number) {
   const abs = Math.abs(n)
@@ -33,6 +36,12 @@ function riskLabel(risk: string) {
 export function AnalyticsDashboard() {
   const { data, loading, error } = useAnalytics()
   const { positions } = usePaperPositions()
+  const [now, setNow] = useState(INITIAL_NOW)
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
 
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded')
   const degradedPositions = positions.filter((p) => p.state === 'degraded')
@@ -165,7 +174,7 @@ export function AnalyticsDashboard() {
               <tbody>
                 {positions.slice(0, 6).map((p) => {
                   const stateColor = p.state === 'open' ? 'text-green-400' : p.state === 'degraded' ? 'text-orange-400' : p.state === 'closed' ? 'text-muted-foreground' : 'text-red-400'
-                  const age = Date.now() - new Date(p.created_at).getTime()
+                  const age = now - new Date(p.created_at).getTime()
                   const ageStr = age < 3_600_000 ? Math.floor(age / 60_000) + 'm ago' : age < 86_400_000 ? Math.floor(age / 3_600_000) + 'h ago' : Math.floor(age / 86_400_000) + 'd ago'
                   return (
                     <tr key={p.id} className="border-t border-border">

@@ -45,7 +45,8 @@ export function useHistory(asset: string, venueA: string, venueB: string, range_
   }, [asset, venueA, venueB, range_])
 
   useEffect(() => {
-    fetchHistory()
+    const initialId = window.setTimeout(fetchHistory, 0)
+    return () => window.clearTimeout(initialId)
   }, [fetchHistory])
 
   return { data, loading, error }
