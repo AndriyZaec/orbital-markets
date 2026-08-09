@@ -3,6 +3,7 @@ import { usePaperPositions } from '@/hooks/usePaperPositions'
 
 const MONTHLY_RATE = 0.0012
 const HOURS_PER_MONTH = 720
+const INITIAL_NOW = Date.now()
 
 function fmtUsd(v: number) {
   return '$' + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -57,7 +58,7 @@ const BENEFITS = [
 
 export function FeeRebates() {
   const { positions } = usePaperPositions()
-  const [now, setNow] = useState(Date.now())
+  const [now, setNow] = useState(INITIAL_NOW)
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)

@@ -1,6 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import {
+  livePositionPollInterval,
+  runSingleFlight,
+  shouldMonitorLiveUpdates,
+} from '@/lib/polling'
+import { hasActiveLiveExposure, subscribeLiveAccountEvents } from '@/lib/live-events'
 import { useVenueAuthority } from './useVenueAuthority'
+import { usePageVisibility } from './usePageVisibility'
 
 export interface LivePosition {
   id: string
@@ -43,13 +50,23 @@ export function useLivePositions(pollInterval = 5_000) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
+  const polling = useRef({ running: false })
+  const streamConnected = useRef(false)
+  const hasActivePositions = useRef<boolean | null>(null)
+  const reschedulePolling = useRef<() => void>(() => {})
+  const pageVisible = usePageVisibility()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
   const accountKey = pacificaAddress && hyperliquidAddress
     ? `${pacificaAddress}:${hyperliquidAddress.toLowerCase()}`
     : ''
+  const [exposure, setExposure] = useState<{ accountKey: string; active: boolean | null }>({
+    accountKey: '',
+    active: null,
+  })
+  const activeExposure = exposure.accountKey === accountKey ? exposure.active : null
+  const shouldMonitor = shouldMonitorLiveUpdates(pageVisible, activeExposure)
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
-    const request = ++requestSequence.current
     if (signal?.aborted) return
     if (!pacificaAddress || !hyperliquidAddress) {
       setPositions([])
@@ -58,39 +75,79 @@ export function useLivePositions(pollInterval = 5_000) {
       setError(null)
       return
     }
-    try {
-      const query = new URLSearchParams({
-        account_pacifica: pacificaAddress,
-        account_hyperliquid: hyperliquidAddress,
-      })
-      const resp = await apiFetch(`/api/v1/live/positions?${query}`, { signal })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const data: LivePosition[] = await resp.json()
-      if (signal?.aborted || request !== requestSequence.current) return
-      data.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
-      setPositions(data)
-      setLoadedAccountKey(accountKey)
-      setError(null)
-    } catch (e) {
-      if (signal?.aborted || request !== requestSequence.current) return
-      setPositions([])
-      setLoadedAccountKey(accountKey)
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      if (!signal?.aborted && request === requestSequence.current) setLoading(false)
-    }
+    await runSingleFlight(polling.current, async () => {
+      const request = ++requestSequence.current
+      try {
+        const query = new URLSearchParams({
+          account_pacifica: pacificaAddress,
+          account_hyperliquid: hyperliquidAddress,
+        })
+        const resp = await apiFetch(`/api/v1/live/positions?${query}`, { signal })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data: LivePosition[] = await resp.json()
+        if (signal?.aborted || request !== requestSequence.current) return
+        data.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+        hasActivePositions.current = hasActiveLiveExposure(data)
+        setExposure({ accountKey, active: hasActivePositions.current })
+        reschedulePolling.current()
+        setPositions(data)
+        setLoadedAccountKey(accountKey)
+        setError(null)
+      } catch (e) {
+        if (signal?.aborted || request !== requestSequence.current) return
+        setPositions([])
+        setLoadedAccountKey(accountKey)
+        setError(e instanceof Error ? e.message : 'Unknown error')
+      } finally {
+        if (!signal?.aborted && request === requestSequence.current) setLoading(false)
+      }
+    })
   }, [pacificaAddress, hyperliquidAddress, accountKey])
 
   useEffect(() => {
+    streamConnected.current = false
+    hasActivePositions.current = null
+    if (!shouldMonitor || !pacificaAddress || !hyperliquidAddress) return
+    return subscribeLiveAccountEvents(pacificaAddress, hyperliquidAddress, (event) => {
+      if (event.type === 'connected') streamConnected.current = true
+      else if (event.type === 'disconnected') streamConnected.current = false
+      else if (event.type === 'positions') {
+        requestSequence.current++
+        const data = event.data as LivePosition[]
+        data.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+        hasActivePositions.current = hasActiveLiveExposure(data)
+        setExposure({ accountKey, active: hasActivePositions.current })
+        reschedulePolling.current()
+        setPositions(data)
+        setLoadedAccountKey(accountKey)
+        setLoading(false)
+        setError(null)
+      }
+    })
+  }, [shouldMonitor, pacificaAddress, hyperliquidAddress, accountKey])
+
+  useEffect(() => {
+    if (!shouldMonitor) return
     const controller = new AbortController()
     const initial = window.setTimeout(() => fetch_(controller.signal), 0)
-    const id = setInterval(() => fetch_(controller.signal), pollInterval)
+    let timer = 0
+    const schedule = () => {
+      window.clearTimeout(timer)
+      const delay = livePositionPollInterval(hasActivePositions.current, pollInterval)
+      timer = window.setTimeout(async () => {
+        if (!streamConnected.current) await fetch_(controller.signal)
+        if (!controller.signal.aborted) schedule()
+      }, delay)
+    }
+    reschedulePolling.current = schedule
+    schedule()
     return () => {
+      if (reschedulePolling.current === schedule) reschedulePolling.current = () => {}
       window.clearTimeout(initial)
-      clearInterval(id)
+      window.clearTimeout(timer)
       controller.abort()
     }
-  }, [fetch_, pollInterval])
+  }, [fetch_, pollInterval, shouldMonitor])
 
   const refetch = useCallback(() => fetch_(), [fetch_])
 

@@ -1,5 +1,15 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { apiFetch } from '@/lib/api'
+import { subscribeLiveSessionEvents } from '@/lib/live-events'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
@@ -118,10 +128,10 @@ interface AdvanceResp {
   remaining_exposure?: RemainingExposure[]
 }
 
-const recoveryPollLimit = 300
-const recoveryPollIntervalMs = 1_000
+const recoveryTimeoutMs = 5 * 60_000
+const recoveryFallbackPollMs = 5_000
 
-export function useLiveExecution() {
+function useLiveExecutionState() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
   const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
@@ -132,52 +142,64 @@ export function useLiveExecution() {
       !state.accountPacifica || !state.accountHyperliquid) return
 
     let cancelled = false
+    let streamConnected = false
+    let fallbackTimer = 0
+    let deadlineTimer = 0
     const sessionId = state.sessionId
     const query = new URLSearchParams({
       account_pacifica: state.accountPacifica,
       account_hyperliquid: state.accountHyperliquid,
     })
-    const poll = async () => {
-      for (let attempt = 0; attempt < recoveryPollLimit && !cancelled; attempt++) {
-        if (attempt > 0) {
-          await new Promise(resolve => window.setTimeout(resolve, recoveryPollIntervalMs))
-        }
-        if (cancelled) return
-
-        try {
-          const response = await apiFetch(`/api/v1/live/sessions/${sessionId}?${query}`)
-          if (!response.ok) continue
-          const result: AdvanceResp = await response.json()
-          if (result.status === 'recovering') continue
-
-          setState((current) => ({
-            ...current,
-            phase: executionPhaseFromStatus(result.status),
-            leg1Fill: result.leg1_fill ?? current.leg1Fill,
-            leg2Fill: result.leg2_fill ?? current.leg2Fill,
-            mismatch: result.mismatch ?? current.mismatch,
-            positionId: result.position_id ?? current.positionId,
-            reason: result.reason ?? current.reason,
-            unwound: result.unwound ?? false,
-            unwindStatus: (result.unwind_status ?? null) as UnwindStatus,
-            remainingExposure: result.remaining_exposure ?? [],
-          }))
-          return
-        } catch {
-          // Keep polling because the original submission and this status request may both be transiently unavailable.
-        }
-      }
-      if (!cancelled) {
-        setState((current) => ({
-          ...current,
-          phase: 'degraded',
-          reason: 'Venue reconciliation did not finish in time. Review venue positions before retrying.',
-        }))
-      }
+    const apply = (result: AdvanceResp) => {
+      if (cancelled || result.status === 'recovering') return false
+      setState((current) => ({
+        ...current,
+        phase: executionPhaseFromStatus(result.status),
+        leg1Fill: result.leg1_fill ?? current.leg1Fill,
+        leg2Fill: result.leg2_fill ?? current.leg2Fill,
+        mismatch: result.mismatch ?? current.mismatch,
+        positionId: result.position_id ?? current.positionId,
+        reason: result.reason ?? current.reason,
+        unwound: result.unwound ?? false,
+        unwindStatus: (result.unwind_status ?? null) as UnwindStatus,
+        remainingExposure: result.remaining_exposure ?? [],
+      }))
+      return true
     }
 
-    poll()
-    return () => { cancelled = true }
+    const closeStream = subscribeLiveSessionEvents(
+      state.accountPacifica,
+      state.accountHyperliquid,
+      sessionId,
+      (connected) => { streamConnected = connected },
+      (data) => { if (apply(data as AdvanceResp)) closeStream() },
+    )
+    const pollFallback = async () => {
+      if (cancelled) return
+      if (!streamConnected) {
+        try {
+          const response = await apiFetch(`/api/v1/live/sessions/${sessionId}?${query}`)
+          if (response.ok && apply(await response.json())) return
+        } catch {
+          // SSE reconnect and the next fallback poll remain active.
+        }
+      }
+      fallbackTimer = window.setTimeout(pollFallback, recoveryFallbackPollMs)
+    }
+    fallbackTimer = window.setTimeout(pollFallback, recoveryFallbackPollMs)
+    deadlineTimer = window.setTimeout(() => {
+      if (!cancelled) setState((current) => ({
+        ...current,
+        phase: 'degraded',
+        reason: 'Venue reconciliation did not finish in time. Review venue positions before retrying.',
+      }))
+    }, recoveryTimeoutMs)
+    return () => {
+      cancelled = true
+      closeStream()
+      window.clearTimeout(fallbackTimer)
+      window.clearTimeout(deadlineTimer)
+    }
   }, [state.phase, state.sessionId, state.accountPacifica, state.accountHyperliquid])
 
   // Live refs of the currently connected accounts. The executeLive async
@@ -541,4 +563,19 @@ export function useLiveExecution() {
   const reset = useCallback(() => setState(INITIAL_STATE), [])
 
   return { state, executeLive, reset }
+}
+
+type LiveExecutionContextValue = ReturnType<typeof useLiveExecutionState>
+
+const LiveExecutionContext = createContext<LiveExecutionContextValue | null>(null)
+
+export function LiveExecutionProvider({ children }: { children: ReactNode }) {
+  const value = useLiveExecutionState()
+  return createElement(LiveExecutionContext.Provider, { value }, children)
+}
+
+export function useLiveExecution(): LiveExecutionContextValue {
+  const value = useContext(LiveExecutionContext)
+  if (!value) throw new Error('useLiveExecution must be used within LiveExecutionProvider')
+  return value
 }

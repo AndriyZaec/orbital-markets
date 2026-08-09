@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import { usePageVisibility } from './usePageVisibility'
 
 interface PnLBlock {
   price_pnl: number
@@ -79,26 +80,37 @@ export function useAnalytics(pollInterval = 15_000) {
   const [data, setData] = useState<Analytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const pageVisible = usePageVisibility()
+  const requestSequence = useRef(0)
 
-  const fetch_ = useCallback(async () => {
+  const fetch_ = useCallback(async (signal?: AbortSignal) => {
+    const request = ++requestSequence.current
     try {
-      const resp = await apiFetch('/api/v1/paper/analytics')
+      const resp = await apiFetch('/api/v1/paper/analytics', { signal })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const json: Analytics = await resp.json()
+      if (signal?.aborted || request !== requestSequence.current) return
       setData(json)
       setError(null)
     } catch (e) {
+      if (signal?.aborted || request !== requestSequence.current) return
       setError(e instanceof Error ? e.message : 'Unknown error')
     } finally {
-      setLoading(false)
+      if (!signal?.aborted && request === requestSequence.current) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    fetch_()
-    const id = setInterval(fetch_, pollInterval)
-    return () => clearInterval(id)
-  }, [fetch_, pollInterval])
+    if (!pageVisible) return
+    const controller = new AbortController()
+    const initialId = window.setTimeout(() => fetch_(controller.signal), 0)
+    const intervalId = window.setInterval(() => fetch_(controller.signal), pollInterval)
+    return () => {
+      controller.abort()
+      window.clearTimeout(initialId)
+      window.clearInterval(intervalId)
+    }
+  }, [fetch_, pollInterval, pageVisible])
 
   return { data, loading, error }
 }

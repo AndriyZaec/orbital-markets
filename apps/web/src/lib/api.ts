@@ -10,10 +10,14 @@
 // Gate detection lives in GateProvider via a /api/v1/health probe — apiFetch
 // stays a thin wrapper so genuine 404s from endpoints surface as 404s.
 
-const API_BASE: string = (import.meta.env.VITE_API_URL ?? '') as string
+const API_BASE: string = import.meta.env?.VITE_API_URL ?? ''
+
+export function apiUrl(path: string): string {
+  return API_BASE + path
+}
 
 export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(API_BASE + path, {
+  return fetch(apiUrl(path), {
     credentials: 'include',
     ...init,
   })

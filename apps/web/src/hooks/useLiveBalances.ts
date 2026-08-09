@@ -1,5 +1,9 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import { runSingleFlight, shouldMonitorLiveUpdates } from '@/lib/polling'
+import { hasActiveLiveExposure, subscribeLiveAccountEvents } from '@/lib/live-events'
+import { useLiveExecution } from './useLiveExecution'
+import { usePageVisibility } from './usePageVisibility'
 
 interface VenueBalance {
   venue: string
@@ -44,31 +48,72 @@ export function useLiveBalances(
     pair: null,
     balances: EMPTY,
   })
+  const polling = useRef({ running: false })
+  const streamConnected = useRef(false)
+  const requestSequence = useRef(0)
+  const pageVisible = usePageVisibility()
+  const { state: execution } = useLiveExecution()
+  const [exposure, setExposure] = useState<{
+    pair: string | null
+    active: boolean | null
+  }>({ pair: null, active: null })
+  const activeExposure = exposure.pair === pair ? exposure.active : null
+  const executionUsesPair = pair !== null &&
+    execution.accountPacifica === accountPacifica &&
+    execution.accountHyperliquid?.toLowerCase() === accountHyperliquid?.toLowerCase()
+  const executionActive = executionUsesPair &&
+    execution.phase !== 'idle' && execution.phase !== 'failed' && execution.phase !== 'aborted'
+  const shouldMonitor = shouldMonitorLiveUpdates(pageVisible, activeExposure, executionActive)
 
-  const fetch_ = useCallback(async () => {
+  const fetch_ = useCallback(async (signal?: AbortSignal) => {
+    if (signal?.aborted) return
     if (!pair || !accountPacifica || !accountHyperliquid) return
-    try {
-      const query = new URLSearchParams({
-        account_pacifica: accountPacifica,
-        account_hyperliquid: accountHyperliquid,
-      })
-      const resp = await apiFetch(`/api/v1/live/balances?${query}`)
-      if (!resp.ok) return
-      const data: Balances = await resp.json()
-      setResult({ pair, balances: data })
-    } catch {
-      // silently ignore — balance display is best-effort
-    }
+    await runSingleFlight(polling.current, async () => {
+      const request = ++requestSequence.current
+      try {
+        const query = new URLSearchParams({
+          account_pacifica: accountPacifica,
+          account_hyperliquid: accountHyperliquid,
+        })
+        const resp = await apiFetch(`/api/v1/live/balances?${query}`, { signal })
+        if (!resp.ok) return
+        const data: Balances = await resp.json()
+        if (signal?.aborted || request !== requestSequence.current) return
+        setResult({ pair, balances: data })
+      } catch {
+        // silently ignore — balance display is best-effort
+      }
+    })
   }, [pair, accountPacifica, accountHyperliquid])
 
   useEffect(() => {
-    const initialId = setTimeout(fetch_, 0)
-    const intervalId = setInterval(fetch_, pollInterval)
+    streamConnected.current = false
+    if (!shouldMonitor || !pair || !accountPacifica || !accountHyperliquid) return
+    return subscribeLiveAccountEvents(accountPacifica, accountHyperliquid, (event) => {
+      if (event.type === 'connected') streamConnected.current = true
+      else if (event.type === 'disconnected') streamConnected.current = false
+      else if (event.type === 'balances') {
+        requestSequence.current++
+        setResult({ pair, balances: event.data as Balances })
+      } else if (event.type === 'positions') {
+        setExposure({ pair, active: hasActiveLiveExposure(event.data) })
+      }
+    })
+  }, [shouldMonitor, pair, accountPacifica, accountHyperliquid])
+
+  useEffect(() => {
+    if (!pageVisible) return
+    const controller = new AbortController()
+    const initialId = setTimeout(() => fetch_(controller.signal), 0)
+    const intervalId = setInterval(() => {
+      if (!streamConnected.current) void fetch_(controller.signal)
+    }, pollInterval)
     return () => {
+      controller.abort()
       clearTimeout(initialId)
       clearInterval(intervalId)
     }
-  }, [fetch_, pollInterval])
+  }, [fetch_, pollInterval, pageVisible])
 
   // Expose refetch so ensure-account-streams callers can force a poll and
   // move the UI to "ready" without waiting for the next 5s tick. Returned

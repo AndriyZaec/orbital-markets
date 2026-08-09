@@ -463,7 +463,7 @@ export function OpportunityPanel({
         )}
       </div>
 
-      {showLiveModal && (
+      {(showLiveModal || liveState.phase !== 'idle') && (
         <LiveExecutionModal
           state={liveState}
           onRetry={handleExecuteLive}
