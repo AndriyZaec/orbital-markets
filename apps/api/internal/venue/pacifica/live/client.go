@@ -214,6 +214,11 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 		}
 		c.conn = conn
 	}
+	conn := c.conn
+	defer func() {
+		conn.Close()
+		c.conn = nil
+	}()
 
 	// Pacifica WS envelope
 	envelope := WSEnvelope{
@@ -224,22 +229,17 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 	}
 
 	submittedAt := time.Now()
-	if err := c.conn.WriteJSON(envelope); err != nil {
-		c.conn.Close()
-		c.conn = nil
+	if err := conn.WriteJSON(envelope); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
 	deadline := time.Now().Add(submitTimeout)
-	c.conn.SetReadDeadline(deadline)
+	conn.SetReadDeadline(deadline)
 
-	_, raw, err := c.conn.ReadMessage()
+	_, raw, err := conn.ReadMessage()
 	if err != nil {
-		c.conn.Close()
-		c.conn = nil
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-	c.conn.SetReadDeadline(time.Time{})
 
 	respondedAt := time.Now()
 
