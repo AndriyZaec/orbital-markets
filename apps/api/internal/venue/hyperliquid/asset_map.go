@@ -9,14 +9,16 @@ import (
 // The asset index is the position of the symbol in the Hyperliquid universe array,
 // which the exchange requires in order payloads (the "a" field).
 type AssetMap struct {
-	mu      sync.RWMutex
-	indices map[string]int // symbol -> universe array index
-	symbols []string       // index -> symbol (for reverse lookup / debugging)
+	mu       sync.RWMutex
+	indices  map[string]int // symbol -> universe array index
+	decimals map[string]int // symbol -> allowed base-size decimals
+	symbols  []string       // index -> symbol (for reverse lookup / debugging)
 }
 
 func NewAssetMap() *AssetMap {
 	return &AssetMap{
-		indices: make(map[string]int),
+		indices:  make(map[string]int),
+		decimals: make(map[string]int),
 	}
 }
 
@@ -27,13 +29,23 @@ func (m *AssetMap) Update(universe []metaAsset) {
 	defer m.mu.Unlock()
 
 	indices := make(map[string]int, len(universe))
+	decimals := make(map[string]int, len(universe))
 	symbols := make([]string, len(universe))
 	for i, asset := range universe {
 		indices[asset.Name] = i
+		decimals[asset.Name] = asset.SzDecimals
 		symbols[i] = asset.Name
 	}
 	m.indices = indices
+	m.decimals = decimals
 	m.symbols = symbols
+}
+
+func (m *AssetMap) SizeDecimals(symbol string) (int, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	decimals, ok := m.decimals[symbol]
+	return decimals, ok
 }
 
 // AssetIndex returns the Hyperliquid universe index for the given symbol.

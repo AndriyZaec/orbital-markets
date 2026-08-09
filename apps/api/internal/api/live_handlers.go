@@ -207,6 +207,12 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Riskier leg first (higher slippage = thinner book → submit first).
 	leg1, leg2 := orderLegsByRisk(plan)
+	leg1Amount, err := liveBaseAmount(plan.Notional, leg1.price)
+	if err != nil {
+		s.logger.Error("live prepare: calculate base amount", "err", err, "notional", plan.Notional, "price", leg1.price)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "could not size live order from dollar notional"})
+		return
+	}
 	baselineLeg1Size, _ := currentVenuePosition(accounts, leg1.venue, leg1.symbol)
 	baselineLeg2Size, _ := currentVenuePosition(accounts, leg2.venue, leg2.symbol)
 	if math.Abs(baselineLeg1Size) > 1e-9 || math.Abs(baselineLeg2Size) > 1e-9 {
@@ -268,7 +274,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	leg1UnwindCloid := fmt.Sprintf("orbital-l1unwind-%d", now.UnixNano()+1)
 
 	leg1Open, err := s.buildOpenSigningRequest(
-		leg1, plan.Notional, leg1OpenCloid, req.AccountPacifica, req.AccountHyperliquid,
+		leg1, leg1Amount, leg1OpenCloid, req.AccountPacifica, req.AccountHyperliquid,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 open", "err", err)
@@ -279,7 +285,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leg1Unwind, err := s.buildUnwindSigningRequest(
-		leg1, plan.Notional, leg1UnwindCloid, req.AccountPacifica, req.AccountHyperliquid,
+		leg1, leg1Amount, leg1UnwindCloid, req.AccountPacifica, req.AccountHyperliquid,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 unwind", "err", err)
@@ -350,6 +356,30 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		"expires_at":       leg1Open.ExpiresAt,
 		"signing_requests": []*domain.SigningRequest{leg1Open, leg1Unwind},
 	})
+}
+
+func liveBaseAmount(notional, price float64) (float64, error) {
+	if notional <= 0 || math.IsNaN(notional) || math.IsInf(notional, 0) {
+		return 0, fmt.Errorf("invalid notional: %v", notional)
+	}
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return 0, fmt.Errorf("invalid price: %v", price)
+	}
+	return notional / price, nil
+}
+
+func liveSessionLeg1Amount(session *LiveSession) float64 {
+	if session != nil && session.Leg1OpenReq != nil {
+		return session.Leg1OpenReq.Amount
+	}
+	return 0
+}
+
+func liveSessionLeg2Amount(session *LiveSession) float64 {
+	if session != nil && session.Leg2OpenReq != nil {
+		return session.Leg2OpenReq.Amount
+	}
+	return 0
 }
 
 func livePreTradeBlockers(plan *domain.ExecutionPlan, accounts *liveAccountContext) []string {

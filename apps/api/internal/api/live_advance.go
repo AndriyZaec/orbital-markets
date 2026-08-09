@@ -271,8 +271,9 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 
 	fillRatio := 0.0
-	if sess.Plan.Notional > 0 {
-		fillRatio = fill.FilledAmount / sess.Plan.Notional
+	leg1TargetAmount := liveSessionLeg1Amount(sess)
+	if leg1TargetAmount > 0 {
+		fillRatio = fill.FilledAmount / leg1TargetAmount
 	}
 
 	// Minimum hedgeable fill check.
@@ -632,8 +633,8 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 		PlanID:        sess.Plan.ID,
 		Asset:         sess.Plan.Asset,
 		State:         state,
-		Leg1:          legResultFrom(sess.Leg1, sess.Leg1Fill, sess.Leg1OpenReqID, sess.Plan.Notional),
-		Leg2:          legResultFrom(sess.Leg2, sess.Leg2Fill, sess.Leg2OpenReqID, leg1FilledAmount(sess)),
+		Leg1:          legResultFrom(sess.Leg1, sess.Leg1Fill, sess.Leg1OpenReqID, liveSessionLeg1Amount(sess)),
+		Leg2:          legResultFrom(sess.Leg2, sess.Leg2Fill, sess.Leg2OpenReqID, liveSessionLeg2Amount(sess)),
 		Recovery:      sess.Recovery,
 		Reasons:       reasons,
 		StartedAt:     sess.CreatedAt,

@@ -195,11 +195,12 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	leg2Delta := leg2Size - session.BaselineLeg2Size
 
 	if !truthReady {
+		leg1Amount := liveSessionLeg1Amount(session)
 		leg2Amount := 0.0
 		if needLeg2 {
-			leg2Amount = session.Plan.Notional
+			leg2Amount = liveSessionLeg2Amount(session)
 		}
-		s.ensureRecoveryFills(session, session.Plan.Notional, leg2Amount, session.Leg1.price, session.Leg2.price)
+		s.ensureRecoveryFills(session, leg1Amount, leg2Amount, session.Leg1.price, session.Leg2.price)
 		if !needLeg2 {
 			unwindCtx, unwindCancel := context.WithTimeout(s.ctx, 20*time.Second)
 			ur := s.fireUnwind(unwindCtx, session)
