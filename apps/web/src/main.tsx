@@ -5,14 +5,17 @@ import App from './App.tsx'
 import { WalletProviders } from './providers/WalletProviders'
 import { GateProvider } from './providers/GateProvider'
 import { VenueReadinessProvider } from './hooks/useVenueReadiness'
+import { LiveExecutionProvider } from './hooks/useLiveExecution'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <GateProvider>
       <WalletProviders>
-        <VenueReadinessProvider>
-          <App />
-        </VenueReadinessProvider>
+        <LiveExecutionProvider>
+          <VenueReadinessProvider>
+            <App />
+          </VenueReadinessProvider>
+        </LiveExecutionProvider>
       </WalletProviders>
     </GateProvider>
   </StrictMode>,
