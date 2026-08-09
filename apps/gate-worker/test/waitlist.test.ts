@@ -1,7 +1,13 @@
 import { env, exports } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const WAITLIST_URL = 'https://orbitalmarkets.xyz/api/waitlist';
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 function submitWaitlist(overrides: Record<string, string> = {}, origin = 'https://orbitalmarkets.xyz') {
   return exports.default.fetch(WAITLIST_URL, {
@@ -126,3 +132,74 @@ describe('existing gate routes', () => {
     expect(await response.json()).toEqual({ error: 'invalid json' });
   });
 });
+
+describe('beta cookie rolling refresh', () => {
+  it('keeps a valid cookie unchanged before the refresh window', async () => {
+    const cookie = await redeemInvite('NOREFRESH');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('origin response')));
+
+    const response = await exports.default.fetch('https://app.orbitalmarkets.xyz/dashboard', {
+      headers: { cookie },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('origin response');
+    expect(response.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('refreshes a valid cookie during the final seven days', async () => {
+    const start = new Date('2026-08-07T12:00:00Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    const cookie = await redeemInvite('ROLLING');
+    const initialExpiration = jwtExpiration(cookie);
+    vi.setSystemTime(new Date(start.getTime() + 24 * DAY_MS));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('origin response', { headers: { 'x-origin': 'pages' } })));
+
+    const response = await exports.default.fetch('https://app.orbitalmarkets.xyz/dashboard', {
+      headers: { cookie },
+    });
+
+    const refreshedCookie = response.headers.get('set-cookie');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-origin')).toBe('pages');
+    expect(await response.text()).toBe('origin response');
+    expect(refreshedCookie).toContain('__beta=');
+    expect(refreshedCookie).toContain('Max-Age=2592000');
+    expect(jwtExpiration(refreshedCookie!)).toBe(initialExpiration + 24 * 24 * 60 * 60);
+  });
+
+  it('does not refresh an expired cookie on an asset request', async () => {
+    const start = new Date('2026-08-07T12:00:00Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    const cookie = await redeemInvite('EXPIRED');
+    vi.setSystemTime(new Date(start.getTime() + 31 * DAY_MS));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('asset response')));
+
+    const response = await exports.default.fetch('https://app.orbitalmarkets.xyz/app.js', {
+      headers: { cookie },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('asset response');
+    expect(response.headers.get('set-cookie')).toBeNull();
+  });
+});
+
+async function redeemInvite(code: string): Promise<string> {
+  await env.BETA_INVITES.put(`invite:${code}`, JSON.stringify({ created_at: Math.floor(Date.now() / 1_000) }));
+  const response = await exports.default.fetch('https://app.orbitalmarkets.xyz/gate/redeem', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  expect(response.status).toBe(200);
+  return response.headers.get('set-cookie')!.split(';', 1)[0];
+}
+
+function jwtExpiration(cookie: string): number {
+  const token = cookie.slice(cookie.indexOf('=') + 1);
+  const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+  return (JSON.parse(atob(payload)) as { exp: number }).exp;
+}

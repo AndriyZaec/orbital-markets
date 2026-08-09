@@ -9,7 +9,13 @@ export default defineConfig(async () => {
     plugins: [
       cloudflareTest({
         wrangler: { configPath: './wrangler.toml' },
-        miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+        miniflare: {
+          bindings: {
+            TEST_MIGRATIONS: migrations,
+            JWT_SECRET: 'test-jwt-secret',
+            COOKIE_DOMAIN: '',
+          },
+        },
       }),
     ],
     test: {

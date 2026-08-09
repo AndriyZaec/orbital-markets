@@ -20,6 +20,7 @@ export interface Env {
 
 const COOKIE_NAME = '__beta';
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // seconds
+const COOKIE_REFRESH_WINDOW = 7 * 24 * 60 * 60; // seconds
 const GATE_PATH = '/gate';
 const WAITLIST_PATH = '/api/waitlist';
 const MAX_WAITLIST_BODY_BYTES = 4_096;
@@ -64,8 +65,9 @@ export default {
     }
 
     const token = readCookie(request, COOKIE_NAME);
-    const ok = token !== null && (await verifyJWT(token, env.JWT_SECRET));
-    if (!ok) {
+    const claims = await decodeJWT(token, env.JWT_SECRET);
+    const currentTime = now();
+    if (!claims || claims.exp <= currentTime) {
       // Defensive: in case the Worker route ever catches a stray /api/* path.
       if (url.pathname.startsWith('/api/')) {
         return new Response('Not Found', { status: 404 });
@@ -78,9 +80,16 @@ export default {
       if (isDocument) {
         return Response.redirect(new URL(GATE_PATH, url.origin).toString(), 302);
       }
+      return fetch(request);
     }
 
-    return fetch(request);
+    const response = await fetch(request);
+    if (claims.exp - currentTime > COOKIE_REFRESH_WINDOW) {
+      return response;
+    }
+
+    const jwt = await signJWT({ cid: claims.cid, exp: currentTime + COOKIE_MAX_AGE }, env.JWT_SECRET);
+    return withCookie(response, jwt, env.COOKIE_DOMAIN);
   },
 } satisfies ExportedHandler<Env>;
 
@@ -287,6 +296,26 @@ async function handleRedeem(request: Request, env: Env): Promise<Response> {
 }
 
 function setCookieResponse(jwt: string, cookieDomain: string): Response {
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      'set-cookie': cookieHeader(jwt, cookieDomain),
+    },
+  });
+}
+
+function withCookie(response: Response, jwt: string, cookieDomain: string): Response {
+  const headers = new Headers(response.headers);
+  headers.append('set-cookie', cookieHeader(jwt, cookieDomain));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function cookieHeader(jwt: string, cookieDomain: string): string {
   const parts = [
     `${COOKIE_NAME}=${jwt}`,
     'Path=/',
@@ -298,13 +327,7 @@ function setCookieResponse(jwt: string, cookieDomain: string): Response {
     parts.push(`Domain=${cookieDomain}`);
     parts.push('Secure'); // production scope assumed when Domain is set
   }
-  return new Response(JSON.stringify({ ok: true }), {
-    status: 200,
-    headers: {
-      'content-type': 'application/json',
-      'set-cookie': parts.join('; '),
-    },
-  });
+  return parts.join('; ');
 }
 
 function jsonResponse(status: number, body: object, headers: HeadersInit = {}): Response {
@@ -364,11 +387,6 @@ async function signJWT(claims: Claims, secret: string): Promise<string> {
   return `${signing}.${b64urlEncode(sig)}`;
 }
 
-async function verifyJWT(token: string, secret: string): Promise<boolean> {
-  const claims = await decodeJWT(token, secret);
-  return claims !== null && claims.exp > now();
-}
-
 async function decodeJWT(token: string | null, secret: string): Promise<Claims | null> {
   if (!token) return null;
   const parts = token.split('.');
@@ -385,7 +403,9 @@ async function decodeJWT(token: string | null, secret: string): Promise<Claims |
   const ok = await crypto.subtle.verify('HMAC', key, b64urlDecode(s), TE.encode(`${h}.${p}`));
   if (!ok) return null;
   try {
-    return JSON.parse(TD.decode(b64urlDecode(p))) as Claims;
+    const claims = JSON.parse(TD.decode(b64urlDecode(p))) as Partial<Claims>;
+    if (typeof claims.cid !== 'string' || typeof claims.exp !== 'number') return null;
+    return claims as Claims;
   } catch {
     return null;
   }
