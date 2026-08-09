@@ -44,6 +44,93 @@ func TestLiveCloseUsesPersistedResidualExposure(t *testing.T) {
 	}
 }
 
+func TestLiveCloseReconcilesRecordedExposureAbsentFromBothVenues(t *testing.T) {
+	server, database := newResidualExposureServer(t)
+	registryCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveClose(response, request)
+
+	if response.Code != 200 {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		ReconciledClosed bool                    `json:"reconciled_closed"`
+		SigningRequests  []domain.SigningRequest `json:"signing_requests"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.ReconciledClosed || len(body.SigningRequests) != 0 {
+		t.Fatalf("body = %+v, want venue-reconciled close without signing", body)
+	}
+	var state string
+	if err := database.QueryRow(`SELECT state FROM live_positions WHERE id = 'position-residual'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(executor.ExecStateClosed) {
+		t.Fatalf("state = %q, want closed", state)
+	}
+}
+
+func TestLiveCloseKeepsRecordedExposureWhenVenuePositionExists(t *testing.T) {
+	server, database := newResidualExposureServer(t)
+	registryCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {
+				Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt,
+				Positions: []liveAccountPosition{{Symbol: "SOL", Side: "long", Size: 2.75}},
+			},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveClose(response, request)
+
+	if response.Code != 200 {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		ReconciledClosed bool                    `json:"reconciled_closed"`
+		SigningRequests  []domain.SigningRequest `json:"signing_requests"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.ReconciledClosed || len(body.SigningRequests) != 1 {
+		t.Fatalf("body = %+v, want one close request for venue exposure", body)
+	}
+	var state string
+	if err := database.QueryRow(`SELECT state FROM live_positions WHERE id = 'position-residual'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(executor.ExecStateDegraded) {
+		t.Fatalf("state = %q, want degraded", state)
+	}
+}
+
 func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{

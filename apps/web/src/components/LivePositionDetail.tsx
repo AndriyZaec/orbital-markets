@@ -263,7 +263,11 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             )}
             {/* Result */}
             {closeDone && liveClose.state.failed === 0 && (
-              <p className="text-[11px] text-green-400">Position closed with all leg fills confirmed.</p>
+              <p className="text-[11px] text-green-400">
+                {liveClose.state.reconciled
+                  ? 'Venue state verified; no remaining exposure was found.'
+                  : 'Position closed with all leg fills confirmed.'}
+              </p>
             )}
             {closeDone && liveClose.state.failed > 0 && (
               <div className="text-[11px] space-y-1">

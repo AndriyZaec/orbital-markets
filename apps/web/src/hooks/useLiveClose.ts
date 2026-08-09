@@ -14,6 +14,7 @@ export interface CloseState {
   submitted: number
   succeeded: number
   failed: number
+  reconciled: boolean
   errors: string[]
 }
 
@@ -23,6 +24,7 @@ const INITIAL: CloseState = {
   submitted: 0,
   succeeded: 0,
   failed: 0,
+  reconciled: false,
   errors: [],
 }
 
@@ -91,11 +93,11 @@ export function useLiveClose() {
         throw new Error(b.error || `Close prepare failed: HTTP ${resp.status}`)
       }
 
-      const data: { signing_requests: SigningRequest[] } = await resp.json()
+      const data: { signing_requests: SigningRequest[]; reconciled_closed?: boolean } = await resp.json()
       const requests = data.signing_requests || []
 
       if (requests.length === 0) {
-        setState(s => ({ ...s, phase: 'done' }))
+        setState(s => ({ ...s, phase: 'done', reconciled: data.reconciled_closed === true }))
         return
       }
 

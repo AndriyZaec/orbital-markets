@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -509,8 +510,9 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 //	  5 minutes is generous enough to hide the quiet-account case while
 //	  still catching a genuinely broken stream.
 const (
-	admissionFreshness = 30 * time.Second
-	displayFreshness   = 5 * time.Minute
+	admissionFreshness                = 30 * time.Second
+	displayFreshness                  = 5 * time.Minute
+	positionReconciliationQuietPeriod = 10 * time.Second
 )
 
 // venueAccountStatus is the per-venue account-data readiness view returned by
@@ -814,6 +816,22 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reconciledClosed, err := s.reconcilePositionAbsentFromVenues(
+		r.Context(), pos, req.AccountPacifica, req.AccountHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reconcile venue exposure"})
+		return
+	}
+	if reconciledClosed {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"position_id":       id,
+			"reconciled_closed": true,
+			"signing_requests":  []any{},
+		})
+		return
+	}
+
 	fills, err := s.liveStore.GetFills(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get fills"})
@@ -861,6 +879,51 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		"position_id":      id,
 		"signing_requests": signingRequests,
 	})
+}
+
+func (s *Server) reconcilePositionAbsentFromVenues(
+	ctx context.Context,
+	position *executor.LivePosition,
+	accountPacifica, accountHyperliquid string,
+) (bool, error) {
+	if s.live == nil || s.live.accounts == nil {
+		return false, nil
+	}
+	updatedAt, err := time.Parse(time.RFC3339, position.UpdatedAt)
+	if err != nil || time.Since(updatedAt) < positionReconciliationQuietPeriod {
+		return false, nil
+	}
+
+	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
+	if err != nil {
+		s.logger.Warn("live position: venue reconciliation unavailable", "err", err, "id", position.ID)
+		return false, nil
+	}
+	defer accounts.Release()
+	unlock := accounts.Lock()
+	defer unlock()
+
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		feed, ok := accounts.Feed(venue)
+		if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, updatedAt) {
+			return false, nil
+		}
+		size, _ := currentVenuePosition(accounts, venue, position.Asset)
+		if math.Abs(size) > 1e-9 {
+			return false, nil
+		}
+	}
+
+	changed, err := s.liveStore.MarkClosed(ctx, position.ID)
+	if err != nil {
+		return false, err
+	}
+	if changed {
+		s.liveStore.InsertEvent(ctx, position.ID, "venue_reconciled_closed", executor.ExecStateClosed,
+			"fresh venue state shows no remaining position on either venue")
+		s.logger.Info("live position: reconciled closed from venue state", "id", position.ID, "asset", position.Asset)
+	}
+	return changed, nil
 }
 
 // handleLiveKill is the emergency kill switch — prepares close orders for all open live positions.
