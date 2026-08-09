@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import { usePageVisibility } from './usePageVisibility'
 
 type LiqRiskLevel = 'safe' | 'elevated' | 'warning' | 'critical' | ''
 
@@ -67,8 +68,14 @@ export function usePlan(
   const [maxLeverage, setMaxLeverage] = useState<number | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const requestSequence = useRef(0)
+  const pageVisible = usePageVisibility()
 
-  const fetchPlan = useCallback(async (oppId: string, selectedLeverage: number, notional?: number) => {
+  const fetchPlan = useCallback(async (
+    oppId: string,
+    selectedLeverage: number,
+    notional?: number,
+    signal?: AbortSignal,
+  ) => {
     const requestId = ++requestSequence.current
     try {
       setLoading(true)
@@ -83,26 +90,27 @@ export function usePlan(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal,
       })
       if (!resp.ok) {
         const body: { error?: string; pair_max_leverage?: number } = await resp.json().catch(() => ({}))
-        if (requestId !== requestSequence.current) return
+        if (signal?.aborted || requestId !== requestSequence.current) return
         if (typeof body.pair_max_leverage === 'number') {
           setMaxLeverage(body.pair_max_leverage)
         }
         throw new Error(body.error || `HTTP ${resp.status}`)
       }
       const data: ExecutionPlan = await resp.json()
-      if (requestId !== requestSequence.current) return
+      if (signal?.aborted || requestId !== requestSequence.current) return
       setPlan(data)
       setMaxLeverage(data.max_leverage)
       setError(null)
     } catch (e) {
-      if (requestId !== requestSequence.current) return
+      if (signal?.aborted || requestId !== requestSequence.current) return
       setError(e instanceof Error ? e.message : 'Unknown error')
       setPlan(null)
     } finally {
-      if (requestId === requestSequence.current) {
+      if (!signal?.aborted && requestId === requestSequence.current) {
         setLoading(false)
       }
     }
@@ -111,22 +119,31 @@ export function usePlan(
   useEffect(() => {
     if (!opportunityId) {
       requestSequence.current++
-      setPlan(null)
-      setError(null)
-      setMaxLeverage(null)
-      return
+      const resetId = window.setTimeout(() => {
+        setPlan(null)
+        setError(null)
+        setMaxLeverage(null)
+      }, 0)
+      return () => window.clearTimeout(resetId)
     }
+    if (!pageVisible) return
 
-    fetchPlan(opportunityId, leverage, requestedNotional)
+    const controller = new AbortController()
+    const initialId = window.setTimeout(
+      () => fetchPlan(opportunityId, leverage, requestedNotional, controller.signal),
+      0,
+    )
 
     intervalRef.current = setInterval(
-      () => fetchPlan(opportunityId, leverage, requestedNotional),
+      () => fetchPlan(opportunityId, leverage, requestedNotional, controller.signal),
       10_000,
     )
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      controller.abort()
+      window.clearTimeout(initialId)
+      if (intervalRef.current) window.clearInterval(intervalRef.current)
     }
-  }, [opportunityId, leverage, requestedNotional, fetchPlan])
+  }, [opportunityId, leverage, requestedNotional, fetchPlan, pageVisible])
 
   const clear = useCallback(() => {
     requestSequence.current++

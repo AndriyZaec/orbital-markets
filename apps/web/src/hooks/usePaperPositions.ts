@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import { usePageVisibility } from './usePageVisibility'
 
 interface Fill {
   venue: string
@@ -66,27 +67,38 @@ export function usePaperPositions(pollInterval = 5_000) {
   const [positions, setPositions] = useState<PaperPosition[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const pageVisible = usePageVisibility()
+  const requestSequence = useRef(0)
 
-  const fetchPositions = useCallback(async () => {
+  const fetchPositions = useCallback(async (signal?: AbortSignal) => {
+    const request = ++requestSequence.current
     try {
-      const resp = await apiFetch('/api/v1/paper/positions')
+      const resp = await apiFetch('/api/v1/paper/positions', { signal })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const data: PaperPosition[] = await resp.json()
+      if (signal?.aborted || request !== requestSequence.current) return
       data.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       setPositions(data)
       setError(null)
     } catch (e) {
+      if (signal?.aborted || request !== requestSequence.current) return
       setError(e instanceof Error ? e.message : 'Unknown error')
     } finally {
-      setLoading(false)
+      if (!signal?.aborted && request === requestSequence.current) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    fetchPositions()
-    const id = setInterval(fetchPositions, pollInterval)
-    return () => clearInterval(id)
-  }, [fetchPositions, pollInterval])
+    if (!pageVisible) return
+    const controller = new AbortController()
+    const initialId = window.setTimeout(() => fetchPositions(controller.signal), 0)
+    const intervalId = window.setInterval(() => fetchPositions(controller.signal), pollInterval)
+    return () => {
+      controller.abort()
+      window.clearTimeout(initialId)
+      window.clearInterval(intervalId)
+    }
+  }, [fetchPositions, pollInterval, pageVisible])
 
   const closePosition = useCallback(async (posId: string) => {
     const resp = await apiFetch(`/api/v1/paper/close/${posId}`, { method: 'POST' })
