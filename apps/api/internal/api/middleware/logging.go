@@ -44,6 +44,10 @@ type statusWriter struct {
 	wroteHeader bool
 }
 
+func (s *statusWriter) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}
+
 func (s *statusWriter) WriteHeader(code int) {
 	if !s.wroteHeader {
 		s.status = code

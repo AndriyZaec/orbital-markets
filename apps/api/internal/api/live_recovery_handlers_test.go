@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +130,37 @@ func TestLiveCloseKeepsRecordedExposureWhenVenuePositionExists(t *testing.T) {
 	}
 	if state != string(executor.ExecStateDegraded) {
 		t.Fatalf("state = %q, want degraded", state)
+	}
+}
+
+func TestLiveEventsEmitsInitialAccountSnapshots(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	registryCtx, cancelRegistry := context.WithCancel(context.Background())
+	t.Cleanup(cancelRegistry)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	requestCtx, cancelRequest := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelRequest()
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/live/events?account_pacifica=sol-wallet&account_hyperliquid=0xwallet", nil,
+	).WithContext(requestCtx)
+	response := httptest.NewRecorder()
+	server.handleLiveEvents(response, request)
+
+	if response.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("content type = %q", response.Header().Get("Content-Type"))
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "event: balances\n") || !strings.Contains(body, "event: positions\n") {
+		t.Fatalf("stream body = %q, want initial balances and positions", body)
 	}
 }
 
