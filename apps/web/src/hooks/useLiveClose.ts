@@ -1,10 +1,8 @@
 import { useState, useCallback } from 'react'
 import { apiFetch } from '@/lib/api'
-import { useWallet } from '@solana/wallet-adapter-react'
-import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
-import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
+import { useTradingAgents } from './useTradingAgents'
 
 export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
 
@@ -50,30 +48,17 @@ async function waitForClose(positionId: string, pacificaAccount: string, hyperli
 
 export function useLiveClose() {
   const [state, setState] = useState<CloseState>(INITIAL)
-  const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
-  const { signTypedDataAsync } = useSignTypedData()
-
-  const buildSigners = useCallback((): Signers => ({
-    pacifica: solWallet.signMessage && solWallet.publicKey
-      ? { signMessage: solWallet.signMessage, publicKey: solWallet.publicKey.toBase58() }
-      : null,
-    hyperliquid: hyperliquidAddress
-      ? {
-          signTypedDataAsync: (params) => signTypedDataAsync({
-            domain: params.domain,
-            types: params.types,
-            primaryType: params.primaryType,
-            message: params.message,
-          }),
-          address: hyperliquidAddress,
-        }
-      : null,
-  }), [solWallet.signMessage, solWallet.publicKey, hyperliquidAddress, signTypedDataAsync])
+  const tradingAgents = useTradingAgents()
 
   const closePosition = useCallback(async (positionId: string) => {
     if (!pacificaAddress || !hyperliquidAddress) {
       setState({ ...INITIAL, phase: 'error', errors: ['Both venue accounts must be connected'] })
+      return
+    }
+    if (!tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress ||
+      tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready') {
+      setState({ ...INITIAL, phase: 'error', errors: ['Authorize both venue trading agents first'] })
       return
     }
 
@@ -86,6 +71,8 @@ export function useLiveClose() {
         body: JSON.stringify({
           account_pacifica: pacificaAddress,
           account_hyperliquid: hyperliquidAddress,
+          agent_pacifica: tradingAgents.pacifica.agentAddress,
+          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
         }),
       })
       if (!resp.ok) {
@@ -102,7 +89,6 @@ export function useLiveClose() {
       }
 
       setState(s => ({ ...s, phase: 'signing', total: requests.length }))
-      const signers = buildSigners()
       const errors: string[] = []
       let failed = 0
       const signedActions: Array<{ request: SigningRequest; signed: SignedAction }> = []
@@ -110,7 +96,7 @@ export function useLiveClose() {
       for (let i = 0; i < requests.length; i++) {
         const req = requests[i]
         setState(s => ({ ...s, phase: 'signing', submitted: i }))
-        const signed = await signRequest(req, signers)
+        const signed = await tradingAgents.sign(req)
         signedActions.push({ request: req, signed })
       }
 
@@ -158,7 +144,7 @@ export function useLiveClose() {
         errors: [e instanceof Error ? e.message : 'Unknown error'],
       }))
     }
-  }, [pacificaAddress, hyperliquidAddress, buildSigners])
+  }, [pacificaAddress, hyperliquidAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL), [])
 

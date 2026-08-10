@@ -10,11 +10,9 @@ import {
 } from 'react'
 import { apiFetch } from '@/lib/api'
 import { subscribeLiveSessionEvents } from '@/lib/live-events'
-import { useWallet } from '@solana/wallet-adapter-react'
-import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
-import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction } from '@/types/signing'
+import { useTradingAgents } from './useTradingAgents'
 import {
   executionFailurePhase,
   executionPhaseFromStatus,
@@ -133,9 +131,8 @@ const recoveryFallbackPollMs = 5_000
 
 function useLiveExecutionState() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
-  const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
-  const { signTypedDataAsync } = useSignTypedData()
+  const tradingAgents = useTradingAgents()
 
   useEffect(() => {
     if (state.phase !== 'recovering' || !state.sessionId ||
@@ -211,23 +208,6 @@ function useLiveExecutionState() {
   useEffect(() => { pacificaRef.current = pacificaAddress }, [pacificaAddress])
   useEffect(() => { hyperliquidRef.current = hyperliquidAddress }, [hyperliquidAddress])
 
-  const buildSigners = useCallback((): Signers => ({
-    pacifica: solWallet.signMessage && solWallet.publicKey
-      ? { signMessage: solWallet.signMessage, publicKey: solWallet.publicKey.toBase58() }
-      : null,
-    hyperliquid: hyperliquidAddress
-      ? {
-          signTypedDataAsync: (params) => signTypedDataAsync({
-            domain: params.domain,
-            types: params.types,
-            primaryType: params.primaryType,
-            message: params.message,
-          }),
-          address: hyperliquidAddress,
-        }
-      : null,
-  }), [solWallet.signMessage, solWallet.publicKey, hyperliquidAddress, signTypedDataAsync])
-
   const postAdvance = async (body: Record<string, unknown>): Promise<AdvanceResp> => {
     const resp = await apiFetch('/api/v1/live/advance', {
       method: 'POST',
@@ -250,6 +230,11 @@ function useLiveExecutionState() {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Both venue accounts must be connected' })
       return
     }
+    if (tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready' ||
+      !tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress) {
+      setState({ ...INITIAL_STATE, phase: 'failed', error: 'Authorize both venue trading agents first' })
+      return
+    }
 
     setState({ ...INITIAL_STATE, phase: 'preparing' })
 
@@ -268,6 +253,8 @@ function useLiveExecutionState() {
             : {}),
           account_pacifica: pacificaAddress,
           account_hyperliquid: hyperliquidAddress,
+          agent_pacifica: tradingAgents.pacifica.agentAddress,
+          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
         }),
       })
       if (!prepResp.ok) {
@@ -313,8 +300,6 @@ function useLiveExecutionState() {
         currentVenue: prep.riskier_venue,
       }))
 
-      const signers = buildSigners()
-
       // Guard: pre-leg-1 wallet swap → nothing submitted, fail cleanly.
       {
         const changed = detectAccountChange()
@@ -333,7 +318,7 @@ function useLiveExecutionState() {
       try {
         signedLeg1 = []
         for (const req of leg1Requests) {
-          signedLeg1.push(await signRequest(req, signers))
+          signedLeg1.push(await tradingAgents.sign(req))
         }
       } catch (e) {
         // Signing-failure rule: nothing submitted, abort cleanly.
@@ -428,7 +413,7 @@ function useLiveExecutionState() {
       // 4. Sign leg 2. If it fails, tell the backend to abort -> fires armed unwind.
       let signedLeg2: SignedAction
       try {
-        signedLeg2 = await signRequest(leg2Req, signers)
+        signedLeg2 = await tradingAgents.sign(leg2Req)
       } catch (e) {
         const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
         setState((s) => ({
@@ -508,7 +493,7 @@ function useLiveExecutionState() {
         } else {
           let signedRetry: SignedAction | null = null
           try {
-            signedRetry = await signRequest(retryReq, signers)
+            signedRetry = await tradingAgents.sign(retryReq)
           } catch (e) {
             const message = `Leg 2 retry signing failed: ${e instanceof Error ? e.message : 'unknown error'}`
             const abortResp = await abortRetry(message)
@@ -558,7 +543,7 @@ function useLiveExecutionState() {
           : { error: e instanceof Error ? e.message : 'Unknown error' }),
       }))
     }
-  }, [pacificaAddress, hyperliquidAddress, buildSigners])
+  }, [pacificaAddress, hyperliquidAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL_STATE), [])
 

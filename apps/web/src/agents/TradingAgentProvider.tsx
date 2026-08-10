@@ -50,7 +50,6 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
 
   return (
     <TradingAgentSession
-      key={`${pacificaOwner ?? ''}:${hyperliquidOwner?.toLowerCase() ?? ''}`}
       pacificaOwner={pacificaOwner}
       hyperliquidOwner={hyperliquidOwner}
       chainId={chainId}
@@ -79,6 +78,12 @@ function TradingAgentSession({
 }) {
   const [pacifica, setPacifica] = useState(() => initialState('pacifica', pacificaOwner))
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
+  if (pacifica.ownerAddress !== pacificaOwner) {
+    setPacifica(initialState('pacifica', pacificaOwner))
+  }
+  if (hyperliquid.ownerAddress?.toLowerCase() !== hyperliquidOwner?.toLowerCase()) {
+    setHyperliquid(initialState('hyperliquid', hyperliquidOwner))
+  }
 
   const authorize = async (venue: Venue) => {
     const setState = venue === 'pacifica' ? setPacifica : setHyperliquid
