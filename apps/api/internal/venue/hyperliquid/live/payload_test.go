@@ -7,6 +7,14 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
+type payloadTestAssetMap struct {
+	index    int
+	decimals int
+}
+
+func (m payloadTestAssetMap) AssetIndex(string) (int, bool)   { return m.index, true }
+func (m payloadTestAssetMap) SizeDecimals(string) (int, bool) { return m.decimals, true }
+
 func TestBuildL1TypedDataMatchesOfficialSDKFixture(t *testing.T) {
 	action := OrderAction{
 		Type: "order",
@@ -37,6 +45,26 @@ func TestHyperliquidNoncesRemainUniqueWithinOneMillisecond(t *testing.T) {
 			t.Fatalf("nonce %d did not advance after %d", next, previous)
 		}
 		previous = next
+	}
+}
+
+func TestBuildOpenPayloadUsesAssetSizePrecision(t *testing.T) {
+	request, err := BuildOpenPayload(
+		payloadTestAssetMap{index: 7, decimals: 3},
+		"VIRTUAL", domain.SideLong, 20.1239, 1.25, "client-order",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Amount != 20.123 {
+		t.Fatalf("request amount = %v, want 20.123", request.Amount)
+	}
+	var unsigned HyperliquidUnsignedAction
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	if unsigned.Action.Orders[0].Size != "20.123" {
+		t.Fatalf("wire size = %q, want 20.123", unsigned.Action.Orders[0].Size)
 	}
 }
 

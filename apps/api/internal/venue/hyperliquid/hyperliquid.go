@@ -32,6 +32,7 @@ type metaResponse struct {
 type metaAsset struct {
 	Name        string `json:"name"`
 	MaxLeverage int    `json:"maxLeverage"`
+	SzDecimals  int    `json:"szDecimals"`
 }
 
 type assetCtx struct {

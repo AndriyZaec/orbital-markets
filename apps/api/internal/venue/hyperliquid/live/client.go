@@ -29,6 +29,7 @@ type Signer interface {
 // AssetMap resolves symbol names to Hyperliquid asset indices.
 type AssetMap interface {
 	AssetIndex(symbol string) (int, bool)
+	SizeDecimals(symbol string) (int, bool)
 }
 
 // Client submits live orders to Hyperliquid via REST.

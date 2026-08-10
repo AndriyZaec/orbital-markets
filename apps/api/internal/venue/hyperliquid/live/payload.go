@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -126,6 +128,14 @@ func buildPayload(
 	if !ok {
 		return nil, fmt.Errorf("unknown asset: %s", symbol)
 	}
+	sizeDecimals, ok := assetMap.SizeDecimals(symbol)
+	if !ok {
+		return nil, fmt.Errorf("size precision unavailable for asset: %s", symbol)
+	}
+	normalizedAmount, amountWire, err := normalizeHyperliquidAmount(amount, sizeDecimals)
+	if err != nil {
+		return nil, fmt.Errorf("normalize %s amount: %w", symbol, err)
+	}
 
 	isBuy := side == domain.SideLong
 	venueSide := "sell"
@@ -150,7 +160,7 @@ func buildPayload(
 			Asset:      assetIdx,
 			IsBuy:      isBuy,
 			LimitPx:    limitPx,
-			Size:       fmt.Sprintf("%.6f", amount),
+			Size:       amountWire,
 			ReduceOnly: reduceOnly,
 			OrderType:  OrderType{Limit: LimitSpec{Tif: "Ioc"}},
 			Cloid:      cloid,
@@ -192,7 +202,7 @@ func buildPayload(
 		Action:          action,
 		Symbol:          symbol,
 		Side:            venueSide,
-		Amount:          amount,
+		Amount:          normalizedAmount,
 		Price:           price,
 		ReduceOnly:      reduceOnly,
 		UnsignedPayload: unsignedBytes,
@@ -200,6 +210,25 @@ func buildPayload(
 		ExpiresAt:       now.Add(30 * time.Second),
 		CreatedAt:       now,
 	}, nil
+}
+
+func normalizeHyperliquidAmount(amount float64, decimals int) (float64, string, error) {
+	if amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return 0, "", fmt.Errorf("invalid amount: %v", amount)
+	}
+	if decimals < 0 || decimals > 8 {
+		return 0, "", fmt.Errorf("invalid size decimals: %d", decimals)
+	}
+	factor := math.Pow10(decimals)
+	normalized := math.Floor(amount*factor+1e-9) / factor
+	if normalized <= 0 {
+		return 0, "", fmt.Errorf("amount is below minimum size precision")
+	}
+	wire := strconv.FormatFloat(normalized, 'f', decimals, 64)
+	if strings.Contains(wire, ".") {
+		wire = strings.TrimRight(strings.TrimRight(wire, "0"), ".")
+	}
+	return normalized, wire, nil
 }
 
 func nextHyperliquidNonce() int64 {

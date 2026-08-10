@@ -25,8 +25,8 @@ type SigningRequest struct {
 
 	// Order fields (venue-agnostic summary for frontend display)
 	Symbol     string  `json:"symbol"`
-	Side       string  `json:"side"` // "buy" or "sell" (venue-native direction)
-	Amount     float64 `json:"amount"`
+	Side       string  `json:"side"`        // "buy" or "sell" (venue-native direction)
+	Amount     float64 `json:"amount"`      // base-asset quantity, never quote notional
 	Price      float64 `json:"price"`       // reference price used for slippage calc
 	ReduceOnly bool    `json:"reduce_only"` // true for close/unwind
 

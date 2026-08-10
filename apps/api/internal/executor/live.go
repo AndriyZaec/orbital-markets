@@ -335,7 +335,7 @@ func (e *LiveExecutor) orderLegs(plan *domain.ExecutionPlan) (legParams, legPara
 		open: venue.OpenParams{
 			Symbol:         plan.Leg1.Asset,
 			Side:           plan.Leg1.Side,
-			Amount:         plan.Notional,
+			Amount:         plan.Notional / plan.Leg1.ExpectedPrice,
 			Price:          plan.Leg1.ExpectedPrice,
 			Leverage:       plan.Leverage.Leverage,
 			MarginRequired: plan.Leverage.MarginRequired / 2,
@@ -351,7 +351,7 @@ func (e *LiveExecutor) orderLegs(plan *domain.ExecutionPlan) (legParams, legPara
 		open: venue.OpenParams{
 			Symbol:         plan.Leg2.Asset,
 			Side:           plan.Leg2.Side,
-			Amount:         plan.Notional,
+			Amount:         plan.Notional / plan.Leg2.ExpectedPrice,
 			Price:          plan.Leg2.ExpectedPrice,
 			Leverage:       plan.Leverage.Leverage,
 			MarginRequired: plan.Leverage.MarginRequired / 2,
