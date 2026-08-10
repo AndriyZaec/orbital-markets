@@ -26,11 +26,12 @@ type SigningRequest struct {
 	Signer  string `json:"signer,omitempty"`
 
 	// Order fields (venue-agnostic summary for frontend display)
-	Symbol     string  `json:"symbol"`
-	Side       string  `json:"side"`        // "buy" or "sell" (venue-native direction)
-	Amount     float64 `json:"amount"`      // base-asset quantity, never quote notional
-	Price      float64 `json:"price"`       // reference price used for slippage calc
-	ReduceOnly bool    `json:"reduce_only"` // true for close/unwind
+	Symbol       string  `json:"symbol"`
+	Side         string  `json:"side"`        // "buy" or "sell" (venue-native direction)
+	Amount       float64 `json:"amount"`      // base-asset quantity, never quote notional
+	Price        float64 `json:"price"`       // reference price used for slippage calc
+	ReduceOnly   bool    `json:"reduce_only"` // true for close/unwind
+	VenueAssetID *int    `json:"venue_asset_id,omitempty"`
 
 	// Unsigned venue-specific payload — the exact bytes the frontend must sign.
 	// Pacifica: JSON bytes of the order message.

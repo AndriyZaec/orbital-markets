@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mr-tron/base58"
@@ -57,7 +56,7 @@ func NewLiveDeps(
 		hlAssetMap:          hlAssetMap,
 		hlAgentApprover:     hllive.NewDefaultAgentApprover(),
 		pacificaAgentBinder: pacificlive.NewDefaultAgentBinder(),
-		agentAuthorizations: newAgentAuthorizationRegistry(),
+		agentAuthorizations: newAgentAuthorizationRegistry(liveStore),
 		accounts: newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
 			IdleTTL:         defaultAccountFeedIdleTTL,
 			CleanupInterval: defaultAccountFeedCleanupInterval,
@@ -69,53 +68,62 @@ func NewLiveDeps(
 }
 
 type agentAuthorizationRegistry struct {
-	mu     sync.RWMutex
-	agents map[string]string
+	store *executor.Store
 }
 
-func newAgentAuthorizationRegistry() *agentAuthorizationRegistry {
-	return &agentAuthorizationRegistry{agents: make(map[string]string)}
+func newAgentAuthorizationRegistry(store *executor.Store) *agentAuthorizationRegistry {
+	return &agentAuthorizationRegistry{store: store}
 }
 
-func agentAuthorizationKey(venue, owner string) string {
-	owner = strings.TrimSpace(owner)
+func normalizeAgentAuthorization(venue, value string) string {
+	value = strings.TrimSpace(value)
 	if venue == "hyperliquid" {
-		owner = strings.ToLower(owner)
+		value = strings.ToLower(value)
 	}
-	return venue + ":" + owner
+	return value
 }
 
-func (r *agentAuthorizationRegistry) record(venue, owner, agent string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if venue == "hyperliquid" {
-		agent = strings.ToLower(strings.TrimSpace(agent))
-	} else {
-		agent = strings.TrimSpace(agent)
+func (r *agentAuthorizationRegistry) record(ctx context.Context, venue, owner, agent string) error {
+	if r == nil || r.store == nil {
+		return nil
 	}
-	r.agents[agentAuthorizationKey(venue, owner)] = agent
+	return r.store.UpsertAgentAuthorization(
+		ctx, venue, normalizeAgentAuthorization(venue, owner), normalizeAgentAuthorization(venue, agent),
+	)
 }
 
-func (r *agentAuthorizationRegistry) matches(venue, owner, agent string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	expected, ok := r.agents[agentAuthorizationKey(venue, owner)]
-	if venue == "hyperliquid" {
-		return ok && strings.EqualFold(expected, strings.TrimSpace(agent))
+func (r *agentAuthorizationRegistry) matches(ctx context.Context, venue, owner, agent string) (bool, error) {
+	if r == nil || r.store == nil {
+		return true, nil
 	}
-	return ok && expected == strings.TrimSpace(agent)
+	return r.store.AgentAuthorizationMatches(
+		ctx, venue, normalizeAgentAuthorization(venue, owner), normalizeAgentAuthorization(venue, agent),
+	)
 }
 
-func (d *LiveDeps) recordAgentAuthorization(venue, owner, agent string) {
+func (d *LiveDeps) recordAgentAuthorization(ctx context.Context, venue, owner, agent string) error {
 	if d.agentAuthorizations == nil {
-		d.agentAuthorizations = newAgentAuthorizationRegistry()
+		return nil
 	}
-	d.agentAuthorizations.record(venue, owner, agent)
+	return d.agentAuthorizations.record(ctx, venue, owner, agent)
 }
 
-func (d *LiveDeps) agentAuthorizationMatches(venue, owner, agent string) bool {
-	// Hand-built test dependencies predate the production authorization registry.
-	return d.agentAuthorizations == nil || d.agentAuthorizations.matches(venue, owner, agent)
+func (d *LiveDeps) agentAuthorizationMatches(ctx context.Context, venue, owner, agent string) (bool, error) {
+	if d.agentAuthorizations == nil {
+		return true, nil
+	}
+	return d.agentAuthorizations.matches(ctx, venue, owner, agent)
+}
+
+func (d *LiveDeps) agentPairAuthorizationMatches(
+	ctx context.Context,
+	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
+) (bool, error) {
+	pacificaMatches, err := d.agentAuthorizationMatches(ctx, "pacifica", accountPacifica, agentPacifica)
+	if err != nil || !pacificaMatches {
+		return pacificaMatches, err
+	}
+	return d.agentAuthorizationMatches(ctx, "hyperliquid", accountHyperliquid, agentHyperliquid)
 }
 
 type liveAccountContext struct {

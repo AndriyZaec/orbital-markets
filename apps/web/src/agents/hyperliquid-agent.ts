@@ -181,6 +181,7 @@ function allowedL1OrderPayload(request: SigningRequest, agent: StoredTradingAgen
     request.account.toLowerCase() === agent.ownerAddress.toLowerCase() &&
     request.signer?.toLowerCase() === agent.agentAddress.toLowerCase() &&
     (request.action === 'open' || request.action === 'close') &&
+    (request.action !== 'close' || request.reduce_only) &&
     Date.parse(request.expires_at) > Date.now() &&
     payload?.primaryType === 'Agent' &&
     domain?.chainId === 1337 &&
@@ -241,6 +242,7 @@ function validateOrderAction(
     hasOnlyKeys(order, ['a', 'b', 'p', 's', 'r', 't', 'c']) &&
     Number.isSafeInteger(order.a) &&
     (order.a as number) >= 0 &&
+    order.a === request.venue_asset_id &&
     order.b === expectedBuy &&
     order.p === expectedPrice &&
     Number.isFinite(amount) &&

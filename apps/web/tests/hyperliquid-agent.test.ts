@@ -118,6 +118,7 @@ function hyperliquidSigningRequest(): SigningRequest {
     amount: 2,
     price: 101.5 / 0.995,
     reduce_only: false,
+    venue_asset_id: 1,
     unsigned_payload: {
       action: {
         type: 'order',

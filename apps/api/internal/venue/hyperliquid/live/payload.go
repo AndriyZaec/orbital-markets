@@ -205,6 +205,7 @@ func buildPayload(
 		Amount:          normalizedAmount,
 		Price:           price,
 		ReduceOnly:      reduceOnly,
+		VenueAssetID:    &assetIdx,
 		UnsignedPayload: unsignedBytes,
 		VenueMetadata:   metaBytes,
 		ExpiresAt:       now.Add(30 * time.Second),

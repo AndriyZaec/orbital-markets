@@ -88,8 +88,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if !s.live.agentAuthorizationMatches("pacifica", req.AccountPacifica, req.AgentPacifica) ||
-		!s.live.agentAuthorizationMatches("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid) {
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
 		return
 	}
@@ -539,7 +545,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1b. Reject open actions — live opens must go through /live/advance.
-	if sigReq.Action == "open" || (!sigReq.ReduceOnly && sigReq.Action != "close") {
+	if sigReq.Action != "close" || !sigReq.ReduceOnly {
 		s.logger.Warn("live submit: rejected non-close action",
 			"request_id", signed.RequestID,
 			"action", sigReq.Action,
@@ -917,8 +923,14 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
 		return
 	}
-	if !s.live.agentAuthorizationMatches("pacifica", req.AccountPacifica, req.AgentPacifica) ||
-		!s.live.agentAuthorizationMatches("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid) {
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
 		return
 	}
@@ -1098,8 +1110,14 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
 		return
 	}
-	if !s.live.agentAuthorizationMatches("pacifica", req.AccountPacifica, req.AgentPacifica) ||
-		!s.live.agentAuthorizationMatches("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid) {
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
 		return
 	}

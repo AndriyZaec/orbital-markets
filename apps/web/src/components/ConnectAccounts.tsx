@@ -4,6 +4,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
+import { useLiveExecution } from '@/hooks/useLiveExecution'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import nadoLogo from '@/assets/nado.jpg'
@@ -96,6 +97,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     refreshBalances,
   } = useVenueReadiness()
   const tradingAgents = useTradingAgents()
+  const { state: liveExecution } = useLiveExecution()
+  const agentChangeBlocked = !['idle', 'open', 'degraded', 'aborted', 'failed'].includes(liveExecution.phase)
 
   // Opening the panel is a user intent to see fresh state — nudge a refresh.
   // (Background poll is deliberately slow at 30s.)
@@ -298,13 +301,15 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                         <>
                           <button
                             onClick={() => handleAuthorize(venue.id as VenueId)}
-                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
+                            disabled={agentChangeBlocked}
+                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             Reauthorize Agent
                           </button>
                           <button
                             onClick={() => tradingAgents.clear(venue.id as VenueId)}
-                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
+                            disabled={agentChangeBlocked}
+                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             Clear Local Agent
                           </button>

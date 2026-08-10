@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -84,6 +85,25 @@ func TestHandleHyperliquidAgentApproveRejectsPrivateKeyFields(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestAgentChangeIsBlockedDuringActiveSession(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	err := server.live.liveStore.UpsertDurableSession(context.Background(), executor.DurableSessionRecord{
+		ID: "active-agent-session", State: "awaiting_leg2_sign", Payload: []byte(`{}`),
+		AccountPacifica: "sol-owner", AccountHyperliquid: "0xowner", Asset: "SOL",
+		HasExposure: true, ExpiresAt: time.Now().Add(time.Minute), CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := server.agentChangeBlocked(context.Background(), "hyperliquid", "0xOWNER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !blocked {
+		t.Fatal("agent change was allowed during an active session")
 	}
 }
 

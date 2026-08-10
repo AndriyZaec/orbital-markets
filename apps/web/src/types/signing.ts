@@ -12,6 +12,7 @@ export interface SigningRequest {
   amount: number
   price: number
   reduce_only: boolean
+  venue_asset_id?: number
   unsigned_payload: unknown
   venue_metadata?: unknown
   expires_at: string
