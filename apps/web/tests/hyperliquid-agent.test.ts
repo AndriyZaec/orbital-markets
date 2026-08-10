@@ -8,7 +8,8 @@ import {
   authorizeHyperliquidAgent,
   signHyperliquidAgentRequest,
 } from '../src/agents/hyperliquid-agent.ts'
-import { loadStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
+import { loadStoredTradingAgent, saveStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
+import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
 import type { StoredTradingAgent } from '../src/agents/types.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
 
@@ -43,7 +44,9 @@ test('Hyperliquid approveAgent typed data matches the selected-chain official fi
 
 test('a local Hyperliquid agent reproduces the official SDK L1 signature', async () => {
   const request = hyperliquidSigningRequest()
-  const signed = await signHyperliquidAgentRequest(request, hyperliquidAgent())
+  const storage = new TestStorage()
+  saveStoredTradingAgent(storage, hyperliquidAgent())
+  const signed = await signWithStoredTradingAgent(storage, request)
 
   assert.equal(
     signed.signature,

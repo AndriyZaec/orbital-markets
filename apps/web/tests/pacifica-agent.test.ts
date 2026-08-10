@@ -8,7 +8,8 @@ import {
   buildPacificaSigningMessage,
   signPacificaAgentRequest,
 } from '../src/agents/pacifica-agent.ts'
-import type { StorageLike } from '../src/agents/storage.ts'
+import { saveStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
+import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
 import type { StoredTradingAgent } from '../src/agents/types.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
 
@@ -32,7 +33,9 @@ test('Pacifica bind_agent_wallet canonical bytes match the official fixture', ()
 })
 
 test('a local Pacifica agent reproduces the official market-order signature', async () => {
-  const signed = await signPacificaAgentRequest(pacificaSigningRequest(), pacificaAgent())
+  const storage = new TestStorage()
+  saveStoredTradingAgent(storage, pacificaAgent())
+  const signed = await signWithStoredTradingAgent(storage, pacificaSigningRequest())
 
   assert.equal(
     signed.signature,

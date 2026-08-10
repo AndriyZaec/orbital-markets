@@ -2,10 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/mr-tron/base58"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
@@ -160,6 +164,21 @@ func signerForVenue(venue, pacificaAgent, hyperliquidAgent string) string {
 }
 
 func (d *LiveDeps) validateAgentIdentity(venue, owner, agent string) error {
+	switch venue {
+	case "pacifica":
+		decoded, err := base58.Decode(strings.TrimSpace(agent))
+		if err != nil || len(decoded) != 32 {
+			return fmt.Errorf("invalid pacifica agent address")
+		}
+	case "hyperliquid":
+		normalized := strings.TrimSpace(agent)
+		if len(normalized) != 42 || !strings.HasPrefix(normalized, "0x") {
+			return fmt.Errorf("invalid hyperliquid agent address")
+		}
+		if _, err := hex.DecodeString(normalized[2:]); err != nil {
+			return fmt.Errorf("invalid hyperliquid agent address")
+		}
+	}
 	ownerKey, _, err := d.accounts.normalizedKey(venue, owner)
 	if err != nil {
 		return err

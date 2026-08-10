@@ -43,3 +43,26 @@ func TestSigningAccountUsesVenueNormalization(t *testing.T) {
 		t.Fatal("case-mismatched Pacifica signer accepted")
 	}
 }
+
+func TestAgentIdentityRequiresVenueAddressFormat(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
+		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger},
+	}, accountFeedRegistryConfig{})
+	live := &LiveDeps{accounts: registry}
+
+	if err := live.validateAgentIdentity("pacifica", "owner", "not-base58"); err == nil {
+		t.Fatal("invalid Pacifica agent accepted")
+	}
+	if err := live.validateAgentIdentity("hyperliquid", "0xowner", "0x1234"); err == nil {
+		t.Fatal("invalid Hyperliquid agent accepted")
+	}
+	if err := live.validateAgentIdentity(
+		"pacifica", "owner", "3ogUn1GNXoASaRbxPNeVJnVv5rG4EPBtmQmX61jVorUe",
+	); err != nil {
+		t.Fatalf("valid Pacifica agent rejected: %v", err)
+	}
+}
