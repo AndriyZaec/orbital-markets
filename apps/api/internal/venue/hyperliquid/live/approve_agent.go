@@ -3,6 +3,7 @@ package live
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	"golang.org/x/crypto/sha3"
 )
 
 const (
@@ -40,8 +44,9 @@ type EthereumSignature struct {
 }
 
 type ApproveAgentRequest struct {
-	Action    ApproveAgentAction `json:"action"`
-	Signature EthereumSignature  `json:"signature"`
+	OwnerAddress string             `json:"owner_address"`
+	Action       ApproveAgentAction `json:"action"`
+	Signature    EthereumSignature  `json:"signature"`
 }
 
 func (r ApproveAgentRequest) Validate(now time.Time) error {
@@ -51,6 +56,9 @@ func (r ApproveAgentRequest) Validate(now time.Time) error {
 	}
 	if !evmAddressPattern.MatchString(r.Action.AgentAddress) {
 		return fmt.Errorf("invalid Hyperliquid agent address")
+	}
+	if !evmAddressPattern.MatchString(r.OwnerAddress) {
+		return fmt.Errorf("invalid Hyperliquid owner address")
 	}
 	if !hexChainPattern.MatchString(r.Action.SignatureChainID) {
 		return fmt.Errorf("invalid Hyperliquid signature chain ID")
@@ -66,7 +74,109 @@ func (r ApproveAgentRequest) Validate(now time.Time) error {
 		(r.Signature.V != 27 && r.Signature.V != 28) {
 		return fmt.Errorf("invalid Hyperliquid agent approval signature")
 	}
+	if err := r.verifyOwnerSignature(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (r ApproveAgentRequest) SigningHash() ([32]byte, error) {
+	chainID, err := strconv.ParseUint(strings.TrimPrefix(r.Action.SignatureChainID, "0x"), 16, 64)
+	if err != nil || chainID == 0 {
+		return [32]byte{}, fmt.Errorf("invalid Hyperliquid signature chain ID")
+	}
+	agentAddress, err := addressWord(r.Action.AgentAddress)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("invalid Hyperliquid agent address")
+	}
+	domain := keccak256(
+		keccak256([]byte("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")),
+		keccak256([]byte("HyperliquidSignTransaction")),
+		keccak256([]byte("1")),
+		uintWord(chainID),
+		make([]byte, 32),
+	)
+	message := keccak256(
+		keccak256([]byte("HyperliquidTransaction:ApproveAgent(string hyperliquidChain,address agentAddress,string agentName,uint64 nonce)")),
+		keccak256([]byte(r.Action.HyperliquidChain)),
+		agentAddress,
+		keccak256([]byte(r.Action.AgentName)),
+		uintWord(uint64(r.Action.Nonce)),
+	)
+	digest := keccak256([]byte{0x19, 0x01}, domain, message)
+	var result [32]byte
+	copy(result[:], digest)
+	return result, nil
+}
+
+func (r ApproveAgentRequest) verifyOwnerSignature() error {
+	digest, err := r.SigningHash()
+	if err != nil {
+		return err
+	}
+	rWord, err := scalarWord(r.Signature.R)
+	if err != nil {
+		return fmt.Errorf("invalid Hyperliquid agent approval signature")
+	}
+	sWord, err := scalarWord(r.Signature.S)
+	if err != nil {
+		return fmt.Errorf("invalid Hyperliquid agent approval signature")
+	}
+	compact := make([]byte, 65)
+	compact[0] = byte(r.Signature.V + 4)
+	copy(compact[1:33], rWord)
+	copy(compact[33:], sWord)
+	publicKey, _, err := ecdsa.RecoverCompact(compact, digest[:])
+	if err != nil {
+		return fmt.Errorf("invalid Hyperliquid owner signature")
+	}
+	uncompressed := publicKey.SerializeUncompressed()
+	addressHash := keccak256(uncompressed[1:])
+	recovered := "0x" + hex.EncodeToString(addressHash[len(addressHash)-20:])
+	if !strings.EqualFold(recovered, r.OwnerAddress) {
+		return fmt.Errorf("Hyperliquid owner signature does not authorize this agent")
+	}
+	return nil
+}
+
+func keccak256(parts ...[]byte) []byte {
+	hash := sha3.NewLegacyKeccak256()
+	for _, part := range parts {
+		_, _ = hash.Write(part)
+	}
+	return hash.Sum(nil)
+}
+
+func uintWord(value uint64) []byte {
+	word := make([]byte, 32)
+	for index := 0; index < 8; index++ {
+		word[31-index] = byte(value >> (index * 8))
+	}
+	return word
+}
+
+func addressWord(address string) ([]byte, error) {
+	decoded, err := hex.DecodeString(strings.TrimPrefix(address, "0x"))
+	if err != nil || len(decoded) != 20 {
+		return nil, fmt.Errorf("invalid address")
+	}
+	word := make([]byte, 32)
+	copy(word[12:], decoded)
+	return word, nil
+}
+
+func scalarWord(value string) ([]byte, error) {
+	encoded := strings.TrimPrefix(value, "0x")
+	if len(encoded)%2 != 0 {
+		encoded = "0" + encoded
+	}
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil || len(decoded) == 0 || len(decoded) > 32 {
+		return nil, fmt.Errorf("invalid scalar")
+	}
+	word := make([]byte, 32)
+	copy(word[32-len(decoded):], decoded)
+	return word, nil
 }
 
 type AgentApprover struct {

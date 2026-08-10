@@ -1,5 +1,7 @@
 import { toHex, type Address, type Hex } from 'viem'
+import { keccak256 } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { encode } from '@msgpack/msgpack'
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
 import { saveStoredTradingAgent, type StorageLike } from './storage.ts'
@@ -19,6 +21,7 @@ export interface HyperliquidApproveAgentAction {
 }
 
 export interface HyperliquidApproveAgentRequest {
+  owner_address: Address
   action: HyperliquidApproveAgentAction
   signature: { r: Hex; s: Hex; v: 27 | 28 }
 }
@@ -75,11 +78,16 @@ export async function authorizeHyperliquidAgent(options: {
   relay: (request: HyperliquidApproveAgentRequest) => Promise<void>
   now?: () => number
 }): Promise<StoredTradingAgent> {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(options.ownerAddress)) throw new Error('Invalid Hyperliquid owner address')
   const now = options.now?.() ?? Date.now()
   const generated = generateHyperliquidAgent()
   const action = buildHyperliquidApproveAgentAction(generated.agentAddress, options.chainId, now)
   const ownerSignature = await options.signTypedData(buildHyperliquidApproveAgentTypedData(action))
-  await options.relay({ action, signature: splitEthereumSignature(ownerSignature) })
+  await options.relay({
+    owner_address: options.ownerAddress as Address,
+    action,
+    signature: splitEthereumSignature(ownerSignature),
+  })
 
   const agent: StoredTradingAgent = {
     version: 1,
@@ -145,6 +153,20 @@ interface L1OrderPayload {
   message: { source: 'a'; connectionId: Hex }
 }
 
+interface HyperliquidOrderAction {
+  type: 'order'
+  orders: [{
+    a: number
+    b: boolean
+    p: string
+    s: string
+    r: boolean
+    t: { limit: { tif: 'Ioc' } }
+    c: string
+  }]
+  grouping: 'na'
+}
+
 function allowedL1OrderPayload(request: SigningRequest, agent: StoredTradingAgent): L1OrderPayload {
   const payload = request.unsigned_payload as Record<string, unknown> | null
   const domain = payload?.domain as Record<string, unknown> | undefined
@@ -152,6 +174,7 @@ function allowedL1OrderPayload(request: SigningRequest, agent: StoredTradingAgen
   const action = payload?.action as Record<string, unknown> | undefined
   const types = payload?.types as Record<string, unknown> | undefined
   const agentType = types?.Agent
+  const connectionId = message?.connectionId
   const allowed =
     request.venue === 'hyperliquid' &&
     agent.venue === 'hyperliquid' &&
@@ -159,18 +182,25 @@ function allowedL1OrderPayload(request: SigningRequest, agent: StoredTradingAgen
     request.signer?.toLowerCase() === agent.agentAddress.toLowerCase() &&
     (request.action === 'open' || request.action === 'close') &&
     Date.parse(request.expires_at) > Date.now() &&
-    action?.type === 'order' &&
     payload?.primaryType === 'Agent' &&
     domain?.chainId === 1337 &&
     domain?.name === 'Exchange' &&
     domain?.version === '1' &&
     domain?.verifyingContract === zeroAddress &&
-    Array.isArray(agentType) &&
-    agentType.length === 2 &&
+    isAgentType(agentType) &&
     message?.source === 'a' &&
-    typeof message.connectionId === 'string' &&
-    /^0x[0-9a-fA-F]{64}$/.test(message.connectionId)
+    typeof connectionId === 'string' &&
+    /^0x[0-9a-fA-F]{64}$/.test(connectionId)
   if (!allowed) throw new Error('Hyperliquid payload is not an allowed L1 order')
+
+  const validatedAction = validateOrderAction(action, request)
+  if (!Number.isSafeInteger(payload?.nonce) || (payload?.nonce as number) <= 0) {
+    throw new Error('Hyperliquid payload is not an allowed L1 order')
+  }
+  const expectedConnectionId = l1ConnectionId(validatedAction, payload.nonce as number)
+  if ((connectionId as string).toLowerCase() !== expectedConnectionId.toLowerCase()) {
+    throw new Error('Hyperliquid connection ID does not match the requested order')
+  }
 
   return {
     domain: {
@@ -179,6 +209,76 @@ function allowedL1OrderPayload(request: SigningRequest, agent: StoredTradingAgen
       verifyingContract: zeroAddress,
       version: '1',
     },
-    message: { source: 'a', connectionId: message.connectionId as Hex },
+    message: { source: 'a', connectionId: connectionId as Hex },
   }
+}
+
+function isAgentType(value: unknown): boolean {
+  return JSON.stringify(value) === JSON.stringify([
+    { name: 'source', type: 'string' },
+    { name: 'connectionId', type: 'bytes32' },
+  ])
+}
+
+function validateOrderAction(
+  value: Record<string, unknown> | undefined,
+  request: SigningRequest,
+): HyperliquidOrderAction {
+  const orders = value?.orders
+  const order = Array.isArray(orders) && orders.length === 1
+    ? orders[0] as Record<string, unknown>
+    : null
+  const orderType = order?.t as Record<string, unknown> | undefined
+  const limit = orderType?.limit as Record<string, unknown> | undefined
+  const expectedBuy = request.side === 'buy'
+  const expectedPrice = (request.price * (expectedBuy ? 1.005 : 0.995)).toFixed(6)
+  const amount = Number(order?.s)
+  const valid =
+    value?.type === 'order' &&
+    value.grouping === 'na' &&
+    hasOnlyKeys(value, ['type', 'orders', 'grouping']) &&
+    !!order &&
+    hasOnlyKeys(order, ['a', 'b', 'p', 's', 'r', 't', 'c']) &&
+    Number.isSafeInteger(order.a) &&
+    (order.a as number) >= 0 &&
+    order.b === expectedBuy &&
+    order.p === expectedPrice &&
+    Number.isFinite(amount) &&
+    Math.abs(amount - request.amount) < 1e-12 &&
+    order.r === request.reduce_only &&
+    hasOnlyKeys(orderType, ['limit']) &&
+    hasOnlyKeys(limit, ['tif']) &&
+    limit?.tif === 'Ioc' &&
+    typeof order.c === 'string' &&
+    /^0x[0-9a-fA-F]{32}$/.test(order.c)
+  if (!valid) throw new Error('Hyperliquid payload is not an allowed L1 order')
+
+  return {
+    type: 'order',
+    orders: [{
+      a: order.a as number,
+      b: order.b as boolean,
+      p: order.p as string,
+      s: order.s as string,
+      r: order.r as boolean,
+      t: { limit: { tif: 'Ioc' } },
+      c: order.c as string,
+    }],
+    grouping: 'na',
+  }
+}
+
+function hasOnlyKeys(value: Record<string, unknown> | undefined, keys: string[]): boolean {
+  if (!value) return false
+  const actual = Object.keys(value).sort()
+  return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index])
+}
+
+function l1ConnectionId(action: HyperliquidOrderAction, nonce: number): Hex {
+  const encodedAction = encode(action)
+  const input = new Uint8Array(encodedAction.length + 9)
+  input.set(encodedAction)
+  new DataView(input.buffer).setBigUint64(encodedAction.length, BigInt(nonce), false)
+  input[input.length - 1] = 0
+  return keccak256(input)
 }

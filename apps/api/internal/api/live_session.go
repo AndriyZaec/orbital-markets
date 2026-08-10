@@ -38,7 +38,7 @@ const (
 
 // sessionTTL bounds how long a session can sit between steps before it is
 // considered stale. Kept short — the whole open flow is meant to be seconds.
-const sessionTTL = 3 * time.Minute
+const sessionTTL = time.Minute
 
 // legPlan captures the resolved per-leg parameters after riskier-first ordering.
 type legPlan struct {

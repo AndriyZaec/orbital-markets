@@ -66,3 +66,26 @@ func TestAgentIdentityRequiresVenueAddressFormat(t *testing.T) {
 		t.Fatalf("valid Pacifica agent rejected: %v", err)
 	}
 }
+
+func TestAgentAuthorizationCannotMoveBetweenOwners(t *testing.T) {
+	registry := newAgentAuthorizationRegistry()
+	registry.record(
+		"hyperliquid",
+		"0x14791697260E4c9A71f18484C9f997B308e59325",
+		"0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
+	)
+	if !registry.matches(
+		"hyperliquid",
+		"0x14791697260e4c9a71f18484c9f997b308e59325",
+		"0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a",
+	) {
+		t.Fatal("registered owner-agent pair was not found")
+	}
+	if registry.matches(
+		"hyperliquid",
+		"0x0000000000000000000000000000000000000001",
+		"0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a",
+	) {
+		t.Fatal("agent authorization moved to another owner")
+	}
+}

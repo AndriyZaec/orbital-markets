@@ -78,6 +78,8 @@ function TradingAgentSession({
 }) {
   const [pacifica, setPacifica] = useState(() => initialState('pacifica', pacificaOwner))
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
+  const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner })
+  owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner }
   if (pacifica.ownerAddress !== pacificaOwner) {
     setPacifica(initialState('pacifica', pacificaOwner))
   }
@@ -94,10 +96,16 @@ function TradingAgentSession({
       const agent = venue === 'pacifica'
         ? await authorizePacifica(ownerAddress)
         : await authorizeHyperliquid(ownerAddress)
+      if (!ownerStillCurrent(venue, ownerAddress, owners.current)) {
+        clearStoredTradingAgent(browserStorage(), venue, ownerAddress)
+        throw new Error(`${venue} owner changed during agent authorization`)
+      }
       setState({ venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Agent authorization failed'
-      setState({ venue, ownerAddress, agentAddress: null, status: 'error', error: message })
+      if (ownerStillCurrent(venue, ownerAddress, owners.current)) {
+        setState({ venue, ownerAddress, agentAddress: null, status: 'error', error: message })
+      }
       throw error
     }
   }
@@ -141,6 +149,17 @@ function TradingAgentSession({
       {children}
     </TradingAgentContext.Provider>
   )
+}
+
+function ownerStillCurrent(
+  venue: Venue,
+  expectedOwner: string,
+  owners: { pacifica: string | null; hyperliquid: string | null },
+): boolean {
+  const current = venue === 'pacifica' ? owners.pacifica : owners.hyperliquid
+  return venue === 'hyperliquid'
+    ? current?.toLowerCase() === expectedOwner.toLowerCase()
+    : current === expectedOwner
 }
 
 function initialState(venue: Venue, ownerAddress: string | null): TradingAgentState {

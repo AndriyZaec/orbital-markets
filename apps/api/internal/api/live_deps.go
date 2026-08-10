@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mr-tron/base58"
@@ -35,6 +36,7 @@ type LiveDeps struct {
 	hlAssetMap          hllive.AssetMap
 	hlAgentApprover     hyperliquidAgentApprover
 	pacificaAgentBinder pacificaAgentBinder
+	agentAuthorizations *agentAuthorizationRegistry
 }
 
 func NewLiveDeps(
@@ -55,6 +57,7 @@ func NewLiveDeps(
 		hlAssetMap:          hlAssetMap,
 		hlAgentApprover:     hllive.NewDefaultAgentApprover(),
 		pacificaAgentBinder: pacificlive.NewDefaultAgentBinder(),
+		agentAuthorizations: newAgentAuthorizationRegistry(),
 		accounts: newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
 			IdleTTL:         defaultAccountFeedIdleTTL,
 			CleanupInterval: defaultAccountFeedCleanupInterval,
@@ -63,6 +66,56 @@ func NewLiveDeps(
 			RecoveryReserve: defaultRecoveryAccountFeedReserve,
 		}),
 	}
+}
+
+type agentAuthorizationRegistry struct {
+	mu     sync.RWMutex
+	agents map[string]string
+}
+
+func newAgentAuthorizationRegistry() *agentAuthorizationRegistry {
+	return &agentAuthorizationRegistry{agents: make(map[string]string)}
+}
+
+func agentAuthorizationKey(venue, owner string) string {
+	owner = strings.TrimSpace(owner)
+	if venue == "hyperliquid" {
+		owner = strings.ToLower(owner)
+	}
+	return venue + ":" + owner
+}
+
+func (r *agentAuthorizationRegistry) record(venue, owner, agent string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if venue == "hyperliquid" {
+		agent = strings.ToLower(strings.TrimSpace(agent))
+	} else {
+		agent = strings.TrimSpace(agent)
+	}
+	r.agents[agentAuthorizationKey(venue, owner)] = agent
+}
+
+func (r *agentAuthorizationRegistry) matches(venue, owner, agent string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	expected, ok := r.agents[agentAuthorizationKey(venue, owner)]
+	if venue == "hyperliquid" {
+		return ok && strings.EqualFold(expected, strings.TrimSpace(agent))
+	}
+	return ok && expected == strings.TrimSpace(agent)
+}
+
+func (d *LiveDeps) recordAgentAuthorization(venue, owner, agent string) {
+	if d.agentAuthorizations == nil {
+		d.agentAuthorizations = newAgentAuthorizationRegistry()
+	}
+	d.agentAuthorizations.record(venue, owner, agent)
+}
+
+func (d *LiveDeps) agentAuthorizationMatches(venue, owner, agent string) bool {
+	// Hand-built test dependencies predate the production authorization registry.
+	return d.agentAuthorizations == nil || d.agentAuthorizations.matches(venue, owner, agent)
 }
 
 type liveAccountContext struct {

@@ -86,6 +86,14 @@ test('a local Hyperliquid agent rejects payloads outside the L1 order policy', a
   await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
 })
 
+test('a local Hyperliquid agent rejects an order that does not match its connection ID', async () => {
+  const request = hyperliquidSigningRequest()
+  const payload = request.unsigned_payload as { action: { orders: Array<{ s: string }> } }
+  payload.action.orders[0].s = '3.000000'
+
+  await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
+})
+
 function hyperliquidAgent(): StoredTradingAgent {
   return {
     version: 1,
@@ -108,10 +116,22 @@ function hyperliquidSigningRequest(): SigningRequest {
     symbol: 'BTC',
     side: 'sell',
     amount: 2,
-    price: 101.5,
+    price: 101.5 / 0.995,
     reduce_only: false,
     unsigned_payload: {
-      action: { type: 'order' },
+      action: {
+        type: 'order',
+        orders: [{
+          a: 1,
+          b: false,
+          p: '101.500000',
+          s: '2.000000',
+          r: false,
+          t: { limit: { tif: 'Ioc' } },
+          c: '0x00000000000000000000000000000001',
+        }],
+        grouping: 'na',
+      },
       nonce: 1_700_000_000_000,
       domain: {
         chainId: 1337,

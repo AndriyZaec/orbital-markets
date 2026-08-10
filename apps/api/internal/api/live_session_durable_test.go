@@ -7,6 +7,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
 func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
@@ -63,6 +64,9 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	if restored.AgentPacifica != "sol-agent" || restored.AgentHyperliquid != "0xagent" {
 		t.Fatalf("agent identities not restored: %q/%q", restored.AgentPacifica, restored.AgentHyperliquid)
 	}
+	if !agentBoundLeg1Requests(restored) {
+		t.Fatal("restored leg-1 requests lost their agent binding")
+	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)
 	}
@@ -89,6 +93,24 @@ func TestSessionManagerReturnsExpiredSessionsForRecovery(t *testing.T) {
 	}
 	if _, found, _ := manager.claim(session.ID); found {
 		t.Fatal("claimed expired session remained in manager")
+	}
+}
+
+func TestPacificaUnwindRemainsValidThroughSessionRecoveryBudget(t *testing.T) {
+	request, err := paclive.BuildClosePayload(
+		"owner", "SOL", domain.SideLong, 1, 100, "recovery-window-test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unsigned paclive.PacificaUnsignedOrder
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	venueExpiry := time.UnixMilli(unsigned.Timestamp).Add(time.Duration(unsigned.ExpiryWindow) * time.Millisecond)
+	const recoveryBudget = 50 * time.Second
+	if required := request.CreatedAt.Add(sessionTTL + recoveryBudget); venueExpiry.Before(required) {
+		t.Fatalf("Pacifica unwind expires at %s before recovery budget %s", venueExpiry, required)
 	}
 }
 

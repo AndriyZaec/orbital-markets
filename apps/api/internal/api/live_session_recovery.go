@@ -111,6 +111,11 @@ func (s *Server) restoreLiveSessions() {
 		}
 
 		if session.State == sessAwaitingLeg1Signs {
+			if !agentBoundLeg1Requests(session) {
+				session.State = sessFailed
+				s.finishSafeDurableSession(session.ID, "legacy_safe", "pre-agent session cannot start new signing work")
+				continue
+			}
 			if session.expired() || session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
 				time.Now().After(session.Leg1OpenReq.ExpiresAt) || time.Now().After(session.Leg1UnwindReq.ExpiresAt) {
 				session.State = sessFailed
@@ -126,6 +131,27 @@ func (s *Server) restoreLiveSessions() {
 
 		s.recoverExposedSession(session, "server restarted during live execution")
 	}
+}
+
+func agentBoundLeg1Requests(session *LiveSession) bool {
+	if session == nil || session.AgentPacifica == "" || session.AgentHyperliquid == "" ||
+		session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil {
+		return false
+	}
+	for _, request := range []*domain.SigningRequest{session.Leg1OpenReq, session.Leg1UnwindReq} {
+		expected := signerForVenue(request.Venue, session.AgentPacifica, session.AgentHyperliquid)
+		if expected == "" || request.Signer == "" {
+			return false
+		}
+		if request.Venue == "hyperliquid" {
+			if !strings.EqualFold(expected, request.Signer) {
+				return false
+			}
+		} else if expected != request.Signer {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) cleanupExpiredLiveSessions() {

@@ -44,9 +44,10 @@ func (s *Server) handleHyperliquidAgentApprove(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err := s.live.hlAgentApprover.ApproveAgent(r.Context(), request); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Hyperliquid agent approval rejected"})
 		return
 	}
+	s.live.recordAgentAuthorization("hyperliquid", request.OwnerAddress, request.Action.AgentAddress)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -72,8 +73,9 @@ func (s *Server) handlePacificaAgentBind(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.live.pacificaAgentBinder.BindAgent(r.Context(), request); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Pacifica agent binding rejected"})
 		return
 	}
+	s.live.recordAgentAuthorization("pacifica", request.Account, request.AgentWallet)
 	w.WriteHeader(http.StatusNoContent)
 }

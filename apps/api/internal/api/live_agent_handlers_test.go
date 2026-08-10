@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 	"time"
 
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secpECDSA "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/mr-tron/base58"
 )
 
@@ -28,11 +30,11 @@ func (f *fakeHyperliquidAgentApprover) ApproveAgent(_ context.Context, request h
 func TestHandleHyperliquidAgentApproveValidatesAndRelays(t *testing.T) {
 	approver := &fakeHyperliquidAgentApprover{}
 	server := &Server{live: &LiveDeps{hlAgentApprover: approver}}
-	body := []byte(`{
-		"action":{"type":"approveAgent","hyperliquidChain":"Mainnet","signatureChainId":"0x1","agentAddress":"0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A","agentName":"Orbital Markets","nonce":` +
-		formatInt(time.Now().UnixMilli()) + `},
-		"signature":{"r":"0x83aa677ba1e5d3c7f7cf727002326d724aaa18943f840cb20fa24c360ff5725a","s":"0x6d62d993d2436db5ce557ec8608624fcb8d4e4410354880e11d99af34a33790","v":27}
-	}`)
+	expected := signedHyperliquidApproval(t, time.Now().UnixMilli())
+	body, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := httptest.NewRecorder()
 
 	server.handleHyperliquidAgentApprove(response, httptest.NewRequest(http.MethodPost, "/api/v1/live/agents/hyperliquid/approve", bytes.NewReader(body)))
@@ -43,6 +45,33 @@ func TestHandleHyperliquidAgentApproveValidatesAndRelays(t *testing.T) {
 	if approver.request.Action.AgentName != "Orbital Markets" {
 		t.Fatalf("relayed action = %+v", approver.request.Action)
 	}
+}
+
+func signedHyperliquidApproval(t *testing.T, nonce int64) hllive.ApproveAgentRequest {
+	t.Helper()
+	request := hllive.ApproveAgentRequest{
+		OwnerAddress: "0x14791697260E4c9A71f18484C9f997B308e59325",
+		Action: hllive.ApproveAgentAction{
+			Type: "approveAgent", HyperliquidChain: "Mainnet", SignatureChainID: "0x1",
+			AgentAddress: "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
+			AgentName:    "Orbital Markets", Nonce: nonce,
+		},
+	}
+	digest, err := request.SigningHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyBytes, err := hex.DecodeString("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := secpECDSA.SignCompact(secp256k1.PrivKeyFromBytes(privateKeyBytes), digest[:], true)
+	request.Signature = hllive.EthereumSignature{
+		R: "0x" + hex.EncodeToString(compact[1:33]),
+		S: "0x" + hex.EncodeToString(compact[33:]),
+		V: int(compact[0]) - 4,
+	}
+	return request
 }
 
 func TestHandleHyperliquidAgentApproveRejectsPrivateKeyFields(t *testing.T) {
@@ -128,8 +157,4 @@ func validPacificaBindRequest(t *testing.T, timestamp int64) pacificlive.BindAge
 
 func ownerAddress(privateKey ed25519.PrivateKey) string {
 	return base58.Encode(privateKey.Public().(ed25519.PublicKey))
-}
-
-func formatInt(value int64) string {
-	return strconv.FormatInt(value, 10)
 }

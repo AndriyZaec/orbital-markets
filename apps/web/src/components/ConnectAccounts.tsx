@@ -295,12 +295,20 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                         </button>
                       )}
                       {readiness.agentReady && (
-                        <button
-                          onClick={() => tradingAgents.clear(venue.id as VenueId)}
-                          className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
-                        >
-                          Clear Local Agent
-                        </button>
+                        <>
+                          <button
+                            onClick={() => handleAuthorize(venue.id as VenueId)}
+                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
+                          >
+                            Reauthorize Agent
+                          </button>
+                          <button
+                            onClick={() => tradingAgents.clear(venue.id as VenueId)}
+                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
+                          >
+                            Clear Local Agent
+                          </button>
+                        </>
                       )}
                       <button
                         onClick={() => handleDisconnect(venue.id)}

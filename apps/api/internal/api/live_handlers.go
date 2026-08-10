@@ -88,6 +88,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if !s.live.agentAuthorizationMatches("pacifica", req.AccountPacifica, req.AgentPacifica) ||
+		!s.live.agentAuthorizationMatches("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
+		return
+	}
 	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
 		return
@@ -912,6 +917,11 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
 		return
 	}
+	if !s.live.agentAuthorizationMatches("pacifica", req.AccountPacifica, req.AgentPacifica) ||
+		!s.live.agentAuthorizationMatches("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
+		return
+	}
 
 	pos, err := s.liveStore.GetPositionForAccounts(
 		r.Context(), id, req.AccountPacifica, req.AccountHyperliquid,
@@ -1086,6 +1096,11 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
+		return
+	}
+	if !s.live.agentAuthorizationMatches("pacifica", req.AccountPacifica, req.AgentPacifica) ||
+		!s.live.agentAuthorizationMatches("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
 		return
 	}
 

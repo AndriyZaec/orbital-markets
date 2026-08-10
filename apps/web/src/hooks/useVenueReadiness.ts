@@ -128,7 +128,10 @@ function buildReadiness(args: {
 }): VenueReadiness {
   const { venue, address, authorityReadiness, agent, balance } = args
   const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
-  const agentReady = agent.status === 'ready' && agent.ownerAddress === address && !!agent.agentAddress
+  const ownerMatches = venue === 'hyperliquid'
+    ? agent.ownerAddress?.toLowerCase() === address?.toLowerCase()
+    : agent.ownerAddress === address
+  const agentReady = agent.status === 'ready' && ownerMatches && !!agent.agentAddress
 
   const balanceConnected = balance.connected
   // Legacy backends without stream_ready/fresh: fall back to `connected` so

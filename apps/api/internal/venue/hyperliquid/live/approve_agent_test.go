@@ -51,16 +51,29 @@ func TestAgentApproverPropagatesVenueRejection(t *testing.T) {
 	}
 }
 
+func TestApproveAgentRequestVerifiesOfficialOwnerSignature(t *testing.T) {
+	const nonce = int64(1_748_970_123_456)
+	request := validApproveAgentRequest(nonce)
+	if err := request.Validate(time.UnixMilli(nonce)); err != nil {
+		t.Fatalf("official signature rejected: %v", err)
+	}
+	request.OwnerAddress = "0x0000000000000000000000000000000000000001"
+	if err := request.Validate(time.UnixMilli(nonce)); err == nil {
+		t.Fatal("signature was accepted for the wrong owner")
+	}
+}
+
 func validApproveAgentRequest(nonce int64) ApproveAgentRequest {
 	return ApproveAgentRequest{
+		OwnerAddress: "0x14791697260E4c9A71f18484C9f997B308e59325",
 		Action: ApproveAgentAction{
 			Type: "approveAgent", HyperliquidChain: "Mainnet", SignatureChainID: "0x1",
 			AgentAddress: "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
 			AgentName:    "Orbital Markets", Nonce: nonce,
 		},
 		Signature: EthereumSignature{
-			R: "0x83aa677ba1e5d3c7f7cf727002326d724aaa18943f840cb20fa24c360ff5725a",
-			S: "0x6d62d993d2436db5ce557ec8608624fcb8d4e4410354880e11d99af34a33790",
+			R: "0xafb2eeb78847d03955929890b3f6371feda37b33a14c7e7dbab45f433457c56",
+			S: "0x67f8856879f44dcf164fd86c9fe58c084077aa5221ba31412951be7749e0351c",
 			V: 27,
 		},
 	}
