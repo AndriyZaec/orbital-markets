@@ -23,6 +23,7 @@ func TestLiveCloseUsesPersistedResidualExposure(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 
@@ -41,7 +42,8 @@ func TestLiveCloseUsesPersistedResidualExposure(t *testing.T) {
 	}
 	requestToSign := body.SigningRequests[0]
 	if requestToSign.PositionID != "position-residual" || requestToSign.Leg != 1 ||
-		requestToSign.Amount != 2.75 || requestToSign.Account != "sol-wallet" {
+		requestToSign.Amount != 2.75 || requestToSign.Account != "sol-wallet" ||
+		requestToSign.Signer != "sol-agent" {
 		t.Fatalf("close request = %+v, want position/leg residual amount 2.75", requestToSign)
 	}
 }
@@ -62,6 +64,7 @@ func TestLiveCloseReconcilesRecordedExposureAbsentFromBothVenues(t *testing.T) {
 
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
@@ -107,6 +110,7 @@ func TestLiveCloseKeepsRecordedExposureWhenVenuePositionExists(t *testing.T) {
 
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
@@ -168,6 +172,7 @@ func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 
@@ -204,6 +209,7 @@ func TestLiveCloseDoesNotExposeAnotherAccountPosition(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "other-wallet", "account_hyperliquid": "0xother",
+		"agent_pacifica": "other-agent", "agent_hyperliquid": "0xotheragent",
 	}))
 	response := httptest.NewRecorder()
 
@@ -217,6 +223,7 @@ func TestKillSwitchTargetsOnlyMatchingAccountPositions(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{
 		"account_pacifica": "other-wallet", "account_hyperliquid": "0xother",
+		"agent_pacifica": "other-agent", "agent_hyperliquid": "0xotheragent",
 	}))
 	response := httptest.NewRecorder()
 

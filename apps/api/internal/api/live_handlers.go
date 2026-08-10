@@ -56,6 +56,8 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
 		AccountPacifica    string   `json:"account_pacifica"`
 		AccountHyperliquid string   `json:"account_hyperliquid"`
+		AgentPacifica      string   `json:"agent_pacifica"`
+		AgentHyperliquid   string   `json:"agent_hyperliquid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -72,6 +74,18 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AccountHyperliquid == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_hyperliquid required"})
+		return
+	}
+	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
+		return
+	}
+	if err := s.live.validateAgentIdentity("pacifica", req.AccountPacifica, req.AgentPacifica); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.live.validateAgentIdentity("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
@@ -275,6 +289,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	leg1Open, err := s.buildOpenSigningRequest(
 		leg1, leg1Amount, leg1OpenCloid, req.AccountPacifica, req.AccountHyperliquid,
+		req.AgentPacifica, req.AgentHyperliquid,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 open", "err", err)
@@ -286,6 +301,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	leg1Unwind, err := s.buildUnwindSigningRequest(
 		leg1, leg1Amount, leg1UnwindCloid, req.AccountPacifica, req.AccountHyperliquid,
+		req.AgentPacifica, req.AgentHyperliquid,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 unwind", "err", err)
@@ -307,6 +323,8 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		Leg2:               leg2,
 		AccountPacifica:    req.AccountPacifica,
 		AccountHyperliquid: req.AccountHyperliquid,
+		AgentPacifica:      req.AgentPacifica,
+		AgentHyperliquid:   req.AgentHyperliquid,
 		State:              sessAwaitingLeg1Signs,
 		Leg1OpenReqID:      leg1Open.ID,
 		Leg1UnwindReqID:    leg1Unwind.ID,
@@ -422,7 +440,8 @@ func orderLegsByRisk(plan *domain.ExecutionPlan) (legPlan, legPlan) {
 // accountPacifica is only used for Pacifica; Hyperliquid derives the account
 // from the signature at submit time.
 func (s *Server) buildOpenSigningRequest(
-	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid string,
+	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid,
+	agentPacifica, agentHyperliquid string,
 ) (*domain.SigningRequest, error) {
 	var request *domain.SigningRequest
 	var err error
@@ -439,6 +458,10 @@ func (s *Server) buildOpenSigningRequest(
 	}
 	if err == nil {
 		request.Account = accountForVenue(leg.venue, accountPacifica, accountHyperliquid)
+		request.Signer = signerForVenue(leg.venue, agentPacifica, agentHyperliquid)
+		if request.Signer == "" {
+			return nil, fmt.Errorf("%s trading agent required", leg.venue)
+		}
 	}
 	return request, err
 }
@@ -446,7 +469,8 @@ func (s *Server) buildOpenSigningRequest(
 // buildUnwindSigningRequest builds a reduce-only close signing request for one leg.
 // Side is the position side; the close payload inverts it internally.
 func (s *Server) buildUnwindSigningRequest(
-	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid string,
+	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid,
+	agentPacifica, agentHyperliquid string,
 ) (*domain.SigningRequest, error) {
 	var request *domain.SigningRequest
 	var err error
@@ -463,6 +487,10 @@ func (s *Server) buildUnwindSigningRequest(
 	}
 	if err == nil {
 		request.Account = accountForVenue(leg.venue, accountPacifica, accountHyperliquid)
+		request.Signer = signerForVenue(leg.venue, agentPacifica, agentHyperliquid)
+		if request.Signer == "" {
+			return nil, fmt.Errorf("%s trading agent required", leg.venue)
+		}
 	}
 	return request, err
 }
@@ -867,6 +895,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AccountPacifica    string `json:"account_pacifica"`
 		AccountHyperliquid string `json:"account_hyperliquid"`
+		AgentPacifica      string `json:"agent_pacifica"`
+		AgentHyperliquid   string `json:"agent_hyperliquid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -876,6 +906,10 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "account_pacifica and account_hyperliquid required",
 		})
+		return
+	}
+	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
 		return
 	}
 
@@ -927,7 +961,10 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
-		sigReq, err := s.buildCloseSigningRequest(fill, cloid, req.AccountPacifica, req.AccountHyperliquid)
+		sigReq, err := s.buildCloseSigningRequest(
+			fill, cloid, req.AccountPacifica, req.AccountHyperliquid,
+			req.AgentPacifica, req.AgentHyperliquid,
+		)
 		if err != nil {
 			s.logger.Error("live close: build close payload", "err", err, "id", id, "leg", fill.Leg)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -1034,6 +1071,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AccountPacifica    string `json:"account_pacifica"`
 		AccountHyperliquid string `json:"account_hyperliquid"`
+		AgentPacifica      string `json:"agent_pacifica"`
+		AgentHyperliquid   string `json:"agent_hyperliquid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -1043,6 +1082,10 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "account_pacifica and account_hyperliquid required",
 		})
+		return
+	}
+	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
 		return
 	}
 
@@ -1129,6 +1172,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				cloid,
 				req.AccountPacifica,
 				req.AccountHyperliquid,
+				req.AgentPacifica,
+				req.AgentHyperliquid,
 			)
 			if err != nil {
 				s.logger.Error("kill switch: build close payload",
@@ -1181,7 +1226,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 func (s *Server) buildCloseSigningRequest(
 	fill executor.LiveFill,
 	clientOrderID string,
-	accountPacifica, accountHyperliquid string,
+	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
 ) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
@@ -1215,6 +1260,10 @@ func (s *Server) buildCloseSigningRequest(
 	}
 	if err == nil {
 		request.Account = accountForVenue(fill.Venue, accountPacifica, accountHyperliquid)
+		request.Signer = signerForVenue(fill.Venue, agentPacifica, agentHyperliquid)
+		if request.Signer == "" {
+			return nil, fmt.Errorf("%s trading agent required", fill.Venue)
+		}
 	}
 	return request, err
 }

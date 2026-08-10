@@ -76,6 +76,7 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 	retryReq, err := s.buildOpenSigningRequest(
 		session.Leg2, remaining, clientOrderID,
 		session.AccountPacifica, session.AccountHyperliquid,
+		session.AgentPacifica, session.AgentHyperliquid,
 	)
 	if err != nil {
 		s.recoverInvalidHedge(w, ctx, session, reason+"; retry payload build failed")

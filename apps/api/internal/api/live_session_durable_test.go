@@ -13,6 +13,7 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	createdAt := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	req := &domain.SigningRequest{
 		ID: "unwind-request", ClientOrderID: "unwind-cloid", Venue: "pacifica",
+		Signer: "sol-agent",
 		Action: "close", Symbol: "SOL", Side: "sell", Amount: 10, ReduceOnly: true,
 		UnsignedPayload: json.RawMessage(`{"order":"payload"}`), ExpiresAt: createdAt.Add(2 * time.Minute),
 	}
@@ -26,6 +27,7 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 		Leg1:            legPlan{venue: "pacifica", symbol: "SOL", side: domain.SideLong, price: 100},
 		Leg2:            legPlan{venue: "hyperliquid", symbol: "SOL", side: domain.SideShort, price: 101},
 		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
+		AgentPacifica: "sol-agent", AgentHyperliquid: "0xagent",
 		State: sessAwaitingLeg2Sign, BaselineLeg1Size: 3, BaselineLeg2Size: -2,
 		Leg1OpenReq: req, Leg1UnwindReq: req,
 		ArmedUnwindReq: req, ArmedUnwindSigned: signed,
@@ -54,6 +56,12 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	}
 	if restored.ArmedUnwindReq.Account != "sol-wallet" {
 		t.Fatalf("armed request account = %q, want persisted session account", restored.ArmedUnwindReq.Account)
+	}
+	if restored.ArmedUnwindReq.Signer != "sol-agent" {
+		t.Fatalf("armed request signer = %q, want persisted session agent", restored.ArmedUnwindReq.Signer)
+	}
+	if restored.AgentPacifica != "sol-agent" || restored.AgentHyperliquid != "0xagent" {
+		t.Fatalf("agent identities not restored: %q/%q", restored.AgentPacifica, restored.AgentHyperliquid)
 	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)

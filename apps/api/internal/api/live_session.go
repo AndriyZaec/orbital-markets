@@ -71,6 +71,8 @@ type LiveSession struct {
 
 	AccountPacifica    string
 	AccountHyperliquid string
+	AgentPacifica      string
+	AgentHyperliquid   string
 
 	State sessionState
 

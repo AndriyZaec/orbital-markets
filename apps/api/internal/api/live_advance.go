@@ -301,6 +301,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	leg2Open, err := s.buildOpenSigningRequest(
 		sess.Leg2, fill.FilledAmount, leg2Cloid,
 		sess.AccountPacifica, sess.AccountHyperliquid,
+		sess.AgentPacifica, sess.AgentHyperliquid,
 	)
 	if err != nil {
 		ur := s.fireUnwind(ctx, sess)

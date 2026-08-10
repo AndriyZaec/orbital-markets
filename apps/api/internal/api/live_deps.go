@@ -148,6 +148,32 @@ func accountForVenue(venue, pacificaAccount, hyperliquidAccount string) string {
 	}
 }
 
+func signerForVenue(venue, pacificaAgent, hyperliquidAgent string) string {
+	switch venue {
+	case "pacifica":
+		return pacificaAgent
+	case "hyperliquid":
+		return hyperliquidAgent
+	default:
+		return ""
+	}
+}
+
+func (d *LiveDeps) validateAgentIdentity(venue, owner, agent string) error {
+	ownerKey, _, err := d.accounts.normalizedKey(venue, owner)
+	if err != nil {
+		return err
+	}
+	agentKey, _, err := d.accounts.normalizedKey(venue, agent)
+	if err != nil {
+		return err
+	}
+	if ownerKey.account == agentKey.account {
+		return fmt.Errorf("%s agent must differ from owner account", venue)
+	}
+	return nil
+}
+
 func (d *LiveDeps) validateSigningAccount(request *domain.SigningRequest, signer string) error {
 	if request == nil || request.Account == "" {
 		return fmt.Errorf("signing request account missing")

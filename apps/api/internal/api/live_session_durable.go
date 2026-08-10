@@ -30,6 +30,8 @@ type durableLiveSession struct {
 	Leg2               durableLegPlan            `json:"leg_2"`
 	AccountPacifica    string                    `json:"account_pacifica"`
 	AccountHyperliquid string                    `json:"account_hyperliquid"`
+	AgentPacifica      string                    `json:"agent_pacifica,omitempty"`
+	AgentHyperliquid   string                    `json:"agent_hyperliquid,omitempty"`
 	State              sessionState              `json:"state"`
 	Leg1OpenReqID      string                    `json:"leg_1_open_request_id"`
 	Leg1UnwindReqID    string                    `json:"leg_1_unwind_request_id"`
@@ -57,6 +59,7 @@ func marshalLiveSession(session *LiveSession) ([]byte, error) {
 		Leg1:            durableLegPlan{Venue: session.Leg1.venue, Symbol: session.Leg1.symbol, Side: session.Leg1.side, Price: session.Leg1.price},
 		Leg2:            durableLegPlan{Venue: session.Leg2.venue, Symbol: session.Leg2.symbol, Side: session.Leg2.side, Price: session.Leg2.price},
 		AccountPacifica: session.AccountPacifica, AccountHyperliquid: session.AccountHyperliquid,
+		AgentPacifica: session.AgentPacifica, AgentHyperliquid: session.AgentHyperliquid,
 		State:         session.State,
 		Leg1OpenReqID: session.Leg1OpenReqID, Leg1UnwindReqID: session.Leg1UnwindReqID,
 		Leg2OpenReqID: session.Leg2OpenReqID, Leg2RetryReqID: session.Leg2RetryReqID,
@@ -90,6 +93,7 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 		Leg1:            legPlan{venue: durable.Leg1.Venue, symbol: durable.Leg1.Symbol, side: durable.Leg1.Side, price: durable.Leg1.Price},
 		Leg2:            legPlan{venue: durable.Leg2.Venue, symbol: durable.Leg2.Symbol, side: durable.Leg2.Side, price: durable.Leg2.Price},
 		AccountPacifica: durable.AccountPacifica, AccountHyperliquid: durable.AccountHyperliquid,
+		AgentPacifica: durable.AgentPacifica, AgentHyperliquid: durable.AgentHyperliquid,
 		State:         durable.State,
 		Leg1OpenReqID: durable.Leg1OpenReqID, Leg1UnwindReqID: durable.Leg1UnwindReqID,
 		Leg2OpenReqID: durable.Leg2OpenReqID, Leg2RetryReqID: durable.Leg2RetryReqID,
