@@ -3,6 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
+import { useTradingAgents } from '@/hooks/useTradingAgents'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import nadoLogo from '@/assets/nado.jpg'
@@ -53,12 +54,18 @@ const TONE: Record<PillTone, { dot: string; text: string }> = {
 }
 
 function walletPill(r: VenueReadiness): { label: string; tone: PillTone } {
-  if (r.status === 'error') return { label: 'Error', tone: 'bad' }
-  return r.walletConnected ? { label: 'Connected', tone: 'ok' } : { label: 'Not connected', tone: 'off' }
+  if (r.walletConnected) return { label: 'Connected', tone: 'ok' }
+  return r.status === 'error' ? { label: 'Error', tone: 'bad' } : { label: 'Not connected', tone: 'off' }
 }
 function signerPill(r: VenueReadiness): { label: string; tone: PillTone } {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
   return r.signerReady ? { label: 'Ready', tone: 'ok' } : { label: 'Missing', tone: 'pending' }
+}
+function agentPill(r: VenueReadiness): { label: string; tone: PillTone } {
+  if (!r.walletConnected) return { label: '—', tone: 'off' }
+  if (r.agentStatus === 'authorizing') return { label: 'Authorizing', tone: 'pending' }
+  if (r.agentStatus === 'error') return { label: 'Error', tone: 'bad' }
+  return r.agentReady ? { label: 'Ready', tone: 'ok' } : { label: 'Required', tone: 'pending' }
 }
 function balancePill(r: VenueReadiness): { label: string; tone: PillTone } {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
@@ -88,6 +95,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     ensureError,
     refreshBalances,
   } = useVenueReadiness()
+  const tradingAgents = useTradingAgents()
 
   // Opening the panel is a user intent to see fresh state — nudge a refresh.
   // (Background poll is deliberately slow at 30s.)
@@ -141,6 +149,10 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     } else if (venueId === 'hyperliquid') {
       evmDisconnect()
     }
+  }
+
+  const handleAuthorize = (venue: VenueId) => {
+    tradingAgents.authorize(venue).catch(() => {})
   }
 
   const getReadiness = (venueId: string): VenueReadiness | null => {
@@ -242,7 +254,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 {!isComingSoon && readiness && (
                   <div className="mt-2 mb-2 rounded border border-border/60 bg-white/[0.02] px-2 py-2 flex flex-col gap-1">
                     <DiagRow label="Wallet" pill={walletPill(readiness)} />
-                    <DiagRow label="Signer" pill={signerPill(readiness)} />
+                    <DiagRow label="Owner signer" pill={signerPill(readiness)} />
+                    <DiagRow label="Trading agent" pill={agentPill(readiness)} />
                     <DiagRow label="Balance" pill={balancePill(readiness)} />
                     {(readiness.equity !== null || readiness.available !== null) && (
                       <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
@@ -269,13 +282,24 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       Coming Soon
                     </button>
                   ) : readiness?.walletConnected ? (
-                    <div className="flex items-center gap-1.5">
-                      {!isReady && (
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      {!readiness.agentReady && (
                         <button
-                          onClick={() => handleConnect(venue.id)}
+                          onClick={() => handleAuthorize(venue.id as VenueId)}
+                          disabled={readiness.agentStatus === 'authorizing' || !readiness.signerReady}
+                          className="px-3 py-1 rounded text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {readiness.agentStatus === 'authorizing'
+                            ? 'Authorizing…'
+                            : readiness.agentStatus === 'error' ? 'Reauthorize Agent' : `Authorize ${venue.name} Agent`}
+                        </button>
+                      )}
+                      {readiness.agentReady && (
+                        <button
+                          onClick={() => tradingAgents.clear(venue.id as VenueId)}
                           className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
                         >
-                          Reconnect
+                          Clear Local Agent
                         </button>
                       )}
                       <button
@@ -309,7 +333,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
-            Non-custodial signing. Your keys never leave your browser. Revoke anytime.
+            Agent keys stay in this browser session. Clearing a local key does not revoke it at the venue. Pacifica agents must be treated as having broad POST authority, including documented withdrawal endpoints.
           </p>
         </div>
       </div>

@@ -154,7 +154,7 @@ function UnwindNotice({ status }: { status: UnwindStatus }) {
 
 const PHASE_HINT: Partial<Record<ExecutionPhase, string>> = {
   preparing: 'Preparing execution plan...',
-  awaiting_leg1: 'Sign the riskier leg + its safety unwind in your wallet',
+  awaiting_leg1: 'Local agent is signing the riskier leg and its safety unwind',
   submitting_leg1: 'Submitting riskier leg and waiting for fill...',
   awaiting_leg2: 'Sign the hedge leg (sized from the actual fill)',
   submitting_leg2: 'Submitting hedge leg and verifying hedge...',

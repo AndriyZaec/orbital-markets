@@ -245,8 +245,8 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
               <div className="flex items-center gap-2">
                 <p className="text-[11px] text-muted-foreground flex-1">
                   {pos.state === 'degraded'
-                    ? 'Verify both venues first. If exposure remains, your wallet will sign the required reduce-only close order.'
-                    : 'Close both legs? Your wallet will sign each close order.'}
+                    ? 'Verify both venues first. If exposure remains, local agents will sign the required reduce-only close order.'
+                    : 'Close both legs? Local trading agents will sign each reduce-only order.'}
                 </p>
                 <Button variant="outline" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
                 <Button variant="destructive" size="xs" onClick={handleClose}>Confirm</Button>
@@ -256,7 +256,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {isClosing && (
               <p className="text-[11px] text-yellow-400">
                 {liveClose.state.phase === 'preparing' ? (pos.state === 'degraded' ? 'Checking venue state...' : 'Preparing close orders...') :
-                 liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} — check your wallet` :
+                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local agents` :
                  liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
                  `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
               </p>

@@ -2,6 +2,8 @@ import { createContext, createElement, useCallback, useContext, useEffect, useMe
 import { apiFetch } from '@/lib/api'
 import { useVenueAuthority, type SigningReadiness } from './useVenueAuthority'
 import { useLiveBalances } from './useLiveBalances'
+import { useTradingAgents } from './useTradingAgents'
+import type { TradingAgentState } from '@/agents/types'
 
 // Single typed readiness layer for Pacifica + Hyperliquid. Composes the
 // existing wallet-authority hook and the live-balances hook so the rest of
@@ -16,6 +18,8 @@ export type VenueStatus =
   | 'disconnected'       // no wallet
   | 'wallet_connected'   // wallet present but signer or balance not yet ready
   | 'signer_missing'     // wallet cannot produce required signatures
+  | 'agent_missing'      // owner wallet has not authorized a local trading agent
+  | 'agent_authorizing'  // owner authorization is in progress
   | 'balance_pending'    // signer OK; waiting on first account snapshot
   | 'account_stale'      // snapshot present but too old
   | 'ready'              // wallet + signer + fresh account state
@@ -28,6 +32,9 @@ export interface VenueReadiness {
   shortAddress: string | null
   walletConnected: boolean
   signerReady: boolean
+  agentReady: boolean
+  agentAddress: string | null
+  agentStatus: TradingAgentState['status']
   balanceConnected: boolean
   balanceReady: boolean
   // Backend account-data freshness. streamReady: subscriber has produced at
@@ -107,6 +114,7 @@ function buildReadiness(args: {
   venue: VenueId
   address: string | null
   authorityReadiness: SigningReadiness
+  agent: TradingAgentState
   balance: {
     connected: boolean
     equity: number
@@ -118,8 +126,9 @@ function buildReadiness(args: {
     reason?: string
   }
 }): VenueReadiness {
-  const { venue, address, authorityReadiness, balance } = args
+  const { venue, address, authorityReadiness, agent, balance } = args
   const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
+  const agentReady = agent.status === 'ready' && agent.ownerAddress === address && !!agent.agentAddress
 
   const balanceConnected = balance.connected
   // Legacy backends without stream_ready/fresh: fall back to `connected` so
@@ -132,6 +141,9 @@ function buildReadiness(args: {
   if (errored) blockingReasons.push('Wallet reported an error')
   if (!walletConnected) blockingReasons.push('Wallet not connected')
   else if (!signerReady) blockingReasons.push('Wallet cannot sign required messages')
+  else if (agent.status === 'authorizing') blockingReasons.push('Trading agent authorization in progress')
+  else if (agent.status === 'error') blockingReasons.push(agent.error || 'Trading agent authorization failed')
+  else if (!agentReady) blockingReasons.push('Trading agent authorization required')
   else if (!streamReady) blockingReasons.push(balance.reason || 'Waiting on account data stream')
   else if (!accountFresh) blockingReasons.push(balance.reason || 'Account data stale — refreshing')
 
@@ -139,6 +151,8 @@ function buildReadiness(args: {
   if (errored) status = 'error'
   else if (!walletConnected) status = 'disconnected'
   else if (!signerReady) status = 'signer_missing'
+  else if (agent.status === 'authorizing') status = 'agent_authorizing'
+  else if (!agentReady) status = agent.status === 'error' ? 'error' : 'agent_missing'
   else if (!streamReady) status = 'balance_pending'
   else if (!accountFresh) status = 'account_stale'
   else status = 'ready'
@@ -150,6 +164,9 @@ function buildReadiness(args: {
     shortAddress: shorten(address),
     walletConnected,
     signerReady,
+    agentReady,
+    agentAddress: agent.agentAddress,
+    agentStatus: agent.status,
     balanceConnected,
     balanceReady,
     streamReady,
@@ -169,6 +186,7 @@ function buildReadiness(args: {
 
 function useVenueReadinessState(): UseVenueReadinessResult {
   const authority = useVenueAuthority()
+  const tradingAgents = useTradingAgents()
   const pacAddr = authority.pacifica.address
   const hlAddr = authority.hyperliquid.address
   const balances = useLiveBalances(pacAddr, hlAddr)
@@ -234,12 +252,14 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       venue: 'pacifica',
       address: authority.pacifica.address,
       authorityReadiness: authority.pacifica.readiness,
+      agent: tradingAgents.pacifica,
       balance: balances.pacifica,
     })
     const hyperliquid = buildReadiness({
       venue: 'hyperliquid',
       address: authority.hyperliquid.address,
       authorityReadiness: authority.hyperliquid.readiness,
+      agent: tradingAgents.hyperliquid,
       balance: balances.hyperliquid,
     })
     const venues = [pacifica, hyperliquid]
@@ -274,7 +294,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
         statusLabel,
       },
     }
-  }, [authority.pacifica, authority.hyperliquid, balances, ensureStatus, ensureError, ensureAccounts])
+  }, [authority.pacifica, authority.hyperliquid, tradingAgents.pacifica, tradingAgents.hyperliquid, balances, ensureStatus, ensureError, ensureAccounts])
 }
 
 export function VenueReadinessProvider({ children }: { children: ReactNode }) {
