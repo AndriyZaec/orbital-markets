@@ -6,6 +6,7 @@ import nacl from 'tweetnacl'
 import {
   clearStoredTradingAgent,
   loadStoredTradingAgent,
+  loadAfterOwnerChange,
   saveStoredTradingAgent,
   storageKey,
   type StorageLike,
@@ -105,5 +106,21 @@ test('clear removes only the selected owner and venue agent', () => {
 
   clearStoredTradingAgent(storage, 'hyperliquid', hyperliquidAgent.ownerAddress)
 
+  assert.equal(storage.values.size, 0)
+})
+
+test('changing owners deletes the previous owner agent immediately', () => {
+  const storage = new MemoryStorage()
+  saveStoredTradingAgent(storage, hyperliquidAgent)
+
+  assert.equal(
+    loadAfterOwnerChange(
+      storage,
+      'hyperliquid',
+      hyperliquidAgent.ownerAddress,
+      '0x0000000000000000000000000000000000000001',
+    ),
+    null,
+  )
   assert.equal(storage.values.size, 0)
 })

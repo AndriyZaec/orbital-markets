@@ -94,3 +94,15 @@ export function clearStoredTradingAgent(
 ): void {
   storage.removeItem(storageKey(venue, ownerAddress))
 }
+
+export function loadAfterOwnerChange(
+  storage: StorageLike,
+  venue: Venue,
+  previousOwner: string | null,
+  currentOwner: string | null,
+): StoredTradingAgent | null {
+  if (previousOwner && normalizeOwner(venue, previousOwner) !== normalizeOwner(venue, currentOwner ?? '')) {
+    clearStoredTradingAgent(storage, venue, previousOwner)
+  }
+  return currentOwner ? loadStoredTradingAgent(storage, venue, currentOwner) : null
+}

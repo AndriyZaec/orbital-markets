@@ -86,6 +86,7 @@ function pacificaSigningRequest(): SigningRequest {
     venue: 'pacifica',
     action: 'open',
     account: ownerAddress,
+    signer: agentAddress,
     symbol: 'BTC',
     side: 'buy',
     amount: 0.1,

@@ -9,6 +9,7 @@ const zeroAddress = '0x0000000000000000000000000000000000000000' as const
 const agentName = 'Orbital Markets'
 
 export interface HyperliquidApproveAgentAction {
+  [key: string]: unknown
   type: 'approveAgent'
   hyperliquidChain: 'Mainnet'
   signatureChainId: Hex
@@ -59,10 +60,10 @@ export function buildHyperliquidApproveAgentTypedData(action: HyperliquidApprove
         { name: 'agentAddress', type: 'address' },
         { name: 'agentName', type: 'string' },
         { name: 'nonce', type: 'uint64' },
-      ],
+      ] as const,
     },
     primaryType: 'HyperliquidTransaction:ApproveAgent' as const,
-    message: action,
+    message: { ...action, nonce: BigInt(action.nonce) },
   }
 }
 
@@ -155,6 +156,7 @@ function allowedL1OrderPayload(request: SigningRequest, agent: StoredTradingAgen
     request.venue === 'hyperliquid' &&
     agent.venue === 'hyperliquid' &&
     request.account.toLowerCase() === agent.ownerAddress.toLowerCase() &&
+    request.signer?.toLowerCase() === agent.agentAddress.toLowerCase() &&
     (request.action === 'open' || request.action === 'close') &&
     Date.parse(request.expires_at) > Date.now() &&
     action?.type === 'order' &&

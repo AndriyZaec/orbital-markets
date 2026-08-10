@@ -101,6 +101,7 @@ function hyperliquidSigningRequest(): SigningRequest {
     venue: 'hyperliquid',
     action: 'open',
     account: '0x14791697260E4c9A71f18484C9f997B308e59325',
+    signer: agentAddress,
     symbol: 'BTC',
     side: 'sell',
     amount: 2,

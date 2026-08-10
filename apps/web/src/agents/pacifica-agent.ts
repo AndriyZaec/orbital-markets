@@ -124,6 +124,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     request.venue === 'pacifica' &&
     agent.venue === 'pacifica' &&
     request.account === agent.ownerAddress &&
+    request.signer === agent.agentAddress &&
     (request.action === 'open' || request.action === 'close') &&
     Date.parse(request.expires_at) > Date.now() &&
     Number.isSafeInteger(order?.timestamp) &&
