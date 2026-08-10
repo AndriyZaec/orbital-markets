@@ -53,8 +53,12 @@ func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningR
 			req.Venue, signed.Venue,
 		)
 	}
-	if req.Account != "" && !signingAccountMatches(req.Venue, req.Account, signed.SignerAddress) {
-		return nil, fmt.Errorf("signer account does not match prepared %s account", req.Venue)
+	expectedSigner := req.Signer
+	if expectedSigner == "" {
+		expectedSigner = req.Account
+	}
+	if expectedSigner != "" && !signingAccountMatches(req.Venue, expectedSigner, signed.SignerAddress) {
+		return nil, fmt.Errorf("signer does not match prepared %s signer", req.Venue)
 	}
 
 	if time.Now().After(req.ExpiresAt) {

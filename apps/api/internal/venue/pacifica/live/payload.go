@@ -53,6 +53,7 @@ func BuildOpenPayload(
 	clientOrderID string,
 ) (*domain.SigningRequest, error) {
 	return buildPayload(
+		account,
 		symbol,
 		sideToVenue(side),
 		amount,
@@ -81,6 +82,7 @@ func BuildClosePayload(
 	}
 
 	return buildPayload(
+		account,
 		symbol,
 		closeSide,
 		amount,
@@ -93,6 +95,7 @@ func BuildClosePayload(
 }
 
 func buildPayload(
+	account string,
 	symbol string,
 	side string,
 	amount float64,
@@ -135,6 +138,7 @@ func buildPayload(
 		ClientOrderID:   clientOrderID,
 		Venue:           "pacifica",
 		Action:          action,
+		Account:         account,
 		Symbol:          symbol,
 		Side:            side,
 		Amount:          amount,
@@ -152,9 +156,11 @@ func buildPayload(
 func AttachSignature(
 	unsigned PacificaUnsignedOrder,
 	signed domain.SignedAction,
+	request *domain.SigningRequest,
 ) MarketOrderRequest {
 	return MarketOrderRequest{
-		Account:       signed.SignerAddress,
+		Account:       request.Account,
+		AgentWallet:   request.Signer,
 		Signature:     signed.Signature,
 		Timestamp:     unsigned.Timestamp,
 		ExpiryWindow:  unsigned.ExpiryWindow,

@@ -28,7 +28,7 @@ func (c *Client) SubmitSignedOrder(
 	}
 
 	// Attach the user's signature to produce the final order
-	finalOrder := AttachSignature(unsigned, signed)
+	finalOrder := AttachSignature(unsigned, signed, req)
 
 	c.logger.Info("pacifica live: submitting signed order",
 		"symbol", finalOrder.Symbol,

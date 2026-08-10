@@ -152,7 +152,11 @@ func (d *LiveDeps) validateSigningAccount(request *domain.SigningRequest, signer
 	if request == nil || request.Account == "" {
 		return fmt.Errorf("signing request account missing")
 	}
-	expected, _, err := d.accounts.normalizedKey(request.Venue, request.Account)
+	expectedSigner := request.Signer
+	if expectedSigner == "" {
+		expectedSigner = request.Account
+	}
+	expected, _, err := d.accounts.normalizedKey(request.Venue, expectedSigner)
 	if err != nil {
 		return err
 	}
@@ -161,7 +165,7 @@ func (d *LiveDeps) validateSigningAccount(request *domain.SigningRequest, signer
 		return err
 	}
 	if expected.account != actual.account {
-		return fmt.Errorf("signer account does not match prepared %s account", request.Venue)
+		return fmt.Errorf("signer does not match prepared %s signer", request.Venue)
 	}
 	return nil
 }

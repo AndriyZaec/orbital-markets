@@ -16,6 +16,7 @@ import "time"
 // and BuildSigningMessage for the canonical signing payload.
 type MarketOrderRequest struct {
 	Account       string `json:"account"`
+	AgentWallet   string `json:"agent_wallet,omitempty"`
 	Signature     string `json:"signature"`
 	Timestamp     int64  `json:"timestamp"`
 	ExpiryWindow  int64  `json:"expiry_window"`

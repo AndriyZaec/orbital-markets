@@ -63,6 +63,16 @@ func TestBuildOpenPayloadVenueExpiryCoversRequestLifetime(t *testing.T) {
 	}
 }
 
+func TestAttachSignatureKeepsOwnerAndAgentIdentities(t *testing.T) {
+	request := &domain.SigningRequest{Account: "owner-wallet", Signer: "agent-wallet"}
+	order := AttachSignature(PacificaUnsignedOrder{Symbol: "BTC"}, domain.SignedAction{
+		SignerAddress: "agent-wallet", Signature: "signature",
+	}, request)
+	if order.Account != "owner-wallet" || order.AgentWallet != "agent-wallet" {
+		t.Fatalf("order identities = account %q agent %q", order.Account, order.AgentWallet)
+	}
+}
+
 func TestSubmitSignedOrderReturnsTransportFailureAsAmbiguous(t *testing.T) {
 	request, err := BuildOpenPayload("redacted-wallet", "BTC", domain.SideLong, 0.125, 90000, "redacted-client-id")
 	if err != nil {

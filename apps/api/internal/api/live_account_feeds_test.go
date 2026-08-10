@@ -33,12 +33,12 @@ func TestSigningAccountUsesVenueNormalization(t *testing.T) {
 	live := &LiveDeps{accounts: registry}
 
 	if err := live.validateSigningAccount(&domain.SigningRequest{
-		Venue: "hyperliquid", Account: "0xAbCd",
+		Venue: "hyperliquid", Account: "0xOwner", Signer: "0xAbCd",
 	}, "0xabcd"); err != nil {
 		t.Fatalf("case-insensitive Hyperliquid signer rejected: %v", err)
 	}
 	if err := live.validateSigningAccount(&domain.SigningRequest{
-		Venue: "pacifica", Account: "SolCaseSensitive",
+		Venue: "pacifica", Account: "Owner", Signer: "SolCaseSensitive",
 	}, "solcasesensitive"); err == nil {
 		t.Fatal("case-mismatched Pacifica signer accepted")
 	}
