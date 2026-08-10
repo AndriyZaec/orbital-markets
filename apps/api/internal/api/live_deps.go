@@ -10,6 +10,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
+	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
 const (
@@ -23,12 +24,13 @@ const (
 // LiveDeps holds dependencies for live non-custodial execution. Account feeds
 // are started lazily and shared by normalized venue+account key.
 type LiveDeps struct {
-	signingStore    *domain.SigningRequestStore
-	liveStore       *executor.Store
-	sessions        *SessionManager
-	accounts        *accountFeedRegistry
-	hlAssetMap      hllive.AssetMap
-	hlAgentApprover hyperliquidAgentApprover
+	signingStore        *domain.SigningRequestStore
+	liveStore           *executor.Store
+	sessions            *SessionManager
+	accounts            *accountFeedRegistry
+	hlAssetMap          hllive.AssetMap
+	hlAgentApprover     hyperliquidAgentApprover
+	pacificaAgentBinder pacificaAgentBinder
 }
 
 func NewLiveDeps(
@@ -43,11 +45,12 @@ func NewLiveDeps(
 		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
 	}
 	return &LiveDeps{
-		signingStore:    signingStore,
-		liveStore:       liveStore,
-		sessions:        NewSessionManager(),
-		hlAssetMap:      hlAssetMap,
-		hlAgentApprover: hllive.NewDefaultAgentApprover(),
+		signingStore:        signingStore,
+		liveStore:           liveStore,
+		sessions:            NewSessionManager(),
+		hlAssetMap:          hlAssetMap,
+		hlAgentApprover:     hllive.NewDefaultAgentApprover(),
+		pacificaAgentBinder: pacificlive.NewDefaultAgentBinder(),
 		accounts: newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
 			IdleTTL:         defaultAccountFeedIdleTTL,
 			CleanupInterval: defaultAccountFeedCleanupInterval,
