@@ -88,17 +88,6 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	authorized, err := s.live.agentPairAuthorizationMatches(
-		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
-	)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
-		return
-	}
-	if !authorized {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
-		return
-	}
 	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
 		return
@@ -145,6 +134,17 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	defer unlockAccounts()
 	req.AccountPacifica = accountSnapshot(accounts, "pacifica").Account
 	req.AccountHyperliquid = accountSnapshot(accounts, "hyperliquid").Account
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
+		return
+	}
 
 	// 3b. Account-data readiness gate. This is separate from the admission
 	// gate below because admission looks at policy (leverage caps, etc); this

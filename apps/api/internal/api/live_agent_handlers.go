@@ -44,6 +44,12 @@ func (s *Server) handleHyperliquidAgentApprove(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	unlockOwner, err := s.live.lockAgentOwner("hyperliquid", request.OwnerAddress)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Hyperliquid owner is busy; retry authorization"})
+		return
+	}
+	defer unlockOwner()
 	blocked, err := s.agentChangeBlocked(r.Context(), "hyperliquid", request.OwnerAddress)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to inspect active live sessions"})
@@ -85,6 +91,12 @@ func (s *Server) handlePacificaAgentBind(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	unlockOwner, err := s.live.lockAgentOwner("pacifica", request.Account)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Pacifica owner is busy; retry authorization"})
+		return
+	}
+	defer unlockOwner()
 	blocked, err := s.agentChangeBlocked(r.Context(), "pacifica", request.Account)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to inspect active live sessions"})

@@ -142,6 +142,21 @@ func (d *LiveDeps) acquireRecoveryAccounts(pacificaAccount, hyperliquidAccount s
 	}, true)
 }
 
+func (d *LiveDeps) lockAgentOwner(venue, owner string) (func(), error) {
+	if d == nil || d.accounts == nil {
+		return func() {}, nil
+	}
+	lease, err := d.accounts.AcquireRecovery(venue, owner)
+	if err != nil {
+		return nil, err
+	}
+	unlockFeed := lockAccountFeeds(lease)
+	return func() {
+		unlockFeed()
+		lease.Release()
+	}, nil
+}
+
 func (d *LiveDeps) acquireAccountContext(accounts map[string]string, recovery bool) (*liveAccountContext, error) {
 	if d == nil || d.accounts == nil {
 		return nil, fmt.Errorf("live account registry not configured")
