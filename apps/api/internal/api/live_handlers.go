@@ -458,7 +458,7 @@ func (s *Server) buildOpenSigningRequest(
 	var err error
 	switch leg.venue {
 	case "pacifica":
-		request, err = paclive.BuildOpenPayload(accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+		request, err = paclive.BuildOpenPayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	case "hyperliquid":
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
@@ -487,7 +487,7 @@ func (s *Server) buildUnwindSigningRequest(
 	var err error
 	switch leg.venue {
 	case "pacifica":
-		request, err = paclive.BuildClosePayload(accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+		request, err = paclive.BuildClosePayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	case "hyperliquid":
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
@@ -1269,6 +1269,7 @@ func (s *Server) buildCloseSigningRequest(
 	switch fill.Venue {
 	case "pacifica":
 		request, err = paclive.BuildClosePayload(
+			s.live.pacificaLotSizes,
 			accountPacifica,
 			fill.Symbol,
 			positionSide,

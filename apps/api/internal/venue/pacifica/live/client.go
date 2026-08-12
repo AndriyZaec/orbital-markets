@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -254,9 +255,11 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 			I       string `json:"I"` // client order ID (CLOID)
 			OrderID int64  `json:"i"` // venue order ID
 			S       string `json:"s"` // symbol
+			Message string `json:"message,omitempty"`
 		} `json:"data"`
 		// Error responses may have different shapes — code != 200 is rejection
 		Error string `json:"error,omitempty"`
+		Err   string `json:"err,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("parse response: %w (raw: %s)", err, string(raw[:min(len(raw), 200)]))
@@ -269,9 +272,16 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 	}
 
 	errMsg := resp.Error
-	if !accepted && errMsg == "" {
-		errMsg = fmt.Sprintf("code %d", resp.Code)
+	if errMsg == "" {
+		errMsg = resp.Err
 	}
+	if errMsg == "" {
+		errMsg = resp.Data.Message
+	}
+	if !accepted && errMsg == "" {
+		errMsg = fmt.Sprintf("Pacifica rejected the order (code %d)", resp.Code)
+	}
+	errMsg = userFacingPacificaError(errMsg)
 
 	return &SubmitResult{
 		RequestID:     resp.ID,
@@ -283,6 +293,13 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 		SubmittedAt:   submittedAt,
 		RespondedAt:   respondedAt,
 	}, nil
+}
+
+func userFacingPacificaError(message string) string {
+	if strings.Contains(strings.ToLower(message), "not a multiple of lot size") {
+		return "Order amount does not match Pacifica's lot size"
+	}
+	return message
 }
 
 // Close cleanly shuts down the trading connection.

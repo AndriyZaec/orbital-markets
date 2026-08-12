@@ -232,7 +232,12 @@ function validateOrderAction(
   const orderType = order?.t as Record<string, unknown> | undefined
   const limit = orderType?.limit as Record<string, unknown> | undefined
   const expectedBuy = request.side === 'buy'
-  const expectedPrice = (request.price * (expectedBuy ? 1.005 : 0.995)).toFixed(6)
+  const expectedPrices = new Set(
+    Array.from({ length: 7 }, (_, sizeDecimals) => normalizeHyperliquidPrice(
+      request.price * (expectedBuy ? 1.005 : 0.995),
+      sizeDecimals,
+    )).map(Number),
+  )
   const amount = Number(order?.s)
   const valid =
     value?.type === 'order' &&
@@ -244,7 +249,8 @@ function validateOrderAction(
     (order.a as number) >= 0 &&
     order.a === request.venue_asset_id &&
     order.b === expectedBuy &&
-    order.p === expectedPrice &&
+    typeof order.p === 'string' &&
+    expectedPrices.has(Number(order.p)) &&
     Number.isFinite(amount) &&
     Math.abs(amount - request.amount) < 1e-12 &&
     order.r === request.reduce_only &&
@@ -268,6 +274,19 @@ function validateOrderAction(
     }],
     grouping: 'na',
   }
+}
+
+function normalizeHyperliquidPrice(price: number, sizeDecimals: number): string {
+  const maxDecimals = 6 - sizeDecimals
+  const decimalRounded = Number(price.toFixed(maxDecimals))
+  const significantDecimals = 4 - Math.floor(Math.log10(decimalRounded))
+  const significantFactor = 10 ** significantDecimals
+  const normalized = significantDecimals < maxDecimals
+    ? Math.round(decimalRounded * significantFactor) / significantFactor
+    : decimalRounded
+  return normalized
+    .toFixed(Math.max(0, Math.min(maxDecimals, significantDecimals)))
+    .replace(/\.?0+$/, '')
 }
 
 function hasOnlyKeys(value: Record<string, unknown> | undefined, keys: string[]): boolean {

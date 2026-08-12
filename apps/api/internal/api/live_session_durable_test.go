@@ -10,6 +10,10 @@ import (
 	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
+type recoveryTestLotSizes struct{}
+
+func (recoveryTestLotSizes) LotSize(string) (string, bool) { return "0.01", true }
+
 func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	createdAt := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	req := &domain.SigningRequest{
@@ -98,6 +102,7 @@ func TestSessionManagerReturnsExpiredSessionsForRecovery(t *testing.T) {
 
 func TestPacificaUnwindRemainsValidThroughSessionRecoveryBudget(t *testing.T) {
 	request, err := paclive.BuildClosePayload(
+		recoveryTestLotSizes{},
 		"owner", "SOL", domain.SideLong, 1, 100, "recovery-window-test",
 	)
 	if err != nil {

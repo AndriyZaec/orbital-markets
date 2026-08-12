@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { useAccount, useChainId, useSignTypedData } from 'wagmi'
+import { useAccount, useSignTypedData, useSwitchChain } from 'wagmi'
+import { mainnet } from 'wagmi/chains'
 
 import { apiFetch } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
@@ -30,8 +31,8 @@ function browserStorage(): StorageLike {
 export function TradingAgentProvider({ children }: { children: ReactNode }) {
   const solana = useWallet()
   const evm = useAccount()
-  const chainId = useChainId()
   const { signTypedDataAsync } = useSignTypedData()
+  const { switchChainAsync } = useSwitchChain()
   const pacificaOwner = solana.connected && solana.publicKey ? solana.publicKey.toBase58() : null
   const hyperliquidOwner = evm.isConnected && evm.address ? evm.address : null
   const previousOwners = useRef<{ pacifica: string | null; hyperliquid: string | null }>({
@@ -52,7 +53,8 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
     <TradingAgentSession
       pacificaOwner={pacificaOwner}
       hyperliquidOwner={hyperliquidOwner}
-      chainId={chainId}
+      chainId={evm.chainId}
+      switchToAuthorizationChain={() => switchChainAsync({ chainId: mainnet.id })}
       solanaSignMessage={solana.signMessage}
       signTypedData={signTypedDataAsync}
     >
@@ -66,13 +68,15 @@ function TradingAgentSession({
   pacificaOwner,
   hyperliquidOwner,
   chainId,
+  switchToAuthorizationChain,
   solanaSignMessage,
   signTypedData,
 }: {
   children: ReactNode
   pacificaOwner: string | null
   hyperliquidOwner: string | null
-  chainId: number
+  chainId?: number
+  switchToAuthorizationChain: () => Promise<unknown>
   solanaSignMessage?: (message: Uint8Array) => Promise<Uint8Array>
   signTypedData: ReturnType<typeof useSignTypedData>['signTypedDataAsync']
 }) {
@@ -120,13 +124,16 @@ function TradingAgentSession({
     })
   }
 
-  const authorizeHyperliquid = (ownerAddress: string) => authorizeHyperliquidAgent({
-    storage: browserStorage(),
-    ownerAddress,
-    chainId,
-    signTypedData,
-    relay: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve', request),
-  })
+  const authorizeHyperliquid = async (ownerAddress: string) => {
+    if (chainId !== mainnet.id) await switchToAuthorizationChain()
+    return authorizeHyperliquidAgent({
+      storage: browserStorage(),
+      ownerAddress,
+      chainId: mainnet.id,
+      signTypedData,
+      relay: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve', request),
+    })
+  }
 
   const sign = async (request: SigningRequest) => {
     const currentOwner = request.venue === 'pacifica' ? pacificaOwner : hyperliquidOwner

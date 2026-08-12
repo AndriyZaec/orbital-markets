@@ -68,6 +68,23 @@ func TestBuildOpenPayloadUsesAssetSizePrecision(t *testing.T) {
 	}
 }
 
+func TestBuildOpenPayloadUsesHyperliquidPricePrecision(t *testing.T) {
+	request, err := BuildOpenPayload(
+		payloadTestAssetMap{index: 7, decimals: 1},
+		"VIRTUAL", domain.SideShort, 45.6, 0.547, "client-order",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unsigned HyperliquidUnsignedAction
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	if unsigned.Action.Orders[0].LimitPx != "0.54427" {
+		t.Fatalf("wire price = %q, want 0.54427", unsigned.Action.Orders[0].LimitPx)
+	}
+}
+
 func TestAttachSignatureBuildsHyperliquidSignatureObject(t *testing.T) {
 	signature := "0x" +
 		"1111111111111111111111111111111111111111111111111111111111111111" +

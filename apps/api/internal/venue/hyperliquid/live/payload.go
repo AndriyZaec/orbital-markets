@@ -148,7 +148,10 @@ func buildPayload(
 	if isBuy {
 		slippageMul = defaultSlippageMulBuy
 	}
-	limitPx := fmt.Sprintf("%.6f", price*slippageMul)
+	limitPx, err := normalizeHyperliquidPrice(price*slippageMul, sizeDecimals)
+	if err != nil {
+		return nil, fmt.Errorf("normalize %s price: %w", symbol, err)
+	}
 
 	// cloid: 128-bit hex for Hyperliquid's client order tracking
 	now := time.Now()
@@ -230,6 +233,26 @@ func normalizeHyperliquidAmount(amount float64, decimals int) (float64, string, 
 		wire = strings.TrimRight(strings.TrimRight(wire, "0"), ".")
 	}
 	return normalized, wire, nil
+}
+
+func normalizeHyperliquidPrice(price float64, sizeDecimals int) (string, error) {
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return "", fmt.Errorf("invalid price: %v", price)
+	}
+	maxDecimals := 6 - sizeDecimals
+	if maxDecimals < 0 || maxDecimals > 6 {
+		return "", fmt.Errorf("invalid size decimals: %d", sizeDecimals)
+	}
+	decimalFactor := math.Pow10(maxDecimals)
+	price = math.Round(price*decimalFactor) / decimalFactor
+	significantDecimals := 4 - int(math.Floor(math.Log10(price)))
+	if significantDecimals < maxDecimals {
+		factor := math.Pow10(significantDecimals)
+		price = math.Round(price*factor) / factor
+		maxDecimals = max(significantDecimals, 0)
+	}
+	wire := strconv.FormatFloat(price, 'f', maxDecimals, 64)
+	return strings.TrimRight(strings.TrimRight(wire, "0"), "."), nil
 }
 
 func nextHyperliquidNonce() int64 {

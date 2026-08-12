@@ -19,7 +19,7 @@ func startLive(
 	logger *slog.Logger,
 	database *sql.DB,
 	market executor.MarketSource,
-	_ *pacifica.Adapter,
+	pac *pacifica.Adapter,
 	hl *hyperliquid.Adapter,
 ) *api.LiveDeps {
 	logger.Info("live execution: starting runtime")
@@ -38,6 +38,6 @@ func startLive(
 	return api.NewLiveDeps(
 		ctx, logger,
 		signingStore, liveStore,
-		hlAssetMap,
+		hlAssetMap, pac,
 	)
 }

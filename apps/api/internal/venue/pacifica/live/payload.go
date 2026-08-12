@@ -3,6 +3,9 @@ package live
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -13,6 +16,10 @@ const (
 	defaultCloseSlippagePct = "1.0" // 1.0% for close/unwind
 	signingRequestTTL       = 30 * time.Second
 )
+
+type LotSizeMap interface {
+	LotSize(symbol string) (string, bool)
+}
 
 // PacificaUnsignedOrder is the order payload the frontend must sign.
 //
@@ -45,6 +52,7 @@ type PacificaSubmitMeta struct {
 
 // BuildOpenPayload constructs an unsigned signing request for a Pacifica open order.
 func BuildOpenPayload(
+	lotSizes LotSizeMap,
 	account string,
 	symbol string,
 	side domain.Side,
@@ -53,6 +61,7 @@ func BuildOpenPayload(
 	clientOrderID string,
 ) (*domain.SigningRequest, error) {
 	return buildPayload(
+		lotSizes,
 		account,
 		symbol,
 		sideToVenue(side),
@@ -68,6 +77,7 @@ func BuildOpenPayload(
 // BuildClosePayload constructs an unsigned signing request for a Pacifica close order.
 // Side is the position side — it will be inverted for the close order.
 func BuildClosePayload(
+	lotSizes LotSizeMap,
 	account string,
 	symbol string,
 	positionSide domain.Side,
@@ -82,6 +92,7 @@ func BuildClosePayload(
 	}
 
 	return buildPayload(
+		lotSizes,
 		account,
 		symbol,
 		closeSide,
@@ -95,6 +106,7 @@ func BuildClosePayload(
 }
 
 func buildPayload(
+	lotSizes LotSizeMap,
 	account string,
 	symbol string,
 	side string,
@@ -106,13 +118,17 @@ func buildPayload(
 	action string,
 ) (*domain.SigningRequest, error) {
 	now := time.Now()
+	normalizedAmount, amountWire, err := normalizePacificaAmount(lotSizes, symbol, amount)
+	if err != nil {
+		return nil, err
+	}
 
 	unsigned := PacificaUnsignedOrder{
 		Timestamp:     now.UnixMilli(),
 		ExpiryWindow:  expiryWindowMs,
 		Symbol:        symbol,
 		Side:          side,
-		Amount:        fmt.Sprintf("%g", amount),
+		Amount:        amountWire,
 		ReduceOnly:    reduceOnly,
 		SlippagePct:   slippagePct,
 		ClientOrderID: clientOrderID,
@@ -141,7 +157,7 @@ func buildPayload(
 		Account:         account,
 		Symbol:          symbol,
 		Side:            side,
-		Amount:          amount,
+		Amount:          normalizedAmount,
 		Price:           price,
 		ReduceOnly:      reduceOnly,
 		UnsignedPayload: unsignedBytes,
@@ -149,6 +165,35 @@ func buildPayload(
 		ExpiresAt:       requestExpiresAt,
 		CreatedAt:       now,
 	}, nil
+}
+
+func normalizePacificaAmount(lotSizes LotSizeMap, symbol string, amount float64) (float64, string, error) {
+	if lotSizes == nil {
+		return 0, "", fmt.Errorf("pacifica lot sizes not configured")
+	}
+	lotSizeWire, ok := lotSizes.LotSize(symbol)
+	if !ok {
+		return 0, "", fmt.Errorf("lot size unavailable for asset: %s", symbol)
+	}
+	lotSize, err := strconv.ParseFloat(lotSizeWire, 64)
+	if err != nil || lotSize <= 0 || math.IsInf(lotSize, 0) || math.IsNaN(lotSize) {
+		return 0, "", fmt.Errorf("invalid lot size for asset: %s", symbol)
+	}
+	decimals := 0
+	if dot := strings.IndexByte(lotSizeWire, '.'); dot >= 0 {
+		decimals = len(strings.TrimRight(lotSizeWire[dot+1:], "0"))
+	}
+	units := math.Floor((amount / lotSize) + 1e-9)
+	normalized := units * lotSize
+	if normalized <= 0 || math.IsInf(normalized, 0) || math.IsNaN(normalized) {
+		return 0, "", fmt.Errorf("amount is below Pacifica lot size for asset: %s", symbol)
+	}
+	wire := strconv.FormatFloat(normalized, 'f', decimals, 64)
+	parsed, err := strconv.ParseFloat(wire, 64)
+	if err != nil {
+		return 0, "", fmt.Errorf("format amount for asset %s: %w", symbol, err)
+	}
+	return parsed, wire, nil
 }
 
 // AttachSignature takes a signed action and produces the final MarketOrderRequest

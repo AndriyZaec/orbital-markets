@@ -456,7 +456,10 @@ func newResidualExposureServer(t *testing.T) (*Server, *sql.DB) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	liveStore := executor.NewStore(database, logger)
-	live := &LiveDeps{liveStore: liveStore, signingStore: domain.NewSigningRequestStore()}
+	live := &LiveDeps{
+		liveStore: liveStore, signingStore: domain.NewSigningRequestStore(),
+		pacificaLotSizes: recoveryTestLotSizes{},
+	}
 	return &Server{ctx: context.Background(), liveStore: liveStore, live: live, logger: logger}, database
 }
 

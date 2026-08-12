@@ -33,6 +33,7 @@ type LiveDeps struct {
 	sessions            *SessionManager
 	accounts            *accountFeedRegistry
 	hlAssetMap          hllive.AssetMap
+	pacificaLotSizes    pacificlive.LotSizeMap
 	hlAgentApprover     hyperliquidAgentApprover
 	pacificaAgentBinder pacificaAgentBinder
 	agentAuthorizations *agentAuthorizationRegistry
@@ -44,6 +45,7 @@ func NewLiveDeps(
 	signingStore *domain.SigningRequestStore,
 	liveStore *executor.Store,
 	hlAssetMap hllive.AssetMap,
+	pacificaLotSizes pacificlive.LotSizeMap,
 ) *LiveDeps {
 	factories := map[string]accountFeedFactory{
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
@@ -54,6 +56,7 @@ func NewLiveDeps(
 		liveStore:           liveStore,
 		sessions:            NewSessionManager(),
 		hlAssetMap:          hlAssetMap,
+		pacificaLotSizes:    pacificaLotSizes,
 		hlAgentApprover:     hllive.NewDefaultAgentApprover(),
 		pacificaAgentBinder: pacificlive.NewDefaultAgentBinder(),
 		agentAuthorizations: newAgentAuthorizationRegistry(liveStore),
