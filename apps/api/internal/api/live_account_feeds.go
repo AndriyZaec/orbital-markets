@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
@@ -44,6 +46,10 @@ type pacificaAccountFeed struct {
 
 func (f *pacificaAccountFeed) Snapshot() liveAccountSnapshot {
 	snapshot := f.state.Snapshot()
+	leverages := make(map[string]float64, len(snapshot.SymbolConfigs))
+	for symbol, config := range snapshot.SymbolConfigs {
+		leverages[symbol] = config.Leverage
+	}
 	positions := make([]liveAccountPosition, 0, len(snapshot.Positions))
 	for _, position := range snapshot.Positions {
 		positions = append(positions, liveAccountPosition{
@@ -56,7 +62,22 @@ func (f *pacificaAccountFeed) Snapshot() liveAccountSnapshot {
 		Connected: snapshot.Connected, LastUpdated: snapshot.LastUpdated,
 		PositionsUpdatedAt: snapshot.PositionsUpdatedAt,
 		Equity:             snapshot.Equity, Available: snapshot.AvailableToSpend,
-		Positions: positions,
+		Positions: positions, LeverageBySymbol: leverages,
+	}
+}
+
+func (f *pacificaAccountFeed) WaitForLeverage(ctx context.Context, symbol string, leverage float64) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if current := f.state.Snapshot().SymbolConfigs[symbol].Leverage; math.Abs(current-leverage) < 1e-9 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -73,6 +94,9 @@ func (f *pacificaAccountFeed) SubmitSigned(
 	signed domain.SignedAction,
 	request *domain.SigningRequest,
 ) (*domain.SubmissionResult, error) {
+	if request.Action == "update_leverage" {
+		return f.client.SubmitSignedLeverage(ctx, signed, request)
+	}
 	return f.client.SubmitSignedOrder(ctx, signed, request, f.tracker)
 }
 
@@ -148,6 +172,9 @@ func (f *hyperliquidAccountFeed) SubmitSigned(
 	signed domain.SignedAction,
 	request *domain.SigningRequest,
 ) (*domain.SubmissionResult, error) {
+	if request.Action == "update_leverage" {
+		return f.client.SubmitSignedLeverage(ctx, signed, request)
+	}
 	return f.client.SubmitSignedOrder(ctx, signed, request)
 }
 
@@ -167,4 +194,8 @@ func (f *hyperliquidAccountFeed) WaitForFill(ctx context.Context, request *domai
 		OrderID: fill.OrderID, Status: string(fill.Status),
 		Filled: fill.Status == hllive.OrderStatusFilled || fill.Status == hllive.OrderStatusPartialFill,
 	}, nil
+}
+
+func (f *hyperliquidAccountFeed) WaitForLeverage(context.Context, string, float64) error {
+	return nil
 }

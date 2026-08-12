@@ -43,11 +43,39 @@ type PacificaUnsignedOrder struct {
 	ClientOrderID string `json:"client_order_id"`
 }
 
+type PacificaUnsignedLeverage struct {
+	Timestamp    int64  `json:"timestamp"`
+	ExpiryWindow int64  `json:"expiry_window"`
+	Symbol       string `json:"symbol"`
+	Leverage     int    `json:"leverage"`
+}
+
 // PacificaSubmitMeta holds venue-specific metadata needed to submit
 // the signed order but not included in the signed payload.
 type PacificaSubmitMeta struct {
 	WSURL      string `json:"ws_url"`
 	ActionType string `json:"action_type"` // "create_market_order"
+}
+
+func BuildUpdateLeveragePayload(account, symbol string, leverage int) (*domain.SigningRequest, error) {
+	if leverage <= 0 {
+		return nil, fmt.Errorf("invalid leverage: %d", leverage)
+	}
+	now := time.Now()
+	unsigned := PacificaUnsignedLeverage{
+		Timestamp: now.UnixMilli(), ExpiryWindow: signingRequestTTL.Milliseconds(),
+		Symbol: symbol, Leverage: leverage,
+	}
+	payload, err := json.Marshal(unsigned)
+	if err != nil {
+		return nil, fmt.Errorf("marshal leverage payload: %w", err)
+	}
+	id := fmt.Sprintf("pac-leverage-%s-%d", symbol, now.UnixNano())
+	return &domain.SigningRequest{
+		ID: id, ClientOrderID: id, Venue: "pacifica", Action: "update_leverage",
+		Account: account, Symbol: symbol, Leverage: leverage, UnsignedPayload: payload,
+		ExpiresAt: now.Add(signingRequestTTL), CreatedAt: now,
+	}, nil
 }
 
 // BuildOpenPayload constructs an unsigned signing request for a Pacifica open order.

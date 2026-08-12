@@ -26,6 +26,8 @@ func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (
 	return nil, nil
 }
 
+func (f *fakeAccountFeed) WaitForLeverage(context.Context, string, float64) error { return nil }
+
 type fakeAccountFeedFactory struct {
 	starts    atomic.Int64
 	stops     atomic.Int64

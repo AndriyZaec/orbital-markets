@@ -321,29 +321,52 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if plan.Leverage.Leverage != math.Trunc(plan.Leverage.Leverage) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "live leverage must be a whole number"})
+		return
+	}
+	leverage := int(plan.Leverage.Leverage)
+	pacificaLeverage, err := paclive.BuildUpdateLeveragePayload(req.AccountPacifica, plan.Asset, leverage)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Pacifica leverage payload build failed"})
+		return
+	}
+	pacificaLeverage.Signer = req.AgentPacifica
+	hyperliquidLeverage, err := hllive.BuildUpdateLeveragePayload(s.live.hlAssetMap, req.AccountHyperliquid, plan.Asset, leverage)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Hyperliquid leverage payload build failed"})
+		return
+	}
+	hyperliquidLeverage.Signer = req.AgentHyperliquid
 
 	s.live.signingStore.Store(leg1Open)
 	s.live.signingStore.Store(leg1Unwind)
+	s.live.signingStore.Store(pacificaLeverage)
+	s.live.signingStore.Store(hyperliquidLeverage)
 
 	// 6. Create the orchestration session.
 	sessionID := uuid.New().String()
 	sess := &LiveSession{
-		ID:                 sessionID,
-		Plan:               plan,
-		Leg1:               leg1,
-		Leg2:               leg2,
-		AccountPacifica:    req.AccountPacifica,
-		AccountHyperliquid: req.AccountHyperliquid,
-		AgentPacifica:      req.AgentPacifica,
-		AgentHyperliquid:   req.AgentHyperliquid,
-		State:              sessAwaitingLeg1Signs,
-		Leg1OpenReqID:      leg1Open.ID,
-		Leg1UnwindReqID:    leg1Unwind.ID,
-		Leg1OpenReq:        leg1Open,
-		Leg1UnwindReq:      leg1Unwind,
-		BaselineLeg1Size:   baselineLeg1Size,
-		BaselineLeg2Size:   baselineLeg2Size,
-		CreatedAt:          now,
+		ID:                       sessionID,
+		Plan:                     plan,
+		Leg1:                     leg1,
+		Leg2:                     leg2,
+		AccountPacifica:          req.AccountPacifica,
+		AccountHyperliquid:       req.AccountHyperliquid,
+		AgentPacifica:            req.AgentPacifica,
+		AgentHyperliquid:         req.AgentHyperliquid,
+		State:                    sessAwaitingLeg1Signs,
+		Leg1OpenReqID:            leg1Open.ID,
+		Leg1UnwindReqID:          leg1Unwind.ID,
+		Leg1OpenReq:              leg1Open,
+		Leg1UnwindReq:            leg1Unwind,
+		PacificaLeverageReqID:    pacificaLeverage.ID,
+		HyperliquidLeverageReqID: hyperliquidLeverage.ID,
+		PacificaLeverageReq:      pacificaLeverage,
+		HyperliquidLeverageReq:   hyperliquidLeverage,
+		BaselineLeg1Size:         baselineLeg1Size,
+		BaselineLeg2Size:         baselineLeg2Size,
+		CreatedAt:                now,
 	}
 	s.live.sessions.put(sess)
 	if err := s.saveLiveSession(r.Context(), sess); err != nil {
@@ -383,7 +406,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		"riskier_venue":    leg1.venue,
 		"hedge_venue":      leg2.venue,
 		"expires_at":       leg1Open.ExpiresAt,
-		"signing_requests": []*domain.SigningRequest{leg1Open, leg1Unwind},
+		"signing_requests": []*domain.SigningRequest{pacificaLeverage, hyperliquidLeverage, leg1Open, leg1Unwind},
 	})
 }
 

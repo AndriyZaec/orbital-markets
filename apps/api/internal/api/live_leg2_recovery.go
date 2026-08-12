@@ -11,7 +11,10 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 )
 
-const leg2RetrySigningWindow = 5 * time.Second
+const (
+	leg2RetrySigningWindow = 5 * time.Second
+	minimumRetryNotional   = 10.0
+)
 
 func mergeNormFills(first, second *normFill) *normFill {
 	if first == nil {
@@ -69,6 +72,11 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 	remaining := session.Leg1Fill.FilledAmount - filled
 	if remaining <= 0 {
 		s.recoverInvalidHedge(w, ctx, session, reason)
+		return
+	}
+	if remaining*session.Leg2.price < minimumRetryNotional {
+		s.recoverInvalidHedge(w, ctx, session,
+			fmt.Sprintf("%s; residual retry value $%.2f is below venue minimum $%.2f", reason, remaining*session.Leg2.price, minimumRetryNotional))
 		return
 	}
 

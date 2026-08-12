@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,14 +36,8 @@ func TestParseRESTAccountInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseRESTAccountInfo() error = %v", err)
 	}
-	if info.Equity != 46.159179 {
-		t.Fatalf("Equity = %v, want 46.159179", info.Equity)
-	}
-	if info.AvailableToSpend != 46.159179 {
-		t.Fatalf("AvailableToSpend = %v, want 46.159179", info.AvailableToSpend)
-	}
-	if info.AvailableToWithdraw != 46.159179 {
-		t.Fatalf("AvailableToWithdraw = %v, want 46.159179", info.AvailableToWithdraw)
+	if info.Equity != 46.159179 || info.AvailableToSpend != 46.159179 || info.AvailableToWithdraw != 46.159179 {
+		t.Fatalf("account info = %+v", info)
 	}
 }
 
@@ -62,20 +57,13 @@ func TestRefreshAccountInfoBootstrapsEmptyPositions(t *testing.T) {
 		default:
 			t.Fatalf("unexpected request path %q", req.URL.Path)
 		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(body)),
-			Header:     make(http.Header),
-		}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
 
 	if err := subscriber.refreshAccountInfo(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !positionsRequested {
-		t.Fatal("positions snapshot was not requested")
-	}
-	if state.Snapshot().PositionsUpdatedAt.IsZero() {
+	if !positionsRequested || state.Snapshot().PositionsUpdatedAt.IsZero() {
 		t.Fatal("empty positions snapshot did not mark position state ready")
 	}
 }
@@ -89,7 +77,6 @@ func TestParseRESTPositions(t *testing.T) {
 			{"symbol":"ETH","side":"bid","amount":"0","entry_price":"3000","margin":"0","liquidation_price":null}
 		]
 	}`)
-
 	positions, err := parseRESTPositions(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -108,5 +95,26 @@ func TestParseRESTPositions(t *testing.T) {
 func TestParseRESTPositionsRejectsMissingData(t *testing.T) {
 	if _, err := parseRESTPositions([]byte(`{"success":true,"data":null}`)); err == nil {
 		t.Fatal("expected missing positions data error")
+	}
+}
+
+func TestHandleLeverageAcceptsNumberAndString(t *testing.T) {
+	for name, payload := range map[string]string{
+		"number": `{"s":"VIRTUAL","l":2}`,
+		"string": `{"s":"VIRTUAL","l":"2"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := NewAccountState()
+			state.ResetForAccount("owner")
+			subscriber := &Subscriber{
+				logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+				state:   state,
+				account: "owner",
+			}
+			subscriber.handleLeverage(json.RawMessage(payload))
+			if got := state.Snapshot().SymbolConfigs["VIRTUAL"].Leverage; got != 2 {
+				t.Fatalf("leverage = %v, want 2", got)
+			}
+		})
 	}
 }

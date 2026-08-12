@@ -45,6 +45,30 @@ test('a local Pacifica agent reproduces the official market-order signature', as
   assert.equal(JSON.stringify(signed).includes(pacificaAgent().privateKey), false)
 })
 
+test('a local Pacifica agent signs only the prepared leverage update', async () => {
+  const request = pacificaSigningRequest()
+  request.id = 'leverage-1'
+  request.client_order_id = 'leverage-1'
+  request.action = 'update_leverage'
+  request.leverage = 2
+  request.unsigned_payload = {
+    timestamp: 1_748_970_123_456,
+    expiry_window: 30_000,
+    symbol: 'BTC',
+    leverage: 2,
+  }
+  const signed = await signPacificaAgentRequest(request, pacificaAgent())
+  const expectedMessage = buildPacificaSigningMessage('update_leverage', 1_748_970_123_456, 30_000, {
+    leverage: 2,
+    symbol: 'BTC',
+  })
+  const keyPair = nacl.sign.keyPair.fromSecretKey(bs58.decode(pacificaAgent().privateKey))
+  assert.equal(signed.signature, bs58.encode(nacl.sign.detached(expectedMessage, keyPair.secretKey)))
+
+  request.leverage = 3
+  await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed leverage update/)
+})
+
 test('Pacifica authorization relays no private key and persists only after binding', async () => {
   const storage = new TestStorage()
   let relayed = ''

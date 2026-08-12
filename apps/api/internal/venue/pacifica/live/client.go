@@ -1,10 +1,13 @@
 package live
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +21,7 @@ import (
 
 const (
 	tradingWSURL   = "wss://ws.pacifica.fi/ws"
+	leverageURL    = "https://api.pacifica.fi/api/v1/account/leverage"
 	submitTimeout  = 10 * time.Second
 	expiryWindowMs = 120_000 // Keeps the pre-signed unwind valid through worst-case recovery.
 )
@@ -37,6 +41,7 @@ type Client struct {
 	accountState *account.AccountState
 	logger       *slog.Logger
 	sendSigned   func(context.Context, MarketOrderRequest) (*SubmitResult, error)
+	sendLeverage func(context.Context, UpdateLeverageRequest) (*SubmitResult, error)
 
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -205,6 +210,51 @@ func (c *Client) buildAndSign(
 // Pacifica envelope: {"id": "uuid", "params": {"create_market_order": {...}}}
 // Response: {"code": 200, "data": {"I": "cloid", "i": oid, "s": "BTC"}, "id": "uuid", "t": ms, "type": "..."}
 func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*SubmitResult, error) {
+	return c.sendWSAction(ctx, "create_market_order", req, req.ClientOrderID, req.Symbol)
+}
+
+func (c *Client) sendLeverageUpdate(ctx context.Context, req UpdateLeverageRequest) (*SubmitResult, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, submitTimeout)
+	defer cancel()
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("encode leverage update: %w", err)
+	}
+	submittedAt := time.Now()
+	httpRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPost, leverageURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build leverage update: %w", err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(httpRequest)
+	if err != nil {
+		return nil, fmt.Errorf("send leverage update: %w", err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxBindingResponse))
+	if err != nil {
+		return nil, fmt.Errorf("read leverage response: %w", err)
+	}
+	var venueResponse struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	decoded := json.Unmarshal(responseBody, &venueResponse) == nil
+	result := &SubmitResult{
+		Symbol:      req.Symbol,
+		Accepted:    response.StatusCode >= 200 && response.StatusCode < 300 && decoded && venueResponse.Success,
+		SubmittedAt: submittedAt, RespondedAt: time.Now(),
+	}
+	if !result.Accepted {
+		result.Error = venueResponse.Error
+		if result.Error == "" {
+			result.Error = pacificaBindingError(responseBody)
+		}
+	}
+	return result, nil
+}
+
+func (c *Client) sendWSAction(ctx context.Context, action string, req any, clientOrderID, symbol string) (*SubmitResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -225,7 +275,7 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 	envelope := WSEnvelope{
 		ID: uuid.New().String(),
 		Params: map[string]any{
-			"create_market_order": req,
+			action: req,
 		},
 	}
 
@@ -286,8 +336,8 @@ func (c *Client) sendOrder(ctx context.Context, req MarketOrderRequest) (*Submit
 	return &SubmitResult{
 		RequestID:     resp.ID,
 		OrderID:       orderID,
-		ClientOrderID: req.ClientOrderID,
-		Symbol:        req.Symbol,
+		ClientOrderID: clientOrderID,
+		Symbol:        symbol,
 		Accepted:      accepted,
 		Error:         errMsg,
 		SubmittedAt:   submittedAt,

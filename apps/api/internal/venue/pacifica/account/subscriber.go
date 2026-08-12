@@ -525,15 +525,23 @@ func (s *Subscriber) handlePositions(data json.RawMessage) {
 //	}
 func (s *Subscriber) handleLeverage(data json.RawMessage) {
 	var update struct {
-		S string `json:"s"` // symbol
-		L string `json:"l"` // leverage (string)
+		S string          `json:"s"` // symbol
+		L json.RawMessage `json:"l"` // leverage (number or numeric string)
 	}
 	if err := json.Unmarshal(data, &update); err != nil {
 		s.logger.Warn("pacifica: parse account_leverage", "err", err)
 		return
 	}
 
-	lev := parseFloat(update.L)
+	var lev float64
+	if err := json.Unmarshal(update.L, &lev); err != nil {
+		var text string
+		if err := json.Unmarshal(update.L, &text); err != nil {
+			s.logger.Warn("pacifica: parse account_leverage value", "err", err)
+			return
+		}
+		lev = parseFloat(text)
+	}
 	if lev <= 0 {
 		lev = 1
 	}

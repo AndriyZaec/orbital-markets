@@ -24,33 +24,39 @@ type durableLegPlan struct {
 }
 
 type durableLiveSession struct {
-	ID                 string                    `json:"id"`
-	Plan               *domain.ExecutionPlan     `json:"plan"`
-	Leg1               durableLegPlan            `json:"leg_1"`
-	Leg2               durableLegPlan            `json:"leg_2"`
-	AccountPacifica    string                    `json:"account_pacifica"`
-	AccountHyperliquid string                    `json:"account_hyperliquid"`
-	AgentPacifica      string                    `json:"agent_pacifica,omitempty"`
-	AgentHyperliquid   string                    `json:"agent_hyperliquid,omitempty"`
-	State              sessionState              `json:"state"`
-	Leg1OpenReqID      string                    `json:"leg_1_open_request_id"`
-	Leg1UnwindReqID    string                    `json:"leg_1_unwind_request_id"`
-	Leg2OpenReqID      string                    `json:"leg_2_open_request_id"`
-	Leg2RetryReqID     string                    `json:"leg_2_retry_request_id"`
-	Leg1OpenReq        *domain.SigningRequest    `json:"leg_1_open_request,omitempty"`
-	Leg1UnwindReq      *domain.SigningRequest    `json:"leg_1_unwind_request,omitempty"`
-	Leg2OpenReq        *domain.SigningRequest    `json:"leg_2_open_request,omitempty"`
-	Leg2RetryReq       *domain.SigningRequest    `json:"leg_2_retry_request,omitempty"`
-	ArmedUnwindSigned  *domain.SignedAction      `json:"armed_unwind_signed,omitempty"`
-	ArmedUnwindReq     *domain.SigningRequest    `json:"armed_unwind_request,omitempty"`
-	Leg1Fill           *normFill                 `json:"leg_1_fill,omitempty"`
-	Leg2Fill           *normFill                 `json:"leg_2_fill,omitempty"`
-	Leg2Attempts       int                       `json:"leg_2_attempts"`
-	Recovery           []executor.RecoveryAction `json:"recovery,omitempty"`
-	BaselineLeg1Size   float64                   `json:"baseline_leg_1_size"`
-	BaselineLeg2Size   float64                   `json:"baseline_leg_2_size"`
-	CreatedAt          string                    `json:"created_at"`
-	UpdatedAt          string                    `json:"updated_at"`
+	ID                         string                    `json:"id"`
+	Plan                       *domain.ExecutionPlan     `json:"plan"`
+	Leg1                       durableLegPlan            `json:"leg_1"`
+	Leg2                       durableLegPlan            `json:"leg_2"`
+	AccountPacifica            string                    `json:"account_pacifica"`
+	AccountHyperliquid         string                    `json:"account_hyperliquid"`
+	AgentPacifica              string                    `json:"agent_pacifica,omitempty"`
+	AgentHyperliquid           string                    `json:"agent_hyperliquid,omitempty"`
+	State                      sessionState              `json:"state"`
+	Leg1OpenReqID              string                    `json:"leg_1_open_request_id"`
+	Leg1UnwindReqID            string                    `json:"leg_1_unwind_request_id"`
+	PacificaLeverageReqID      string                    `json:"pacifica_leverage_request_id,omitempty"`
+	HyperliquidLeverageReqID   string                    `json:"hyperliquid_leverage_request_id,omitempty"`
+	Leg2OpenReqID              string                    `json:"leg_2_open_request_id"`
+	Leg2RetryReqID             string                    `json:"leg_2_retry_request_id"`
+	Leg1OpenReq                *domain.SigningRequest    `json:"leg_1_open_request,omitempty"`
+	Leg1UnwindReq              *domain.SigningRequest    `json:"leg_1_unwind_request,omitempty"`
+	PacificaLeverageReq        *domain.SigningRequest    `json:"pacifica_leverage_request,omitempty"`
+	HyperliquidLeverageReq     *domain.SigningRequest    `json:"hyperliquid_leverage_request,omitempty"`
+	PacificaLeverageApplied    bool                      `json:"pacifica_leverage_applied,omitempty"`
+	HyperliquidLeverageApplied bool                      `json:"hyperliquid_leverage_applied,omitempty"`
+	Leg2OpenReq                *domain.SigningRequest    `json:"leg_2_open_request,omitempty"`
+	Leg2RetryReq               *domain.SigningRequest    `json:"leg_2_retry_request,omitempty"`
+	ArmedUnwindSigned          *domain.SignedAction      `json:"armed_unwind_signed,omitempty"`
+	ArmedUnwindReq             *domain.SigningRequest    `json:"armed_unwind_request,omitempty"`
+	Leg1Fill                   *normFill                 `json:"leg_1_fill,omitempty"`
+	Leg2Fill                   *normFill                 `json:"leg_2_fill,omitempty"`
+	Leg2Attempts               int                       `json:"leg_2_attempts"`
+	Recovery                   []executor.RecoveryAction `json:"recovery,omitempty"`
+	BaselineLeg1Size           float64                   `json:"baseline_leg_1_size"`
+	BaselineLeg2Size           float64                   `json:"baseline_leg_2_size"`
+	CreatedAt                  string                    `json:"created_at"`
+	UpdatedAt                  string                    `json:"updated_at"`
 }
 
 func marshalLiveSession(session *LiveSession) ([]byte, error) {
@@ -62,8 +68,11 @@ func marshalLiveSession(session *LiveSession) ([]byte, error) {
 		AgentPacifica: session.AgentPacifica, AgentHyperliquid: session.AgentHyperliquid,
 		State:         session.State,
 		Leg1OpenReqID: session.Leg1OpenReqID, Leg1UnwindReqID: session.Leg1UnwindReqID,
+		PacificaLeverageReqID: session.PacificaLeverageReqID, HyperliquidLeverageReqID: session.HyperliquidLeverageReqID,
 		Leg2OpenReqID: session.Leg2OpenReqID, Leg2RetryReqID: session.Leg2RetryReqID,
 		Leg1OpenReq: session.Leg1OpenReq, Leg1UnwindReq: session.Leg1UnwindReq,
+		PacificaLeverageReq: session.PacificaLeverageReq, HyperliquidLeverageReq: session.HyperliquidLeverageReq,
+		PacificaLeverageApplied: session.PacificaLeverageApplied, HyperliquidLeverageApplied: session.HyperliquidLeverageApplied,
 		Leg2OpenReq: session.Leg2OpenReq, Leg2RetryReq: session.Leg2RetryReq,
 		ArmedUnwindSigned: session.ArmedUnwindSigned, ArmedUnwindReq: session.ArmedUnwindReq,
 		Leg1Fill: session.Leg1Fill, Leg2Fill: session.Leg2Fill,
@@ -96,8 +105,11 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 		AgentPacifica: durable.AgentPacifica, AgentHyperliquid: durable.AgentHyperliquid,
 		State:         durable.State,
 		Leg1OpenReqID: durable.Leg1OpenReqID, Leg1UnwindReqID: durable.Leg1UnwindReqID,
+		PacificaLeverageReqID: durable.PacificaLeverageReqID, HyperliquidLeverageReqID: durable.HyperliquidLeverageReqID,
 		Leg2OpenReqID: durable.Leg2OpenReqID, Leg2RetryReqID: durable.Leg2RetryReqID,
 		Leg1OpenReq: durable.Leg1OpenReq, Leg1UnwindReq: durable.Leg1UnwindReq,
+		PacificaLeverageReq: durable.PacificaLeverageReq, HyperliquidLeverageReq: durable.HyperliquidLeverageReq,
+		PacificaLeverageApplied: durable.PacificaLeverageApplied, HyperliquidLeverageApplied: durable.HyperliquidLeverageApplied,
 		Leg2OpenReq: durable.Leg2OpenReq, Leg2RetryReq: durable.Leg2RetryReq,
 		ArmedUnwindSigned: durable.ArmedUnwindSigned, ArmedUnwindReq: durable.ArmedUnwindReq,
 		Leg1Fill: durable.Leg1Fill, Leg2Fill: durable.Leg2Fill,
@@ -115,6 +127,7 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 func backfillSigningRequestAccounts(session *LiveSession) {
 	requests := []*domain.SigningRequest{
 		session.Leg1OpenReq, session.Leg1UnwindReq,
+		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
 		session.Leg2OpenReq, session.Leg2RetryReq, session.ArmedUnwindReq,
 	}
 	for _, request := range requests {

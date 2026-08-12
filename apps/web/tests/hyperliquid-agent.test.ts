@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { privateKeyToAccount } from 'viem/accounts'
+import { encode } from '@msgpack/msgpack'
+import { keccak256 } from 'viem'
 
 import {
   buildHyperliquidApproveAgentAction,
@@ -92,6 +94,39 @@ test('a local Hyperliquid agent rejects an order that does not match its connect
   payload.action.orders[0].s = '3.000000'
 
   await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
+})
+
+test('a local Hyperliquid agent signs only the prepared cross leverage update', async () => {
+  const request = hyperliquidSigningRequest()
+  const action = { type: 'updateLeverage', asset: 1, isCross: true, leverage: 2 } as const
+  const nonce = 1_700_000_000_001
+  const encoded = encode(action)
+  const input = new Uint8Array(encoded.length + 9)
+  input.set(encoded)
+  new DataView(input.buffer).setBigUint64(encoded.length, BigInt(nonce), false)
+  const connectionId = keccak256(input)
+  request.id = 'leverage-1'
+  request.client_order_id = 'leverage-1'
+  request.action = 'update_leverage'
+  request.leverage = 2
+  request.unsigned_payload = {
+    action,
+    nonce,
+    domain: {
+      chainId: 1337,
+      name: 'Exchange',
+      verifyingContract: '0x0000000000000000000000000000000000000000',
+      version: '1',
+    },
+    types: { Agent: [{ name: 'source', type: 'string' }, { name: 'connectionId', type: 'bytes32' }] },
+    primaryType: 'Agent',
+    message: { source: 'a', connectionId },
+  }
+  const signed = await signHyperliquidAgentRequest(request, hyperliquidAgent())
+  assert.equal(signed.signer_address, agentAddress)
+
+  ;(request.unsigned_payload as { action: { isCross: boolean } }).action.isCross = false
+  await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed leverage update/)
 })
 
 function hyperliquidAgent(): StoredTradingAgent {

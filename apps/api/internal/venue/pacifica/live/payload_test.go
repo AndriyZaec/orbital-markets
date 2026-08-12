@@ -96,6 +96,20 @@ func TestBuildOpenPayloadRoundsDownToPacificaLotSize(t *testing.T) {
 	}
 }
 
+func TestBuildUpdateLeveragePayloadUsesCanonicalFields(t *testing.T) {
+	request, err := BuildUpdateLeveragePayload("owner", "VIRTUAL", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload PacificaUnsignedLeverage
+	if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if request.Action != "update_leverage" || request.Leverage != 2 || payload.Symbol != "VIRTUAL" || payload.Leverage != 2 {
+		t.Fatalf("request = %+v payload = %+v", request, payload)
+	}
+}
+
 func TestSubmitSignedOrderReturnsTransportFailureAsAmbiguous(t *testing.T) {
 	request, err := BuildOpenPayload(payloadTestLotSizes, "redacted-wallet", "BTC", domain.SideLong, 0.125, 90000, "redacted-client-id")
 	if err != nil {

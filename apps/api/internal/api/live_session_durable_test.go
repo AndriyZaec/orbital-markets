@@ -22,6 +22,16 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 		Action: "close", Symbol: "SOL", Side: "sell", Amount: 10, ReduceOnly: true,
 		UnsignedPayload: json.RawMessage(`{"order":"payload"}`), ExpiresAt: createdAt.Add(2 * time.Minute),
 	}
+	pacificaLeverageReq := &domain.SigningRequest{
+		ID: "pacifica-leverage", ClientOrderID: "pacifica-leverage", Venue: "pacifica",
+		Action: "update_leverage", Account: "sol-wallet", Signer: "sol-agent", Symbol: "SOL", Leverage: 2,
+		UnsignedPayload: json.RawMessage(`{"leverage":2}`), ExpiresAt: createdAt.Add(2 * time.Minute),
+	}
+	hyperliquidLeverageReq := &domain.SigningRequest{
+		ID: "hyperliquid-leverage", ClientOrderID: "hyperliquid-leverage", Venue: "hyperliquid",
+		Action: "update_leverage", Account: "0xwallet", Signer: "0xagent", Symbol: "SOL", Leverage: 2,
+		UnsignedPayload: json.RawMessage(`{"leverage":2}`), ExpiresAt: createdAt.Add(2 * time.Minute),
+	}
 	signed := &domain.SignedAction{
 		RequestID: req.ID, ClientOrderID: req.ClientOrderID, Venue: req.Venue,
 		SignerAddress: "wallet", Signature: "signature",
@@ -35,6 +45,8 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 		AgentPacifica: "sol-agent", AgentHyperliquid: "0xagent",
 		State: sessAwaitingLeg2Sign, BaselineLeg1Size: 3, BaselineLeg2Size: -2,
 		Leg1OpenReq: req, Leg1UnwindReq: req,
+		PacificaLeverageReqID: pacificaLeverageReq.ID, HyperliquidLeverageReqID: hyperliquidLeverageReq.ID,
+		PacificaLeverageReq: pacificaLeverageReq, HyperliquidLeverageReq: hyperliquidLeverageReq,
 		ArmedUnwindReq: req, ArmedUnwindSigned: signed,
 		Leg1Fill:     &normFill{FilledAmount: 10, AvgFillPrice: 100, Filled: true},
 		Leg2Attempts: 1,
@@ -70,6 +82,10 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	}
 	if !agentBoundLeg1Requests(restored) {
 		t.Fatal("restored leg-1 requests lost their agent binding")
+	}
+	if restored.PacificaLeverageReq == nil || restored.HyperliquidLeverageReq == nil ||
+		restored.PacificaLeverageReq.Leverage != 2 || restored.HyperliquidLeverageReq.Leverage != 2 {
+		t.Fatalf("restored leverage requests = %+v / %+v", restored.PacificaLeverageReq, restored.HyperliquidLeverageReq)
 	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)

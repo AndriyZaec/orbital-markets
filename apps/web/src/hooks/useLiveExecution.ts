@@ -109,7 +109,7 @@ interface PrepareResp {
   riskier_venue: string
   hedge_venue: string
   expires_at: string
-  signing_requests: SigningRequest[] // [leg1 open, leg1 unwind]
+  signing_requests: SigningRequest[] // [two leverage updates, leg1 open, leg1 unwind]
 }
 
 interface AdvanceResp {
@@ -267,8 +267,13 @@ function useLiveExecutionState() {
       }
       const prep: PrepareResp = await prepResp.json()
       const leg1Requests = prep.signing_requests || []
-      if (leg1Requests.length < 2) {
-        throw new Error('Expected leg-1 open and unwind signing requests')
+      const leverageVenues = new Set(leg1Requests
+        .filter((request) => request.action === 'update_leverage')
+        .map((request) => request.venue))
+      if (leg1Requests.length !== 4 || leverageVenues.size !== 2 ||
+        !leg1Requests.some((request) => request.action === 'open') ||
+        !leg1Requests.some((request) => request.action === 'close' && request.reduce_only)) {
+        throw new Error('Expected two leverage updates plus leg-1 open and unwind requests')
       }
 
       // Snapshot the accounts the session was prepared for. Any subsequent

@@ -77,25 +77,14 @@ export async function signPacificaAgentRequest(
   request: SigningRequest,
   agent: StoredTradingAgent,
 ): Promise<SignedAction> {
-  const order = allowedMarketOrder(request, agent)
   const secretKey = bs58.decode(agent.privateKey)
   const keyPair = nacl.sign.keyPair.fromSecretKey(secretKey)
   if (bs58.encode(keyPair.publicKey) !== agent.agentAddress) {
     throw new Error('Pacifica agent key does not match its address')
   }
-  const message = buildPacificaSigningMessage(
-    'create_market_order',
-    order.timestamp,
-    order.expiry_window,
-    {
-      amount: order.amount,
-      client_order_id: order.client_order_id,
-      reduce_only: order.reduce_only,
-      side: order.side,
-      slippage_percent: order.slippage_percent,
-      symbol: order.symbol,
-    },
-  )
+  const message = request.action === 'update_leverage'
+    ? leverageSigningMessage(allowedLeverageUpdate(request, agent))
+    : orderSigningMessage(allowedMarketOrder(request, agent))
   return {
     request_id: request.id,
     client_order_id: request.client_order_id,
@@ -103,6 +92,52 @@ export async function signPacificaAgentRequest(
     signer_address: agent.agentAddress,
     signature: bs58.encode(nacl.sign.detached(message, keyPair.secretKey)),
   }
+}
+
+function orderSigningMessage(order: PacificaOrder): Uint8Array {
+  return buildPacificaSigningMessage('create_market_order', order.timestamp, order.expiry_window, {
+    amount: order.amount,
+    client_order_id: order.client_order_id,
+    reduce_only: order.reduce_only,
+    side: order.side,
+    slippage_percent: order.slippage_percent,
+    symbol: order.symbol,
+  })
+}
+
+interface PacificaLeverageUpdate {
+  timestamp: number
+  expiry_window: number
+  symbol: string
+  leverage: number
+}
+
+function leverageSigningMessage(update: PacificaLeverageUpdate): Uint8Array {
+  return buildPacificaSigningMessage('update_leverage', update.timestamp, update.expiry_window, {
+    leverage: update.leverage,
+    symbol: update.symbol,
+  })
+}
+
+function allowedLeverageUpdate(request: SigningRequest, agent: StoredTradingAgent): PacificaLeverageUpdate {
+  const update = request.unsigned_payload as Partial<PacificaLeverageUpdate> | null
+  const allowed =
+    request.venue === 'pacifica' &&
+    agent.venue === 'pacifica' &&
+    request.account === agent.ownerAddress &&
+    request.signer === agent.agentAddress &&
+    request.action === 'update_leverage' &&
+    Date.parse(request.expires_at) > Date.now() &&
+    Number.isSafeInteger(update?.timestamp) &&
+    Number.isSafeInteger(update?.expiry_window) &&
+    (update?.expiry_window ?? 0) > 0 &&
+    (update?.expiry_window ?? 0) <= maxOrderExpiryWindow &&
+    update?.symbol === request.symbol &&
+    Number.isSafeInteger(update?.leverage) &&
+    update?.leverage === request.leverage &&
+    hasOnlyKeys(update, ['timestamp', 'expiry_window', 'symbol', 'leverage'])
+  if (!allowed) throw new Error('Pacifica payload is not an allowed leverage update')
+  return update as PacificaLeverageUpdate
 }
 
 interface PacificaOrder {
@@ -154,4 +189,11 @@ function sortCanonical(value: unknown): unknown {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, entry]) => [key, sortCanonical(entry)]),
   )
+}
+
+function hasOnlyKeys(value: object | null | undefined, keys: string[]): boolean {
+  if (!value) return false
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
 }

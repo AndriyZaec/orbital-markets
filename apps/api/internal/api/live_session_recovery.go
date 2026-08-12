@@ -110,6 +110,12 @@ func (s *Server) restoreLiveSessions() {
 			continue
 		}
 
+		if session.State == sessConfiguringLeverage {
+			session.State = sessFailed
+			detail := "server restarted while applying leverage; venue leverage may be partially changed, but no order was submitted. Retry to reconcile both venues"
+			s.finishLiveSession(s.ctx, session, detail)
+			continue
+		}
 		if session.State == sessAwaitingLeg1Signs {
 			if !agentBoundLeg1Requests(session) {
 				session.State = sessFailed
@@ -117,6 +123,7 @@ func (s *Server) restoreLiveSessions() {
 				continue
 			}
 			if session.expired() || session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
+				session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil ||
 				time.Now().After(session.Leg1OpenReq.ExpiresAt) || time.Now().After(session.Leg1UnwindReq.ExpiresAt) {
 				session.State = sessFailed
 				s.finishSafeDurableSession(session.ID, "expired_safe", "expired before any order submission")
@@ -124,6 +131,8 @@ func (s *Server) restoreLiveSessions() {
 			}
 			s.live.signingStore.Store(session.Leg1OpenReq)
 			s.live.signingStore.Store(session.Leg1UnwindReq)
+			s.live.signingStore.Store(session.PacificaLeverageReq)
+			s.live.signingStore.Store(session.HyperliquidLeverageReq)
 			s.live.sessions.put(session)
 			s.logger.Info("live recovery: restored pre-exposure session", "session_id", session.ID)
 			continue
@@ -135,10 +144,14 @@ func (s *Server) restoreLiveSessions() {
 
 func agentBoundLeg1Requests(session *LiveSession) bool {
 	if session == nil || session.AgentPacifica == "" || session.AgentHyperliquid == "" ||
-		session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil {
+		session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
+		session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil {
 		return false
 	}
-	for _, request := range []*domain.SigningRequest{session.Leg1OpenReq, session.Leg1UnwindReq} {
+	for _, request := range []*domain.SigningRequest{
+		session.Leg1OpenReq, session.Leg1UnwindReq,
+		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
+	} {
 		expected := signerForVenue(request.Venue, session.AgentPacifica, session.AgentHyperliquid)
 		if expected == "" || request.Signer == "" {
 			return false

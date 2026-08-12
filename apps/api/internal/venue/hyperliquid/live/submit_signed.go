@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -112,6 +113,52 @@ func (c *Client) SubmitSignedOrder(
 		SubmittedAt:   submitResult.SubmittedAt,
 		RespondedAt:   submitResult.RespondedAt,
 	}, nil
+}
+
+func (c *Client) SubmitSignedLeverage(
+	ctx context.Context,
+	signed domain.SignedAction,
+	req *domain.SigningRequest,
+) (*domain.SubmissionResult, error) {
+	var unsigned HyperliquidUnsignedLeverage
+	if err := json.Unmarshal(req.UnsignedPayload, &unsigned); err != nil {
+		return nil, fmt.Errorf("unmarshal leverage action: %w", err)
+	}
+	body, err := AttachLeverageSignature(signed, unsigned)
+	if err != nil {
+		return nil, fmt.Errorf("attach leverage signature: %w", err)
+	}
+	submittedAt := time.Now()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build leverage request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("submit leverage update: %w", err)
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read leverage response: %w", err)
+	}
+	respondedAt := time.Now()
+	var parsed struct {
+		Status   string          `json:"status"`
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		return nil, fmt.Errorf("parse leverage response: %w", err)
+	}
+	result := &domain.SubmissionResult{
+		RequestID: signed.RequestID, ClientOrderID: req.ClientOrderID, Venue: "hyperliquid",
+		Accepted: parsed.Status == "ok", SubmittedAt: submittedAt, RespondedAt: respondedAt,
+	}
+	if !result.Accepted {
+		result.Error = strings.Trim(string(parsed.Response), `"`)
+	}
+	return result, nil
 }
 
 func (c *Client) registerAmbiguousSubmission(cloid string, req *domain.SigningRequest, submittedAt time.Time) {

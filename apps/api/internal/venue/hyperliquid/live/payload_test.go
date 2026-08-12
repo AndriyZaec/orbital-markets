@@ -85,6 +85,20 @@ func TestBuildOpenPayloadUsesHyperliquidPricePrecision(t *testing.T) {
 	}
 }
 
+func TestBuildUpdateLeveragePayloadUsesCrossMargin(t *testing.T) {
+	request, err := BuildUpdateLeveragePayload(payloadTestAssetMap{index: 7, decimals: 1}, "0xowner", "VIRTUAL", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload HyperliquidUnsignedLeverage
+	if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if request.Action != "update_leverage" || request.Leverage != 2 || payload.Action.Asset != 7 || !payload.Action.IsCross || payload.Action.Leverage != 2 {
+		t.Fatalf("request = %+v payload = %+v", request, payload)
+	}
+}
+
 func TestAttachSignatureBuildsHyperliquidSignatureObject(t *testing.T) {
 	signature := "0x" +
 		"1111111111111111111111111111111111111111111111111111111111111111" +
