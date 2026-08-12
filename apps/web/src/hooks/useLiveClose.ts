@@ -27,13 +27,15 @@ const INITIAL: CloseState = {
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const closeConfirmationAttempts = 12
+const closeConfirmationPollMs = 2_000
 
 async function waitForClose(positionId: string, pacificaAccount: string, hyperliquidAccount: string): Promise<void> {
 	const query = new URLSearchParams({
 		account_pacifica: pacificaAccount,
 		account_hyperliquid: hyperliquidAccount,
 	})
-  for (let attempt = 0; attempt < 22; attempt++) {
+  for (let attempt = 0; attempt < closeConfirmationAttempts; attempt++) {
     const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
     if (!resp.ok) throw new Error(`Close confirmation failed: HTTP ${resp.status}`)
     const data: { position: { state: string } } = await resp.json()
@@ -41,7 +43,9 @@ async function waitForClose(positionId: string, pacificaAccount: string, hyperli
     if (data.position.state === 'degraded') {
       throw new Error('A close fill was not confirmed; manual action may be required')
     }
-    await delay(1_000)
+    if (attempt < closeConfirmationAttempts - 1) {
+      await delay(closeConfirmationPollMs)
+    }
   }
   throw new Error('Close fill confirmation timed out; check the position before retrying')
 }
