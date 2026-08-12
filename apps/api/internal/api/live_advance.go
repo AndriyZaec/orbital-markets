@@ -233,23 +233,28 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 			return
 		}
 		update.markApplied()
-		feed, ok := sess.accounts.Feed(update.req.Venue)
-		if !ok {
-			sess.State = sessFailed
-			reason := update.name + " leverage confirmation unavailable; no order submitted"
-			s.finishLiveSession(ctx, sess, reason)
-			writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
-			return
-		}
-		confirmCtx, cancelConfirm := context.WithTimeout(ctx, 5*time.Second)
-		confirmErr := feed.WaitForLeverage(confirmCtx, update.req.Symbol, float64(update.req.Leverage))
-		cancelConfirm()
-		if confirmErr != nil {
-			sess.State = sessFailed
-			reason := update.name + " did not confirm the selected leverage; no order submitted. Retry after account data refreshes"
-			s.finishLiveSession(ctx, sess, reason)
-			writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
-			return
+		// Hyperliquid's successful exchange response is the only pre-position
+		// confirmation available. Pacifica also exposes selected leverage in its
+		// account stream, so require that independent observation before trading.
+		if update.req.Venue == "pacifica" {
+			feed, ok := sess.accounts.Feed(update.req.Venue)
+			if !ok {
+				sess.State = sessFailed
+				reason := update.name + " leverage confirmation unavailable; no order submitted"
+				s.finishLiveSession(ctx, sess, reason)
+				writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
+				return
+			}
+			confirmCtx, cancelConfirm := context.WithTimeout(ctx, 5*time.Second)
+			confirmErr := feed.WaitForLeverage(confirmCtx, update.req.Symbol, float64(update.req.Leverage))
+			cancelConfirm()
+			if confirmErr != nil {
+				sess.State = sessFailed
+				reason := update.name + " did not confirm the selected leverage; no order submitted. Retry after account data refreshes"
+				s.finishLiveSession(ctx, sess, reason)
+				writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
+				return
+			}
 		}
 		if err := s.saveLiveSession(ctx, sess); err != nil {
 			sess.State = sessFailed
@@ -265,6 +270,15 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		sess.State = sessFailed
 		s.finishLiveSession(ctx, sess, recoveryPersistenceError(sess.ID, err))
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist configured live session"})
+		return
+	}
+	if time.Now().After(openReq.ExpiresAt) {
+		sess.State = sessFailed
+		s.finishLiveSession(ctx, sess, "leg 1 authorization expired while configuring leverage; no order submitted")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sess.ID, "status": string(sessFailed),
+			"reason": "leg 1 authorization expired while configuring leverage; no order submitted",
+		})
 		return
 	}
 

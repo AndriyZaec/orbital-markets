@@ -47,3 +47,15 @@ func TestUnwindConfirmationDoesNotHideResidualExposure(t *testing.T) {
 		t.Fatal("full unwind was not confirmed")
 	}
 }
+
+func TestRetryMinimumAppliesOnlyToNormalizedHyperliquidNotional(t *testing.T) {
+	if !retryBelowMinimumNotional("hyperliquid", 0.099, 100) {
+		t.Fatal("Hyperliquid retry below $10 should be suppressed")
+	}
+	if retryBelowMinimumNotional("hyperliquid", 0.1, 100) {
+		t.Fatal("Hyperliquid retry at $10 should be allowed")
+	}
+	if retryBelowMinimumNotional("pacifica", 0.01, 100) {
+		t.Fatal("Hyperliquid minimum must not suppress Pacifica retries")
+	}
+}
