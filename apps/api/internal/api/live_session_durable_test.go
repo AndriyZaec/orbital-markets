@@ -7,14 +7,30 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
+
+type recoveryTestLotSizes struct{}
+
+func (recoveryTestLotSizes) LotSize(string) (string, bool) { return "0.01", true }
 
 func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	createdAt := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	req := &domain.SigningRequest{
 		ID: "unwind-request", ClientOrderID: "unwind-cloid", Venue: "pacifica",
+		Signer: "sol-agent",
 		Action: "close", Symbol: "SOL", Side: "sell", Amount: 10, ReduceOnly: true,
 		UnsignedPayload: json.RawMessage(`{"order":"payload"}`), ExpiresAt: createdAt.Add(2 * time.Minute),
+	}
+	pacificaLeverageReq := &domain.SigningRequest{
+		ID: "pacifica-leverage", ClientOrderID: "pacifica-leverage", Venue: "pacifica",
+		Action: "update_leverage", Account: "sol-wallet", Signer: "sol-agent", Symbol: "SOL", Leverage: 2,
+		UnsignedPayload: json.RawMessage(`{"leverage":2}`), ExpiresAt: createdAt.Add(2 * time.Minute),
+	}
+	hyperliquidLeverageReq := &domain.SigningRequest{
+		ID: "hyperliquid-leverage", ClientOrderID: "hyperliquid-leverage", Venue: "hyperliquid",
+		Action: "update_leverage", Account: "0xwallet", Signer: "0xagent", Symbol: "SOL", Leverage: 2,
+		UnsignedPayload: json.RawMessage(`{"leverage":2}`), ExpiresAt: createdAt.Add(2 * time.Minute),
 	}
 	signed := &domain.SignedAction{
 		RequestID: req.ID, ClientOrderID: req.ClientOrderID, Venue: req.Venue,
@@ -26,8 +42,11 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 		Leg1:            legPlan{venue: "pacifica", symbol: "SOL", side: domain.SideLong, price: 100},
 		Leg2:            legPlan{venue: "hyperliquid", symbol: "SOL", side: domain.SideShort, price: 101},
 		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
+		AgentPacifica: "sol-agent", AgentHyperliquid: "0xagent",
 		State: sessAwaitingLeg2Sign, BaselineLeg1Size: 3, BaselineLeg2Size: -2,
 		Leg1OpenReq: req, Leg1UnwindReq: req,
+		PacificaLeverageReqID: pacificaLeverageReq.ID, HyperliquidLeverageReqID: hyperliquidLeverageReq.ID,
+		PacificaLeverageReq: pacificaLeverageReq, HyperliquidLeverageReq: hyperliquidLeverageReq,
 		ArmedUnwindReq: req, ArmedUnwindSigned: signed,
 		Leg1Fill:     &normFill{FilledAmount: 10, AvgFillPrice: 100, Filled: true},
 		Leg2Attempts: 1,
@@ -55,6 +74,19 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	if restored.ArmedUnwindReq.Account != "sol-wallet" {
 		t.Fatalf("armed request account = %q, want persisted session account", restored.ArmedUnwindReq.Account)
 	}
+	if restored.ArmedUnwindReq.Signer != "sol-agent" {
+		t.Fatalf("armed request signer = %q, want persisted session agent", restored.ArmedUnwindReq.Signer)
+	}
+	if restored.AgentPacifica != "sol-agent" || restored.AgentHyperliquid != "0xagent" {
+		t.Fatalf("agent identities not restored: %q/%q", restored.AgentPacifica, restored.AgentHyperliquid)
+	}
+	if !agentBoundLeg1Requests(restored) {
+		t.Fatal("restored leg-1 requests lost their agent binding")
+	}
+	if restored.PacificaLeverageReq == nil || restored.HyperliquidLeverageReq == nil ||
+		restored.PacificaLeverageReq.Leverage != 2 || restored.HyperliquidLeverageReq.Leverage != 2 {
+		t.Fatalf("restored leverage requests = %+v / %+v", restored.PacificaLeverageReq, restored.HyperliquidLeverageReq)
+	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)
 	}
@@ -81,6 +113,25 @@ func TestSessionManagerReturnsExpiredSessionsForRecovery(t *testing.T) {
 	}
 	if _, found, _ := manager.claim(session.ID); found {
 		t.Fatal("claimed expired session remained in manager")
+	}
+}
+
+func TestPacificaUnwindRemainsValidThroughSessionRecoveryBudget(t *testing.T) {
+	request, err := paclive.BuildClosePayload(
+		recoveryTestLotSizes{},
+		"owner", "SOL", domain.SideLong, 1, 100, "recovery-window-test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unsigned paclive.PacificaUnsignedOrder
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	venueExpiry := time.UnixMilli(unsigned.Timestamp).Add(time.Duration(unsigned.ExpiryWindow) * time.Millisecond)
+	const recoveryBudget = 50 * time.Second
+	if required := request.CreatedAt.Add(sessionTTL + recoveryBudget); venueExpiry.Before(required) {
+		t.Fatalf("Pacifica unwind expires at %s before recovery budget %s", venueExpiry, required)
 	}
 }
 

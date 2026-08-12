@@ -101,6 +101,23 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 		return
 	}
 	if !confirmed {
+		// IOC fills can reach venue position state before (or without) the
+		// account-scoped fill stream event. Venue truth is the final fallback.
+		position, positionErr := s.liveStore.GetPosition(s.ctx, req.PositionID)
+		if positionErr == nil {
+			reconcileCtx, cancelReconcile := context.WithTimeout(s.ctx, recoveryAccountTimeout)
+			reconciled, reconcileErr := s.reconcilePositionFromVenueTruth(
+				reconcileCtx, position, position.AccountPacifica, position.AccountHyperliquid, req.CreatedAt,
+			)
+			cancelReconcile()
+			if reconcileErr != nil {
+				s.logger.Warn("live close: venue fallback reconciliation failed", "err", reconcileErr, "id", req.PositionID, "venue", req.Venue)
+			} else if reconciled {
+				s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_complete", executor.ExecStateClosed,
+					"close confirmed from fresh venue position state after fill tracking missed the event")
+				return
+			}
+		}
 		s.markCloseFailed(ctx, req, outcome.Error)
 		return
 	}

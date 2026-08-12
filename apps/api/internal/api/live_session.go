@@ -14,6 +14,8 @@ type sessionState string
 const (
 	// sessAwaitingLeg1Signs: prepare done; waiting for signed leg-1 open + leg-1 unwind.
 	sessAwaitingLeg1Signs sessionState = "awaiting_leg1_signs"
+	// sessConfiguringLeverage: signatures are validated and venue leverage is being applied; no order was submitted.
+	sessConfiguringLeverage sessionState = "configuring_leverage"
 	// sessAwaitingLeg2Sign: leg 1 filled; waiting for signed leg-2 open (sized from actual fill).
 	sessAwaitingLeg2Sign sessionState = "awaiting_leg2_sign"
 	// sessAwaitingLeg2RetrySign: one residual hedge retry is ready for signing.
@@ -38,7 +40,7 @@ const (
 
 // sessionTTL bounds how long a session can sit between steps before it is
 // considered stale. Kept short — the whole open flow is meant to be seconds.
-const sessionTTL = 3 * time.Minute
+const sessionTTL = time.Minute
 
 // legPlan captures the resolved per-leg parameters after riskier-first ordering.
 type legPlan struct {
@@ -71,18 +73,26 @@ type LiveSession struct {
 
 	AccountPacifica    string
 	AccountHyperliquid string
+	AgentPacifica      string
+	AgentHyperliquid   string
 
 	State sessionState
 
 	// Signing request correlation IDs issued to the frontend.
-	Leg1OpenReqID   string
-	Leg1UnwindReqID string
-	Leg2OpenReqID   string
-	Leg2RetryReqID  string
-	Leg1OpenReq     *domain.SigningRequest
-	Leg1UnwindReq   *domain.SigningRequest
-	Leg2OpenReq     *domain.SigningRequest
-	Leg2RetryReq    *domain.SigningRequest
+	Leg1OpenReqID              string
+	Leg1UnwindReqID            string
+	PacificaLeverageReqID      string
+	HyperliquidLeverageReqID   string
+	Leg2OpenReqID              string
+	Leg2RetryReqID             string
+	Leg1OpenReq                *domain.SigningRequest
+	Leg1UnwindReq              *domain.SigningRequest
+	PacificaLeverageReq        *domain.SigningRequest
+	HyperliquidLeverageReq     *domain.SigningRequest
+	PacificaLeverageApplied    bool
+	HyperliquidLeverageApplied bool
+	Leg2OpenReq                *domain.SigningRequest
+	Leg2RetryReq               *domain.SigningRequest
 
 	// Armed reduce-only unwind for leg 1 — signed up front, held to fire on any
 	// failure after leg 1 opens. Reduce-only auto-caps to the actual open size.
@@ -111,7 +121,7 @@ func (s *LiveSession) expired() bool {
 }
 
 func (s *LiveSession) hasPossibleExposure() bool {
-	return s.State == sessLeg1Submitting || s.State == sessLeg1Submitted || s.State == sessAwaitingLeg2Sign ||
+	return s.State == sessConfiguringLeverage || s.State == sessLeg1Submitting || s.State == sessLeg1Submitted || s.State == sessAwaitingLeg2Sign ||
 		s.State == sessAwaitingLeg2RetrySign || s.State == sessLeg2Submitting ||
 		s.State == sessLeg2Submitted || s.State == sessRecovering
 }

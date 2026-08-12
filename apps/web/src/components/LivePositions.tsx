@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useKillSwitch } from '@/hooks/useKillSwitch'
-import { useVenueAuthority } from '@/hooks/useVenueAuthority'
+import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import {
   Table,
   TableBody,
@@ -91,7 +91,7 @@ interface LivePositionsProps {
 
 export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
   const { positions, loading, error, refetch } = useLivePositions()
-  const { isFullyReady } = useVenueAuthority()
+  const { aggregate } = useVenueReadiness()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [tab, setTab] = useState<'open' | 'closed'>('open')
 
@@ -156,7 +156,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
             <DialogTitle className="text-red-400">Close all live positions?</DialogTitle>
             <DialogDescription>
               This will submit close orders for all {openPositions.length} open live position{openPositions.length !== 1 ? 's' : ''} across connected venues.
-              Your wallet will prompt you to sign each close order.
+              Browser-local trading agents will sign every reduce-only close before any order is submitted.
             </DialogDescription>
           </DialogHeader>
 
@@ -200,7 +200,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
               )}
               {kill.state.phase === 'signing' && (
                 <p className="text-yellow-400 text-[11px]">
-                  Signing order {kill.state.signed + 1} of {kill.state.totalRequests} — check your wallet
+                  Signing order {kill.state.signed + 1} of {kill.state.totalRequests} with local agents
                 </p>
               )}
               {kill.state.phase === 'submitting' && (
@@ -283,9 +283,9 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
 
         {!loading && !error && displayed.length === 0 && (
           <div className="flex flex-col items-center justify-center py-8 gap-3">
-            {!isFullyReady ? (
+            {!aggregate.allReady ? (
               <>
-                <p className="text-muted-foreground text-xs">Connect both wallets to start live trading</p>
+                <p className="text-muted-foreground text-xs">Connect both wallets and authorize trading agents to start live trading</p>
                 {onConnectWallets && (
                   <button
                     onClick={onConnectWallets}

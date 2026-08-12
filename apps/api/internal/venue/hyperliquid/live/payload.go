@@ -33,6 +33,12 @@ type HyperliquidUnsignedAction struct {
 	HyperliquidTypedData
 }
 
+type HyperliquidUnsignedLeverage struct {
+	Action UpdateLeverageAction `json:"action"`
+	Nonce  int64                `json:"nonce"`
+	HyperliquidTypedData
+}
+
 type EIP712Domain struct {
 	ChainID           int    `json:"chainId"`
 	Name              string `json:"name"`
@@ -114,6 +120,39 @@ func BuildClosePayload(
 	)
 }
 
+func BuildUpdateLeveragePayload(
+	assetMap AssetMap,
+	account, symbol string,
+	leverage int,
+) (*domain.SigningRequest, error) {
+	assetIdx, ok := assetMap.AssetIndex(symbol)
+	if !ok {
+		return nil, fmt.Errorf("unknown asset: %s", symbol)
+	}
+	if leverage <= 0 {
+		return nil, fmt.Errorf("invalid leverage: %d", leverage)
+	}
+	action := UpdateLeverageAction{Type: "updateLeverage", Asset: assetIdx, IsCross: true, Leverage: leverage}
+	nonce := nextHyperliquidNonce()
+	typedData, err := buildL1TypedData(action, nonce)
+	if err != nil {
+		return nil, fmt.Errorf("build Hyperliquid leverage typed data: %w", err)
+	}
+	unsignedBytes, err := json.Marshal(HyperliquidUnsignedLeverage{
+		Action: action, Nonce: nonce, HyperliquidTypedData: typedData,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal leverage action: %w", err)
+	}
+	now := time.Now()
+	id := fmt.Sprintf("hl-leverage-%s-%d", symbol, now.UnixNano())
+	return &domain.SigningRequest{
+		ID: id, ClientOrderID: id, Venue: "hyperliquid", Action: "update_leverage",
+		Account: account, Symbol: symbol, Leverage: leverage, VenueAssetID: &assetIdx,
+		UnsignedPayload: unsignedBytes, ExpiresAt: now.Add(30 * time.Second), CreatedAt: now,
+	}, nil
+}
+
 func buildPayload(
 	assetMap AssetMap,
 	symbol string,
@@ -148,7 +187,10 @@ func buildPayload(
 	if isBuy {
 		slippageMul = defaultSlippageMulBuy
 	}
-	limitPx := fmt.Sprintf("%.6f", price*slippageMul)
+	limitPx, err := normalizeHyperliquidPrice(price*slippageMul, sizeDecimals)
+	if err != nil {
+		return nil, fmt.Errorf("normalize %s price: %w", symbol, err)
+	}
 
 	// cloid: 128-bit hex for Hyperliquid's client order tracking
 	now := time.Now()
@@ -205,6 +247,7 @@ func buildPayload(
 		Amount:          normalizedAmount,
 		Price:           price,
 		ReduceOnly:      reduceOnly,
+		VenueAssetID:    &assetIdx,
 		UnsignedPayload: unsignedBytes,
 		VenueMetadata:   metaBytes,
 		ExpiresAt:       now.Add(30 * time.Second),
@@ -231,6 +274,26 @@ func normalizeHyperliquidAmount(amount float64, decimals int) (float64, string, 
 	return normalized, wire, nil
 }
 
+func normalizeHyperliquidPrice(price float64, sizeDecimals int) (string, error) {
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return "", fmt.Errorf("invalid price: %v", price)
+	}
+	maxDecimals := 6 - sizeDecimals
+	if maxDecimals < 0 || maxDecimals > 6 {
+		return "", fmt.Errorf("invalid size decimals: %d", sizeDecimals)
+	}
+	decimalFactor := math.Pow10(maxDecimals)
+	price = math.Round(price*decimalFactor) / decimalFactor
+	significantDecimals := 4 - int(math.Floor(math.Log10(price)))
+	if significantDecimals < maxDecimals {
+		factor := math.Pow10(significantDecimals)
+		price = math.Round(price*factor) / factor
+		maxDecimals = max(significantDecimals, 0)
+	}
+	wire := strconv.FormatFloat(price, 'f', maxDecimals, 64)
+	return strings.TrimRight(strings.TrimRight(wire, "0"), "."), nil
+}
+
 func nextHyperliquidNonce() int64 {
 	for {
 		previous := lastHyperliquidNonce.Load()
@@ -244,7 +307,7 @@ func nextHyperliquidNonce() int64 {
 	}
 }
 
-func buildL1TypedData(action OrderAction, nonce int64) (HyperliquidTypedData, error) {
+func buildL1TypedData(action any, nonce int64) (HyperliquidTypedData, error) {
 	var packed bytes.Buffer
 	encoder := msgpack.NewEncoder(&packed)
 	encoder.SetCustomStructTag("json")
@@ -293,6 +356,16 @@ func AttachSignature(signed domain.SignedAction, unsigned HyperliquidUnsignedAct
 		"signature": signature,
 	}
 	return json.Marshal(reqBody)
+}
+
+func AttachLeverageSignature(signed domain.SignedAction, unsigned HyperliquidUnsignedLeverage) ([]byte, error) {
+	signature, err := parseEthereumSignature(signed.Signature)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"action": unsigned.Action, "nonce": unsigned.Nonce, "signature": signature,
+	})
 }
 
 type hyperliquidSignature struct {

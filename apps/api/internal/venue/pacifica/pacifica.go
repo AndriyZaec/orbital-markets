@@ -57,6 +57,7 @@ type assetState struct {
 	askPrice     float64
 	askSize      float64 // notional
 	maxLeverage  int
+	lotSize      string
 	timestamp    time.Time
 }
 
@@ -126,6 +127,7 @@ func (a *Adapter) RefreshMetadata(ctx context.Context) error {
 		Success bool `json:"success"`
 		Data    []struct {
 			Symbol      string `json:"symbol"`
+			LotSize     string `json:"lot_size"`
 			MaxLeverage int    `json:"max_leverage"`
 		} `json:"data"`
 	}
@@ -148,9 +150,17 @@ func (a *Adapter) RefreshMetadata(ctx context.Context) error {
 			a.assets[s.Symbol] = state
 		}
 		state.maxLeverage = s.MaxLeverage
+		state.lotSize = s.LotSize
 	}
 	a.logger.Info("pacifica: symbol info loaded", "symbols", len(result.Data))
 	return nil
+}
+
+func (a *Adapter) LotSize(symbol string) (string, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	state, ok := a.assets[symbol]
+	return state.lotSize, ok && state.lotSize != ""
 }
 
 // Connect starts the WebSocket connection and processes messages until ctx is cancelled.

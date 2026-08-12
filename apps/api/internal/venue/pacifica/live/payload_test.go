@@ -12,8 +12,17 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
+type testLotSizes map[string]string
+
+func (m testLotSizes) LotSize(symbol string) (string, bool) {
+	value, ok := m[symbol]
+	return value, ok
+}
+
+var payloadTestLotSizes = testLotSizes{"BTC": "0.00001", "SOL": "0.01", "VIRTUAL": "0.1"}
+
 func TestBuildClosePayloadPreservesResidualAmount(t *testing.T) {
-	request, err := BuildClosePayload("redacted-wallet", "SOL", domain.SideLong, 2.75, 100, "redacted-client-id")
+	request, err := BuildClosePayload(payloadTestLotSizes, "redacted-wallet", "SOL", domain.SideLong, 2.75, 100, "redacted-client-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +39,7 @@ func TestBuildClosePayloadPreservesResidualAmount(t *testing.T) {
 }
 
 func TestBuildOpenPayloadPreservesRequestedAmount(t *testing.T) {
-	request, err := BuildOpenPayload("redacted-wallet", "BTC", domain.SideShort, 0.125, 90000, "redacted-client-id")
+	request, err := BuildOpenPayload(payloadTestLotSizes, "redacted-wallet", "BTC", domain.SideShort, 0.125, 90000, "redacted-client-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +49,7 @@ func TestBuildOpenPayloadPreservesRequestedAmount(t *testing.T) {
 }
 
 func TestBuildOpenPayloadVenueExpiryCoversRequestLifetime(t *testing.T) {
-	request, err := BuildOpenPayload("redacted-wallet", "BTC", domain.SideLong, 0.125, 90000, "redacted-client-id")
+	request, err := BuildOpenPayload(payloadTestLotSizes, "redacted-wallet", "BTC", domain.SideLong, 0.125, 90000, "redacted-client-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +72,46 @@ func TestBuildOpenPayloadVenueExpiryCoversRequestLifetime(t *testing.T) {
 	}
 }
 
+func TestAttachSignatureKeepsOwnerAndAgentIdentities(t *testing.T) {
+	request := &domain.SigningRequest{Account: "owner-wallet", Signer: "agent-wallet"}
+	order := AttachSignature(PacificaUnsignedOrder{Symbol: "BTC"}, domain.SignedAction{
+		SignerAddress: "agent-wallet", Signature: "signature",
+	}, request)
+	if order.Account != "owner-wallet" || order.AgentWallet != "agent-wallet" {
+		t.Fatalf("order identities = account %q agent %q", order.Account, order.AgentWallet)
+	}
+}
+
+func TestBuildOpenPayloadRoundsDownToPacificaLotSize(t *testing.T) {
+	request, err := BuildOpenPayload(payloadTestLotSizes, "redacted-wallet", "VIRTUAL", domain.SideLong, 45.662100456621005, 1, "redacted-client-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unsigned PacificaUnsignedOrder
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	if request.Amount != 45.6 || unsigned.Amount != "45.6" {
+		t.Fatalf("normalized amount = %v (%q), want 45.6", request.Amount, unsigned.Amount)
+	}
+}
+
+func TestBuildUpdateLeveragePayloadUsesCanonicalFields(t *testing.T) {
+	request, err := BuildUpdateLeveragePayload("owner", "VIRTUAL", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload PacificaUnsignedLeverage
+	if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if request.Action != "update_leverage" || request.Leverage != 2 || payload.Symbol != "VIRTUAL" || payload.Leverage != 2 {
+		t.Fatalf("request = %+v payload = %+v", request, payload)
+	}
+}
+
 func TestSubmitSignedOrderReturnsTransportFailureAsAmbiguous(t *testing.T) {
-	request, err := BuildOpenPayload("redacted-wallet", "BTC", domain.SideLong, 0.125, 90000, "redacted-client-id")
+	request, err := BuildOpenPayload(payloadTestLotSizes, "redacted-wallet", "BTC", domain.SideLong, 0.125, 90000, "redacted-client-id")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -90,7 +90,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const [confirmClose, setConfirmClose] = useState(false)
 
   const hasRecordedExposure = hasActionableRecordedFills(fills)
-  const canClose = (pos.state === 'open' || pos.state === 'degraded') && !loading && hasRecordedExposure
+  const canClose = (pos.state === 'open' || pos.state === 'degraded' || pos.state === 'closing') && !loading && hasRecordedExposure
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
@@ -238,25 +238,25 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {/* Confirm prompt */}
             {canClose && !confirmClose && !isClosing && !closeDone && (
               <Button variant="destructive" size="sm" className="w-full" onClick={() => setConfirmClose(true)}>
-                {pos.state === 'degraded' ? 'Verify Venue Exposure' : 'Close Position'}
+                {pos.state === 'open' ? 'Close Position' : 'Verify Venue Exposure'}
               </Button>
             )}
             {confirmClose && !isClosing && (
               <div className="flex items-center gap-2">
                 <p className="text-[11px] text-muted-foreground flex-1">
-                  {pos.state === 'degraded'
-                    ? 'Verify both venues first. If exposure remains, your wallet will sign the required reduce-only close order.'
-                    : 'Close both legs? Your wallet will sign each close order.'}
+                  {pos.state !== 'open'
+                    ? 'Verify both venues first. If exposure remains, local agents will sign the required reduce-only close order.'
+                    : 'Close both legs? Local trading agents will sign each reduce-only order.'}
                 </p>
-                <Button variant="outline" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
+                <Button variant="secondary" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
                 <Button variant="destructive" size="xs" onClick={handleClose}>Confirm</Button>
               </div>
             )}
             {/* Progress */}
             {isClosing && (
               <p className="text-[11px] text-yellow-400">
-                {liveClose.state.phase === 'preparing' ? (pos.state === 'degraded' ? 'Checking venue state...' : 'Preparing close orders...') :
-                 liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} — check your wallet` :
+                {liveClose.state.phase === 'preparing' ? (pos.state !== 'open' ? 'Checking venue state...' : 'Preparing close orders...') :
+                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local agents` :
                  liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
                  `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
               </p>
@@ -342,14 +342,19 @@ function FillCard({ fill }: { fill: LiveFillDetail }) {
 function EventRow({ event: ev }: { event: LiveEventDetail }) {
   const isComplete = ev.event === 'complete'
   const isError = ev.state === 'degraded' || ev.state === 'failed'
+  const label = ev.event
+    .split('_')
+    .filter(Boolean)
+    .map((word, index) => index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word)
+    .join(' ')
 
   return (
-    <div className="flex items-start gap-2 text-[10px]">
-      <span className="text-muted-foreground/60 font-mono shrink-0 w-[130px]">{fmtTime(ev.at)}</span>
-      <span className={`font-medium shrink-0 w-[100px] ${
+    <div className="grid grid-cols-[130px_minmax(140px,0.8fr)_minmax(0,1.6fr)] items-start gap-x-3 gap-y-1 text-[10px] max-sm:grid-cols-[110px_minmax(0,1fr)]">
+      <span className="text-muted-foreground/60 font-mono">{fmtTime(ev.at)}</span>
+      <span className={`min-w-0 font-medium leading-relaxed ${
         isComplete && isError ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-foreground'
-      }`}>{ev.event}</span>
-      {ev.detail && <span className="text-muted-foreground break-words">{ev.detail}</span>}
+      }`}>{label}</span>
+      {ev.detail && <span className="min-w-0 text-muted-foreground leading-relaxed break-words max-sm:col-span-2 max-sm:pl-[110px]">{ev.detail}</span>}
     </div>
   )
 }

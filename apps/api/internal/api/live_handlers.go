@@ -56,6 +56,8 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
 		AccountPacifica    string   `json:"account_pacifica"`
 		AccountHyperliquid string   `json:"account_hyperliquid"`
+		AgentPacifica      string   `json:"agent_pacifica"`
+		AgentHyperliquid   string   `json:"agent_hyperliquid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -72,6 +74,18 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AccountHyperliquid == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_hyperliquid required"})
+		return
+	}
+	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
+		return
+	}
+	if err := s.live.validateAgentIdentity("pacifica", req.AccountPacifica, req.AgentPacifica); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.live.validateAgentIdentity("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
@@ -120,6 +134,17 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	defer unlockAccounts()
 	req.AccountPacifica = accountSnapshot(accounts, "pacifica").Account
 	req.AccountHyperliquid = accountSnapshot(accounts, "hyperliquid").Account
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
+		return
+	}
 
 	// 3b. Account-data readiness gate. This is separate from the admission
 	// gate below because admission looks at policy (leverage caps, etc); this
@@ -252,12 +277,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			"state", activeSession.State,
 			"has_exposure", activeSession.HasExposure,
 		)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":      "existing live session for this asset requires recovery before retrying",
-			"code":       livePrepareExistingSession,
-			"session_id": activeSession.ID,
-			"state":      activeSession.State,
-		})
+		writeJSON(w, http.StatusConflict, liveSessionConflictResponse(
+			"Your previous trade is still being checked. No new orders can be placed for this market yet.",
+			activeSession.State,
+		))
 		return
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -275,6 +298,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	leg1Open, err := s.buildOpenSigningRequest(
 		leg1, leg1Amount, leg1OpenCloid, req.AccountPacifica, req.AccountHyperliquid,
+		req.AgentPacifica, req.AgentHyperliquid,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 open", "err", err)
@@ -286,6 +310,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	leg1Unwind, err := s.buildUnwindSigningRequest(
 		leg1, leg1Amount, leg1UnwindCloid, req.AccountPacifica, req.AccountHyperliquid,
+		req.AgentPacifica, req.AgentHyperliquid,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 unwind", "err", err)
@@ -294,27 +319,52 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if plan.Leverage.Leverage != math.Trunc(plan.Leverage.Leverage) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "live leverage must be a whole number"})
+		return
+	}
+	leverage := int(plan.Leverage.Leverage)
+	pacificaLeverage, err := paclive.BuildUpdateLeveragePayload(req.AccountPacifica, plan.Asset, leverage)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Pacifica leverage payload build failed"})
+		return
+	}
+	pacificaLeverage.Signer = req.AgentPacifica
+	hyperliquidLeverage, err := hllive.BuildUpdateLeveragePayload(s.live.hlAssetMap, req.AccountHyperliquid, plan.Asset, leverage)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Hyperliquid leverage payload build failed"})
+		return
+	}
+	hyperliquidLeverage.Signer = req.AgentHyperliquid
 
 	s.live.signingStore.Store(leg1Open)
 	s.live.signingStore.Store(leg1Unwind)
+	s.live.signingStore.Store(pacificaLeverage)
+	s.live.signingStore.Store(hyperliquidLeverage)
 
 	// 6. Create the orchestration session.
 	sessionID := uuid.New().String()
 	sess := &LiveSession{
-		ID:                 sessionID,
-		Plan:               plan,
-		Leg1:               leg1,
-		Leg2:               leg2,
-		AccountPacifica:    req.AccountPacifica,
-		AccountHyperliquid: req.AccountHyperliquid,
-		State:              sessAwaitingLeg1Signs,
-		Leg1OpenReqID:      leg1Open.ID,
-		Leg1UnwindReqID:    leg1Unwind.ID,
-		Leg1OpenReq:        leg1Open,
-		Leg1UnwindReq:      leg1Unwind,
-		BaselineLeg1Size:   baselineLeg1Size,
-		BaselineLeg2Size:   baselineLeg2Size,
-		CreatedAt:          now,
+		ID:                       sessionID,
+		Plan:                     plan,
+		Leg1:                     leg1,
+		Leg2:                     leg2,
+		AccountPacifica:          req.AccountPacifica,
+		AccountHyperliquid:       req.AccountHyperliquid,
+		AgentPacifica:            req.AgentPacifica,
+		AgentHyperliquid:         req.AgentHyperliquid,
+		State:                    sessAwaitingLeg1Signs,
+		Leg1OpenReqID:            leg1Open.ID,
+		Leg1UnwindReqID:          leg1Unwind.ID,
+		Leg1OpenReq:              leg1Open,
+		Leg1UnwindReq:            leg1Unwind,
+		PacificaLeverageReqID:    pacificaLeverage.ID,
+		HyperliquidLeverageReqID: hyperliquidLeverage.ID,
+		PacificaLeverageReq:      pacificaLeverage,
+		HyperliquidLeverageReq:   hyperliquidLeverage,
+		BaselineLeg1Size:         baselineLeg1Size,
+		BaselineLeg2Size:         baselineLeg2Size,
+		CreatedAt:                now,
 	}
 	s.live.sessions.put(sess)
 	if err := s.saveLiveSession(r.Context(), sess); err != nil {
@@ -324,12 +374,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			r.Context(), req.AccountPacifica, req.AccountHyperliquid, plan.Asset,
 		)
 		if activeErr == nil && activeSession.ID != sess.ID {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":      "another live session for this asset started concurrently",
-				"code":       livePrepareExistingSession,
-				"session_id": activeSession.ID,
-				"state":      activeSession.State,
-			})
+			writeJSON(w, http.StatusConflict, liveSessionConflictResponse(
+				"Another trade for this market started concurrently. Wait for its status to be confirmed.",
+				activeSession.State,
+			))
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist live session"})
@@ -354,8 +402,16 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		"riskier_venue":    leg1.venue,
 		"hedge_venue":      leg2.venue,
 		"expires_at":       leg1Open.ExpiresAt,
-		"signing_requests": []*domain.SigningRequest{leg1Open, leg1Unwind},
+		"signing_requests": []*domain.SigningRequest{pacificaLeverage, hyperliquidLeverage, leg1Open, leg1Unwind},
 	})
+}
+
+func liveSessionConflictResponse(message, state string) map[string]any {
+	return map[string]any{
+		"error": message,
+		"code":  livePrepareExistingSession,
+		"state": state,
+	}
 }
 
 func liveBaseAmount(notional, price float64) (float64, error) {
@@ -422,13 +478,14 @@ func orderLegsByRisk(plan *domain.ExecutionPlan) (legPlan, legPlan) {
 // accountPacifica is only used for Pacifica; Hyperliquid derives the account
 // from the signature at submit time.
 func (s *Server) buildOpenSigningRequest(
-	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid string,
+	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid,
+	agentPacifica, agentHyperliquid string,
 ) (*domain.SigningRequest, error) {
 	var request *domain.SigningRequest
 	var err error
 	switch leg.venue {
 	case "pacifica":
-		request, err = paclive.BuildOpenPayload(accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+		request, err = paclive.BuildOpenPayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	case "hyperliquid":
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
@@ -439,6 +496,10 @@ func (s *Server) buildOpenSigningRequest(
 	}
 	if err == nil {
 		request.Account = accountForVenue(leg.venue, accountPacifica, accountHyperliquid)
+		request.Signer = signerForVenue(leg.venue, agentPacifica, agentHyperliquid)
+		if request.Signer == "" {
+			return nil, fmt.Errorf("%s trading agent required", leg.venue)
+		}
 	}
 	return request, err
 }
@@ -446,13 +507,14 @@ func (s *Server) buildOpenSigningRequest(
 // buildUnwindSigningRequest builds a reduce-only close signing request for one leg.
 // Side is the position side; the close payload inverts it internally.
 func (s *Server) buildUnwindSigningRequest(
-	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid string,
+	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid,
+	agentPacifica, agentHyperliquid string,
 ) (*domain.SigningRequest, error) {
 	var request *domain.SigningRequest
 	var err error
 	switch leg.venue {
 	case "pacifica":
-		request, err = paclive.BuildClosePayload(accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+		request, err = paclive.BuildClosePayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	case "hyperliquid":
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
@@ -463,6 +525,10 @@ func (s *Server) buildUnwindSigningRequest(
 	}
 	if err == nil {
 		request.Account = accountForVenue(leg.venue, accountPacifica, accountHyperliquid)
+		request.Signer = signerForVenue(leg.venue, agentPacifica, agentHyperliquid)
+		if request.Signer == "" {
+			return nil, fmt.Errorf("%s trading agent required", leg.venue)
+		}
 	}
 	return request, err
 }
@@ -506,7 +572,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1b. Reject open actions — live opens must go through /live/advance.
-	if sigReq.Action == "open" || (!sigReq.ReduceOnly && sigReq.Action != "close") {
+	if sigReq.Action != "close" || !sigReq.ReduceOnly {
 		s.logger.Warn("live submit: rejected non-close action",
 			"request_id", signed.RequestID,
 			"action", sigReq.Action,
@@ -867,6 +933,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AccountPacifica    string `json:"account_pacifica"`
 		AccountHyperliquid string `json:"account_hyperliquid"`
+		AgentPacifica      string `json:"agent_pacifica"`
+		AgentHyperliquid   string `json:"agent_hyperliquid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -878,7 +946,6 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
 	pos, err := s.liveStore.GetPositionForAccounts(
 		r.Context(), id, req.AccountPacifica, req.AccountHyperliquid,
 	)
@@ -887,7 +954,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pos.State != string(executor.ExecStateOpen) && pos.State != string(executor.ExecStateDegraded) {
+	if pos.State != string(executor.ExecStateOpen) && pos.State != string(executor.ExecStateDegraded) &&
+		pos.State != string(executor.ExecStateClosing) {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": fmt.Sprintf("position is %s, not closeable", pos.State),
 		})
@@ -909,6 +977,34 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if pos.State == string(executor.ExecStateClosing) {
+		progress, progressErr := s.liveStore.GetCloseProgress(r.Context(), id)
+		if progressErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get close progress"})
+			return
+		}
+		if progress.Pending > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "position close is still being reconciled; venue exposure remains or fresh venue state is unavailable",
+			})
+			return
+		}
+	}
+	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required when venue exposure remains"})
+		return
+	}
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
+		return
+	}
 
 	fills, err := s.liveStore.GetFills(r.Context(), id)
 	if err != nil {
@@ -927,7 +1023,10 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
-		sigReq, err := s.buildCloseSigningRequest(fill, cloid, req.AccountPacifica, req.AccountHyperliquid)
+		sigReq, err := s.buildCloseSigningRequest(
+			fill, cloid, req.AccountPacifica, req.AccountHyperliquid,
+			req.AgentPacifica, req.AgentHyperliquid,
+		)
 		if err != nil {
 			s.logger.Error("live close: build close payload", "err", err, "id", id, "leg", fill.Leg)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -967,10 +1066,25 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 	if s.live == nil || s.live.accounts == nil {
 		return false, nil
 	}
-	updatedAt, err := time.Parse(time.RFC3339, position.UpdatedAt)
-	if err != nil || time.Since(updatedAt) < positionReconciliationQuietPeriod {
+	reconcileAfter, err := s.liveStore.LastCloseActivity(ctx, position.ID)
+	if err != nil {
+		return false, err
+	}
+	if reconcileAfter.IsZero() {
+		reconcileAfter, err = time.Parse(time.RFC3339, position.UpdatedAt)
+	}
+	if err != nil || time.Since(reconcileAfter) < positionReconciliationQuietPeriod {
 		return false, nil
 	}
+	return s.reconcilePositionFromVenueTruth(ctx, position, accountPacifica, accountHyperliquid, reconcileAfter)
+}
+
+func (s *Server) reconcilePositionFromVenueTruth(
+	ctx context.Context,
+	position *executor.LivePosition,
+	accountPacifica, accountHyperliquid string,
+	after time.Time,
+) (bool, error) {
 
 	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
 	if err != nil {
@@ -980,10 +1094,25 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 	defer accounts.Release()
 	unlock := accounts.Lock()
 	defer unlock()
-
+	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
+	defer cancel()
 	for _, venue := range []string{"pacifica", "hyperliquid"} {
 		feed, ok := accounts.Feed(venue)
-		if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, updatedAt) {
+		if !ok {
+			return false, nil
+		}
+		if err := feed.RefreshPositions(reconcileCtx); err != nil {
+			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
+			return false, nil
+		}
+	}
+	if !waitForPositionState(reconcileCtx, accounts, after) {
+		return false, nil
+	}
+
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		_, ok := accounts.Feed(venue)
+		if !ok {
 			return false, nil
 		}
 		size, _ := currentVenuePosition(accounts, venue, position.Asset)
@@ -1002,6 +1131,29 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 		s.logger.Info("live position: reconciled closed from venue state", "id", position.ID, "asset", position.Asset)
 	}
 	return changed, nil
+}
+
+func waitForPositionState(ctx context.Context, accounts *liveAccountContext, after time.Time) bool {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		ready := true
+		for _, venue := range []string{"pacifica", "hyperliquid"} {
+			feed, ok := accounts.Feed(venue)
+			if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, after) {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // handleLiveKill is the emergency kill switch — prepares close orders for all open live positions.
@@ -1034,6 +1186,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AccountPacifica    string `json:"account_pacifica"`
 		AccountHyperliquid string `json:"account_hyperliquid"`
+		AgentPacifica      string `json:"agent_pacifica"`
+		AgentHyperliquid   string `json:"agent_hyperliquid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -1045,11 +1199,26 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
+		return
+	}
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
+		return
+	}
 
 	s.logger.Warn("kill switch: activated")
 
 	ctx := r.Context()
-	positions, err := s.live.liveStore.ListOpenPositionsForAccounts(
+	positions, err := s.live.liveStore.ListCloseablePositionsForAccounts(
 		ctx, req.AccountPacifica, req.AccountHyperliquid,
 	)
 	if err != nil {
@@ -1108,6 +1277,20 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			posResults = append(posResults, pc)
 			continue
 		}
+		if pos.State == string(executor.ExecStateClosing) {
+			progress, err := s.live.liveStore.GetCloseProgress(ctx, pos.ID)
+			if err != nil {
+				s.logger.Error("kill switch: get close progress", "err", err, "id", pos.ID)
+				pc.Error = "failed to get close progress"
+				posResults = append(posResults, pc)
+				continue
+			}
+			if progress.Pending > 0 {
+				pc.Error = "close submission is still pending venue reconciliation"
+				posResults = append(posResults, pc)
+				continue
+			}
+		}
 
 		legsClosed := 0
 		for _, fill := range fills {
@@ -1129,6 +1312,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				cloid,
 				req.AccountPacifica,
 				req.AccountHyperliquid,
+				req.AgentPacifica,
+				req.AgentHyperliquid,
 			)
 			if err != nil {
 				s.logger.Error("kill switch: build close payload",
@@ -1181,7 +1366,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 func (s *Server) buildCloseSigningRequest(
 	fill executor.LiveFill,
 	clientOrderID string,
-	accountPacifica, accountHyperliquid string,
+	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
 ) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
@@ -1191,6 +1376,7 @@ func (s *Server) buildCloseSigningRequest(
 	switch fill.Venue {
 	case "pacifica":
 		request, err = paclive.BuildClosePayload(
+			s.live.pacificaLotSizes,
 			accountPacifica,
 			fill.Symbol,
 			positionSide,
@@ -1215,6 +1401,10 @@ func (s *Server) buildCloseSigningRequest(
 	}
 	if err == nil {
 		request.Account = accountForVenue(fill.Venue, accountPacifica, accountHyperliquid)
+		request.Signer = signerForVenue(fill.Venue, agentPacifica, agentHyperliquid)
+		if request.Signer == "" {
+			return nil, fmt.Errorf("%s trading agent required", fill.Venue)
+		}
 	}
 	return request, err
 }

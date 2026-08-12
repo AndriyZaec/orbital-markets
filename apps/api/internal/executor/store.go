@@ -278,6 +278,19 @@ func (s *Store) ConfirmedCloseLegs(ctx context.Context, positionID string) (map[
 	return legs, rows.Err()
 }
 
+func (s *Store) LastCloseActivity(ctx context.Context, positionID string) (time.Time, error) {
+	var raw sql.NullString
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT MAX(updated_at) FROM live_close_outcomes WHERE position_id = ?`, positionID,
+	).Scan(&raw); err != nil {
+		return time.Time{}, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, raw.String)
+}
+
 // MarkCloseDegraded records a terminal close failure without overwriting
 // monitoring fields from the open position.
 func (s *Store) MarkCloseDegraded(ctx context.Context, positionID string) error {
@@ -372,6 +385,22 @@ func (s *Store) ListOpenPositionsForAccounts(ctx context.Context, pacifica, hype
 		 WHERE state IN ('open', 'degraded') AND account_pacifica = ? AND account_hyperliquid = ?
 		 ORDER BY started_at DESC`,
 		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+}
+
+// ListCloseablePositionsForAccounts includes interrupted closes so emergency
+// recovery remains available after an API restart.
+func (s *Store) ListCloseablePositionsForAccounts(ctx context.Context, pacifica, hyperliquid string) ([]LivePosition, error) {
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE state IN ('open', 'degraded', 'closing') AND account_pacifica = ? AND account_hyperliquid = ?
+		 ORDER BY started_at DESC`,
+		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+}
+
+func (s *Store) ListClosingPositions(ctx context.Context) ([]LivePosition, error) {
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE state = 'closing' ORDER BY started_at DESC`)
 }
 
 func (s *Store) queryPositions(ctx context.Context, query string, args ...any) ([]LivePosition, error) {

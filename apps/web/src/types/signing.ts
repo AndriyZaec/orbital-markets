@@ -4,13 +4,16 @@ export interface SigningRequest {
   position_id?: string
   leg?: number
   venue: 'pacifica' | 'hyperliquid'
-  action: 'open' | 'close'
+  action: 'open' | 'close' | 'update_leverage'
   account: string
+  signer?: string
   symbol: string
   side: 'buy' | 'sell'
   amount: number
   price: number
   reduce_only: boolean
+  venue_asset_id?: number
+  leverage?: number
   unsigned_payload: unknown
   venue_metadata?: unknown
   expires_at: string

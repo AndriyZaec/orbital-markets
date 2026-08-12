@@ -30,14 +30,17 @@ type liveAccountSnapshot struct {
 	Equity             float64
 	Available          float64
 	Positions          []liveAccountPosition
+	LeverageBySymbol   map[string]float64
 }
 
 // liveAccountFeed hides venue-specific account state, submission, and fill tracking.
 type liveAccountFeed interface {
 	Snapshot() liveAccountSnapshot
 	PreTradeBlockers(domain.Leg) []string
+	RefreshPositions(context.Context) error
 	SubmitSigned(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error)
 	WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error)
+	WaitForLeverage(context.Context, string, float64) error
 }
 
 // accountFeedFactory starts one account feed and must return without waiting for readiness.

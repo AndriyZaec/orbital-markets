@@ -11,7 +11,10 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 )
 
-const leg2RetrySigningWindow = 5 * time.Second
+const (
+	leg2RetrySigningWindow = 5 * time.Second
+	minimumRetryNotional   = 10.0
+)
 
 func mergeNormFills(first, second *normFill) *normFill {
 	if first == nil {
@@ -71,14 +74,19 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 		s.recoverInvalidHedge(w, ctx, session, reason)
 		return
 	}
-
 	clientOrderID := fmt.Sprintf("orbital-l2retry-%d", time.Now().UnixNano())
 	retryReq, err := s.buildOpenSigningRequest(
 		session.Leg2, remaining, clientOrderID,
 		session.AccountPacifica, session.AccountHyperliquid,
+		session.AgentPacifica, session.AgentHyperliquid,
 	)
 	if err != nil {
 		s.recoverInvalidHedge(w, ctx, session, reason+"; retry payload build failed")
+		return
+	}
+	if retryBelowMinimumNotional(retryReq.Venue, retryReq.Amount, retryReq.Price) {
+		s.recoverInvalidHedge(w, ctx, session,
+			fmt.Sprintf("%s; normalized residual retry value $%.2f is below Hyperliquid minimum $%.2f", reason, retryReq.Amount*retryReq.Price, minimumRetryNotional))
 		return
 	}
 	retryReq.ExpiresAt = time.Now().Add(leg2RetrySigningWindow)
@@ -105,6 +113,10 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 		"reason":           reason,
 		"signing_requests": []*domain.SigningRequest{retryReq},
 	})
+}
+
+func retryBelowMinimumNotional(venue string, amount, price float64) bool {
+	return venue == "hyperliquid" && amount*price < minimumRetryNotional
 }
 
 func (s *Server) advanceLeg2Retry(

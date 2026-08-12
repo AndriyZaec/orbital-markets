@@ -6,16 +6,19 @@ import { WalletProviders } from './providers/WalletProviders'
 import { GateProvider } from './providers/GateProvider'
 import { VenueReadinessProvider } from './hooks/useVenueReadiness'
 import { LiveExecutionProvider } from './hooks/useLiveExecution'
+import { TradingAgentProvider } from './agents/TradingAgentProvider'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <GateProvider>
       <WalletProviders>
-        <LiveExecutionProvider>
-          <VenueReadinessProvider>
-            <App />
-          </VenueReadinessProvider>
-        </LiveExecutionProvider>
+        <TradingAgentProvider>
+          <LiveExecutionProvider>
+            <VenueReadinessProvider>
+              <App />
+            </VenueReadinessProvider>
+          </LiveExecutionProvider>
+        </TradingAgentProvider>
       </WalletProviders>
     </GateProvider>
   </StrictMode>,

@@ -1,10 +1,8 @@
 import { useState, useCallback } from 'react'
 import { apiFetch } from '@/lib/api'
-import { useWallet } from '@solana/wallet-adapter-react'
-import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
-import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
+import { useTradingAgents } from './useTradingAgents'
 
 export type KillPhase =
   | 'idle'
@@ -57,26 +55,8 @@ const INITIAL: KillState = {
 
 export function useKillSwitch() {
   const [state, setState] = useState<KillState>(INITIAL)
-  const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
-  const { signTypedDataAsync } = useSignTypedData()
-
-  const buildSigners = useCallback((): Signers => ({
-    pacifica: solWallet.signMessage && solWallet.publicKey
-      ? { signMessage: solWallet.signMessage, publicKey: solWallet.publicKey.toBase58() }
-      : null,
-    hyperliquid: hyperliquidAddress
-      ? {
-          signTypedDataAsync: (params) => signTypedDataAsync({
-            domain: params.domain,
-            types: params.types,
-            primaryType: params.primaryType,
-            message: params.message,
-          }),
-          address: hyperliquidAddress,
-        }
-      : null,
-  }), [solWallet.signMessage, solWallet.publicKey, hyperliquidAddress, signTypedDataAsync])
+  const tradingAgents = useTradingAgents()
 
   const submitSigned = async (signed: SignedAction): Promise<SubmissionResult> => {
     const resp = await apiFetch('/api/v1/live/submit', {
@@ -104,6 +84,11 @@ export function useKillSwitch() {
       setState(s => ({ ...s, phase: 'error', errors: ['Both venue accounts must be connected'] }))
       return
     }
+    if (!tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress ||
+      tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready') {
+      setState(s => ({ ...s, phase: 'error', errors: ['Authorize both venue trading agents first'] }))
+      return
+    }
 
     setState({ ...INITIAL, phase: 'preparing' })
 
@@ -115,6 +100,8 @@ export function useKillSwitch() {
         body: JSON.stringify({
           account_pacifica: pacificaAddress,
           account_hyperliquid: hyperliquidAddress,
+          agent_pacifica: tradingAgents.pacifica.agentAddress,
+          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
         }),
       })
       if (!resp.ok) {
@@ -142,29 +129,22 @@ export function useKillSwitch() {
         positions: data.positions,
       }))
 
-      // 2. Sign and submit each close order
-      const signers = buildSigners()
+      // Sign every reduce-only action before submitting any venue order.
       const errors: string[] = []
       let succeeded = 0
       let failed = 0
       let uncertain = 0
-
+      const signedActions: Array<{ request: SigningRequest; signed: SignedAction }> = []
       for (let i = 0; i < requests.length; i++) {
         const req = requests[i]
+        setState(s => ({ ...s, phase: 'signing', signed: i }))
+        signedActions.push({ request: req, signed: await tradingAgents.sign(req) })
+      }
 
-        let signed: SignedAction
+      for (let i = 0; i < signedActions.length; i++) {
+        const { request: req, signed } = signedActions[i]
         try {
-          setState(s => ({ ...s, phase: 'signing', signed: i }))
-          signed = await signRequest(req, signers)
-        } catch (e) {
-          failed++
-          errors.push(`${req.venue} ${req.symbol}: ${e instanceof Error ? e.message : 'signing failed'}`)
-          setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
-          continue
-        }
-
-        try {
-          setState(s => ({ ...s, phase: 'submitting', signed: i + 1, submitted: i }))
+          setState(s => ({ ...s, phase: 'submitting', signed: signedActions.length, submitted: i }))
           const result = await submitSigned(signed)
 
           if (result.accepted) {
@@ -191,7 +171,7 @@ export function useKillSwitch() {
         errors: [e instanceof Error ? e.message : 'Unknown error'],
       }))
     }
-  }, [pacificaAddress, hyperliquidAddress, buildSigners])
+  }, [pacificaAddress, hyperliquidAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL), [])
 

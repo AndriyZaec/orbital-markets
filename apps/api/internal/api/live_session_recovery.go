@@ -18,6 +18,7 @@ const recoveryAccountTimeout = 20 * time.Second
 func (s *Server) runLiveSessionRecovery() {
 	go s.renewLiveSessionLeases()
 	s.restoreLiveSessions()
+	s.reconcileClosingPositions()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -27,6 +28,30 @@ func (s *Server) runLiveSessionRecovery() {
 		case <-ticker.C:
 			s.restoreLiveSessions()
 			s.cleanupExpiredLiveSessions()
+			s.reconcileClosingPositions()
+		}
+	}
+}
+
+func (s *Server) reconcileClosingPositions() {
+	if s.live == nil || s.live.accounts == nil {
+		return
+	}
+	positions, err := s.liveStore.ListClosingPositions(s.ctx)
+	if err != nil {
+		s.logger.Error("live close recovery: list closing positions", "err", err)
+		return
+	}
+	for i := range positions {
+		position := &positions[i]
+		ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
+		_, err := s.reconcilePositionAbsentFromVenues(
+			ctx, position, position.AccountPacifica, position.AccountHyperliquid,
+		)
+		cancel()
+		if err != nil {
+			s.logger.Warn("live close recovery: venue reconciliation failed", "err", err, "id", position.ID)
+			continue
 		}
 	}
 }
@@ -110,8 +135,20 @@ func (s *Server) restoreLiveSessions() {
 			continue
 		}
 
+		if session.State == sessConfiguringLeverage {
+			session.State = sessFailed
+			detail := "server restarted while applying leverage; venue leverage may be partially changed, but no order was submitted. Retry to reconcile both venues"
+			s.finishLiveSession(s.ctx, session, detail)
+			continue
+		}
 		if session.State == sessAwaitingLeg1Signs {
+			if !agentBoundLeg1Requests(session) {
+				session.State = sessFailed
+				s.finishSafeDurableSession(session.ID, "legacy_safe", "pre-agent session cannot start new signing work")
+				continue
+			}
 			if session.expired() || session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
+				session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil ||
 				time.Now().After(session.Leg1OpenReq.ExpiresAt) || time.Now().After(session.Leg1UnwindReq.ExpiresAt) {
 				session.State = sessFailed
 				s.finishSafeDurableSession(session.ID, "expired_safe", "expired before any order submission")
@@ -119,6 +156,8 @@ func (s *Server) restoreLiveSessions() {
 			}
 			s.live.signingStore.Store(session.Leg1OpenReq)
 			s.live.signingStore.Store(session.Leg1UnwindReq)
+			s.live.signingStore.Store(session.PacificaLeverageReq)
+			s.live.signingStore.Store(session.HyperliquidLeverageReq)
 			s.live.sessions.put(session)
 			s.logger.Info("live recovery: restored pre-exposure session", "session_id", session.ID)
 			continue
@@ -126,6 +165,31 @@ func (s *Server) restoreLiveSessions() {
 
 		s.recoverExposedSession(session, "server restarted during live execution")
 	}
+}
+
+func agentBoundLeg1Requests(session *LiveSession) bool {
+	if session == nil || session.AgentPacifica == "" || session.AgentHyperliquid == "" ||
+		session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
+		session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil {
+		return false
+	}
+	for _, request := range []*domain.SigningRequest{
+		session.Leg1OpenReq, session.Leg1UnwindReq,
+		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
+	} {
+		expected := signerForVenue(request.Venue, session.AgentPacifica, session.AgentHyperliquid)
+		if expected == "" || request.Signer == "" {
+			return false
+		}
+		if request.Venue == "hyperliquid" {
+			if !strings.EqualFold(expected, request.Signer) {
+				return false
+			}
+		} else if expected != request.Signer {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) cleanupExpiredLiveSessions() {

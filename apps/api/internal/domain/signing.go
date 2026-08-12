@@ -19,16 +19,20 @@ type SigningRequest struct {
 	Leg           int    `json:"leg,omitempty"`
 
 	// Venue context
-	Venue   string `json:"venue"`   // "pacifica" or "hyperliquid"
-	Action  string `json:"action"`  // "open" or "close"
-	Account string `json:"account"` // normalized venue account that must sign and submit
+	Venue  string `json:"venue"`  // "pacifica" or "hyperliquid"
+	Action string `json:"action"` // "open", "close", or "update_leverage"
+	// Account owns venue state; Signer is the owner or authorized agent expected to sign.
+	Account string `json:"account"`
+	Signer  string `json:"signer,omitempty"`
 
 	// Order fields (venue-agnostic summary for frontend display)
-	Symbol     string  `json:"symbol"`
-	Side       string  `json:"side"`        // "buy" or "sell" (venue-native direction)
-	Amount     float64 `json:"amount"`      // base-asset quantity, never quote notional
-	Price      float64 `json:"price"`       // reference price used for slippage calc
-	ReduceOnly bool    `json:"reduce_only"` // true for close/unwind
+	Symbol       string  `json:"symbol"`
+	Side         string  `json:"side"`        // "buy" or "sell" (venue-native direction)
+	Amount       float64 `json:"amount"`      // base-asset quantity, never quote notional
+	Price        float64 `json:"price"`       // reference price used for slippage calc
+	ReduceOnly   bool    `json:"reduce_only"` // true for close/unwind
+	VenueAssetID *int    `json:"venue_asset_id,omitempty"`
+	Leverage     int     `json:"leverage,omitempty"`
 
 	// Unsigned venue-specific payload — the exact bytes the frontend must sign.
 	// Pacifica: JSON bytes of the order message.

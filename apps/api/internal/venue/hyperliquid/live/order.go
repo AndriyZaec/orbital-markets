@@ -5,18 +5,25 @@ import "time"
 // OrderAction is the Hyperliquid exchange action for placing orders.
 // Hyperliquid uses a POST /exchange endpoint with EIP-712 typed signing.
 type OrderAction struct {
-	Type      string      `json:"type"` // "order"
-	Orders    []OrderSpec `json:"orders"`
-	Grouping  string      `json:"grouping"` // "na" for single orders
+	Type     string      `json:"type"` // "order"
+	Orders   []OrderSpec `json:"orders"`
+	Grouping string      `json:"grouping"` // "na" for single orders
+}
+
+type UpdateLeverageAction struct {
+	Type     string `json:"type"`
+	Asset    int    `json:"asset"`
+	IsCross  bool   `json:"isCross"`
+	Leverage int    `json:"leverage"`
 }
 
 // OrderSpec is a single order within an action.
 type OrderSpec struct {
-	Asset      int       `json:"a"`           // asset index from meta.universe
-	IsBuy      bool      `json:"b"`           // true = buy, false = sell
-	LimitPx    string    `json:"p"`           // price as string
-	Size       string    `json:"s"`           // size as string
-	ReduceOnly bool      `json:"r"`           // true for close/unwind
+	Asset      int       `json:"a"` // asset index from meta.universe
+	IsBuy      bool      `json:"b"` // true = buy, false = sell
+	LimitPx    string    `json:"p"` // price as string
+	Size       string    `json:"s"` // size as string
+	ReduceOnly bool      `json:"r"` // true for close/unwind
 	OrderType  OrderType `json:"t"`
 	Cloid      string    `json:"c,omitempty"` // client order ID, 128-bit hex
 }

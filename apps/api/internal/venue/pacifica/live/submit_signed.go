@@ -28,7 +28,7 @@ func (c *Client) SubmitSignedOrder(
 	}
 
 	// Attach the user's signature to produce the final order
-	finalOrder := AttachSignature(unsigned, signed)
+	finalOrder := AttachSignature(unsigned, signed, req)
 
 	c.logger.Info("pacifica live: submitting signed order",
 		"symbol", finalOrder.Symbol,
@@ -72,6 +72,35 @@ func (c *Client) SubmitSignedOrder(
 		Error:         submitResult.Error,
 		SubmittedAt:   submitResult.SubmittedAt,
 		RespondedAt:   submitResult.RespondedAt,
+	}, nil
+}
+
+func (c *Client) SubmitSignedLeverage(
+	ctx context.Context,
+	signed domain.SignedAction,
+	req *domain.SigningRequest,
+) (*domain.SubmissionResult, error) {
+	var unsigned PacificaUnsignedLeverage
+	if err := json.Unmarshal(req.UnsignedPayload, &unsigned); err != nil {
+		return nil, fmt.Errorf("unmarshal leverage payload: %w", err)
+	}
+	final := UpdateLeverageRequest{
+		Account: req.Account, AgentWallet: req.Signer, Signature: signed.Signature,
+		Timestamp: unsigned.Timestamp, ExpiryWindow: unsigned.ExpiryWindow,
+		Symbol: unsigned.Symbol, Leverage: unsigned.Leverage,
+	}
+	send := c.sendLeverageUpdate
+	if c.sendLeverage != nil {
+		send = c.sendLeverage
+	}
+	result, err := send(ctx, final)
+	if err != nil {
+		return nil, fmt.Errorf("submit leverage update: %w", err)
+	}
+	return &domain.SubmissionResult{
+		RequestID: signed.RequestID, ClientOrderID: req.ClientOrderID, Venue: "pacifica",
+		Accepted: result.Accepted, Error: result.Error,
+		SubmittedAt: result.SubmittedAt, RespondedAt: result.RespondedAt,
 	}, nil
 }
 

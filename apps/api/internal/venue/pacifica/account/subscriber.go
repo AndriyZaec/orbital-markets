@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -39,6 +40,7 @@ type Subscriber struct {
 	handler StreamHandler // optional: receives order/trade updates
 	logger  *slog.Logger
 	client  *http.Client
+	refresh sync.Mutex
 }
 
 func NewSubscriber(
@@ -112,6 +114,12 @@ type accountInfo struct {
 }
 
 func (s *Subscriber) refreshAccountInfo(ctx context.Context) error {
+	s.refresh.Lock()
+	defer s.refresh.Unlock()
+	return s.refreshAccountInfoLocked(ctx)
+}
+
+func (s *Subscriber) refreshAccountInfoLocked(ctx context.Context) error {
 	info, err := s.refreshAccountBalance(ctx)
 	if err != nil {
 		return err
@@ -197,6 +205,10 @@ func (s *Subscriber) refreshPositions(ctx context.Context) error {
 	}
 	s.state.UpdatePositionsForAccount(s.account, positions)
 	return nil
+}
+
+func (s *Subscriber) RefreshPositions(ctx context.Context) error {
+	return s.refreshAccountInfo(ctx)
 }
 
 func parseRESTPositions(raw []byte) ([]AccountPosition, error) {
@@ -525,15 +537,23 @@ func (s *Subscriber) handlePositions(data json.RawMessage) {
 //	}
 func (s *Subscriber) handleLeverage(data json.RawMessage) {
 	var update struct {
-		S string `json:"s"` // symbol
-		L string `json:"l"` // leverage (string)
+		S string          `json:"s"` // symbol
+		L json.RawMessage `json:"l"` // leverage (number or numeric string)
 	}
 	if err := json.Unmarshal(data, &update); err != nil {
 		s.logger.Warn("pacifica: parse account_leverage", "err", err)
 		return
 	}
 
-	lev := parseFloat(update.L)
+	var lev float64
+	if err := json.Unmarshal(update.L, &lev); err != nil {
+		var text string
+		if err := json.Unmarshal(update.L, &text); err != nil {
+			s.logger.Warn("pacifica: parse account_leverage value", "err", err)
+			return
+		}
+		lev = parseFloat(text)
+	}
 	if lev <= 0 {
 		lev = 1
 	}

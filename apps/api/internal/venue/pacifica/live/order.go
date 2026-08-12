@@ -16,6 +16,7 @@ import "time"
 // and BuildSigningMessage for the canonical signing payload.
 type MarketOrderRequest struct {
 	Account       string `json:"account"`
+	AgentWallet   string `json:"agent_wallet,omitempty"`
 	Signature     string `json:"signature"`
 	Timestamp     int64  `json:"timestamp"`
 	ExpiryWindow  int64  `json:"expiry_window"`
@@ -25,6 +26,16 @@ type MarketOrderRequest struct {
 	ReduceOnly    bool   `json:"reduce_only"`
 	SlippagePct   string `json:"slippage_percent"`
 	ClientOrderID string `json:"client_order_id"`
+}
+
+type UpdateLeverageRequest struct {
+	Account      string `json:"account"`
+	AgentWallet  string `json:"agent_wallet,omitempty"`
+	Signature    string `json:"signature"`
+	Timestamp    int64  `json:"timestamp"`
+	ExpiryWindow int64  `json:"expiry_window"`
+	Symbol       string `json:"symbol"`
+	Leverage     int    `json:"leverage"`
 }
 
 // WSEnvelope is the top-level WebSocket message sent to Pacifica.

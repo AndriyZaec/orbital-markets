@@ -136,10 +136,16 @@ export function OpportunityPanel({
   const notionalValid = Number.isFinite(notionalNum) && notionalNum > 0
   const notionalForPlan = notionalValid ? notionalNum : undefined
   const debouncedNotionalForPlan = useDebouncedValue(notionalForPlan, 300)
-  const planInputsPending = !Object.is(notionalForPlan, debouncedNotionalForPlan)
+  const debouncedLeverageForPlan = useDebouncedValue(leverage, 300)
+  const planInputsPending = !Object.is(notionalForPlan, debouncedNotionalForPlan) ||
+    leverage !== debouncedLeverageForPlan
 
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(opp.id, leverage, debouncedNotionalForPlan)
+  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(
+    opp.id,
+    debouncedLeverageForPlan,
+    debouncedNotionalForPlan,
+  )
   const planUpdating = planLoading || planInputsPending
   const maxLev = maxLeverage || opportunityMaxLev
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)

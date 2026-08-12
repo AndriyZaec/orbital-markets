@@ -1,10 +1,8 @@
 import { useState, useCallback } from 'react'
 import { apiFetch } from '@/lib/api'
-import { useWallet } from '@solana/wallet-adapter-react'
-import { useSignTypedData } from 'wagmi'
 import { useVenueAuthority } from './useVenueAuthority'
-import { signRequest, type Signers } from '@/lib/signing'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
+import { useTradingAgents } from './useTradingAgents'
 
 export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
 
@@ -29,13 +27,15 @@ const INITIAL: CloseState = {
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const closeConfirmationAttempts = 12
+const closeConfirmationPollMs = 2_000
 
 async function waitForClose(positionId: string, pacificaAccount: string, hyperliquidAccount: string): Promise<void> {
 	const query = new URLSearchParams({
 		account_pacifica: pacificaAccount,
 		account_hyperliquid: hyperliquidAccount,
 	})
-  for (let attempt = 0; attempt < 22; attempt++) {
+  for (let attempt = 0; attempt < closeConfirmationAttempts; attempt++) {
     const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
     if (!resp.ok) throw new Error(`Close confirmation failed: HTTP ${resp.status}`)
     const data: { position: { state: string } } = await resp.json()
@@ -43,40 +43,23 @@ async function waitForClose(positionId: string, pacificaAccount: string, hyperli
     if (data.position.state === 'degraded') {
       throw new Error('A close fill was not confirmed; manual action may be required')
     }
-    await delay(1_000)
+    if (attempt < closeConfirmationAttempts - 1) {
+      await delay(closeConfirmationPollMs)
+    }
   }
   throw new Error('Close fill confirmation timed out; check the position before retrying')
 }
 
 export function useLiveClose() {
   const [state, setState] = useState<CloseState>(INITIAL)
-  const solWallet = useWallet()
   const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
-  const { signTypedDataAsync } = useSignTypedData()
-
-  const buildSigners = useCallback((): Signers => ({
-    pacifica: solWallet.signMessage && solWallet.publicKey
-      ? { signMessage: solWallet.signMessage, publicKey: solWallet.publicKey.toBase58() }
-      : null,
-    hyperliquid: hyperliquidAddress
-      ? {
-          signTypedDataAsync: (params) => signTypedDataAsync({
-            domain: params.domain,
-            types: params.types,
-            primaryType: params.primaryType,
-            message: params.message,
-          }),
-          address: hyperliquidAddress,
-        }
-      : null,
-  }), [solWallet.signMessage, solWallet.publicKey, hyperliquidAddress, signTypedDataAsync])
+  const tradingAgents = useTradingAgents()
 
   const closePosition = useCallback(async (positionId: string) => {
     if (!pacificaAddress || !hyperliquidAddress) {
       setState({ ...INITIAL, phase: 'error', errors: ['Both venue accounts must be connected'] })
       return
     }
-
     setState({ ...INITIAL, phase: 'preparing' })
 
     try {
@@ -86,6 +69,8 @@ export function useLiveClose() {
         body: JSON.stringify({
           account_pacifica: pacificaAddress,
           account_hyperliquid: hyperliquidAddress,
+          agent_pacifica: tradingAgents.pacifica.agentAddress,
+          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
         }),
       })
       if (!resp.ok) {
@@ -102,7 +87,6 @@ export function useLiveClose() {
       }
 
       setState(s => ({ ...s, phase: 'signing', total: requests.length }))
-      const signers = buildSigners()
       const errors: string[] = []
       let failed = 0
       const signedActions: Array<{ request: SigningRequest; signed: SignedAction }> = []
@@ -110,7 +94,7 @@ export function useLiveClose() {
       for (let i = 0; i < requests.length; i++) {
         const req = requests[i]
         setState(s => ({ ...s, phase: 'signing', submitted: i }))
-        const signed = await signRequest(req, signers)
+        const signed = await tradingAgents.sign(req)
         signedActions.push({ request: req, signed })
       }
 
@@ -158,7 +142,7 @@ export function useLiveClose() {
         errors: [e instanceof Error ? e.message : 'Unknown error'],
       }))
     }
-  }, [pacificaAddress, hyperliquidAddress, buildSigners])
+  }, [pacificaAddress, hyperliquidAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL), [])
 
