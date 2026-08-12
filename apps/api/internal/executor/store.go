@@ -387,6 +387,22 @@ func (s *Store) ListOpenPositionsForAccounts(ctx context.Context, pacifica, hype
 		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
 }
 
+// ListCloseablePositionsForAccounts includes interrupted closes so emergency
+// recovery remains available after an API restart.
+func (s *Store) ListCloseablePositionsForAccounts(ctx context.Context, pacifica, hyperliquid string) ([]LivePosition, error) {
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE state IN ('open', 'degraded', 'closing') AND account_pacifica = ? AND account_hyperliquid = ?
+		 ORDER BY started_at DESC`,
+		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+}
+
+func (s *Store) ListClosingPositions(ctx context.Context) ([]LivePosition, error) {
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE state = 'closing' ORDER BY started_at DESC`)
+}
+
 func (s *Store) queryPositions(ctx context.Context, query string, args ...any) ([]LivePosition, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

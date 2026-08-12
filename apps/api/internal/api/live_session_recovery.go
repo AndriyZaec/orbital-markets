@@ -18,6 +18,7 @@ const recoveryAccountTimeout = 20 * time.Second
 func (s *Server) runLiveSessionRecovery() {
 	go s.renewLiveSessionLeases()
 	s.restoreLiveSessions()
+	s.reconcileClosingPositions()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -27,6 +28,30 @@ func (s *Server) runLiveSessionRecovery() {
 		case <-ticker.C:
 			s.restoreLiveSessions()
 			s.cleanupExpiredLiveSessions()
+			s.reconcileClosingPositions()
+		}
+	}
+}
+
+func (s *Server) reconcileClosingPositions() {
+	if s.live == nil || s.live.accounts == nil {
+		return
+	}
+	positions, err := s.liveStore.ListClosingPositions(s.ctx)
+	if err != nil {
+		s.logger.Error("live close recovery: list closing positions", "err", err)
+		return
+	}
+	for i := range positions {
+		position := &positions[i]
+		ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
+		_, err := s.reconcilePositionAbsentFromVenues(
+			ctx, position, position.AccountPacifica, position.AccountHyperliquid,
+		)
+		cancel()
+		if err != nil {
+			s.logger.Warn("live close recovery: venue reconciliation failed", "err", err, "id", position.ID)
+			continue
 		}
 	}
 }

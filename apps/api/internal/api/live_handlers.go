@@ -978,10 +978,17 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pos.State == string(executor.ExecStateClosing) {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "position close is still being reconciled; venue exposure remains or fresh venue state is unavailable",
-		})
-		return
+		progress, progressErr := s.liveStore.GetCloseProgress(r.Context(), id)
+		if progressErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get close progress"})
+			return
+		}
+		if progress.Pending > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "position close is still being reconciled; venue exposure remains or fresh venue state is unavailable",
+			})
+			return
+		}
 	}
 	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required when venue exposure remains"})
@@ -1211,7 +1218,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	s.logger.Warn("kill switch: activated")
 
 	ctx := r.Context()
-	positions, err := s.live.liveStore.ListOpenPositionsForAccounts(
+	positions, err := s.live.liveStore.ListCloseablePositionsForAccounts(
 		ctx, req.AccountPacifica, req.AccountHyperliquid,
 	)
 	if err != nil {
@@ -1269,6 +1276,20 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			pc.Error = "failed to get close progress"
 			posResults = append(posResults, pc)
 			continue
+		}
+		if pos.State == string(executor.ExecStateClosing) {
+			progress, err := s.live.liveStore.GetCloseProgress(ctx, pos.ID)
+			if err != nil {
+				s.logger.Error("kill switch: get close progress", "err", err, "id", pos.ID)
+				pc.Error = "failed to get close progress"
+				posResults = append(posResults, pc)
+				continue
+			}
+			if progress.Pending > 0 {
+				pc.Error = "close submission is still pending venue reconciliation"
+				posResults = append(posResults, pc)
+				continue
+			}
 		}
 
 		legsClosed := 0
