@@ -13,14 +13,22 @@ import (
 )
 
 type fakeAccountFeed struct {
-	snapshot liveAccountSnapshot
-	blockers []string
+	snapshot        liveAccountSnapshot
+	refreshSnapshot *liveAccountSnapshot
+	blockers        []string
+	submitResult    *domain.SubmissionResult
 }
 
 func (f *fakeAccountFeed) Snapshot() liveAccountSnapshot        { return f.snapshot }
 func (f *fakeAccountFeed) PreTradeBlockers(domain.Leg) []string { return f.blockers }
+func (f *fakeAccountFeed) RefreshPositions(context.Context) error {
+	if f.refreshSnapshot != nil {
+		f.snapshot = *f.refreshSnapshot
+	}
+	return nil
+}
 func (f *fakeAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error) {
-	return nil, nil
+	return f.submitResult, nil
 }
 func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error) {
 	return nil, nil
@@ -29,12 +37,13 @@ func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (
 func (f *fakeAccountFeed) WaitForLeverage(context.Context, string, float64) error { return nil }
 
 type fakeAccountFeedFactory struct {
-	starts    atomic.Int64
-	stops     atomic.Int64
-	started   chan struct{}
-	snapshots map[string]liveAccountSnapshot
-	blockers  map[string][]string
-	startErr  error
+	starts           atomic.Int64
+	stops            atomic.Int64
+	started          chan struct{}
+	snapshots        map[string]liveAccountSnapshot
+	refreshSnapshots map[string]liveAccountSnapshot
+	blockers         map[string][]string
+	startErr         error
 }
 
 func (f *fakeAccountFeedFactory) Normalize(account string) (string, error) {
@@ -61,7 +70,11 @@ func (f *fakeAccountFeedFactory) Start(ctx context.Context, account string) (liv
 	if !ok {
 		snapshot = liveAccountSnapshot{Account: account}
 	}
-	return &fakeAccountFeed{snapshot: snapshot, blockers: f.blockers[account]}, nil
+	var refreshSnapshot *liveAccountSnapshot
+	if refreshed, ok := f.refreshSnapshots[account]; ok {
+		refreshSnapshot = &refreshed
+	}
+	return &fakeAccountFeed{snapshot: snapshot, refreshSnapshot: refreshSnapshot, blockers: f.blockers[account]}, nil
 }
 
 func TestAcquireAccountsRollsBackNewPartialPair(t *testing.T) {

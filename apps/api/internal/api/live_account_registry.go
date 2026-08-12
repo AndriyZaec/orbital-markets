@@ -37,6 +37,7 @@ type liveAccountSnapshot struct {
 type liveAccountFeed interface {
 	Snapshot() liveAccountSnapshot
 	PreTradeBlockers(domain.Leg) []string
+	RefreshPositions(context.Context) error
 	SubmitSigned(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error)
 	WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error)
 	WaitForLeverage(context.Context, string, float64) error

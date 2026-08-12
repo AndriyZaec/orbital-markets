@@ -56,12 +56,6 @@ export function useLiveClose() {
       setState({ ...INITIAL, phase: 'error', errors: ['Both venue accounts must be connected'] })
       return
     }
-    if (!tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress ||
-      tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready') {
-      setState({ ...INITIAL, phase: 'error', errors: ['Authorize both venue trading agents first'] })
-      return
-    }
-
     setState({ ...INITIAL, phase: 'preparing' })
 
     try {

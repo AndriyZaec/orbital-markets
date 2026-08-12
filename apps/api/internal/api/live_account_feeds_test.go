@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
 )
 
 func TestVenueAccountNormalization(t *testing.T) {
@@ -64,5 +65,19 @@ func TestAgentIdentityRequiresVenueAddressFormat(t *testing.T) {
 		"pacifica", "owner", "3ogUn1GNXoASaRbxPNeVJnVv5rG4EPBtmQmX61jVorUe",
 	); err != nil {
 		t.Fatalf("valid Pacifica agent rejected: %v", err)
+	}
+}
+
+func TestPacificaAcceptedLeverageUpdatesLocalAccountState(t *testing.T) {
+	state := pacaccount.NewAccountState()
+	state.ResetForAccount("owner")
+	request := &domain.SigningRequest{
+		ID: "leverage", ClientOrderID: "leverage", Venue: "pacifica", Action: "update_leverage",
+		Account: "owner", Symbol: "VIRTUAL", Leverage: 2,
+	}
+
+	applyAcceptedPacificaLeverage(state, request)
+	if got := state.Snapshot().SymbolConfigs["VIRTUAL"].Leverage; got != 2 {
+		t.Fatalf("leverage = %v, want 2", got)
 	}
 }

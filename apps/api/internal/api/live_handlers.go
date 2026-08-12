@@ -942,22 +942,6 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
-		return
-	}
-	authorized, err := s.live.agentPairAuthorizationMatches(
-		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
-	)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
-		return
-	}
-	if !authorized {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
-		return
-	}
-
 	pos, err := s.liveStore.GetPositionForAccounts(
 		r.Context(), id, req.AccountPacifica, req.AccountHyperliquid,
 	)
@@ -966,7 +950,8 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pos.State != string(executor.ExecStateOpen) && pos.State != string(executor.ExecStateDegraded) {
+	if pos.State != string(executor.ExecStateOpen) && pos.State != string(executor.ExecStateDegraded) &&
+		pos.State != string(executor.ExecStateClosing) {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": fmt.Sprintf("position is %s, not closeable", pos.State),
 		})
@@ -986,6 +971,27 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			"reconciled_closed": true,
 			"signing_requests":  []any{},
 		})
+		return
+	}
+	if pos.State == string(executor.ExecStateClosing) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "position close is still being reconciled; venue exposure remains or fresh venue state is unavailable",
+		})
+		return
+	}
+	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required when venue exposure remains"})
+		return
+	}
+	authorized, err := s.live.agentPairAuthorizationMatches(
+		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
+		return
+	}
+	if !authorized {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
 		return
 	}
 
@@ -1049,10 +1055,25 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 	if s.live == nil || s.live.accounts == nil {
 		return false, nil
 	}
-	updatedAt, err := time.Parse(time.RFC3339, position.UpdatedAt)
-	if err != nil || time.Since(updatedAt) < positionReconciliationQuietPeriod {
+	reconcileAfter, err := s.liveStore.LastCloseActivity(ctx, position.ID)
+	if err != nil {
+		return false, err
+	}
+	if reconcileAfter.IsZero() {
+		reconcileAfter, err = time.Parse(time.RFC3339, position.UpdatedAt)
+	}
+	if err != nil || time.Since(reconcileAfter) < positionReconciliationQuietPeriod {
 		return false, nil
 	}
+	return s.reconcilePositionFromVenueTruth(ctx, position, accountPacifica, accountHyperliquid, reconcileAfter)
+}
+
+func (s *Server) reconcilePositionFromVenueTruth(
+	ctx context.Context,
+	position *executor.LivePosition,
+	accountPacifica, accountHyperliquid string,
+	after time.Time,
+) (bool, error) {
 
 	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
 	if err != nil {
@@ -1062,10 +1083,25 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 	defer accounts.Release()
 	unlock := accounts.Lock()
 	defer unlock()
-
+	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
+	defer cancel()
 	for _, venue := range []string{"pacifica", "hyperliquid"} {
 		feed, ok := accounts.Feed(venue)
-		if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, updatedAt) {
+		if !ok {
+			return false, nil
+		}
+		if err := feed.RefreshPositions(reconcileCtx); err != nil {
+			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
+			return false, nil
+		}
+	}
+	if !waitForPositionState(reconcileCtx, accounts, after) {
+		return false, nil
+	}
+
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		_, ok := accounts.Feed(venue)
+		if !ok {
 			return false, nil
 		}
 		size, _ := currentVenuePosition(accounts, venue, position.Asset)
@@ -1084,6 +1120,29 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 		s.logger.Info("live position: reconciled closed from venue state", "id", position.ID, "asset", position.Asset)
 	}
 	return changed, nil
+}
+
+func waitForPositionState(ctx context.Context, accounts *liveAccountContext, after time.Time) bool {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		ready := true
+		for _, venue := range []string{"pacifica", "hyperliquid"} {
+			feed, ok := accounts.Feed(venue)
+			if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, after) {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // handleLiveKill is the emergency kill switch — prepares close orders for all open live positions.

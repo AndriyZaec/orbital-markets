@@ -54,17 +54,16 @@ func TestLiveCloseReconcilesRecordedExposureAbsentFromBothVenues(t *testing.T) {
 	t.Cleanup(cancel)
 	updatedAt := time.Now()
 	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
-		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+		"pacifica": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
 			"sol-wallet": {Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt},
 		}},
-		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+		"hyperliquid": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
 			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
 		}},
 	}, accountFeedRegistryConfig{})
 
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
-		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
@@ -88,6 +87,68 @@ func TestLiveCloseReconcilesRecordedExposureAbsentFromBothVenues(t *testing.T) {
 	}
 	if state != string(executor.ExecStateClosed) {
 		t.Fatalf("state = %q, want closed", state)
+	}
+}
+
+func TestLiveCloseReconcilesStaleClosingPositionAbsentFromBothVenues(t *testing.T) {
+	server, database := newResidualExposureServer(t)
+	if _, err := database.Exec(`UPDATE live_positions SET state = 'closing' WHERE id = 'position-residual'`); err != nil {
+		t.Fatal(err)
+	}
+	registryCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveClose(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reconciled_closed":true`) {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestLiveCloseIgnoresFreshMonitorTimestampAfterOldCloseAttempt(t *testing.T) {
+	server, database := newResidualExposureServer(t)
+	if _, err := database.Exec(`
+		UPDATE live_positions SET updated_at = ? WHERE id = 'position-residual';
+		INSERT INTO live_close_outcomes (
+			position_id, leg, venue, client_order_id, requested_amount,
+			resolved, error, created_at, updated_at
+		) VALUES ('position-residual', 1, 'pacifica', 'old-close', 2.75, 1, 'rejected', ?, ?)`,
+		time.Now().Format(time.RFC3339), "2026-07-22T12:01:00Z", "2026-07-22T12:01:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	registryCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveClose(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reconciled_closed":true`) {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
 }
 

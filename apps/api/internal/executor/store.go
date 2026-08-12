@@ -278,6 +278,19 @@ func (s *Store) ConfirmedCloseLegs(ctx context.Context, positionID string) (map[
 	return legs, rows.Err()
 }
 
+func (s *Store) LastCloseActivity(ctx context.Context, positionID string) (time.Time, error) {
+	var raw sql.NullString
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT MAX(updated_at) FROM live_close_outcomes WHERE position_id = ?`, positionID,
+	).Scan(&raw); err != nil {
+		return time.Time{}, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, raw.String)
+}
+
 // MarkCloseDegraded records a terminal close failure without overwriting
 // monitoring fields from the open position.
 func (s *Store) MarkCloseDegraded(ctx context.Context, positionID string) error {

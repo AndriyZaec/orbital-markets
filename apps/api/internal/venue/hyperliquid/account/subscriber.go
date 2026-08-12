@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,7 @@ type Subscriber struct {
 	address string // Ethereum address (0x...)
 	client  *http.Client
 	logger  *slog.Logger
+	refresh sync.Mutex
 
 	firstUpdate bool // tracks whether we've logged the first successful update
 }
@@ -61,30 +63,27 @@ func (s *Subscriber) Run(ctx context.Context) {
 }
 
 func (s *Subscriber) poll(ctx context.Context) {
+	if err := s.RefreshPositions(ctx); err != nil && ctx.Err() == nil {
+		s.logger.Error("hl account: refresh failed", "err", err)
+		s.state.SetConnectedForAccount(s.address, false)
+	}
+}
+
+func (s *Subscriber) RefreshPositions(ctx context.Context) error {
+	s.refresh.Lock()
+	defer s.refresh.Unlock()
 	perpRaw, err := s.fetchInfo(ctx, "clearinghouseState")
 	if err != nil {
-		if ctx.Err() == nil {
-			s.logger.Error("hl account: fetch perp state failed", "err", err)
-			s.state.SetConnectedForAccount(s.address, false)
-		}
-		return
+		return err
 	}
 	spotRaw, err := s.fetchInfo(ctx, "spotClearinghouseState")
 	if err != nil {
-		if ctx.Err() == nil {
-			s.logger.Error("hl account: fetch unified balance failed", "err", err)
-			s.state.SetConnectedForAccount(s.address, false)
-		}
-		return
+		return err
 	}
 
 	margin, positions, err := parseAccountState(perpRaw, spotRaw)
 	if err != nil {
-		if ctx.Err() == nil {
-			s.logger.Error("hl account: parse failed", "err", err)
-			s.state.SetConnectedForAccount(s.address, false)
-		}
-		return
+		return err
 	}
 	s.state.UpdateMarginForAccount(s.address, margin)
 	s.state.UpdatePositionsForAccount(s.address, positions)
@@ -98,6 +97,7 @@ func (s *Subscriber) poll(ctx context.Context) {
 			"positions", len(positions),
 		)
 	}
+	return nil
 }
 
 func (s *Subscriber) fetchInfo(ctx context.Context, requestType string) ([]byte, error) {

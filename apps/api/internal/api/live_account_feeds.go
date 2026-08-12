@@ -35,13 +35,18 @@ func (f *pacificaAccountFeedFactory) Start(ctx context.Context, account string) 
 	client := paclive.NewClient(f.logger, nil, state)
 	subscriber := pacaccount.NewSubscriber(f.logger, state, account, tracker)
 	go subscriber.Run(ctx)
-	return &pacificaAccountFeed{state: state, tracker: tracker, client: client}, nil
+	return &pacificaAccountFeed{state: state, tracker: tracker, client: client, subscriber: subscriber}, nil
 }
 
 type pacificaAccountFeed struct {
-	state   *pacaccount.AccountState
-	tracker *paclive.Tracker
-	client  *paclive.Client
+	state      *pacaccount.AccountState
+	tracker    *paclive.Tracker
+	client     *paclive.Client
+	subscriber *pacaccount.Subscriber
+}
+
+func (f *pacificaAccountFeed) RefreshPositions(ctx context.Context) error {
+	return f.subscriber.RefreshPositions(ctx)
 }
 
 func (f *pacificaAccountFeed) Snapshot() liveAccountSnapshot {
@@ -95,9 +100,20 @@ func (f *pacificaAccountFeed) SubmitSigned(
 	request *domain.SigningRequest,
 ) (*domain.SubmissionResult, error) {
 	if request.Action == "update_leverage" {
-		return f.client.SubmitSignedLeverage(ctx, signed, request)
+		result, err := f.client.SubmitSignedLeverage(ctx, signed, request)
+		if err == nil && result != nil && result.Accepted {
+			applyAcceptedPacificaLeverage(f.state, request)
+		}
+		return result, err
 	}
 	return f.client.SubmitSignedOrder(ctx, signed, request, f.tracker)
+}
+
+func applyAcceptedPacificaLeverage(state *pacaccount.AccountState, request *domain.SigningRequest) {
+	config := state.Snapshot().SymbolConfigs[request.Symbol]
+	config.Symbol = request.Symbol
+	config.Leverage = float64(request.Leverage)
+	state.UpdateSymbolConfigForAccount(request.Account, config)
 }
 
 func (f *pacificaAccountFeed) WaitForFill(ctx context.Context, request *domain.SigningRequest) (*normFill, error) {
@@ -133,12 +149,17 @@ func (f *hyperliquidAccountFeedFactory) Start(ctx context.Context, account strin
 	subscriber := hlaccount.NewSubscriber(f.logger, state, account)
 	go subscriber.Run(ctx)
 	go tracker.Run(ctx)
-	return &hyperliquidAccountFeed{state: state, client: client}, nil
+	return &hyperliquidAccountFeed{state: state, client: client, subscriber: subscriber}, nil
 }
 
 type hyperliquidAccountFeed struct {
-	state  *hlaccount.AccountState
-	client *hllive.Client
+	state      *hlaccount.AccountState
+	client     *hllive.Client
+	subscriber *hlaccount.Subscriber
+}
+
+func (f *hyperliquidAccountFeed) RefreshPositions(ctx context.Context) error {
+	return f.subscriber.RefreshPositions(ctx)
 }
 
 func (f *hyperliquidAccountFeed) Snapshot() liveAccountSnapshot {
