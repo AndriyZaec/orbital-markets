@@ -277,12 +277,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			"state", activeSession.State,
 			"has_exposure", activeSession.HasExposure,
 		)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":      "existing live session for this asset requires recovery before retrying",
-			"code":       livePrepareExistingSession,
-			"session_id": activeSession.ID,
-			"state":      activeSession.State,
-		})
+		writeJSON(w, http.StatusConflict, liveSessionConflictResponse(
+			"Your previous trade is still being checked. No new orders can be placed for this market yet.",
+			activeSession.State,
+		))
 		return
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -376,12 +374,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			r.Context(), req.AccountPacifica, req.AccountHyperliquid, plan.Asset,
 		)
 		if activeErr == nil && activeSession.ID != sess.ID {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":      "another live session for this asset started concurrently",
-				"code":       livePrepareExistingSession,
-				"session_id": activeSession.ID,
-				"state":      activeSession.State,
-			})
+			writeJSON(w, http.StatusConflict, liveSessionConflictResponse(
+				"Another trade for this market started concurrently. Wait for its status to be confirmed.",
+				activeSession.State,
+			))
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist live session"})
@@ -408,6 +404,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		"expires_at":       leg1Open.ExpiresAt,
 		"signing_requests": []*domain.SigningRequest{pacificaLeverage, hyperliquidLeverage, leg1Open, leg1Unwind},
 	})
+}
+
+func liveSessionConflictResponse(message, state string) map[string]any {
+	return map[string]any{
+		"error": message,
+		"code":  livePrepareExistingSession,
+		"state": state,
+	}
 }
 
 func liveBaseAmount(notional, price float64) (float64, error) {

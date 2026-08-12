@@ -390,6 +390,13 @@ func TestLiveSessionStatusKeepsActiveRequestsRecovering(t *testing.T) {
 	}
 }
 
+func TestLivePrepareConflictDoesNotExposeActiveSessionID(t *testing.T) {
+	responseBody := liveSessionConflictResponse("trade still being checked", string(sessRecovering))
+	if _, exposed := responseBody["session_id"]; exposed {
+		t.Fatalf("conflict response exposed active session: %+v", responseBody)
+	}
+}
+
 func TestAmbiguousCloseSubmissionRemainsPending(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	recorded := server.recordAmbiguousCloseSubmission(&domain.SigningRequest{
