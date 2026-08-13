@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  canRequestLiveClose,
   hasActionableRecordedFills,
   recoveryPresentation,
 } from '../src/lib/degraded-execution.ts'
@@ -27,4 +28,10 @@ test('close actions require a confirmed positive recorded fill', () => {
   assert.equal(hasActionableRecordedFills([{ filled: false, filled_amount: 10 }]), false)
   assert.equal(hasActionableRecordedFills([{ filled: true, filled_amount: 0 }]), false)
   assert.equal(hasActionableRecordedFills([{ filled: true, filled_amount: 2.75 }]), true)
+})
+
+test('an open position remains closeable before detail fills render', () => {
+  assert.equal(canRequestLiveClose('open', []), true)
+  assert.equal(canRequestLiveClose('degraded', []), false)
+  assert.equal(canRequestLiveClose('closing', [{ filled: true, filled_amount: 2.75 }]), true)
 })

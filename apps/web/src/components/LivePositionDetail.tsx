@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
 import { useLiveClose } from '@/hooks/useLiveClose'
-import { hasActionableRecordedFills } from '@/lib/degraded-execution'
+import { canRequestLiveClose, hasActionableRecordedFills } from '@/lib/degraded-execution'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
@@ -90,7 +90,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const [confirmClose, setConfirmClose] = useState(false)
 
   const hasRecordedExposure = hasActionableRecordedFills(fills)
-  const canClose = (pos.state === 'open' || pos.state === 'degraded' || pos.state === 'closing') && !loading && hasRecordedExposure
+  const canClose = pos.state === 'open' || (!loading && canRequestLiveClose(pos.state, fills))
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
