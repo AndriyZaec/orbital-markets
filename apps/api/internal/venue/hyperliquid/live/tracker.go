@@ -74,6 +74,13 @@ func (t *Tracker) Register(result *SubmitResult, requestedAmount float64) {
 		requestedAmt:  requestedAmount,
 		submittedAt:   result.SubmittedAt,
 		status:        OrderStatusAccepted,
+		filledAmt:     result.FilledAmount,
+		avgPrice:      result.AvgFillPrice,
+	}
+	if result.FilledAmount > 0 && requestedAmount > 0 &&
+		result.FilledAmount/requestedAmount >= fillFullThreshold {
+		order.status = OrderStatusFilled
+		order.resolvedAt = result.RespondedAt
 	}
 
 	if result.OrderID != "" {
