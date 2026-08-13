@@ -144,9 +144,9 @@ function buildReadiness(args: {
   if (errored) blockingReasons.push('Wallet reported an error')
   if (!walletConnected) blockingReasons.push('Wallet not connected')
   else if (!signerReady) blockingReasons.push('Wallet cannot sign required messages')
-  else if (agent.status === 'authorizing') blockingReasons.push('Trading agent authorization in progress')
-  else if (agent.status === 'error') blockingReasons.push(agent.error || 'Trading agent authorization failed')
-  else if (!agentReady) blockingReasons.push('Trading agent authorization required')
+  else if (agent.status === 'authorizing') blockingReasons.push('Authorization in progress')
+  else if (agent.status === 'error') blockingReasons.push(agent.error || 'Authorization failed')
+  else if (!agentReady) blockingReasons.push('Authorization required')
   else if (!streamReady) blockingReasons.push(balance.reason || 'Waiting on account data stream')
   else if (!accountFresh) blockingReasons.push(balance.reason || 'Account data stale — refreshing')
 

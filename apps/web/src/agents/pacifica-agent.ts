@@ -5,7 +5,7 @@ import type { SignedAction, SigningRequest } from '@/types/signing'
 import { saveStoredTradingAgent, type StorageLike } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 
-const bindExpiryWindow = 5_000
+const bindExpiryWindow = 30_000
 const maxOrderExpiryWindow = 120_000
 
 export interface PacificaBindAgentRequest {

@@ -8,7 +8,7 @@ export async function signWithStoredTradingAgent(
   request: SigningRequest,
 ): Promise<SignedAction> {
   const agent = loadStoredTradingAgent(storage, request.venue, request.account)
-  if (!agent) throw new Error(`${venueName(request.venue)} trading agent is not ready`)
+  if (!agent) throw new Error(`${venueName(request.venue)} authorization is not ready`)
   if (request.venue === 'pacifica') return signPacificaAgentRequest(request, agent)
   return signHyperliquidAgentRequest(request, agent)
 }

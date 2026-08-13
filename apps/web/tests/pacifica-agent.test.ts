@@ -86,6 +86,7 @@ test('Pacifica authorization relays no private key and persists only after bindi
   assert.equal(relayed.includes(agent.privateKey), false)
   assert.equal(relayed.includes('private'), false)
   assert.equal(relayed.includes('bind_agent_wallet'), false)
+  assert.equal(JSON.parse(relayed).expiry_window, 30_000)
 })
 
 test('a local Pacifica agent rejects non-order payloads', async () => {

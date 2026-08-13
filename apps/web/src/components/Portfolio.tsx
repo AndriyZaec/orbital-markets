@@ -324,7 +324,7 @@ const STATUS_VIEW: Record<
   disconnected:      { label: 'Not connected',   color: 'text-muted-foreground', dot: 'bg-muted-foreground' },
   wallet_connected:  { label: 'Wallet only',     color: 'text-yellow-400',       dot: 'bg-yellow-400' },
   signer_missing:    { label: 'Signer missing',  color: 'text-yellow-400',       dot: 'bg-yellow-400' },
-  agent_missing:     { label: 'Agent required',  color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  agent_missing:     { label: 'Authorization required', color: 'text-yellow-400', dot: 'bg-yellow-400' },
   agent_authorizing: { label: 'Authorizing',     color: 'text-yellow-400',       dot: 'bg-yellow-400' },
   balance_pending:   { label: 'Balance pending', color: 'text-yellow-400',       dot: 'bg-yellow-400' },
   account_stale:     { label: 'Data stale',      color: 'text-yellow-400',       dot: 'bg-yellow-400' },

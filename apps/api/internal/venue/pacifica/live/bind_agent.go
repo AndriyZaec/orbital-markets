@@ -16,6 +16,7 @@ import (
 const (
 	bindAgentURL       = "https://api.pacifica.fi/api/v1/agent/bind"
 	bindAgentTimeout   = 10 * time.Second
+	bindExpiryWindow   = 30_000
 	maxBindingResponse = 64 << 10
 )
 
@@ -40,11 +41,11 @@ func (r BindAgentRequest) Validate(now time.Time) error {
 	if err != nil || len(signature) != ed25519.SignatureSize {
 		return fmt.Errorf("invalid Pacifica owner signature")
 	}
-	if r.ExpiryWindow != 5_000 {
+	if r.ExpiryWindow != bindExpiryWindow {
 		return fmt.Errorf("invalid Pacifica binding expiry window")
 	}
 	if delta := now.UnixMilli() - r.Timestamp; delta < -r.ExpiryWindow || delta > r.ExpiryWindow {
-		return fmt.Errorf("Pacifica agent binding timestamp is stale")
+		return fmt.Errorf("Pacifica authorization expired; try again")
 	}
 	message, err := BuildSigningMessage("bind_agent_wallet", r.Timestamp, r.ExpiryWindow, map[string]any{
 		"agent_wallet": r.AgentWallet,

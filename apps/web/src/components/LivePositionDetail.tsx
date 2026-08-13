@@ -246,7 +246,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
                 <p className="text-[11px] text-muted-foreground flex-1">
                   {pos.state !== 'open'
                     ? 'Refresh both venues and close any position for this asset? This may include exposure opened outside Orbital.'
-                    : 'Close both legs? Local trading agents will sign each reduce-only order.'}
+                    : 'Close both legs? Local authorization keys will sign each reduce-only order.'}
                 </p>
                 <Button variant="secondary" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
                 <Button variant="destructive" size="xs" onClick={handleClose}>Confirm</Button>
@@ -256,7 +256,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {isClosing && (
               <p className="text-[11px] text-yellow-400">
                 {liveClose.state.phase === 'preparing' ? (pos.state !== 'open' ? 'Checking venue state...' : 'Preparing close orders...') :
-                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local agents` :
+                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local authorization` :
                  liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
                  `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
               </p>
