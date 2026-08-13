@@ -32,6 +32,6 @@ test('close actions require a confirmed positive recorded fill', () => {
 
 test('an open position remains closeable before detail fills render', () => {
   assert.equal(canRequestLiveClose('open', []), true)
-  assert.equal(canRequestLiveClose('degraded', []), false)
+  assert.equal(canRequestLiveClose('degraded', []), true)
   assert.equal(canRequestLiveClose('closing', [{ filled: true, filled_amount: 2.75 }]), true)
 })

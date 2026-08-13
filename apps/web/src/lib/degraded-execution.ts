@@ -87,6 +87,6 @@ export function canRequestLiveClose(
   state: string,
   fills: Array<{ filled: boolean; filled_amount: number }>,
 ): boolean {
-  if (state === 'open') return true
-  return (state === 'degraded' || state === 'closing') && hasActionableRecordedFills(fills)
+  if (state === 'open' || state === 'degraded') return true
+  return state === 'closing' && hasActionableRecordedFills(fills)
 }

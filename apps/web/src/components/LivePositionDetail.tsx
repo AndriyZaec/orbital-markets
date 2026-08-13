@@ -90,7 +90,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const [confirmClose, setConfirmClose] = useState(false)
 
   const hasRecordedExposure = hasActionableRecordedFills(fills)
-  const canClose = pos.state === 'open' || (!loading && canRequestLiveClose(pos.state, fills))
+  const canClose = canRequestLiveClose(pos.state, fills)
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
@@ -238,14 +238,14 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {/* Confirm prompt */}
             {canClose && !confirmClose && !isClosing && !closeDone && (
               <Button variant="destructive" size="sm" className="w-full" onClick={() => setConfirmClose(true)}>
-                {pos.state === 'open' ? 'Close Position' : 'Verify Venue Exposure'}
+                {pos.state === 'open' ? 'Close Position' : 'Check & Close Venue Exposure'}
               </Button>
             )}
             {confirmClose && !isClosing && (
               <div className="flex items-center gap-2">
                 <p className="text-[11px] text-muted-foreground flex-1">
                   {pos.state !== 'open'
-                    ? 'Verify both venues first. If exposure remains, local agents will sign the required reduce-only close order.'
+                    ? 'Refresh both venues and close any position for this asset? This may include exposure opened outside Orbital.'
                     : 'Close both legs? Local trading agents will sign each reduce-only order.'}
                 </p>
                 <Button variant="secondary" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
