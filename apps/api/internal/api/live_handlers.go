@@ -1017,9 +1017,22 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	closeFills := fills
+	venueDerived := false
+	if pos.State == string(executor.ExecStateDegraded) && s.live.accounts != nil {
+		closeFills, err = s.freshVenueExposureFills(
+			r.Context(), pos, req.AccountPacifica, req.AccountHyperliquid,
+		)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		venueDerived = true
+	}
+
 	var signingRequests []*domain.SigningRequest
-	for _, fill := range fills {
-		if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
+	for _, fill := range closeFills {
+		if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
 			continue
 		}
 		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
@@ -1039,6 +1052,18 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		s.live.signingStore.Store(sigReq)
 		signingRequests = append(signingRequests, sigReq)
 	}
+	if len(signingRequests) == 0 && venueDerived {
+		if _, err := s.liveStore.MarkClosed(r.Context(), id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reconcile venue exposure"})
+			return
+		}
+		s.liveStore.InsertEvent(r.Context(), id, "venue_reconciled_closed", executor.ExecStateClosed,
+			"fresh venue state shows no remaining position on either venue")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"position_id": id, "reconciled_closed": true, "signing_requests": []any{},
+		})
+		return
+	}
 
 	if len(signingRequests) == 0 {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "no filled legs to close"})
@@ -1056,6 +1081,62 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		"position_id":      id,
 		"signing_requests": signingRequests,
 	})
+}
+
+func (s *Server) freshVenueExposureFills(
+	ctx context.Context,
+	position *executor.LivePosition,
+	accountPacifica, accountHyperliquid string,
+) ([]executor.LiveFill, error) {
+	if s.live.accounts == nil {
+		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
+	}
+	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
+	if err != nil {
+		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
+	}
+	defer accounts.Release()
+	unlock := accounts.Lock()
+	defer unlock()
+
+	refreshCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
+	defer cancel()
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		feed, ok := accounts.Feed(venue)
+		if !ok || feed.RefreshPositions(refreshCtx) != nil {
+			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
+		}
+		snapshot := feed.Snapshot()
+		if snapshot.PositionsUpdatedAt.IsZero() || time.Since(snapshot.PositionsUpdatedAt) > admissionFreshness {
+			return nil, fmt.Errorf("fresh %s exposure is unavailable; verify both venues directly", venue)
+		}
+	}
+
+	var fills []executor.LiveFill
+	for leg, venue := range []string{position.VenueA, position.VenueB} {
+		size, price := currentVenuePosition(accounts, venue, position.Asset)
+		if math.Abs(size) <= 1e-9 {
+			continue
+		}
+		side := domain.SideLong
+		if size < 0 {
+			side = domain.SideShort
+		}
+		fills = append(fills, executor.LiveFill{
+			PositionID:      position.ID,
+			Leg:             leg + 1,
+			Venue:           venue,
+			Symbol:          position.Asset,
+			Side:            string(side),
+			RequestedAmount: math.Abs(size),
+			FilledAmount:    math.Abs(size),
+			AvgFillPrice:    price,
+			FillRatio:       1,
+			Accepted:        true,
+			Filled:          true,
+		})
+	}
+	return fills, nil
 }
 
 func (s *Server) reconcilePositionAbsentFromVenues(

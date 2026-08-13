@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
 import { useLiveClose } from '@/hooks/useLiveClose'
-import { hasActionableRecordedFills } from '@/lib/degraded-execution'
+import { canRequestLiveClose, hasActionableRecordedFills } from '@/lib/degraded-execution'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
@@ -90,7 +90,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const [confirmClose, setConfirmClose] = useState(false)
 
   const hasRecordedExposure = hasActionableRecordedFills(fills)
-  const canClose = (pos.state === 'open' || pos.state === 'degraded' || pos.state === 'closing') && !loading && hasRecordedExposure
+  const canClose = canRequestLiveClose(pos.state, fills)
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
 
@@ -238,15 +238,15 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {/* Confirm prompt */}
             {canClose && !confirmClose && !isClosing && !closeDone && (
               <Button variant="destructive" size="sm" className="w-full" onClick={() => setConfirmClose(true)}>
-                {pos.state === 'open' ? 'Close Position' : 'Verify Venue Exposure'}
+                {pos.state === 'open' ? 'Close Position' : 'Check & Close Venue Exposure'}
               </Button>
             )}
             {confirmClose && !isClosing && (
               <div className="flex items-center gap-2">
                 <p className="text-[11px] text-muted-foreground flex-1">
                   {pos.state !== 'open'
-                    ? 'Verify both venues first. If exposure remains, local agents will sign the required reduce-only close order.'
-                    : 'Close both legs? Local trading agents will sign each reduce-only order.'}
+                    ? 'Refresh both venues and close any position for this asset? This may include exposure opened outside Orbital.'
+                    : 'Close both legs? Local authorization keys will sign each reduce-only order.'}
                 </p>
                 <Button variant="secondary" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
                 <Button variant="destructive" size="xs" onClick={handleClose}>Confirm</Button>
@@ -256,7 +256,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {isClosing && (
               <p className="text-[11px] text-yellow-400">
                 {liveClose.state.phase === 'preparing' ? (pos.state !== 'open' ? 'Checking venue state...' : 'Preparing close orders...') :
-                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local agents` :
+                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local authorization` :
                  liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
                  `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
               </p>

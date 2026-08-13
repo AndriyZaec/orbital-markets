@@ -258,7 +258,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   <div className="mt-2 mb-2 rounded border border-border/60 bg-white/[0.02] px-2 py-2 flex flex-col gap-1">
                     <DiagRow label="Wallet" pill={walletPill(readiness)} />
                     <DiagRow label="Owner signer" pill={signerPill(readiness)} />
-                    <DiagRow label="Trading agent" pill={agentPill(readiness)} />
+                    <DiagRow label="Authorization" pill={agentPill(readiness)} />
                     <DiagRow label="Balance" pill={balancePill(readiness)} />
                     {(readiness.equity !== null || readiness.available !== null) && (
                       <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
@@ -294,7 +294,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                         >
                           {readiness.agentStatus === 'authorizing'
                             ? 'Authorizing…'
-                            : readiness.agentStatus === 'error' ? 'Reauthorize Agent' : `Authorize ${venue.name} Agent`}
+                            : readiness.agentStatus === 'error' ? `Reauthorize ${venue.name}` : `Authorize ${venue.name}`}
                         </button>
                       )}
                       {readiness.agentReady && (
@@ -304,14 +304,14 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                             disabled={agentChangeBlocked}
                             className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
-                            Reauthorize Agent
+                            Reauthorize
                           </button>
                           <button
                             onClick={() => tradingAgents.clear(venue.id as VenueId)}
                             disabled={agentChangeBlocked}
                             className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
-                            Clear Local Agent
+                            Clear Local Authorization
                           </button>
                         </>
                       )}
@@ -346,7 +346,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
-            Agent keys stay in this browser session. Clearing a local key does not revoke it at the venue. Pacifica agents must be treated as having broad POST authority, including documented withdrawal endpoints.
+            Authorization keys stay in this browser session. Clearing a local key does not revoke it at the venue. Pacifica authorization must be treated as having broad POST authority, including documented withdrawal endpoints.
           </p>
         </div>
       </div>

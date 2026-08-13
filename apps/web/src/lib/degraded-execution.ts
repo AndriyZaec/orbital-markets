@@ -82,3 +82,11 @@ export function hasActionableRecordedFills(
 ): boolean {
   return fills.some((fill) => fill.filled && fill.filled_amount > 0)
 }
+
+export function canRequestLiveClose(
+  state: string,
+  fills: Array<{ filled: boolean; filled_amount: number }>,
+): boolean {
+  if (state === 'open' || state === 'degraded') return true
+  return state === 'closing' && hasActionableRecordedFills(fills)
+}

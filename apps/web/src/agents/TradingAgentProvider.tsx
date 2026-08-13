@@ -24,7 +24,7 @@ function missingState(venue: Venue, ownerAddress: string | null): TradingAgentSt
 }
 
 function browserStorage(): StorageLike {
-  if (typeof window === 'undefined') throw new Error('Trading agents require a browser session')
+  if (typeof window === 'undefined') throw new Error('Trading authorization requires a browser session')
   return window.sessionStorage
 }
 
@@ -106,7 +106,7 @@ function TradingAgentSession({
       }
       setState({ venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Agent authorization failed'
+      const message = error instanceof Error ? error.message : 'Authorization failed'
       if (ownerStillCurrent(venue, ownerAddress, owners.current)) {
         setState({ venue, ownerAddress, agentAddress: null, status: 'error', error: message })
       }
@@ -189,5 +189,5 @@ async function relayAuthorization(
   })
   if (response.ok) return
   const body = await response.json().catch(() => null) as { error?: string } | null
-  throw new Error(body?.error ?? `Agent authorization failed (${response.status})`)
+  throw new Error(body?.error ?? `Authorization failed (${response.status})`)
 }

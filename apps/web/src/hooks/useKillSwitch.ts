@@ -86,7 +86,7 @@ export function useKillSwitch() {
     }
     if (!tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress ||
       tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready') {
-      setState(s => ({ ...s, phase: 'error', errors: ['Authorize both venue trading agents first'] }))
+      setState(s => ({ ...s, phase: 'error', errors: ['Authorize both venues first'] }))
       return
     }
 

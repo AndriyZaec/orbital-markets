@@ -45,6 +45,8 @@ type SubmitResult struct {
 	ClientOrderID string    `json:"client_order_id"`
 	Symbol        string    `json:"symbol"`
 	Accepted      bool      `json:"accepted"`
+	FilledAmount  float64   `json:"filled_amount,omitempty"`
+	AvgFillPrice  float64   `json:"avg_fill_price,omitempty"`
 	Error         string    `json:"error,omitempty"`
 	SubmittedAt   time.Time `json:"submitted_at"`
 	RespondedAt   time.Time `json:"responded_at"`

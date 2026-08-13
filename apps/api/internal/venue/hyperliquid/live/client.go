@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -337,6 +338,7 @@ func (c *Client) parseResponse(
 	// Resting:    {"resting": {"oid": 77738308}}
 	// Error:      {"error": "Order must have minimum value of $10."}
 	var orderID string
+	var filledAmount, avgFillPrice float64
 	if len(orderResp.Data.Statuses) > 0 {
 		var status struct {
 			Resting struct {
@@ -362,6 +364,8 @@ func (c *Client) parseResponse(
 			}
 			if status.Filled.OID > 0 {
 				orderID = fmt.Sprintf("%d", status.Filled.OID)
+				filledAmount, _ = strconv.ParseFloat(status.Filled.TotalSz, 64)
+				avgFillPrice, _ = strconv.ParseFloat(status.Filled.AvgPx, 64)
 			} else if status.Resting.OID > 0 {
 				orderID = fmt.Sprintf("%d", status.Resting.OID)
 			}
@@ -373,6 +377,8 @@ func (c *Client) parseResponse(
 		ClientOrderID: clientOrderID,
 		Symbol:        symbol,
 		Accepted:      true,
+		FilledAmount:  filledAmount,
+		AvgFillPrice:  avgFillPrice,
 		SubmittedAt:   submittedAt,
 		RespondedAt:   respondedAt,
 	}

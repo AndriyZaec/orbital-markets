@@ -64,6 +64,6 @@ func validBindAgentRequest(t *testing.T, timestamp int64) BindAgentRequest {
 	return BindAgentRequest{
 		Account:   base58.Encode(owner.Public().(ed25519.PublicKey)),
 		Signature: base58.Encode(ed25519.Sign(owner, message)),
-		Timestamp: timestamp, ExpiryWindow: 5_000, AgentWallet: agentAddress,
+		Timestamp: timestamp, ExpiryWindow: 30_000, AgentWallet: agentAddress,
 	}
 }

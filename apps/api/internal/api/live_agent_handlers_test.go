@@ -162,7 +162,7 @@ func validPacificaBindRequest(t *testing.T, timestamp int64) pacificlive.BindAge
 		agentSeed[index] = byte(index + 32)
 	}
 	agent := ed25519.NewKeyFromSeed(agentSeed)
-	message, err := pacificlive.BuildSigningMessage("bind_agent_wallet", timestamp, 5_000, map[string]any{
+	message, err := pacificlive.BuildSigningMessage("bind_agent_wallet", timestamp, 30_000, map[string]any{
 		"agent_wallet": base58.Encode(agent.Public().(ed25519.PublicKey)),
 	})
 	if err != nil {
@@ -170,7 +170,7 @@ func validPacificaBindRequest(t *testing.T, timestamp int64) pacificlive.BindAge
 	}
 	return pacificlive.BindAgentRequest{
 		Account: ownerAddress(owner), Signature: base58.Encode(ed25519.Sign(owner, message)),
-		Timestamp: timestamp, ExpiryWindow: 5_000,
+		Timestamp: timestamp, ExpiryWindow: 30_000,
 		AgentWallet: base58.Encode(agent.Public().(ed25519.PublicKey)),
 	}
 }

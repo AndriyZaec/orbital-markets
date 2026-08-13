@@ -156,7 +156,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
             <DialogTitle className="text-red-400">Close all live positions?</DialogTitle>
             <DialogDescription>
               This will submit close orders for all {openPositions.length} open live position{openPositions.length !== 1 ? 's' : ''} across connected venues.
-              Browser-local trading agents will sign every reduce-only close before any order is submitted.
+              Browser-local authorization keys will sign every reduce-only close before any order is submitted.
             </DialogDescription>
           </DialogHeader>
 
@@ -200,7 +200,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
               )}
               {kill.state.phase === 'signing' && (
                 <p className="text-yellow-400 text-[11px]">
-                  Signing order {kill.state.signed + 1} of {kill.state.totalRequests} with local agents
+                  Signing order {kill.state.signed + 1} of {kill.state.totalRequests} with local authorization
                 </p>
               )}
               {kill.state.phase === 'submitting' && (
@@ -285,7 +285,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
           <div className="flex flex-col items-center justify-center py-8 gap-3">
             {!aggregate.allReady ? (
               <>
-                <p className="text-muted-foreground text-xs">Connect both wallets and authorize trading agents to start live trading</p>
+                <p className="text-muted-foreground text-xs">Connect both wallets and authorize each venue to start live trading</p>
                 {onConnectWallets && (
                   <button
                     onClick={onConnectWallets}

@@ -293,6 +293,47 @@ func TestLiveCloseKeepsRecordedExposureWhenVenuePositionExists(t *testing.T) {
 	}
 }
 
+func TestLiveCloseUsesFreshVenueExposureWhenRecordedFillsAreMissing(t *testing.T) {
+	server, database := newResidualExposureServer(t)
+	if _, err := database.Exec(`DELETE FROM live_fills WHERE position_id = 'position-residual'`); err != nil {
+		t.Fatal(err)
+	}
+	registryCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {
+				Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt,
+				Positions: []liveAccountPosition{{Symbol: "SOL", Side: "long", Size: 2.75, EntryPrice: 100}},
+			},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{refreshSnapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveClose(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		SigningRequests []domain.SigningRequest `json:"signing_requests"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.SigningRequests) != 1 || body.SigningRequests[0].Amount != 2.75 || body.SigningRequests[0].Side != "ask" {
+		t.Fatalf("signing requests = %+v, want venue-derived Pacifica close", body.SigningRequests)
+	}
+}
+
 func TestLiveEventsEmitsInitialAccountSnapshots(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	registryCtx, cancelRegistry := context.WithCancel(context.Background())

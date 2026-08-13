@@ -232,7 +232,7 @@ function useLiveExecutionState() {
     }
     if (tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready' ||
       !tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress) {
-      setState({ ...INITIAL_STATE, phase: 'failed', error: 'Authorize both venue trading agents first' })
+      setState({ ...INITIAL_STATE, phase: 'failed', error: 'Authorize both venues first' })
       return
     }
 
