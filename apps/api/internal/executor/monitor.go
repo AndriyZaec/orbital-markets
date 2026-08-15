@@ -57,10 +57,6 @@ func (m *Monitor) tick(ctx context.Context) {
 		m.logger.Error("live monitor: list open positions", "err", err)
 		return
 	}
-	if len(positions) == 0 {
-		return
-	}
-
 	for i := range positions {
 		m.evaluate(ctx, &positions[i])
 	}
@@ -104,7 +100,7 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 		leg2Snap = snapA
 	}
 
-	if leg1Snap.BidPrice <= 0 || leg2Snap.BidPrice <= 0 {
+	if leg1Snap.MarkPrice <= 0 || leg2Snap.MarkPrice <= 0 {
 		return
 	}
 
@@ -113,24 +109,14 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 	// Current spread (annualized funding edge)
 	update.CurrentSpread = domain.AnnualizedGrossEdge(leg1Snap.FundingRate, leg2Snap.FundingRate)
 
-	// Per-leg current prices (exit side)
+	// Venue UIs report unrealized PnL against mark price, not executable BBO.
 	leg1Side := domain.Side(leg1.Side)
-	if leg1Side == domain.SideLong {
-		update.Leg1CurPrice = leg1Snap.BidPrice  // close long at bid
-		update.Leg2CurPrice = leg2Snap.AskPrice  // close short at ask
-	} else {
-		update.Leg1CurPrice = leg1Snap.AskPrice  // close short at ask
-		update.Leg2CurPrice = leg2Snap.BidPrice  // close long at bid
-	}
+	leg2Side := domain.Side(leg2.Side)
+	update.Leg1CurPrice = leg1Snap.MarkPrice
+	update.Leg2CurPrice = leg2Snap.MarkPrice
 
-	// Price P&L per leg
-	if leg1Side == domain.SideLong {
-		update.PricePnL = (update.Leg1CurPrice-leg1.AvgFillPrice)/leg1.AvgFillPrice*leg1.FilledAmount +
-			(leg2.AvgFillPrice-update.Leg2CurPrice)/leg2.AvgFillPrice*leg2.FilledAmount
-	} else {
-		update.PricePnL = (leg1.AvgFillPrice-update.Leg1CurPrice)/leg1.AvgFillPrice*leg1.FilledAmount +
-			(update.Leg2CurPrice-leg2.AvgFillPrice)/leg2.AvgFillPrice*leg2.FilledAmount
-	}
+	update.PricePnL = legPricePnL(leg1Side, leg1.AvgFillPrice, update.Leg1CurPrice, leg1.FilledAmount) +
+		legPricePnL(leg2Side, leg2.AvgFillPrice, update.Leg2CurPrice, leg2.FilledAmount)
 
 	// Funding P&L (accumulated since open)
 	if pos.OpenedAt != "" {
@@ -138,7 +124,6 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 		if !openedAt.IsZero() {
 			hoursOpen := time.Since(openedAt).Hours()
 			if leg1Side == domain.SideLong {
-				// Long pays funding, short collects
 				update.FundingPnL = (-leg1Snap.FundingRate*leg1.FilledAmount +
 					leg2Snap.FundingRate*leg2.FilledAmount) * hoursOpen
 			} else {
@@ -165,10 +150,6 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 
 	// Liquidation prices and risk
 	update.Leg1LiqPrice = domain.LiquidationPrice(leg1.AvgFillPrice, leg1Side, pos.Leverage)
-	leg2Side := domain.SideLong
-	if leg1Side == domain.SideLong {
-		leg2Side = domain.SideShort
-	}
 	update.Leg2LiqPrice = domain.LiquidationPrice(leg2.AvgFillPrice, leg2Side, pos.Leverage)
 
 	update.Leg1LiqDist = domain.LiquidationDistance(update.Leg1CurPrice, update.Leg1LiqPrice, leg1Side)
@@ -208,4 +189,11 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 			"basis_change", fmt.Sprintf("%.2f%%", update.BasisChange*100),
 		)
 	}
+}
+
+func legPricePnL(side domain.Side, entryPrice, markPrice, baseAmount float64) float64 {
+	if side == domain.SideShort {
+		return (entryPrice - markPrice) * baseAmount
+	}
+	return (markPrice - entryPrice) * baseAmount
 }
