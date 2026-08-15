@@ -29,11 +29,14 @@ type trackedOrder struct {
 	requestedAmt  float64
 	submittedAt   time.Time
 
-	status     OrderStatus
-	fills      []tradeUpdate
-	totalFee   float64
-	lastUpdate time.Time
-	error      string
+	status               OrderStatus
+	fills                []tradeUpdate
+	seenTradeIDs         map[int64]struct{}
+	totalFee             float64
+	reportedFilledAmount float64
+	reportedAvgFillPrice float64
+	lastUpdate           time.Time
+	error                string
 }
 
 // tradeUpdate is a single fill event from account_trades.
@@ -64,14 +67,43 @@ func (t *Tracker) Register(submitResult *SubmitResult, requestedAmount float64) 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	if order, exists := t.orders[submitResult.ClientOrderID]; exists {
+		order.mu.Lock()
+		defer order.mu.Unlock()
+		if submitResult.OrderID != "" {
+			order.orderID = submitResult.OrderID
+		}
+		if submitResult.Symbol != "" {
+			order.symbol = submitResult.Symbol
+		}
+		if requestedAmount > 0 {
+			order.requestedAmt = requestedAmount
+		}
+		if !submitResult.SubmittedAt.IsZero() {
+			order.submittedAt = submitResult.SubmittedAt
+		}
+		if !submitResult.Accepted && !order.status.IsTerminal() {
+			order.status = OrderStatusRejected
+			order.error = submitResult.Error
+		}
+		order.lastUpdate = time.Now()
+		return
+	}
+
+	status := OrderStatusAccepted
+	if !submitResult.Accepted {
+		status = OrderStatusRejected
+	}
 	t.orders[submitResult.ClientOrderID] = &trackedOrder{
 		orderID:       submitResult.OrderID,
 		clientOrderID: submitResult.ClientOrderID,
 		symbol:        submitResult.Symbol,
 		requestedAmt:  requestedAmount,
 		submittedAt:   submitResult.SubmittedAt,
-		status:        OrderStatusAccepted,
+		status:        status,
+		seenTradeIDs:  make(map[int64]struct{}),
 		lastUpdate:    time.Now(),
+		error:         submitResult.Error,
 	}
 }
 
@@ -135,11 +167,16 @@ func (t *Tracker) HandleOrderUpdate(data json.RawMessage) {
 		}
 
 		// Map Pacifica order status to Orbital status
+		filledAmt := parseFloat(u.F)
+		avgFillPrice := parseFloat(u.P)
+		if filledAmt > order.reportedFilledAmount {
+			order.reportedFilledAmount = filledAmt
+			order.reportedAvgFillPrice = avgFillPrice
+		}
 		switch u.OS {
 		case "filled":
 			order.status = OrderStatusFilled
 		case "cancelled", "canceled":
-			filledAmt := parseFloat(u.F)
 			if filledAmt > 0 {
 				order.status = OrderStatusPartialFill
 			} else {
@@ -150,7 +187,6 @@ func (t *Tracker) HandleOrderUpdate(data json.RawMessage) {
 		case "expired":
 			order.status = OrderStatusExpired
 		case "open", "partial_fill":
-			filledAmt := parseFloat(u.F)
 			if filledAmt > 0 && order.requestedAmt > 0 &&
 				filledAmt/order.requestedAmt >= fillFullThreshold {
 				order.status = OrderStatusFilled
@@ -189,13 +225,14 @@ func (t *Tracker) HandleOrderUpdate(data json.RawMessage) {
 //	}]
 func (t *Tracker) HandleTrade(data json.RawMessage) {
 	var trades []struct {
-		I  int64   `json:"i"`  // order ID
-		CI *string `json:"I"`  // client order ID (nullable)
-		S  string  `json:"s"`  // symbol
-		P  string  `json:"p"`  // price
-		A  string  `json:"a"`  // amount
-		F  string  `json:"f"`  // fee
-		T  int64   `json:"t"`  // timestamp ms
+		H  int64   `json:"h"` // history ID
+		I  int64   `json:"i"` // order ID
+		CI *string `json:"I"` // client order ID (nullable)
+		S  string  `json:"s"` // symbol
+		P  string  `json:"p"` // price
+		A  string  `json:"a"` // amount
+		F  string  `json:"f"` // fee
+		T  int64   `json:"t"` // timestamp ms
 	}
 	if err := json.Unmarshal(data, &trades); err != nil {
 		t.logger.Warn("pacifica tracker: parse trade", "err", err)
@@ -235,6 +272,13 @@ func (t *Tracker) HandleTrade(data json.RawMessage) {
 		fee := parseFloat(tr.F)
 
 		order.mu.Lock()
+		if tr.H > 0 {
+			if _, seen := order.seenTradeIDs[tr.H]; seen {
+				order.mu.Unlock()
+				continue
+			}
+			order.seenTradeIDs[tr.H] = struct{}{}
+		}
 		fill := tradeUpdate{
 			Price:  price,
 			Amount: amount,
@@ -329,6 +373,10 @@ func (t *Tracker) buildResult(clientOrderID string, finalStatus OrderStatus) (*F
 		}
 		t := f.At
 		lastFill = &t
+	}
+	if order.reportedFilledAmount > filledAmount {
+		filledAmount = order.reportedFilledAmount
+		weightedPrice = order.reportedAvgFillPrice * filledAmount
 	}
 
 	var avgPrice float64

@@ -44,20 +44,21 @@ func (c *Client) SubmitSignedOrder(
 	if c.sendSigned != nil {
 		sendOrder = c.sendSigned
 	}
+	if tracker != nil {
+		tracker.Register(&SubmitResult{
+			ClientOrderID: req.ClientOrderID,
+			Symbol:        req.Symbol,
+			Accepted:      true,
+			SubmittedAt:   time.Now(),
+		}, req.Amount)
+	}
 	submitResult, err := sendOrder(ctx, finalOrder)
 	if err != nil {
-		if tracker != nil {
-			tracker.Register(&SubmitResult{
-				ClientOrderID: req.ClientOrderID,
-				Symbol:        req.Symbol,
-				SubmittedAt:   time.Now(),
-			}, req.Amount)
-		}
 		return nil, fmt.Errorf("submit signed order: %w", err)
 	}
 
-	// Register with tracker for fill monitoring
-	if submitResult.Accepted && tracker != nil {
+	// Add venue response metadata without replacing events that arrived in flight.
+	if tracker != nil {
 		tracker.Register(submitResult, req.Amount)
 	}
 
