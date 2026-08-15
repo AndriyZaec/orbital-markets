@@ -22,6 +22,21 @@ type MarketData struct {
 	Timestamp    time.Time `json:"timestamp"`
 }
 
+// FundingPayment is a realized account balance change from a venue funding settlement.
+type FundingPayment struct {
+	ExternalID string
+	Venue      string
+	Account    string
+	Asset      string
+	AmountUSD  float64
+	PaidAt     time.Time
+}
+
+// FundingHistory reads realized funding settlements for an account.
+type FundingHistory interface {
+	FundingPayments(ctx context.Context, account, asset string, since, until time.Time) ([]FundingPayment, error)
+}
+
 // Adapter is the interface every venue integration must implement.
 type Adapter interface {
 	Name() string

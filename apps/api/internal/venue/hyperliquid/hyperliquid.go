@@ -86,20 +86,95 @@ type assetState struct {
 }
 
 type Adapter struct {
-	mu       sync.RWMutex
-	assets   map[string]*assetState
-	assetMap *AssetMap
-	logger   *slog.Logger
-	client   *http.Client
+	mu         sync.RWMutex
+	assets     map[string]*assetState
+	assetMap   *AssetMap
+	logger     *slog.Logger
+	client     *http.Client
+	fundingURL string
 }
 
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
-		assets:   make(map[string]*assetState),
-		assetMap: NewAssetMap(),
-		logger:   logger,
-		client:   &http.Client{Timeout: 10 * time.Second},
+		assets:     make(map[string]*assetState),
+		assetMap:   NewAssetMap(),
+		logger:     logger,
+		client:     &http.Client{Timeout: 10 * time.Second},
+		fundingURL: restURL,
 	}
+}
+
+func (a *Adapter) FundingPayments(ctx context.Context, account, asset string, since, until time.Time) ([]venue.FundingPayment, error) {
+	start := since.UnixMilli()
+	end := until.UnixMilli()
+	var payments []venue.FundingPayment
+	seen := make(map[string]struct{})
+	for page := 0; page < 100; page++ {
+		payload, err := json.Marshal(map[string]any{
+			"type": "userFunding", "user": account, "startTime": start, "endTime": end,
+		})
+		if err != nil {
+			return nil, err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, a.fundingURL, strings.NewReader(string(payload)))
+		if err != nil {
+			return nil, fmt.Errorf("build Hyperliquid funding history request: %w", err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := a.client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("fetch Hyperliquid funding history: %w", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		response.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read Hyperliquid funding history: %w", readErr)
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("Hyperliquid funding history returned HTTP %d", response.StatusCode)
+		}
+		var result []struct {
+			Delta struct {
+				Coin string `json:"coin"`
+				USDC string `json:"usdc"`
+			} `json:"delta"`
+			Time int64  `json:"time"`
+			Hash string `json:"hash"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("decode Hyperliquid funding history: %w", err)
+		}
+		var lastTime int64
+		for _, item := range result {
+			if item.Time > lastTime {
+				lastTime = item.Time
+			}
+			if !strings.EqualFold(item.Delta.Coin, asset) {
+				continue
+			}
+			externalID := fmt.Sprintf("%s:%s:%d", item.Hash, item.Delta.Coin, item.Time)
+			if _, exists := seen[externalID]; exists {
+				continue
+			}
+			amount, err := strconv.ParseFloat(item.Delta.USDC, 64)
+			if err != nil {
+				return nil, fmt.Errorf("parse Hyperliquid funding payment: %w", err)
+			}
+			seen[externalID] = struct{}{}
+			payments = append(payments, venue.FundingPayment{
+				ExternalID: externalID, Venue: venueName, Account: account, Asset: item.Delta.Coin,
+				AmountUSD: amount, PaidAt: time.UnixMilli(item.Time).UTC(),
+			})
+		}
+		if len(result) < 500 || lastTime >= end {
+			return payments, nil
+		}
+		if lastTime <= start {
+			return nil, fmt.Errorf("Hyperliquid funding history did not advance")
+		}
+		start = lastTime
+	}
+	return nil, fmt.Errorf("Hyperliquid funding history pagination limit exceeded")
 }
 
 // AssetMap returns the live symbol -> asset index resolver.

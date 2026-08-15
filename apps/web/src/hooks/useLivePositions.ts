@@ -27,6 +27,7 @@ export interface LivePosition {
   basis_change: number
   price_pnl: number
   funding_pnl: number
+  funding_pnl_source: 'pending' | 'estimated' | 'realized'
   total_pnl: number
   leg1_current_price: number
   leg2_current_price: number

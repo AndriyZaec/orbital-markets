@@ -118,23 +118,6 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 	update.PricePnL = legPricePnL(leg1Side, leg1.AvgFillPrice, update.Leg1CurPrice, leg1.FilledAmount) +
 		legPricePnL(leg2Side, leg2.AvgFillPrice, update.Leg2CurPrice, leg2.FilledAmount)
 
-	// Funding P&L (accumulated since open)
-	if pos.OpenedAt != "" {
-		openedAt, _ := time.Parse(time.RFC3339, pos.OpenedAt)
-		if !openedAt.IsZero() {
-			hoursOpen := time.Since(openedAt).Hours()
-			if leg1Side == domain.SideLong {
-				update.FundingPnL = (-leg1Snap.FundingRate*leg1.FilledAmount +
-					leg2Snap.FundingRate*leg2.FilledAmount) * hoursOpen
-			} else {
-				update.FundingPnL = (leg1Snap.FundingRate*leg1.FilledAmount +
-					-leg2Snap.FundingRate*leg2.FilledAmount) * hoursOpen
-			}
-		}
-	}
-
-	update.TotalPnL = update.PricePnL + update.FundingPnL
-
 	// Basis: relative price gap between venues
 	if update.Leg1CurPrice > 0 && update.Leg2CurPrice > 0 {
 		mid := (update.Leg1CurPrice + update.Leg2CurPrice) / 2

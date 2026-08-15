@@ -203,7 +203,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
             <div className="grid grid-cols-3 gap-4">
               <div><p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{fmtPnL(pos.price_pnl)}</p></div>
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">Funding PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{fmtPnL(pos.funding_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">{pos.funding_pnl_source === 'realized' ? 'Realized Funding' : 'Estimated Funding'}</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{fmtPnL(pos.funding_pnl)}</p></div>
               <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{fmtPnL(pos.total_pnl)}</p></div>
             </div>
           </div>

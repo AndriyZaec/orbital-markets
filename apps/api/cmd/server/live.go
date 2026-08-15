@@ -8,6 +8,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
@@ -29,7 +30,12 @@ func startLive(
 	// --- Live position store + monitor ---
 	liveStore := executor.NewStore(database, logger)
 	liveMonitor := executor.NewMonitor(logger, liveStore, market)
+	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, map[string]venue.FundingHistory{
+		"pacifica":    pac,
+		"hyperliquid": hl,
+	})
 	go liveMonitor.Run(ctx)
+	go fundingMonitor.Run(ctx)
 
 	signingStore := domain.NewSigningRequestStore()
 

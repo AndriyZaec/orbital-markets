@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 // Store persists live execution state to SQLite.
@@ -311,7 +313,7 @@ const livePositionCols = `id, plan_id, opportunity_id, asset,
 	notional, leverage,
 	entry_spread, hedge_mismatch,
 	current_spread, current_basis, entry_basis, basis_change,
-	price_pnl, funding_pnl, total_pnl,
+	price_pnl, funding_pnl, funding_pnl_source, total_pnl,
 	leg1_current_price, leg2_current_price,
 	leg1_liq_price, leg2_liq_price,
 	leg1_liq_dist, leg2_liq_dist,
@@ -328,7 +330,7 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 		&p.Notional, &p.Leverage,
 		&p.EntrySpread, &p.HedgeMismatch,
 		&p.CurrentSpread, &p.CurrentBasis, &p.EntryBasis, &p.BasisChange,
-		&p.PricePnL, &p.FundingPnL, &p.TotalPnL,
+		&p.PricePnL, &p.FundingPnL, &p.FundingPnLSource, &p.TotalPnL,
 		&p.Leg1CurPrice, &p.Leg2CurPrice,
 		&p.Leg1LiqPrice, &p.Leg2LiqPrice,
 		&p.Leg1LiqDist, &p.Leg2LiqDist,
@@ -473,6 +475,73 @@ func (s *Store) GetEvents(ctx context.Context, positionID string) ([]LiveEvent, 
 	return events, rows.Err()
 }
 
+func (s *Store) InsertFundingPayments(ctx context.Context, positionID string, payments []venue.FundingPayment) error {
+	if len(payments) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, payment := range payments {
+		if payment.ExternalID == "" || payment.Venue == "" || payment.Account == "" || payment.Asset == "" || payment.PaidAt.IsZero() {
+			return fmt.Errorf("invalid funding payment")
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO live_funding_payments (
+				position_id, venue, account, external_id, asset, amount_usd, paid_at, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(venue, account, external_id) DO NOTHING`,
+			positionID, payment.Venue, payment.Account, payment.ExternalID, payment.Asset, payment.AmountUSD,
+			payment.PaidAt.UTC().Format(time.RFC3339Nano), now,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SumFundingPayments(ctx context.Context, positionID string) (float64, error) {
+	var total float64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount_usd), 0)
+		FROM live_funding_payments WHERE position_id = ?`, positionID).Scan(&total)
+	return total, err
+}
+
+func (s *Store) RecordFundingSync(ctx context.Context, positionID string, finalized bool) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO live_funding_sync (position_id, synced_at, finalized)
+		VALUES (?, ?, ?)
+		ON CONFLICT(position_id) DO UPDATE SET
+			synced_at = excluded.synced_at,
+			finalized = MAX(live_funding_sync.finalized, excluded.finalized)`,
+		positionID, time.Now().UTC().Format(time.RFC3339Nano), boolToInt(finalized),
+	)
+	return err
+}
+
+func (s *Store) ListUnfinalizedClosedPositions(ctx context.Context) ([]LivePosition, error) {
+	return s.queryPositions(ctx, `
+		SELECT `+livePositionCols+` FROM live_positions
+		WHERE state = 'closed' AND NOT EXISTS (
+			SELECT 1 FROM live_funding_sync funding
+			WHERE funding.position_id = live_positions.id AND funding.finalized = 1
+		)
+		ORDER BY updated_at`)
+}
+
+func (s *Store) UpdateRealizedFunding(ctx context.Context, positionID string, fundingPnL float64) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE live_positions SET funding_pnl = ?, funding_pnl_source = 'realized',
+			total_pnl = price_pnl + ?, monitor_at = ?, updated_at = ?
+		WHERE id = ?`, fundingPnL, fundingPnL, now, now, positionID)
+	return err
+}
+
 // MonitorUpdate holds the fields written by the live monitor on each tick.
 type MonitorUpdate struct {
 	CurrentSpread float64
@@ -480,8 +549,6 @@ type MonitorUpdate struct {
 	EntryBasis    float64
 	BasisChange   float64
 	PricePnL      float64
-	FundingPnL    float64
-	TotalPnL      float64
 	Leg1CurPrice  float64
 	Leg2CurPrice  float64
 	Leg1LiqPrice  float64
@@ -503,8 +570,7 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 			entry_basis = ?,
 			basis_change = ?,
 			price_pnl = ?,
-			funding_pnl = ?,
-			total_pnl = ?,
+			total_pnl = ? + funding_pnl,
 			leg1_current_price = ?,
 			leg2_current_price = ?,
 			leg1_liq_price = ?,
@@ -522,8 +588,7 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 		m.EntryBasis,
 		m.BasisChange,
 		m.PricePnL,
-		m.FundingPnL,
-		m.TotalPnL,
+		m.PricePnL,
 		m.Leg1CurPrice,
 		m.Leg2CurPrice,
 		m.Leg1LiqPrice,
@@ -563,6 +628,7 @@ type LivePosition struct {
 	BasisChange        float64 `json:"basis_change"`
 	PricePnL           float64 `json:"price_pnl"`
 	FundingPnL         float64 `json:"funding_pnl"`
+	FundingPnLSource   string  `json:"funding_pnl_source"`
 	TotalPnL           float64 `json:"total_pnl"`
 	Leg1CurPrice       float64 `json:"leg1_current_price"`
 	Leg2CurPrice       float64 `json:"leg2_current_price"`
