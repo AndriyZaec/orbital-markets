@@ -45,13 +45,31 @@ func (s *Server) reconcileClosingPositions() {
 	for i := range positions {
 		position := &positions[i]
 		ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
-		_, err := s.reconcilePositionAbsentFromVenues(
+		exposureState, err := s.inspectPositionAfterCloseActivity(
 			ctx, position, position.AccountPacifica, position.AccountHyperliquid,
 		)
 		cancel()
 		if err != nil {
 			s.logger.Warn("live close recovery: venue reconciliation failed", "err", err, "id", position.ID)
 			continue
+		}
+		switch exposureState {
+		case positionExposureFlat:
+			if _, err := s.markPositionClosedFromVenueTruth(s.ctx, position); err != nil {
+				s.logger.Warn("live close recovery: mark closed", "err", err, "id", position.ID)
+			}
+		case positionExposurePresent:
+			progress, progressErr := s.liveStore.GetCloseProgress(s.ctx, position.ID)
+			if progressErr != nil {
+				s.logger.Warn("live close recovery: get close progress", "err", progressErr, "id", position.ID)
+				continue
+			}
+			if progress.Required > 0 && progress.Confirmed == progress.Required && progress.Pending == 0 {
+				if err := s.liveStore.MarkCloseDegraded(s.ctx, position.ID); err == nil {
+					s.liveStore.InsertEvent(s.ctx, position.ID, "close_residual", executor.ExecStateDegraded,
+						"confirmed close fills left residual venue exposure")
+				}
+			}
 		}
 	}
 }

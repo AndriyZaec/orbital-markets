@@ -17,11 +17,16 @@ type fakeAccountFeed struct {
 	refreshSnapshot *liveAccountSnapshot
 	blockers        []string
 	submitResult    *domain.SubmissionResult
+	waitFill        *normFill
+	refreshErr      error
 }
 
 func (f *fakeAccountFeed) Snapshot() liveAccountSnapshot        { return f.snapshot }
 func (f *fakeAccountFeed) PreTradeBlockers(domain.Leg) []string { return f.blockers }
 func (f *fakeAccountFeed) RefreshPositions(context.Context) error {
+	if f.refreshErr != nil {
+		return f.refreshErr
+	}
 	if f.refreshSnapshot != nil {
 		f.snapshot = *f.refreshSnapshot
 	}
@@ -31,7 +36,7 @@ func (f *fakeAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *do
 	return f.submitResult, nil
 }
 func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error) {
-	return nil, nil
+	return f.waitFill, nil
 }
 
 func (f *fakeAccountFeed) WaitForLeverage(context.Context, string, float64) error { return nil }
@@ -43,7 +48,9 @@ type fakeAccountFeedFactory struct {
 	snapshots        map[string]liveAccountSnapshot
 	refreshSnapshots map[string]liveAccountSnapshot
 	blockers         map[string][]string
+	waitFills        map[string]*normFill
 	startErr         error
+	refreshErr       error
 }
 
 func (f *fakeAccountFeedFactory) Normalize(account string) (string, error) {
@@ -74,7 +81,10 @@ func (f *fakeAccountFeedFactory) Start(ctx context.Context, account string) (liv
 	if refreshed, ok := f.refreshSnapshots[account]; ok {
 		refreshSnapshot = &refreshed
 	}
-	return &fakeAccountFeed{snapshot: snapshot, refreshSnapshot: refreshSnapshot, blockers: f.blockers[account]}, nil
+	return &fakeAccountFeed{
+		snapshot: snapshot, refreshSnapshot: refreshSnapshot,
+		blockers: f.blockers[account], waitFill: f.waitFills[account], refreshErr: f.refreshErr,
+	}, nil
 }
 
 func TestAcquireAccountsRollsBackNewPartialPair(t *testing.T) {

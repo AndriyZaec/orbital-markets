@@ -1144,20 +1144,32 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 	position *executor.LivePosition,
 	accountPacifica, accountHyperliquid string,
 ) (bool, error) {
+	state, err := s.inspectPositionAfterCloseActivity(ctx, position, accountPacifica, accountHyperliquid)
+	if err != nil || state != positionExposureFlat {
+		return false, err
+	}
+	return s.markPositionClosedFromVenueTruth(ctx, position)
+}
+
+func (s *Server) inspectPositionAfterCloseActivity(
+	ctx context.Context,
+	position *executor.LivePosition,
+	accountPacifica, accountHyperliquid string,
+) (positionExposureState, error) {
 	if s.live == nil || s.live.accounts == nil {
-		return false, nil
+		return positionExposureUnknown, nil
 	}
 	reconcileAfter, err := s.liveStore.LastCloseActivity(ctx, position.ID)
 	if err != nil {
-		return false, err
+		return positionExposureUnknown, err
 	}
 	if reconcileAfter.IsZero() {
 		reconcileAfter, err = time.Parse(time.RFC3339, position.UpdatedAt)
 	}
 	if err != nil || time.Since(reconcileAfter) < positionReconciliationQuietPeriod {
-		return false, nil
+		return positionExposureUnknown, nil
 	}
-	return s.reconcilePositionFromVenueTruth(ctx, position, accountPacifica, accountHyperliquid, reconcileAfter)
+	return s.inspectPositionVenueTruth(ctx, position, accountPacifica, accountHyperliquid, reconcileAfter)
 }
 
 func (s *Server) reconcilePositionFromVenueTruth(
@@ -1166,42 +1178,14 @@ func (s *Server) reconcilePositionFromVenueTruth(
 	accountPacifica, accountHyperliquid string,
 	after time.Time,
 ) (bool, error) {
+	state, err := s.inspectPositionVenueTruth(ctx, position, accountPacifica, accountHyperliquid, after)
+	if err != nil || state != positionExposureFlat {
+		return false, err
+	}
+	return s.markPositionClosedFromVenueTruth(ctx, position)
+}
 
-	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
-	if err != nil {
-		s.logger.Warn("live position: venue reconciliation unavailable", "err", err, "id", position.ID)
-		return false, nil
-	}
-	defer accounts.Release()
-	unlock := accounts.Lock()
-	defer unlock()
-	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
-	defer cancel()
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
-		feed, ok := accounts.Feed(venue)
-		if !ok {
-			return false, nil
-		}
-		if err := feed.RefreshPositions(reconcileCtx); err != nil {
-			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
-			return false, nil
-		}
-	}
-	if !waitForPositionState(reconcileCtx, accounts, after) {
-		return false, nil
-	}
-
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
-		_, ok := accounts.Feed(venue)
-		if !ok {
-			return false, nil
-		}
-		size, _ := currentVenuePosition(accounts, venue, position.Asset)
-		if math.Abs(size) > 1e-9 {
-			return false, nil
-		}
-	}
-
+func (s *Server) markPositionClosedFromVenueTruth(ctx context.Context, position *executor.LivePosition) (bool, error) {
 	changed, err := s.liveStore.MarkClosed(ctx, position.ID)
 	if err != nil {
 		return false, err
@@ -1212,6 +1196,60 @@ func (s *Server) reconcilePositionFromVenueTruth(
 		s.logger.Info("live position: reconciled closed from venue state", "id", position.ID, "asset", position.Asset)
 	}
 	return changed, nil
+}
+
+type positionExposureState int
+
+const (
+	positionExposureUnknown positionExposureState = iota
+	positionExposureFlat
+	positionExposurePresent
+)
+
+func (s *Server) inspectPositionVenueTruth(
+	ctx context.Context,
+	position *executor.LivePosition,
+	accountPacifica, accountHyperliquid string,
+	after time.Time,
+) (positionExposureState, error) {
+	if s.live == nil || s.live.accounts == nil {
+		return positionExposureUnknown, nil
+	}
+	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
+	if err != nil {
+		s.logger.Warn("live position: venue reconciliation unavailable", "err", err, "id", position.ID)
+		return positionExposureUnknown, nil
+	}
+	defer accounts.Release()
+	unlock := accounts.Lock()
+	defer unlock()
+	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
+	defer cancel()
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		feed, ok := accounts.Feed(venue)
+		if !ok {
+			return positionExposureUnknown, nil
+		}
+		if err := feed.RefreshPositions(reconcileCtx); err != nil {
+			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
+			return positionExposureUnknown, nil
+		}
+	}
+	if !waitForPositionState(reconcileCtx, accounts, after) {
+		return positionExposureUnknown, nil
+	}
+
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		_, ok := accounts.Feed(venue)
+		if !ok {
+			return positionExposureUnknown, nil
+		}
+		size, _ := currentVenuePosition(accounts, venue, position.Asset)
+		if math.Abs(size) > 1e-9 {
+			return positionExposurePresent, nil
+		}
+	}
+	return positionExposureFlat, nil
 }
 
 func waitForPositionState(ctx context.Context, accounts *liveAccountContext, after time.Time) bool {
