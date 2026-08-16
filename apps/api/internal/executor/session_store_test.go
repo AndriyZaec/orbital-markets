@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -89,7 +90,7 @@ func TestPersistFullResultAtomicWritesCompleteTerminalRecord(t *testing.T) {
 		},
 		Leg2: executor.LegResult{
 			Venue: "hyperliquid", Symbol: "SOL", Side: "short", Submitted: true,
-			Accepted: true, Filled: true, RequestedAmt: 10, FilledAmount: 10, FillRatio: 1,
+			Accepted: true, Filled: true, RequestedAmt: 10, FilledAmount: 9.8, FillRatio: 0.98,
 		},
 	}
 	if err := store.PersistFullResultAtomic(
@@ -118,6 +119,9 @@ func TestPersistFullResultAtomicWritesCompleteTerminalRecord(t *testing.T) {
 	if positions[0].OpenedAt == "" || positions[0].CompletedAt != "" {
 		t.Fatalf("position timestamps = opened %q completed %q, want open without completion",
 			positions[0].OpenedAt, positions[0].CompletedAt)
+	}
+	if math.Abs(positions[0].HedgeMismatch-0.02) > 1e-9 {
+		t.Fatalf("hedge mismatch = %v, want 0.02", positions[0].HedgeMismatch)
 	}
 	other, err := store.ListPositionsForAccounts(context.Background(), "other-wallet", "0xother")
 	if err != nil {

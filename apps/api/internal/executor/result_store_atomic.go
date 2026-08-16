@@ -36,10 +36,10 @@ func (s *Store) PersistFullResultAtomic(
 			account_pacifica, account_hyperliquid,
 			notional, leverage, entry_spread, hedge_mismatch,
 			started_at, opened_at, completed_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
 		result.PlanID, result.PlanID, result.OpportunityID, result.Asset,
 		venueA, venueB, string(result.State), accountPacifica, accountHyperliquid,
-		notional, leverage,
+		notional, leverage, resultHedgeMismatch(result),
 		result.StartedAt.UTC().Format(time.RFC3339Nano), openedAt, completedAt, now,
 	)
 	if err != nil {

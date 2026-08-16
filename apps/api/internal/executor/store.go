@@ -777,6 +777,14 @@ func boolToInt(b bool) int64 {
 	return 0
 }
 
+func resultHedgeMismatch(result *ExecutionResult) float64 {
+	leg1Amount := result.Leg1.FilledAmount
+	if leg1Amount <= 0 {
+		return 1
+	}
+	return math.Abs(result.Leg2.FilledAmount-leg1Amount) / leg1Amount
+}
+
 // ReasonsDetail joins reasons into a single string for event detail.
 func ReasonsDetail(reasons []string) string {
 	if len(reasons) == 0 {
@@ -826,5 +834,5 @@ func (s *Store) PersistFullResult(ctx context.Context, result *ExecutionResult, 
 
 	// Final state
 	s.InsertEvent(ctx, posID, "complete", result.State, ReasonsDetail(result.Reasons))
-	s.UpdateState(ctx, posID, result.State, 0, 0)
+	s.UpdateState(ctx, posID, result.State, 0, resultHedgeMismatch(result))
 }
