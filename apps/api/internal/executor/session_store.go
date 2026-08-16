@@ -258,8 +258,8 @@ func (s *Store) UpsertRecoveryBlockedPosition(
 		INSERT INTO live_positions (
 			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
 			account_pacifica, account_hyperliquid,
-			notional, leverage, started_at, completed_at, updated_at
-		) VALUES (?, ?, 'recovery-blocked', ?, 'unknown', 'unknown', ?, ?, ?, 0, 0, ?, ?, ?)
+			notional, leverage, started_at, updated_at
+		) VALUES (?, ?, 'recovery-blocked', ?, 'unknown', 'unknown', ?, ?, ?, 0, 0, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			account_pacifica = excluded.account_pacifica,
 			account_hyperliquid = excluded.account_hyperliquid,
@@ -267,7 +267,7 @@ func (s *Store) UpsertRecoveryBlockedPosition(
 		WHERE live_positions.account_pacifica != excluded.account_pacifica
 		   OR live_positions.account_hyperliquid != excluded.account_hyperliquid`,
 		positionID, sessionID, asset, string(ExecStateDegraded), accountPacifica,
-		strings.ToLower(strings.TrimSpace(accountHyperliquid)), now, now, now)
+		strings.ToLower(strings.TrimSpace(accountHyperliquid)), now, now)
 	if err != nil {
 		return err
 	}

@@ -27,7 +27,7 @@ func (s *Store) PersistFullResultAtomic(
 	if result.State == ExecStateOpen {
 		openedAt = now
 	}
-	if result.State == ExecStateOpen || result.State == ExecStateDegraded || result.State == ExecStateFailed {
+	if result.State == ExecStateFailed {
 		completedAt = now
 	}
 	_, err = tx.ExecContext(ctx, `

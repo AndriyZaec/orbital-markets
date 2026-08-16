@@ -59,7 +59,7 @@ func (s *Store) UpdateState(ctx context.Context, positionID string, state ExecSt
 	if state == ExecStateOpen {
 		openedAt = sql.NullString{String: now, Valid: true}
 	}
-	if state == ExecStateOpen || state == ExecStateDegraded || state == ExecStateFailed {
+	if state == ExecStateFailed {
 		completedAt = sql.NullString{String: now, Valid: true}
 	}
 
@@ -155,7 +155,7 @@ func (s *Store) MarkClosing(ctx context.Context, positionID string) error {
 func (s *Store) MarkClosed(ctx context.Context, positionID string) (bool, error) {
 	now := time.Now().Format(time.RFC3339)
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE live_positions SET state = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+		UPDATE live_positions SET state = ?, completed_at = ?, updated_at = ?
 		WHERE id = ? AND state != ?`,
 		string(ExecStateClosed), now, now, positionID, string(ExecStateClosed),
 	)

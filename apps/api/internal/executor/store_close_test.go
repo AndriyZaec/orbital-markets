@@ -63,6 +63,10 @@ func TestCloseProgressRequiresConfirmedFillForEveryOpenLeg(t *testing.T) {
 	if progress.Confirmed != progress.Required {
 		t.Fatalf("progress = %+v, want all legs confirmed", progress)
 	}
+	const staleCompletion = "2026-07-22T12:00:00Z"
+	if _, err := database.Exec(`UPDATE live_positions SET completed_at = ? WHERE id = 'position-1'`, staleCompletion); err != nil {
+		t.Fatal(err)
+	}
 	changed, err := store.MarkClosed(ctx, "position-1")
 	if err != nil || !changed {
 		t.Fatalf("first MarkClosed() = %v, %v; want true, nil", changed, err)
@@ -71,12 +75,15 @@ func TestCloseProgressRequiresConfirmedFillForEveryOpenLeg(t *testing.T) {
 	if err != nil || changed {
 		t.Fatalf("second MarkClosed() = %v, %v; want false, nil", changed, err)
 	}
-	var state string
-	if err := database.QueryRow(`SELECT state FROM live_positions WHERE id = 'position-1'`).Scan(&state); err != nil {
+	var state, completedAt string
+	if err := database.QueryRow(`SELECT state, completed_at FROM live_positions WHERE id = 'position-1'`).Scan(&state, &completedAt); err != nil {
 		t.Fatal(err)
 	}
 	if state != string(executor.ExecStateClosed) {
 		t.Fatalf("state = %q, want closed", state)
+	}
+	if completedAt == staleCompletion {
+		t.Fatalf("completed_at = %q, want actual close time", completedAt)
 	}
 }
 

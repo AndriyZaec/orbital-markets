@@ -18,11 +18,53 @@ type fakeFundingHistory struct {
 	payments []venue.FundingPayment
 	calls    int
 	err      error
+	since    time.Time
+	until    time.Time
 }
 
-func (f *fakeFundingHistory) FundingPayments(context.Context, string, string, time.Time, time.Time) ([]venue.FundingPayment, error) {
+func (f *fakeFundingHistory) FundingPayments(_ context.Context, _, _ string, since, until time.Time) ([]venue.FundingPayment, error) {
 	f.calls++
+	f.since = since
+	f.until = until
 	return f.payments, f.err
+}
+
+func TestFinalFundingUsesActualHoldingInterval(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "funding-interval.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	now := time.Now().UTC().Truncate(time.Second)
+	startedAt := now.Add(-3 * time.Hour)
+	openedAt := now.Add(-2 * time.Hour)
+	completedAt := now.Add(-time.Minute)
+	if _, err := database.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_pacifica, account_hyperliquid, notional, leverage,
+			started_at, opened_at, completed_at, updated_at
+		) VALUES ('position-1', 'plan-1', 'opp-1', 'SOL', 'pacifica', 'hyperliquid', 'closed',
+			'sol-wallet', '0xwallet', 100, 2, ?, ?, ?, ?)`,
+		startedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339),
+		completedAt.Format(time.RFC3339), completedAt.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pacifica := &fakeFundingHistory{}
+	hyperliquid := &fakeFundingHistory{}
+	monitor := NewFundingMonitor(logger, NewStore(database, logger), map[string]venue.FundingHistory{
+		"pacifica": pacifica, "hyperliquid": hyperliquid,
+	})
+
+	monitor.finalizeClosed(context.Background())
+
+	for name, source := range map[string]*fakeFundingHistory{"pacifica": pacifica, "hyperliquid": hyperliquid} {
+		if source.calls != 1 || !source.since.Equal(openedAt) || !source.until.Equal(completedAt) {
+			t.Fatalf("%s interval = [%s, %s] calls=%d, want [%s, %s] once",
+				name, source.since, source.until, source.calls, openedAt, completedAt)
+		}
+	}
 }
 
 func TestPartialFundingSyncIsNotPublished(t *testing.T) {

@@ -59,11 +59,11 @@ func (m *FundingMonitor) tick(ctx context.Context) {
 }
 
 func (m *FundingMonitor) syncOpen(ctx context.Context, position *LivePosition) {
-	startedAt, err := time.Parse(time.RFC3339, position.StartedAt)
+	openedAt, err := time.Parse(time.RFC3339, position.OpenedAt)
 	if err != nil {
 		return
 	}
-	realized, ok := m.realized(ctx, position, startedAt, time.Now().UTC(), false)
+	realized, ok := m.realized(ctx, position, openedAt, time.Now().UTC(), false)
 	if !ok {
 		return
 	}
@@ -129,8 +129,8 @@ func (m *FundingMonitor) finalizeClosed(ctx context.Context) {
 	for i := range positions {
 		position := &positions[i]
 		completedAt, completedErr := time.Parse(time.RFC3339, position.CompletedAt)
-		startedAt, startedErr := time.Parse(time.RFC3339, position.StartedAt)
-		if completedErr != nil || startedErr != nil || time.Since(completedAt) < fundingFinalizationDelay {
+		openedAt, openedErr := time.Parse(time.RFC3339, position.OpenedAt)
+		if completedErr != nil || openedErr != nil || time.Since(completedAt) < fundingFinalizationDelay {
 			continue
 		}
 		lastAttempt := m.finalizationAttemptedAt[position.ID]
@@ -138,7 +138,7 @@ func (m *FundingMonitor) finalizeClosed(ctx context.Context) {
 			continue
 		}
 		m.finalizationAttemptedAt[position.ID] = time.Now()
-		realized, ok := m.realized(ctx, position, startedAt, completedAt, true)
+		realized, ok := m.realized(ctx, position, openedAt, completedAt, true)
 		if !ok {
 			continue
 		}

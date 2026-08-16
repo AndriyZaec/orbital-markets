@@ -115,6 +115,10 @@ func TestPersistFullResultAtomicWritesCompleteTerminalRecord(t *testing.T) {
 	if len(positions) != 1 || positions[0].ID != "plan-1" {
 		t.Fatalf("scoped positions = %+v, want plan-1", positions)
 	}
+	if positions[0].OpenedAt == "" || positions[0].CompletedAt != "" {
+		t.Fatalf("position timestamps = opened %q completed %q, want open without completion",
+			positions[0].OpenedAt, positions[0].CompletedAt)
+	}
 	other, err := store.ListPositionsForAccounts(context.Background(), "other-wallet", "0xother")
 	if err != nil {
 		t.Fatal(err)
