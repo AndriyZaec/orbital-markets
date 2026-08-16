@@ -131,10 +131,31 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 		return
 	}
 	if progress.Required > 0 && progress.Confirmed == progress.Required {
-		changed, err := s.liveStore.MarkClosed(ctx, req.PositionID)
-		if err == nil && changed {
-			s.liveStore.InsertEvent(ctx, req.PositionID, "close_complete", executor.ExecStateClosed,
-				fmt.Sprintf("%d close fills confirmed", progress.Confirmed))
+		position, positionErr := s.liveStore.GetPosition(s.ctx, req.PositionID)
+		if positionErr != nil {
+			return
+		}
+		reconcileCtx, cancelReconcile := context.WithTimeout(s.ctx, recoveryAccountTimeout)
+		exposureState, reconcileErr := s.inspectPositionVenueTruth(
+			reconcileCtx, position, position.AccountPacifica, position.AccountHyperliquid, req.CreatedAt,
+		)
+		cancelReconcile()
+		if reconcileErr != nil {
+			s.logger.Warn("live close: venue confirmation failed", "err", reconcileErr, "id", req.PositionID)
+			return
+		}
+		switch exposureState {
+		case positionExposureFlat:
+			changed, err := s.liveStore.MarkClosed(s.ctx, req.PositionID)
+			if err == nil && changed {
+				s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_complete", executor.ExecStateClosed,
+					fmt.Sprintf("%d close fills confirmed and venue exposure is flat", progress.Confirmed))
+			}
+		case positionExposurePresent:
+			if err := s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID); err == nil {
+				s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_residual", executor.ExecStateDegraded,
+					"close fills confirmed but fresh venue state shows residual exposure")
+			}
 		}
 	} else if progress.Failed == 0 && progress.Pending == 0 {
 		go s.markIncompleteCloseAfterGrace(req.PositionID)

@@ -63,6 +63,10 @@ func TestCloseProgressRequiresConfirmedFillForEveryOpenLeg(t *testing.T) {
 	if progress.Confirmed != progress.Required {
 		t.Fatalf("progress = %+v, want all legs confirmed", progress)
 	}
+	const staleCompletion = "2026-07-22T12:00:00Z"
+	if _, err := database.Exec(`UPDATE live_positions SET completed_at = ? WHERE id = 'position-1'`, staleCompletion); err != nil {
+		t.Fatal(err)
+	}
 	changed, err := store.MarkClosed(ctx, "position-1")
 	if err != nil || !changed {
 		t.Fatalf("first MarkClosed() = %v, %v; want true, nil", changed, err)
@@ -71,12 +75,15 @@ func TestCloseProgressRequiresConfirmedFillForEveryOpenLeg(t *testing.T) {
 	if err != nil || changed {
 		t.Fatalf("second MarkClosed() = %v, %v; want false, nil", changed, err)
 	}
-	var state string
-	if err := database.QueryRow(`SELECT state FROM live_positions WHERE id = 'position-1'`).Scan(&state); err != nil {
+	var state, completedAt string
+	if err := database.QueryRow(`SELECT state, completed_at FROM live_positions WHERE id = 'position-1'`).Scan(&state, &completedAt); err != nil {
 		t.Fatal(err)
 	}
 	if state != string(executor.ExecStateClosed) {
 		t.Fatalf("state = %q, want closed", state)
+	}
+	if completedAt == staleCompletion {
+		t.Fatalf("completed_at = %q, want actual close time", completedAt)
 	}
 }
 
@@ -125,6 +132,80 @@ func TestCloseProgressTreatsResolvedPartialFillAsFailure(t *testing.T) {
 	}
 	if state != string(executor.ExecStateDegraded) {
 		t.Fatalf("state = %q, want degraded", state)
+	}
+}
+
+func TestMarkClosedFinalizesPricePnLFromCloseFills(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "realized-pnl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	seedLivePosition(t, database, "position-pnl")
+	if _, err := database.Exec(`
+		UPDATE live_fills SET side = 'long', filled_amount = 1, avg_fill_price = 100 WHERE position_id = 'position-pnl' AND leg = 1;
+		UPDATE live_fills SET side = 'short', filled_amount = 1, avg_fill_price = 100 WHERE position_id = 'position-pnl' AND leg = 2;
+		UPDATE live_positions SET price_pnl = -999, funding_pnl = 3, total_pnl = -996 WHERE id = 'position-pnl';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, outcome := range []executor.CloseOutcome{
+		{PositionID: "position-pnl", Leg: 1, Venue: "pacifica", ClientOrderID: "close-long", RequestedAmount: 1, FilledAmount: 1, AvgFillPrice: 110, FillRatio: 1, Accepted: true, Confirmed: true, Resolved: true},
+		{PositionID: "position-pnl", Leg: 2, Venue: "hyperliquid", ClientOrderID: "close-short", RequestedAmount: 1, FilledAmount: 1, AvgFillPrice: 90, FillRatio: 1, Accepted: true, Confirmed: true, Resolved: true},
+	} {
+		if err := store.UpsertCloseOutcome(ctx, outcome); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if changed, err := store.MarkClosed(ctx, "position-pnl"); err != nil || !changed {
+		t.Fatalf("MarkClosed() = %v, %v; want true, nil", changed, err)
+	}
+	var pricePnL, totalPnL float64
+	if err := database.QueryRow(`SELECT price_pnl, total_pnl FROM live_positions WHERE id = 'position-pnl'`).Scan(&pricePnL, &totalPnL); err != nil {
+		t.Fatal(err)
+	}
+	if pricePnL != 20 || totalPnL != 23 {
+		t.Fatalf("final PnL = price %v total %v, want price 20 total 23", pricePnL, totalPnL)
+	}
+}
+
+func TestMarkClosedAggregatesPartialCloseAndRetryPrices(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "retry-pnl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	seedLivePosition(t, database, "position-retry-pnl")
+	if _, err := database.Exec(`
+		UPDATE live_fills SET side = 'long', filled_amount = 1, avg_fill_price = 100 WHERE position_id = 'position-retry-pnl' AND leg = 1;
+		UPDATE live_fills SET side = 'short', filled_amount = 1, avg_fill_price = 100 WHERE position_id = 'position-retry-pnl' AND leg = 2;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, outcome := range []executor.CloseOutcome{
+		{PositionID: "position-retry-pnl", Leg: 1, Venue: "pacifica", ClientOrderID: "close-long-partial", RequestedAmount: 1, FilledAmount: 0.4, AvgFillPrice: 105, FillRatio: 0.4, Accepted: true, Resolved: true},
+		{PositionID: "position-retry-pnl", Leg: 1, Venue: "pacifica", ClientOrderID: "close-long-retry", RequestedAmount: 0.6, FilledAmount: 0.6, AvgFillPrice: 115, FillRatio: 1, Accepted: true, Confirmed: true, Resolved: true},
+		{PositionID: "position-retry-pnl", Leg: 2, Venue: "hyperliquid", ClientOrderID: "close-short", RequestedAmount: 1, FilledAmount: 1, AvgFillPrice: 90, FillRatio: 1, Accepted: true, Confirmed: true, Resolved: true},
+	} {
+		if err := store.UpsertCloseOutcome(ctx, outcome); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if changed, err := store.MarkClosed(ctx, "position-retry-pnl"); err != nil || !changed {
+		t.Fatalf("MarkClosed() = %v, %v; want true, nil", changed, err)
+	}
+	var pricePnL float64
+	if err := database.QueryRow(`SELECT price_pnl FROM live_positions WHERE id = 'position-retry-pnl'`).Scan(&pricePnL); err != nil {
+		t.Fatal(err)
+	}
+	if pricePnL != 21 {
+		t.Fatalf("final price PnL = %v, want 21 from weighted partial and retry fills", pricePnL)
 	}
 }
 

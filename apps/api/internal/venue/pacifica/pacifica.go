@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,9 +19,10 @@ import (
 )
 
 const (
-	wsURL     = "wss://ws.pacifica.fi/ws"
-	infoURL   = "https://api.pacifica.fi/api/v1/info"
-	venueName = "pacifica"
+	wsURL             = "wss://ws.pacifica.fi/ws"
+	infoURL           = "https://api.pacifica.fi/api/v1/info"
+	fundingHistoryURL = "https://api.pacifica.fi/api/v1/funding/history"
+	venueName         = "pacifica"
 )
 
 // wsMessage wraps both prices and bbo channel messages.
@@ -67,14 +71,81 @@ type Adapter struct {
 	logger     *slog.Logger
 	client     *http.Client
 	metadataMu sync.Mutex
+	fundingURL string
 }
 
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
-		assets: make(map[string]*assetState),
-		logger: logger,
-		client: &http.Client{Timeout: 10 * time.Second},
+		assets:     make(map[string]*assetState),
+		logger:     logger,
+		client:     &http.Client{Timeout: 10 * time.Second},
+		fundingURL: fundingHistoryURL,
 	}
+}
+
+func (a *Adapter) FundingPayments(ctx context.Context, account, asset string, since, until time.Time) ([]venue.FundingPayment, error) {
+	cursor := ""
+	var payments []venue.FundingPayment
+	for page := 0; page < 100; page++ {
+		query := url.Values{"account": {account}, "limit": {"100"}}
+		if cursor != "" {
+			query.Set("cursor", cursor)
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, a.fundingURL+"?"+query.Encode(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("build Pacifica funding history request: %w", err)
+		}
+		response, err := a.client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("fetch Pacifica funding history: %w", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		response.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read Pacifica funding history: %w", readErr)
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("Pacifica funding history returned HTTP %d", response.StatusCode)
+		}
+		var result struct {
+			Success bool `json:"success"`
+			Data    []struct {
+				HistoryID int64  `json:"history_id"`
+				Symbol    string `json:"symbol"`
+				Payout    string `json:"payout"`
+				CreatedAt int64  `json:"created_at"`
+			} `json:"data"`
+			NextCursor string `json:"next_cursor"`
+			HasMore    bool   `json:"has_more"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil || !result.Success {
+			return nil, fmt.Errorf("decode Pacifica funding history")
+		}
+		reachedStart := false
+		for _, item := range result.Data {
+			paidAt := time.UnixMilli(item.CreatedAt).UTC()
+			if paidAt.Before(since) {
+				reachedStart = true
+				continue
+			}
+			if paidAt.After(until) || !strings.EqualFold(item.Symbol, asset) {
+				continue
+			}
+			amount, err := strconv.ParseFloat(item.Payout, 64)
+			if err != nil {
+				return nil, fmt.Errorf("parse Pacifica funding payout: %w", err)
+			}
+			payments = append(payments, venue.FundingPayment{
+				ExternalID: strconv.FormatInt(item.HistoryID, 10), Venue: venueName, Account: account,
+				Asset: item.Symbol, AmountUSD: amount, PaidAt: paidAt,
+			})
+		}
+		if !result.HasMore || result.NextCursor == "" || reachedStart {
+			return payments, nil
+		}
+		cursor = result.NextCursor
+	}
+	return nil, fmt.Errorf("Pacifica funding history pagination limit exceeded")
 }
 
 func (a *Adapter) Name() string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -133,5 +134,37 @@ func TestSubmitSignedOrderReturnsTransportFailureAsAmbiguous(t *testing.T) {
 	tracker.mu.RUnlock()
 	if !tracked {
 		t.Fatal("ambiguous submission was not registered for fill reconciliation")
+	}
+}
+
+func TestSubmitSignedOrderTracksFillArrivingBeforeSubmissionResponse(t *testing.T) {
+	request, err := BuildOpenPayload(payloadTestLotSizes, "redacted-wallet", "SOL", domain.SideLong, 1, 100, "client-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := NewTracker(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	client := NewClient(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	client.sendSigned = func(_ context.Context, order MarketOrderRequest) (*SubmitResult, error) {
+		tracker.HandleOrderUpdate([]byte(fmt.Sprintf(`[{"i":42,"I":%q,"s":"SOL","a":"1","f":"1","os":"filled","p":"100"}]`, order.ClientOrderID)))
+		return &SubmitResult{
+			OrderID: "42", ClientOrderID: order.ClientOrderID, Symbol: order.Symbol,
+			Accepted: true, SubmittedAt: time.Now(), RespondedAt: time.Now(),
+		}, nil
+	}
+
+	if _, err := client.SubmitSignedOrder(context.Background(), domain.SignedAction{
+		RequestID: request.ID, ClientOrderID: request.ClientOrderID, Venue: "pacifica",
+		SignerAddress: "redacted-wallet", Signature: "redacted-signature",
+	}, request, tracker); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	fill, err := tracker.WaitForFill(ctx, request.ClientOrderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fill.Status != OrderStatusFilled || fill.FilledAmount != 1 || fill.AvgFillPrice != 100 {
+		t.Fatalf("fill = %+v, want pre-response fill event retained", fill)
 	}
 }

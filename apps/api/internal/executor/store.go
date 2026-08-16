@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 // Store persists live execution state to SQLite.
@@ -57,7 +61,7 @@ func (s *Store) UpdateState(ctx context.Context, positionID string, state ExecSt
 	if state == ExecStateOpen {
 		openedAt = sql.NullString{String: now, Valid: true}
 	}
-	if state == ExecStateOpen || state == ExecStateDegraded || state == ExecStateFailed {
+	if state == ExecStateFailed {
 		completedAt = sql.NullString{String: now, Valid: true}
 	}
 
@@ -152,17 +156,108 @@ func (s *Store) MarkClosing(ctx context.Context, positionID string) error {
 // whether this call performed the transition.
 func (s *Store) MarkClosed(ctx context.Context, positionID string) (bool, error) {
 	now := time.Now().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE live_positions SET state = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
-		WHERE id = ? AND state != ?`,
-		string(ExecStateClosed), now, now, positionID, string(ExecStateClosed),
-	)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	pricePnL, hasRealizedPnL, err := realizedClosePricePnL(ctx, tx, positionID)
+	if err != nil {
+		return false, err
+	}
+	var result sql.Result
+	if hasRealizedPnL {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE live_positions SET state = ?, completed_at = ?, price_pnl = ?,
+				total_pnl = ? + funding_pnl, updated_at = ?
+			WHERE id = ? AND state != ?`,
+			string(ExecStateClosed), now, pricePnL, pricePnL, now, positionID, string(ExecStateClosed),
+		)
+	} else {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE live_positions SET state = ?, completed_at = ?, updated_at = ?
+			WHERE id = ? AND state != ?`,
+			string(ExecStateClosed), now, now, positionID, string(ExecStateClosed),
+		)
+	}
 	if err != nil {
 		s.logger.Error("live store: mark closed", "err", err, "id", positionID)
 		return false, err
 	}
 	rows, err := result.RowsAffected()
-	return rows > 0, err
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+const closePnLCoverageTolerance = 0.005
+
+func realizedClosePricePnL(ctx context.Context, tx *sql.Tx, positionID string) (float64, bool, error) {
+	type openingLeg struct {
+		leg        int
+		side       string
+		amount     float64
+		entryPrice float64
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT leg, side, filled_amount, avg_fill_price
+		FROM live_fills
+		WHERE position_id = ? AND filled = 1
+		ORDER BY leg`, positionID)
+	if err != nil {
+		return 0, false, err
+	}
+	var legs []openingLeg
+	for rows.Next() {
+		var leg openingLeg
+		if err := rows.Scan(&leg.leg, &leg.side, &leg.amount, &leg.entryPrice); err != nil {
+			rows.Close()
+			return 0, false, err
+		}
+		legs = append(legs, leg)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, false, err
+	}
+	if len(legs) == 0 {
+		return 0, false, nil
+	}
+
+	var total float64
+	for _, leg := range legs {
+		var closeAmount, weightedClosePrice sql.NullFloat64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT SUM(filled_amount), SUM(filled_amount * avg_fill_price)
+			FROM live_close_outcomes
+			WHERE position_id = ? AND leg = ? AND resolved = 1
+				AND filled_amount > 0 AND avg_fill_price > 0`, positionID, leg.leg,
+		).Scan(&closeAmount, &weightedClosePrice); err != nil {
+			return 0, false, err
+		}
+		if !closeAmount.Valid || !weightedClosePrice.Valid || leg.amount <= 0 || leg.entryPrice <= 0 {
+			return 0, false, nil
+		}
+		tolerance := math.Max(leg.amount*closePnLCoverageTolerance, 1e-9)
+		if math.Abs(closeAmount.Float64-leg.amount) > tolerance {
+			return 0, false, nil
+		}
+		closePrice := weightedClosePrice.Float64 / closeAmount.Float64
+		side := domain.Side(strings.ToLower(leg.side))
+		if side != domain.SideLong && side != domain.SideShort {
+			return 0, false, nil
+		}
+		total += legPricePnL(side, leg.entryPrice, closePrice, leg.amount)
+	}
+	return total, true, nil
 }
 
 // CloseOutcome records the latest known state of a reduce-only close order.
@@ -311,7 +406,7 @@ const livePositionCols = `id, plan_id, opportunity_id, asset,
 	notional, leverage,
 	entry_spread, hedge_mismatch,
 	current_spread, current_basis, entry_basis, basis_change,
-	price_pnl, funding_pnl, total_pnl,
+	price_pnl, funding_pnl, funding_pnl_source, total_pnl,
 	leg1_current_price, leg2_current_price,
 	leg1_liq_price, leg2_liq_price,
 	leg1_liq_dist, leg2_liq_dist,
@@ -328,7 +423,7 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 		&p.Notional, &p.Leverage,
 		&p.EntrySpread, &p.HedgeMismatch,
 		&p.CurrentSpread, &p.CurrentBasis, &p.EntryBasis, &p.BasisChange,
-		&p.PricePnL, &p.FundingPnL, &p.TotalPnL,
+		&p.PricePnL, &p.FundingPnL, &p.FundingPnLSource, &p.TotalPnL,
 		&p.Leg1CurPrice, &p.Leg2CurPrice,
 		&p.Leg1LiqPrice, &p.Leg2LiqPrice,
 		&p.Leg1LiqDist, &p.Leg2LiqDist,
@@ -473,6 +568,73 @@ func (s *Store) GetEvents(ctx context.Context, positionID string) ([]LiveEvent, 
 	return events, rows.Err()
 }
 
+func (s *Store) InsertFundingPayments(ctx context.Context, positionID string, payments []venue.FundingPayment) error {
+	if len(payments) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, payment := range payments {
+		if payment.ExternalID == "" || payment.Venue == "" || payment.Account == "" || payment.Asset == "" || payment.PaidAt.IsZero() {
+			return fmt.Errorf("invalid funding payment")
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO live_funding_payments (
+				position_id, venue, account, external_id, asset, amount_usd, paid_at, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(venue, account, external_id) DO NOTHING`,
+			positionID, payment.Venue, payment.Account, payment.ExternalID, payment.Asset, payment.AmountUSD,
+			payment.PaidAt.UTC().Format(time.RFC3339Nano), now,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SumFundingPayments(ctx context.Context, positionID string) (float64, error) {
+	var total float64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount_usd), 0)
+		FROM live_funding_payments WHERE position_id = ?`, positionID).Scan(&total)
+	return total, err
+}
+
+func (s *Store) RecordFundingSync(ctx context.Context, positionID string, finalized bool) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO live_funding_sync (position_id, synced_at, finalized)
+		VALUES (?, ?, ?)
+		ON CONFLICT(position_id) DO UPDATE SET
+			synced_at = excluded.synced_at,
+			finalized = MAX(live_funding_sync.finalized, excluded.finalized)`,
+		positionID, time.Now().UTC().Format(time.RFC3339Nano), boolToInt(finalized),
+	)
+	return err
+}
+
+func (s *Store) ListUnfinalizedClosedPositions(ctx context.Context) ([]LivePosition, error) {
+	return s.queryPositions(ctx, `
+		SELECT `+livePositionCols+` FROM live_positions
+		WHERE state = 'closed' AND NOT EXISTS (
+			SELECT 1 FROM live_funding_sync funding
+			WHERE funding.position_id = live_positions.id AND funding.finalized = 1
+		)
+		ORDER BY updated_at`)
+}
+
+func (s *Store) UpdateRealizedFunding(ctx context.Context, positionID string, fundingPnL float64) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE live_positions SET funding_pnl = ?, funding_pnl_source = 'realized',
+			total_pnl = price_pnl + ?, monitor_at = ?, updated_at = ?
+		WHERE id = ?`, fundingPnL, fundingPnL, now, now, positionID)
+	return err
+}
+
 // MonitorUpdate holds the fields written by the live monitor on each tick.
 type MonitorUpdate struct {
 	CurrentSpread float64
@@ -480,8 +642,6 @@ type MonitorUpdate struct {
 	EntryBasis    float64
 	BasisChange   float64
 	PricePnL      float64
-	FundingPnL    float64
-	TotalPnL      float64
 	Leg1CurPrice  float64
 	Leg2CurPrice  float64
 	Leg1LiqPrice  float64
@@ -503,8 +663,7 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 			entry_basis = ?,
 			basis_change = ?,
 			price_pnl = ?,
-			funding_pnl = ?,
-			total_pnl = ?,
+			total_pnl = ? + funding_pnl,
 			leg1_current_price = ?,
 			leg2_current_price = ?,
 			leg1_liq_price = ?,
@@ -522,8 +681,7 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 		m.EntryBasis,
 		m.BasisChange,
 		m.PricePnL,
-		m.FundingPnL,
-		m.TotalPnL,
+		m.PricePnL,
 		m.Leg1CurPrice,
 		m.Leg2CurPrice,
 		m.Leg1LiqPrice,
@@ -563,6 +721,7 @@ type LivePosition struct {
 	BasisChange        float64 `json:"basis_change"`
 	PricePnL           float64 `json:"price_pnl"`
 	FundingPnL         float64 `json:"funding_pnl"`
+	FundingPnLSource   string  `json:"funding_pnl_source"`
 	TotalPnL           float64 `json:"total_pnl"`
 	Leg1CurPrice       float64 `json:"leg1_current_price"`
 	Leg2CurPrice       float64 `json:"leg2_current_price"`
@@ -618,6 +777,14 @@ func boolToInt(b bool) int64 {
 	return 0
 }
 
+func resultHedgeMismatch(result *ExecutionResult) float64 {
+	leg1Amount := result.Leg1.FilledAmount
+	if leg1Amount <= 0 {
+		return 1
+	}
+	return math.Abs(result.Leg2.FilledAmount-leg1Amount) / leg1Amount
+}
+
 // ReasonsDetail joins reasons into a single string for event detail.
 func ReasonsDetail(reasons []string) string {
 	if len(reasons) == 0 {
@@ -667,5 +834,5 @@ func (s *Store) PersistFullResult(ctx context.Context, result *ExecutionResult, 
 
 	// Final state
 	s.InsertEvent(ctx, posID, "complete", result.State, ReasonsDetail(result.Reasons))
-	s.UpdateState(ctx, posID, result.State, 0, 0)
+	s.UpdateState(ctx, posID, result.State, 0, resultHedgeMismatch(result))
 }

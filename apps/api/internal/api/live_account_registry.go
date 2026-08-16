@@ -19,6 +19,7 @@ type liveAccountPosition struct {
 	Side       string
 	Size       float64
 	EntryPrice float64
+	LiqPrice   float64
 }
 
 type liveAccountSnapshot struct {

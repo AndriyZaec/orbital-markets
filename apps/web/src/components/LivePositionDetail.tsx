@@ -3,6 +3,8 @@ import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
 import { useLiveClose } from '@/hooks/useLiveClose'
 import { canRequestLiveClose, hasActionableRecordedFills } from '@/lib/degraded-execution'
+import { monitoredLegVenues } from '@/lib/live-position-monitoring'
+import { formatSignedUsdPnL } from '@/lib/pnl-format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
@@ -25,11 +27,6 @@ function fmtUsd(n: number) {
   if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2) + 'M'
   if (n >= 1_000) return '$' + (n / 1_000).toFixed(2) + 'K'
   return '$' + n.toFixed(2)
-}
-
-function fmtPnL(n: number) {
-  const sign = n >= 0 ? '+' : ''
-  return sign + '$' + Math.abs(n).toFixed(2)
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -86,6 +83,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const { data, loading, error: detailError } = useLivePositionDetail(pos.id)
   const fills = data?.fills ?? []
   const events = data?.events ?? []
+  const [leg1Venue, leg2Venue] = monitoredLegVenues(fills, pos.venue_a, pos.venue_b)
   const liveClose = useLiveClose()
   const [confirmClose, setConfirmClose] = useState(false)
 
@@ -191,8 +189,8 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
           <div className="px-5 py-4 border-b border-border">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Leg Status</p>
             <div className="grid grid-cols-2 gap-3">
-              <LegCard label="Leg 1" venue={pos.venue_a} currentPrice={pos.leg1_current_price} liqPrice={pos.leg1_liq_price} liqDist={pos.leg1_liq_dist} liqRisk={pos.leg1_liq_risk} />
-              <LegCard label="Leg 2" venue={pos.venue_b} currentPrice={pos.leg2_current_price} liqPrice={pos.leg2_liq_price} liqDist={pos.leg2_liq_dist} liqRisk={pos.leg2_liq_risk} />
+              <LegCard label="Leg 1" venue={leg1Venue} currentPrice={pos.leg1_current_price} liqPrice={pos.leg1_liq_price} liqDist={pos.leg1_liq_dist} liqRisk={pos.leg1_liq_risk} />
+              <LegCard label="Leg 2" venue={leg2Venue} currentPrice={pos.leg2_current_price} liqPrice={pos.leg2_liq_price} liqDist={pos.leg2_liq_dist} liqRisk={pos.leg2_liq_risk} />
             </div>
           </div>
         )}
@@ -202,9 +200,9 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
           <div className="px-5 py-4 border-b border-border">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
             <div className="grid grid-cols-3 gap-4">
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{fmtPnL(pos.price_pnl)}</p></div>
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">Funding PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{fmtPnL(pos.funding_pnl)}</p></div>
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{fmtPnL(pos.total_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{formatSignedUsdPnL(pos.price_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">{pos.funding_pnl_source === 'realized' ? 'Realized Funding' : 'Estimated Funding'}</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{formatSignedUsdPnL(pos.funding_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{formatSignedUsdPnL(pos.total_pnl)}</p></div>
             </div>
           </div>
         )}

@@ -8,6 +8,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
@@ -28,16 +29,16 @@ func startLive(
 
 	// --- Live position store + monitor ---
 	liveStore := executor.NewStore(database, logger)
-	liveMonitor := executor.NewMonitor(logger, liveStore, market)
-	go liveMonitor.Run(ctx)
-
 	signingStore := domain.NewSigningRequestStore()
+	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac)
+	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)
+	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, map[string]venue.FundingHistory{
+		"pacifica":    pac,
+		"hyperliquid": hl,
+	})
+	go liveMonitor.Run(ctx)
+	go fundingMonitor.Run(ctx)
 
 	logger.Info("live execution: runtime ready (account streams start on wallet connect)")
-
-	return api.NewLiveDeps(
-		ctx, logger,
-		signingStore, liveStore,
-		hlAssetMap, pac,
-	)
+	return liveDeps
 }
