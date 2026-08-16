@@ -19,6 +19,7 @@ func (s *Server) runLiveSessionRecovery() {
 	go s.renewLiveSessionLeases()
 	s.restoreLiveSessions()
 	s.reconcileClosingPositions()
+	s.reconcileOpenPositions()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -29,8 +30,112 @@ func (s *Server) runLiveSessionRecovery() {
 			s.restoreLiveSessions()
 			s.cleanupExpiredLiveSessions()
 			s.reconcileClosingPositions()
+			s.reconcileOpenPositions()
 		}
 	}
+}
+
+const cachedExposureAmountTolerance = 0.005
+
+func (s *Server) reconcileOpenPositions() {
+	if s.live == nil || s.live.accounts == nil {
+		return
+	}
+	positions, err := s.liveStore.ListOpenPositions(s.ctx)
+	if err != nil {
+		s.logger.Error("live exposure recovery: list positions", "err", err)
+		return
+	}
+	for i := range positions {
+		position := &positions[i]
+		exposure, ready, err := s.cachedVenueExposure(position)
+		if err != nil {
+			s.logger.Warn("live exposure recovery: account snapshots unavailable", "err", err, "id", position.ID)
+			continue
+		}
+		if !ready {
+			continue
+		}
+		if math.Abs(exposure["pacifica"]) <= 1e-9 && math.Abs(exposure["hyperliquid"]) <= 1e-9 {
+			if _, err := s.markPositionClosedFromVenueTruth(s.ctx, position); err != nil {
+				s.logger.Warn("live exposure recovery: mark flat position closed", "err", err, "id", position.ID)
+			}
+			continue
+		}
+		if position.State != string(executor.ExecStateOpen) {
+			continue
+		}
+		fills, err := s.liveStore.GetFills(s.ctx, position.ID)
+		if err != nil {
+			s.logger.Warn("live exposure recovery: get fills", "err", err, "id", position.ID)
+			continue
+		}
+		if cachedExposureMatchesFills(exposure, fills) {
+			continue
+		}
+		if err := s.liveStore.MarkCloseDegraded(s.ctx, position.ID); err == nil {
+			s.liveStore.InsertEvent(s.ctx, position.ID, "venue_exposure_changed", executor.ExecStateDegraded,
+				"fresh account snapshots no longer match the recorded open legs")
+		}
+	}
+}
+
+func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[string]float64, bool, error) {
+	accounts, err := s.live.acquireRecoveryAccounts(position.AccountPacifica, position.AccountHyperliquid)
+	if err != nil {
+		return nil, false, err
+	}
+	defer accounts.Release()
+
+	after, err := time.Parse(time.RFC3339, position.OpenedAt)
+	if err != nil {
+		after, err = time.Parse(time.RFC3339, position.UpdatedAt)
+	}
+	if err != nil {
+		return nil, false, nil
+	}
+	exposure := make(map[string]float64, 2)
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		feed, ok := accounts.Feed(venue)
+		if !ok {
+			return nil, false, nil
+		}
+		snapshot := feed.Snapshot()
+		if snapshot.PositionsUpdatedAt.IsZero() || !snapshot.PositionsUpdatedAt.After(after) ||
+			time.Since(snapshot.PositionsUpdatedAt) > admissionFreshness {
+			return nil, false, nil
+		}
+		for _, accountPosition := range snapshot.Positions {
+			if strings.EqualFold(accountPosition.Symbol, position.Asset) {
+				exposure[venue] = signedSize(accountPosition.Side, accountPosition.Size)
+				break
+			}
+		}
+	}
+	return exposure, true, nil
+}
+
+func cachedExposureMatchesFills(exposure map[string]float64, fills []executor.LiveFill) bool {
+	expected := make(map[string]float64, 2)
+	for _, fill := range fills {
+		if fill.Filled && fill.FilledAmount > 0 {
+			expected[fill.Venue] = signedSize(fill.Side, fill.FilledAmount)
+		}
+	}
+	if len(expected) != 2 {
+		return false
+	}
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		expectedSize, ok := expected[venue]
+		if !ok {
+			return false
+		}
+		tolerance := math.Max(math.Abs(expectedSize)*cachedExposureAmountTolerance, 1e-9)
+		if math.Abs(exposure[venue]-expectedSize) > tolerance {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) reconcileClosingPositions() {
