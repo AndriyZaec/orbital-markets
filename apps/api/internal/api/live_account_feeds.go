@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
@@ -59,7 +60,7 @@ func (f *pacificaAccountFeed) Snapshot() liveAccountSnapshot {
 	for _, position := range snapshot.Positions {
 		positions = append(positions, liveAccountPosition{
 			Symbol: position.Symbol, Side: position.Side,
-			Size: position.Size, EntryPrice: position.EntryPrice,
+			Size: position.Size, EntryPrice: position.EntryPrice, LiqPrice: position.LiqPrice,
 		})
 	}
 	return liveAccountSnapshot{
@@ -168,7 +169,7 @@ func (f *hyperliquidAccountFeed) Snapshot() liveAccountSnapshot {
 	for _, position := range snapshot.Positions {
 		positions = append(positions, liveAccountPosition{
 			Symbol: position.Coin, Side: position.Side,
-			Size: position.Size, EntryPrice: position.EntryPx,
+			Size: position.Size, EntryPrice: position.EntryPx, LiqPrice: position.LiquidationPx,
 		})
 	}
 	return liveAccountSnapshot{
@@ -178,6 +179,32 @@ func (f *hyperliquidAccountFeed) Snapshot() liveAccountSnapshot {
 		Equity:             snapshot.Margin.AccountEquity, Available: snapshot.Margin.AvailableBalance,
 		Positions: positions,
 	}
+}
+
+func (d *LiveDeps) LiquidationPrices(_ context.Context, position *executor.LivePosition) (map[string]float64, error) {
+	accounts, err := d.acquireRecoveryAccounts(position.AccountPacifica, position.AccountHyperliquid)
+	if err != nil {
+		return nil, err
+	}
+	defer accounts.Release()
+	prices := make(map[string]float64, 2)
+	for _, venue := range []string{"pacifica", "hyperliquid"} {
+		feed, ok := accounts.Feed(venue)
+		if !ok {
+			return nil, fmt.Errorf("%s account feed unavailable", venue)
+		}
+		snapshot := feed.Snapshot()
+		if snapshot.PositionsUpdatedAt.IsZero() || time.Since(snapshot.PositionsUpdatedAt) > admissionFreshness {
+			continue
+		}
+		for _, accountPosition := range snapshot.Positions {
+			if strings.EqualFold(accountPosition.Symbol, position.Asset) && accountPosition.LiqPrice > 0 {
+				prices[venue] = accountPosition.LiqPrice
+				break
+			}
+		}
+	}
+	return prices, nil
 }
 
 func (f *hyperliquidAccountFeed) PreTradeBlockers(leg domain.Leg) []string {

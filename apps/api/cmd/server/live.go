@@ -29,7 +29,9 @@ func startLive(
 
 	// --- Live position store + monitor ---
 	liveStore := executor.NewStore(database, logger)
-	liveMonitor := executor.NewMonitor(logger, liveStore, market)
+	signingStore := domain.NewSigningRequestStore()
+	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac)
+	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)
 	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, map[string]venue.FundingHistory{
 		"pacifica":    pac,
 		"hyperliquid": hl,
@@ -37,13 +39,6 @@ func startLive(
 	go liveMonitor.Run(ctx)
 	go fundingMonitor.Run(ctx)
 
-	signingStore := domain.NewSigningRequestStore()
-
 	logger.Info("live execution: runtime ready (account streams start on wallet connect)")
-
-	return api.NewLiveDeps(
-		ctx, logger,
-		signingStore, liveStore,
-		hlAssetMap, pac,
-	)
+	return liveDeps
 }

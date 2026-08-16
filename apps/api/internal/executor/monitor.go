@@ -20,19 +20,22 @@ type MarketSource interface {
 	FreshSnapshots(ctx context.Context, asset, venueA, venueB string) (venue.MarketData, venue.MarketData, error)
 }
 
+type LiquidationSource interface {
+	LiquidationPrices(ctx context.Context, position *LivePosition) (map[string]float64, error)
+}
+
 // Monitor periodically evaluates open live positions against real venue data
 // and persists updated metrics to SQLite.
 type Monitor struct {
-	store  *Store
-	market MarketSource
-	logger *slog.Logger
+	store        *Store
+	market       MarketSource
+	liquidations LiquidationSource
+	logger       *slog.Logger
 }
 
-func NewMonitor(logger *slog.Logger, store *Store, market MarketSource) *Monitor {
+func NewMonitor(logger *slog.Logger, store *Store, market MarketSource, liquidations LiquidationSource) *Monitor {
 	return &Monitor{
-		store:  store,
-		market: market,
-		logger: logger,
+		store: store, market: market, liquidations: liquidations, logger: logger,
 	}
 }
 
@@ -131,9 +134,19 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 		update.BasisChange = update.CurrentBasis - update.EntryBasis
 	}
 
-	// Liquidation prices and risk
-	update.Leg1LiqPrice = domain.LiquidationPrice(leg1.AvgFillPrice, leg1Side, pos.Leverage)
-	update.Leg2LiqPrice = domain.LiquidationPrice(leg2.AvgFillPrice, leg2Side, pos.Leverage)
+	var nativeLiquidationPrices map[string]float64
+	if m.liquidations != nil {
+		nativeLiquidationPrices, err = m.liquidations.LiquidationPrices(ctx, pos)
+		if err != nil {
+			m.logger.Warn("live monitor: fetch liquidation prices", "err", err, "id", pos.ID)
+		}
+	}
+	update.Leg1LiqPrice = monitoredLiquidationPrice(
+		nativeLiquidationPrices[leg1.Venue], leg1.AvgFillPrice, leg1Side, pos.Leverage,
+	)
+	update.Leg2LiqPrice = monitoredLiquidationPrice(
+		nativeLiquidationPrices[leg2.Venue], leg2.AvgFillPrice, leg2Side, pos.Leverage,
+	)
 
 	update.Leg1LiqDist = domain.LiquidationDistance(update.Leg1CurPrice, update.Leg1LiqPrice, leg1Side)
 	update.Leg2LiqDist = domain.LiquidationDistance(update.Leg2CurPrice, update.Leg2LiqPrice, leg2Side)
@@ -179,4 +192,11 @@ func legPricePnL(side domain.Side, entryPrice, markPrice, baseAmount float64) fl
 		return (entryPrice - markPrice) * baseAmount
 	}
 	return (markPrice - entryPrice) * baseAmount
+}
+
+func monitoredLiquidationPrice(nativePrice, entryPrice float64, side domain.Side, leverage float64) float64 {
+	if nativePrice > 0 {
+		return nativePrice
+	}
+	return domain.LiquidationPrice(entryPrice, side, leverage)
 }
