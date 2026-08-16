@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -154,17 +156,108 @@ func (s *Store) MarkClosing(ctx context.Context, positionID string) error {
 // whether this call performed the transition.
 func (s *Store) MarkClosed(ctx context.Context, positionID string) (bool, error) {
 	now := time.Now().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE live_positions SET state = ?, completed_at = ?, updated_at = ?
-		WHERE id = ? AND state != ?`,
-		string(ExecStateClosed), now, now, positionID, string(ExecStateClosed),
-	)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	pricePnL, hasRealizedPnL, err := realizedClosePricePnL(ctx, tx, positionID)
+	if err != nil {
+		return false, err
+	}
+	var result sql.Result
+	if hasRealizedPnL {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE live_positions SET state = ?, completed_at = ?, price_pnl = ?,
+				total_pnl = ? + funding_pnl, updated_at = ?
+			WHERE id = ? AND state != ?`,
+			string(ExecStateClosed), now, pricePnL, pricePnL, now, positionID, string(ExecStateClosed),
+		)
+	} else {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE live_positions SET state = ?, completed_at = ?, updated_at = ?
+			WHERE id = ? AND state != ?`,
+			string(ExecStateClosed), now, now, positionID, string(ExecStateClosed),
+		)
+	}
 	if err != nil {
 		s.logger.Error("live store: mark closed", "err", err, "id", positionID)
 		return false, err
 	}
 	rows, err := result.RowsAffected()
-	return rows > 0, err
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+const closePnLCoverageTolerance = 0.005
+
+func realizedClosePricePnL(ctx context.Context, tx *sql.Tx, positionID string) (float64, bool, error) {
+	type openingLeg struct {
+		leg        int
+		side       string
+		amount     float64
+		entryPrice float64
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT leg, side, filled_amount, avg_fill_price
+		FROM live_fills
+		WHERE position_id = ? AND filled = 1
+		ORDER BY leg`, positionID)
+	if err != nil {
+		return 0, false, err
+	}
+	var legs []openingLeg
+	for rows.Next() {
+		var leg openingLeg
+		if err := rows.Scan(&leg.leg, &leg.side, &leg.amount, &leg.entryPrice); err != nil {
+			rows.Close()
+			return 0, false, err
+		}
+		legs = append(legs, leg)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, false, err
+	}
+	if len(legs) == 0 {
+		return 0, false, nil
+	}
+
+	var total float64
+	for _, leg := range legs {
+		var closeAmount, weightedClosePrice sql.NullFloat64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT SUM(filled_amount), SUM(filled_amount * avg_fill_price)
+			FROM live_close_outcomes
+			WHERE position_id = ? AND leg = ? AND resolved = 1
+				AND filled_amount > 0 AND avg_fill_price > 0`, positionID, leg.leg,
+		).Scan(&closeAmount, &weightedClosePrice); err != nil {
+			return 0, false, err
+		}
+		if !closeAmount.Valid || !weightedClosePrice.Valid || leg.amount <= 0 || leg.entryPrice <= 0 {
+			return 0, false, nil
+		}
+		tolerance := math.Max(leg.amount*closePnLCoverageTolerance, 1e-9)
+		if math.Abs(closeAmount.Float64-leg.amount) > tolerance {
+			return 0, false, nil
+		}
+		closePrice := weightedClosePrice.Float64 / closeAmount.Float64
+		side := domain.Side(strings.ToLower(leg.side))
+		if side != domain.SideLong && side != domain.SideShort {
+			return 0, false, nil
+		}
+		total += legPricePnL(side, leg.entryPrice, closePrice, leg.amount)
+	}
+	return total, true, nil
 }
 
 // CloseOutcome records the latest known state of a reduce-only close order.
