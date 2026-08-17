@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
+import { useTelegramLink } from '@/hooks/useTelegramLink'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import nadoLogo from '@/assets/nado.jpg'
 import gmtradeLogo from '@/assets/gm-trade.png'
 import driftLogo from '@/assets/drift.png'
+import telegramLogo from '@/assets/telegram-logo.svg'
 
 // Static venue metadata (logos, blurbs, chain, coming-soon flag). Runtime
 // readiness comes from useVenueReadiness — the single typed layer that
@@ -31,6 +33,8 @@ const VENUES: VenueDef[] = [
   { id: 'gmtrade', name: 'GMTrade', logo: gmtradeLogo, description: 'Solana-based perpetual trading platform', chain: 'Solana', comingSoon: true },
 ]
 
+const FIRST_COMING_SOON_INDEX = VENUES.findIndex((venue) => venue.comingSoon)
+
 interface Props {
   open: boolean
   onConnectionChange?: (count: number) => void
@@ -47,6 +51,12 @@ function fmtUsd(n: number | null): string {
 // Diagnostic pill state (label + colors). Copy is operator-friendly, not
 // adapter jargon: we say "Balance" not "balance stream", etc.
 type PillTone = 'ok' | 'pending' | 'off' | 'bad'
+interface DiagnosticPill {
+  label: string
+  tone: PillTone
+  loading?: boolean
+}
+
 const TONE: Record<PillTone, { dot: string; text: string }> = {
   ok:      { dot: 'bg-green-400',           text: 'text-green-400' },
   pending: { dot: 'bg-yellow-400',          text: 'text-yellow-400' },
@@ -54,28 +64,30 @@ const TONE: Record<PillTone, { dot: string; text: string }> = {
   bad:     { dot: 'bg-red-400',             text: 'text-red-400' },
 }
 
-function walletPill(r: VenueReadiness): { label: string; tone: PillTone } {
+function walletPill(r: VenueReadiness): DiagnosticPill {
   if (r.walletConnected) return { label: 'Connected', tone: 'ok' }
   return r.status === 'error' ? { label: 'Error', tone: 'bad' } : { label: 'Not connected', tone: 'off' }
 }
-function signerPill(r: VenueReadiness): { label: string; tone: PillTone } {
+function signerPill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
   return r.signerReady ? { label: 'Ready', tone: 'ok' } : { label: 'Missing', tone: 'pending' }
 }
-function agentPill(r: VenueReadiness): { label: string; tone: PillTone } {
+function agentPill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
-  if (r.agentStatus === 'authorizing') return { label: 'Authorizing', tone: 'pending' }
+  if (r.agentStatus === 'authorizing') return { label: 'Authorizing', tone: 'pending', loading: true }
   if (r.agentStatus === 'error') return { label: 'Error', tone: 'bad' }
   return r.agentReady ? { label: 'Ready', tone: 'ok' } : { label: 'Required', tone: 'pending' }
 }
-function balancePill(r: VenueReadiness): { label: string; tone: PillTone } {
+function balancePill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
   if (r.balanceReady) return { label: 'Ready', tone: 'ok' }
   // Stream up but snapshot is old — surface as Stale, not Pending, so the
   // operator can tell the difference between "still initializing" and
   // "data went stale after being fresh".
   if (r.streamReady && !r.accountFresh) return { label: 'Stale', tone: 'pending' }
-  if (r.balanceConnected || r.streamReady) return { label: 'Pending', tone: 'pending' }
+  if (r.status === 'balance_pending' || r.balanceConnected || r.streamReady) {
+    return { label: 'Pending', tone: 'pending', loading: true }
+  }
   return { label: 'Not connected', tone: 'off' }
 }
 
@@ -97,6 +109,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     refreshBalances,
   } = useVenueReadiness()
   const tradingAgents = useTradingAgents()
+  const telegramLink = useTelegramLink()
   const { state: liveExecution } = useLiveExecution()
   const agentChangeBlocked = !['idle', 'open', 'degraded', 'aborted', 'failed'].includes(liveExecution.phase)
 
@@ -165,6 +178,15 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   }
 
   const summaryTone = TONE[aggregateTone(aggregate.statusLabel)]
+  const showTelegram = pacifica.walletConnected
+    && hyperliquid.walletConnected
+    && !!pacifica.address
+    && !!hyperliquid.address
+
+  const handleConnectTelegram = () => {
+    if (!pacifica.address || !hyperliquid.address) return
+    telegramLink.connect(pacifica.address, hyperliquid.address)
+  }
 
   return (
     <div
@@ -212,15 +234,45 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       <div className="flex-1 overflow-auto min-h-0 px-3 py-3">
         <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mb-2 px-1">Venues</p>
         <div className="flex flex-col gap-2">
-          {VENUES.map((venue) => {
+          {VENUES.map((venue, index) => {
             const readiness = getReadiness(venue.id)
             const isComingSoon = venue.comingSoon
             const isReady = !isComingSoon && readiness?.status === 'ready'
             const isErr = !isComingSoon && readiness?.status === 'error'
 
             return (
+              <Fragment key={venue.id}>
+                {index === FIRST_COMING_SOON_INDEX && (
+                  <>
+                    {showTelegram && (
+                      <div className="py-1 animate-in fade-in-0 duration-200">
+                        <div className="px-1 mb-2">
+                          <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium">
+                            Telegram
+                          </p>
+                          <p className="text-[10px] text-muted-foreground/70 mt-1 leading-relaxed">
+                            View opportunities and live positions from Telegram.
+                          </p>
+                        </div>
+                        <button
+                          onClick={handleConnectTelegram}
+                          disabled={telegramLink.creating}
+                          className="w-full h-10 rounded-lg border border-[#229ED9]/25 bg-[#229ED9]/10 hover:border-[#229ED9]/40 hover:bg-[#229ED9]/15 disabled:opacity-70 disabled:cursor-wait text-[#8bd3f5] flex items-center justify-center gap-2 text-xs font-semibold transition-colors"
+                        >
+                          <img src={telegramLogo} alt="" className="size-5" />
+                          {telegramLink.creating ? 'Opening Telegram...' : 'Connect Telegram'}
+                        </button>
+                        {telegramLink.error && (
+                          <p className="text-[10px] text-red-400 mt-1.5 px-1">{telegramLink.error}</p>
+                        )}
+                      </div>
+                    )}
+                    <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mt-2 px-1">
+                      Coming Soon
+                    </p>
+                  </>
+                )}
               <div
-                key={venue.id}
                 className={`rounded-lg border px-3 py-3 ${
                   isReady
                     ? 'border-green-500/20 bg-green-500/[0.03]'
@@ -260,7 +312,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     <DiagRow label="Owner signer" pill={signerPill(readiness)} />
                     <DiagRow label="Authorization" pill={agentPill(readiness)} />
                     <DiagRow label="Balance" pill={balancePill(readiness)} />
-                    {(readiness.equity !== null || readiness.available !== null) && (
+                    {readiness.walletConnected && (
                       <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
                         <span className="text-muted-foreground">Equity / Available</span>
                         <span className="font-mono text-foreground">
@@ -333,6 +385,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 </div>
 
               </div>
+              </Fragment>
             )
           })}
         </div>
@@ -346,7 +399,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
-            Authorization keys stay in this browser session. Clearing a local key does not revoke it at the venue. Pacifica authorization must be treated as having broad POST authority, including documented withdrawal endpoints.
+            Authorization keys stay in this browser session. Clearing a local key does not revoke it at the venue.
           </p>
         </div>
       </div>
@@ -485,14 +538,22 @@ function EvmWalletPicker({
   )
 }
 
-function DiagRow({ label, pill }: { label: string; pill: { label: string; tone: PillTone } }) {
+function DiagRow({ label, pill }: { label: string; pill: DiagnosticPill }) {
   const t = TONE[pill.tone]
+  const textColor = pill.loading ? 'text-cyan-400' : t.text
   return (
     <div className="flex items-center justify-between text-[10px]">
       <span className="text-muted-foreground">{label}</span>
       <div className="flex items-center gap-1.5">
-        <div className={`size-1.5 rounded-full ${t.dot}`} />
-        <span className={`font-medium ${t.text}`}>{pill.label}</span>
+        {pill.loading ? (
+          <div
+            className="size-2.5 animate-spin rounded-full border border-slate-500/40 border-t-cyan-400"
+            aria-hidden="true"
+          />
+        ) : (
+          <div className={`size-1.5 rounded-full ${t.dot}`} />
+        )}
+        <span className={`font-medium ${textColor}`}>{pill.label}</span>
       </div>
     </div>
   )

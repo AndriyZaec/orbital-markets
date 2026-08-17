@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 import { usePageVisibility } from './usePageVisibility'
 
 interface Fill {
@@ -74,7 +74,7 @@ export function usePaperPositions(pollInterval = 5_000) {
     const request = ++requestSequence.current
     try {
       const resp = await apiFetch('/api/v1/paper/positions', { signal })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      if (!resp.ok) throw await apiResponseError(resp, 'Unable to load positions. Please try again.')
       const data: PaperPosition[] = await resp.json()
       if (signal?.aborted || request !== requestSequence.current) return
       data.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -82,7 +82,7 @@ export function usePaperPositions(pollInterval = 5_000) {
       setError(null)
     } catch (e) {
       if (signal?.aborted || request !== requestSequence.current) return
-      setError(e instanceof Error ? e.message : 'Unknown error')
+      setError(userErrorMessage(e, 'Unable to load positions. Please try again.'))
     } finally {
       if (!signal?.aborted && request === requestSequence.current) setLoading(false)
     }
@@ -104,7 +104,7 @@ export function usePaperPositions(pollInterval = 5_000) {
     const resp = await apiFetch(`/api/v1/paper/close/${posId}`, { method: 'POST' })
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}))
-      throw new Error(body.error || `HTTP ${resp.status}`)
+      throw apiError(resp.status, 'Unable to close the position. Please try again.', body)
     }
     await fetchPositions()
   }, [fetchPositions])

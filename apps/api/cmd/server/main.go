@@ -72,15 +72,20 @@ func main() {
 
 	// Live execution deps (non-custodial signing flow)
 	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
+	telegram := buildTelegramIntegration(logger, sc, database)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	if telegram != nil && telegram.links != nil {
+		srv.EnableTelegramLinks(telegram.links)
+	}
+	handler := buildRootHandler(srv.Handler(), telegram)
 
 	addr := envOr("ADDR", ":8080")
 	logger.Info("starting server", "addr", addr, "env", env)
 
 	httpSrv := &http.Server{
 		Addr:              addr,
-		Handler:           srv.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

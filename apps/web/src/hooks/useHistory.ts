@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 
 export interface HistoryPoint {
   t: string
@@ -28,14 +28,14 @@ export function useHistory(asset: string, venueA: string, venueB: string, range_
       setLoading(true)
       const params = new URLSearchParams({ asset, venue_a: venueA, venue_b: venueB, range: range_ })
       const resp = await apiFetch(`/api/v1/history?${params}`)
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      if (!resp.ok) throw await apiResponseError(resp, 'Funding history is not available. Please try again.')
       const json: HistoryData = await resp.json()
       if (requestId !== requestSequence.current) return
       setData(json.points ?? [])
       setError(null)
     } catch (e) {
       if (requestId !== requestSequence.current) return
-      setError(e instanceof Error ? e.message : 'Unknown error')
+      setError(userErrorMessage(e, 'Funding history is not available. Please try again.'))
       setData([])
     } finally {
       if (requestId === requestSequence.current) {

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch, apiResponseError } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
@@ -37,7 +37,9 @@ async function waitForClose(positionId: string, pacificaAccount: string, hyperli
 	})
   for (let attempt = 0; attempt < closeConfirmationAttempts; attempt++) {
     const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
-    if (!resp.ok) throw new Error(`Close confirmation failed: HTTP ${resp.status}`)
+    if (!resp.ok) {
+      throw await apiResponseError(resp, 'Unable to confirm the close. Check the position before retrying.')
+    }
     const data: { position: { state: string } } = await resp.json()
     if (data.position.state === 'closed') return
     if (data.position.state === 'degraded') {
@@ -75,7 +77,7 @@ export function useLiveClose() {
       })
       if (!resp.ok) {
         const b = await resp.json().catch(() => ({}))
-        throw new Error(b.error || `Close prepare failed: HTTP ${resp.status}`)
+        throw apiError(resp.status, 'Unable to prepare the position close. Please try again.', b)
       }
 
       const data: { signing_requests: SigningRequest[]; reconciled_closed?: boolean } = await resp.json()
@@ -110,7 +112,8 @@ export function useLiveClose() {
           if (!submitResp.ok) {
             const b = await submitResp.json().catch(() => ({}))
             failed++
-            errors.push(`${req.venue} ${req.symbol}: ${b.error || `HTTP ${submitResp.status}`}`)
+            const message = apiError(submitResp.status, 'Order submission failed. Check the position before retrying.', b).message
+            errors.push(`${req.venue} ${req.symbol}: ${message}`)
             setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
             continue
           }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 import { usePageVisibility } from './usePageVisibility'
 
 interface Opportunity {
@@ -44,7 +44,7 @@ export function useOpportunities(pollInterval = 60_000) {
     const request = ++requestSequence.current
     try {
       const resp = await apiFetch('/api/v1/opportunities', { signal })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      if (!resp.ok) throw await apiResponseError(resp, 'Unable to load opportunities. Please try again.')
       const data: Opportunity[] = await resp.json()
       if (signal?.aborted || request !== requestSequence.current) return
       setOpportunities(data)
@@ -52,7 +52,7 @@ export function useOpportunities(pollInterval = 60_000) {
       setError(null)
     } catch (e) {
       if (signal?.aborted || request !== requestSequence.current) return
-      setError(e instanceof Error ? e.message : 'Unknown error')
+      setError(userErrorMessage(e, 'Unable to load opportunities. Please try again.'))
     } finally {
       if (!signal?.aborted && request === requestSequence.current) setLoading(false)
     }

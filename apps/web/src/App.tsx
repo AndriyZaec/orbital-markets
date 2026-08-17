@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
 import type { Opportunity } from '@/hooks/useOpportunities'
@@ -203,12 +203,12 @@ export default function App() {
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
-        alert(body.error || `Execution failed: HTTP ${resp.status}`)
+        alert(apiError(resp.status, 'Unable to open the position. Please try again.', body).message)
         return
       }
       closeOpportunity()
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Unknown error')
+      alert(userErrorMessage(e, 'Unable to open the position. Please try again.'))
     }
   }
 

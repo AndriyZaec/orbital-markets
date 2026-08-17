@@ -29,6 +29,7 @@ type Server struct {
 	mux           *http.ServeMux
 	handler       http.Handler // mux wrapped in middleware (recovery → logging → auth)
 	recoveryOwner string
+	telegramLinks TelegramLinker
 }
 
 func NewServer(
@@ -81,6 +82,16 @@ func NewServer(
 
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+// EnableTelegramLinks adds the beta-authenticated link-intent endpoint. It must
+// be called during startup, before Handler begins serving requests.
+func (s *Server) EnableTelegramLinks(links TelegramLinker) {
+	if links == nil {
+		return
+	}
+	s.telegramLinks = links
+	s.mux.HandleFunc("POST /api/v1/telegram/link-intents", s.handleTelegramLinkIntent)
 }
 
 func (s *Server) routes() {

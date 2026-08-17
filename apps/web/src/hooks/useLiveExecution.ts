@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch } from '@/lib/api'
 import { subscribeLiveSessionEvents } from '@/lib/live-events'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction } from '@/types/signing'
@@ -216,7 +216,7 @@ function useLiveExecutionState() {
     })
     if (!resp.ok) {
       const b = await resp.json().catch(() => ({}))
-      throw new Error(b.error || `Advance failed: HTTP ${resp.status}`)
+      throw apiError(resp.status, 'Unable to continue execution. Check the session and try again.', b)
     }
     return resp.json()
   }
@@ -262,7 +262,11 @@ function useLiveExecutionState() {
         const reasons = Array.isArray(b.reasons)
           ? b.reasons.filter((reason): reason is string => typeof reason === 'string')
           : []
-        const message = b.error || `Prepare failed: HTTP ${prepResp.status}`
+        const message = apiError(
+          prepResp.status,
+          'Unable to prepare live execution. Refresh the opportunity and try again.',
+          b,
+        ).message
         throw new Error(reasons.length > 0 ? `${message}: ${reasons.join('; ')}` : message)
       }
       const prep: PrepareResp = await prepResp.json()

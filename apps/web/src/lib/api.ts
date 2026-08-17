@@ -22,3 +22,43 @@ export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     ...init,
   })
 }
+
+function backendError(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || !('error' in payload)) return null
+  const error = (payload as { error?: unknown }).error
+  return typeof error === 'string' && error.trim() ? error : null
+}
+
+export function apiError(status: number, fallback: string, payload?: unknown): Error {
+  switch (status) {
+    case 401:
+      return new Error('Your session has expired. Refresh the page and try again.')
+    case 408:
+    case 504:
+      return new Error('The request timed out. Please try again.')
+    case 429:
+      return new Error('Too many requests. Wait a moment and try again.')
+    default:
+      if (status >= 500) {
+        return new Error('Orbital is temporarily unavailable. Please try again shortly.')
+      }
+  }
+
+  const detail = backendError(payload)
+  if (detail) return new Error(detail)
+  if (status === 403) return new Error('This action is not permitted.')
+  if (status === 409) return new Error(`${fallback} Refresh the latest data and try again.`)
+  return new Error(fallback)
+}
+
+export async function apiResponseError(response: Response, fallback: string): Promise<Error> {
+  const payload: unknown = await response.json().catch(() => null)
+  return apiError(response.status, fallback, payload)
+}
+
+export function userErrorMessage(cause: unknown, fallback: string): string {
+  if (cause instanceof TypeError && /failed to fetch|load failed|network(?:error| request)/i.test(cause.message)) {
+    return 'Unable to reach Orbital. Check your connection and try again.'
+  }
+  return cause instanceof Error && cause.message ? cause.message : fallback
+}
