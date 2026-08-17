@@ -36,6 +36,25 @@ type fakeMessenger struct {
 	acknowledged []string
 }
 
+type fakeAccountLinks struct {
+	consumeToken string
+	consumeChat  int64
+	consumeErr   error
+	unlinkedChat int64
+	unlinked     bool
+}
+
+func (l *fakeAccountLinks) ConsumeLinkIntent(_ context.Context, token string, chatID int64) (AccountLink, error) {
+	l.consumeToken = token
+	l.consumeChat = chatID
+	return AccountLink{ChatID: chatID}, l.consumeErr
+}
+
+func (l *fakeAccountLinks) Unlink(_ context.Context, chatID int64) (bool, error) {
+	l.unlinkedChat = chatID
+	return l.unlinked, nil
+}
+
 func (m *fakeMessenger) SendMessage(_ context.Context, chatID int64, text string, keyboard InlineKeyboardMarkup) error {
 	m.sent = append(m.sent, sentMessage{chatID: chatID, text: text, keyboard: keyboard})
 	return nil
@@ -131,6 +150,49 @@ func TestWebhookRejectsWrongSecret(t *testing.T) {
 	bot.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", response.Code)
+	}
+}
+
+func TestStartTokenClaimsReadOnlyAccountLink(t *testing.T) {
+	links := &fakeAccountLinks{}
+	messenger := &fakeMessenger{}
+	bot := New(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&fakeOpportunitySource{},
+		messenger,
+		"secret",
+		"https://app.example",
+		WithAccountLinks(links),
+	)
+	serveUpdate(t, bot, "secret", update{Message: &message{
+		Text: "/start one-time-token",
+		Chat: chat{ID: 42, Type: "private"},
+	}})
+	if links.consumeToken != "one-time-token" || links.consumeChat != 42 {
+		t.Fatalf("consumed token = %q, chat = %d", links.consumeToken, links.consumeChat)
+	}
+	if len(messenger.sent) != 1 || !strings.Contains(messenger.sent[0].text, "Accounts linked") {
+		t.Fatalf("messages = %+v", messenger.sent)
+	}
+}
+
+func TestUnlinkUsesTelegramChatIdentity(t *testing.T) {
+	links := &fakeAccountLinks{unlinked: true}
+	messenger := &fakeMessenger{}
+	bot := New(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&fakeOpportunitySource{},
+		messenger,
+		"secret",
+		"https://app.example",
+		WithAccountLinks(links),
+	)
+	serveUpdate(t, bot, "secret", update{Message: &message{
+		Text: "/unlink",
+		Chat: chat{ID: 42, Type: "private"},
+	}})
+	if links.unlinkedChat != 42 {
+		t.Fatalf("unlinked chat = %d, want 42", links.unlinkedChat)
 	}
 }
 

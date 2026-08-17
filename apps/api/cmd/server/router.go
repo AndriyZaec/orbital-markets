@@ -1,15 +1,22 @@
 package main
 
 import (
-	"log/slog"
 	"net/http"
-
-	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 )
 
-func buildRootHandler(logger *slog.Logger, sc *scanner.Scanner, apiHandler http.Handler) http.Handler {
+type externalRoutes interface {
+	registerRoutes(*http.ServeMux) bool
+}
+
+func buildRootHandler(apiHandler http.Handler, integrations ...externalRoutes) http.Handler {
 	mux := http.NewServeMux()
-	if !registerTelegramRoutes(mux, logger, sc) {
+	registered := false
+	for _, integration := range integrations {
+		if integration != nil && integration.registerRoutes(mux) {
+			registered = true
+		}
+	}
+	if !registered {
 		return apiHandler
 	}
 	mux.Handle("/", apiHandler)

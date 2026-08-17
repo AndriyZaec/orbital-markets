@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,18 +22,38 @@ type OpportunitySource interface {
 	Opportunities() []domain.Opportunity
 }
 
+type AccountLinks interface {
+	ConsumeLinkIntent(context.Context, string, int64) (AccountLink, error)
+	Unlink(context.Context, int64) (bool, error)
+}
+
+type Option func(*Bot)
+
+func WithAccountLinks(links AccountLinks) Option {
+	return func(bot *Bot) {
+		bot.links = links
+	}
+}
+
 type Bot struct {
 	logger        *slog.Logger
 	opportunities OpportunitySource
 	messenger     Messenger
 	webhookSecret string
 	appURL        string
+	links         AccountLinks
 	snapshots     *snapshotStore
 	now           func() time.Time
 }
 
-func New(logger *slog.Logger, opportunities OpportunitySource, messenger Messenger, webhookSecret, appURL string) *Bot {
-	return &Bot{
+func New(
+	logger *slog.Logger,
+	opportunities OpportunitySource,
+	messenger Messenger,
+	webhookSecret, appURL string,
+	options ...Option,
+) *Bot {
+	bot := &Bot{
 		logger:        logger,
 		opportunities: opportunities,
 		messenger:     messenger,
@@ -41,6 +62,10 @@ func New(logger *slog.Logger, opportunities OpportunitySource, messenger Messeng
 		snapshots:     newSnapshotStore(),
 		now:           time.Now,
 	}
+	for _, option := range options {
+		option(bot)
+	}
+	return bot
 }
 
 type update struct {
@@ -100,11 +125,55 @@ func (b *Bot) handleUpdate(ctx context.Context, incoming update) error {
 	switch command {
 	case "/opportunities":
 		return b.sendOpportunities(ctx, incoming.Message.Chat.ID)
-	case "/start", "/help":
+	case "/start":
+		if len(fields) > 1 {
+			return b.claimAccountLink(ctx, incoming.Message.Chat.ID, fields[1])
+		}
+		return b.sendWelcome(ctx, incoming.Message.Chat.ID)
+	case "/unlink":
+		return b.unlinkAccount(ctx, incoming.Message.Chat.ID)
+	case "/help":
 		return b.sendWelcome(ctx, incoming.Message.Chat.ID)
 	default:
 		return b.sendWelcome(ctx, incoming.Message.Chat.ID)
 	}
+}
+
+func (b *Bot) claimAccountLink(ctx context.Context, chatID int64, token string) error {
+	if b.links == nil {
+		return b.messenger.SendMessage(ctx, chatID, "Account linking is not enabled.", InlineKeyboardMarkup{})
+	}
+	if _, err := b.links.ConsumeLinkIntent(ctx, token, chatID); err != nil {
+		if !errors.Is(err, ErrInvalidLinkToken) {
+			b.logger.Error("telegram account link failed", "err", err, "chat_id", chatID)
+		}
+		return b.messenger.SendMessage(ctx, chatID,
+			"This account link is invalid or expired. Create a new link in Orbital.",
+			InlineKeyboardMarkup{},
+		)
+	}
+	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+		{{Text: "Opportunities", CallbackData: "opportunities:refresh"}},
+		{{Text: "Open Orbital", URL: b.appURL}},
+	}}
+	return b.messenger.SendMessage(ctx, chatID,
+		"<b>Accounts linked</b>\n\nThis chat can now view the connected Orbital accounts. No trading permissions were granted.",
+		keyboard,
+	)
+}
+
+func (b *Bot) unlinkAccount(ctx context.Context, chatID int64) error {
+	if b.links == nil {
+		return b.messenger.SendMessage(ctx, chatID, "No accounts are linked.", InlineKeyboardMarkup{})
+	}
+	unlinked, err := b.links.Unlink(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("unlink Telegram accounts: %w", err)
+	}
+	if !unlinked {
+		return b.messenger.SendMessage(ctx, chatID, "No accounts are linked.", InlineKeyboardMarkup{})
+	}
+	return b.messenger.SendMessage(ctx, chatID, "Accounts unlinked from this chat.", InlineKeyboardMarkup{})
 }
 
 func (b *Bot) handleCallback(ctx context.Context, callback callbackQuery) error {

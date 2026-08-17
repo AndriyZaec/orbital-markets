@@ -14,11 +14,13 @@ import (
 func TestRootHandlerReturnsAPIDirectlyWhenTelegramDisabled(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "")
 	t.Setenv("TELEGRAM_WEBHOOK_SECRET", "")
+	t.Setenv("TELEGRAM_BOT_USERNAME", "")
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	handler := buildRootHandler(testLogger(), scanner.New(testLogger()), apiHandler)
+	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil)
+	handler := buildRootHandler(apiHandler, integration)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -30,12 +32,14 @@ func TestRootHandlerReturnsAPIDirectlyWhenTelegramDisabled(t *testing.T) {
 func TestRootHandlerSeparatesTelegramWebhookFromAPI(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "token")
 	t.Setenv("TELEGRAM_WEBHOOK_SECRET", "secret")
+	t.Setenv("TELEGRAM_BOT_USERNAME", "")
 	apiCalls := 0
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		apiCalls++
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := buildRootHandler(testLogger(), scanner.New(testLogger()), apiHandler)
+	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil)
+	handler := buildRootHandler(apiHandler, integration)
 
 	apiRequest := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	apiResponse := httptest.NewRecorder()
@@ -59,10 +63,12 @@ func TestRootHandlerSeparatesTelegramWebhookFromAPI(t *testing.T) {
 func TestRootHandlerDoesNotExposeMisconfiguredTelegramRoute(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "token")
 	t.Setenv("TELEGRAM_WEBHOOK_SECRET", "")
+	t.Setenv("TELEGRAM_BOT_USERNAME", "")
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	})
-	handler := buildRootHandler(testLogger(), scanner.New(testLogger()), apiHandler)
+	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil)
+	handler := buildRootHandler(apiHandler, integration)
 
 	request := httptest.NewRequest(http.MethodPost, "/telegram/webhook", nil)
 	response := httptest.NewRecorder()
