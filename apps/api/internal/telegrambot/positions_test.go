@@ -14,15 +14,10 @@ import (
 
 type fakePositionSource struct {
 	positions       []executor.LivePosition
-	detail          *executor.LivePosition
 	listPacifica    string
 	listHyperliquid string
-	getID           string
-	getPacifica     string
-	getHyperliquid  string
 	listLimit       int
 	listCalls       int
-	getCalls        int
 }
 
 func (s *fakePositionSource) ListRecentActivePositionsForAccounts(
@@ -35,18 +30,6 @@ func (s *fakePositionSource) ListRecentActivePositionsForAccounts(
 	s.listHyperliquid = hyperliquid
 	s.listLimit = limit
 	return append([]executor.LivePosition(nil), s.positions...), nil
-}
-
-func (s *fakePositionSource) GetPositionForAccounts(
-	_ context.Context,
-	id, pacifica, hyperliquid string,
-) (*executor.LivePosition, error) {
-	s.getCalls++
-	s.getID = id
-	s.getPacifica = pacifica
-	s.getHyperliquid = hyperliquid
-	copy := *s.detail
-	return &copy, nil
 }
 
 func TestPositionsRequireLinkedAccounts(t *testing.T) {
@@ -138,7 +121,7 @@ func TestPositionsPaginationReloadsBoundedAccountScopedHistory(t *testing.T) {
 	}
 }
 
-func TestPositionDetailRefetchesWithinCurrentLinkedAccounts(t *testing.T) {
+func TestPositionDetailReloadsWithinCurrentLinkedAccounts(t *testing.T) {
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	positions := testPositions(now, 1)
 	positions[0].TotalPnL = 12.34
@@ -155,7 +138,7 @@ func TestPositionDetailRefetchesWithinCurrentLinkedAccounts(t *testing.T) {
 	positions[0].Leg2LiqDist = -0.03
 	positions[0].Leg2LiqRisk = "critical"
 	links := linkedAccountFixture()
-	source := &fakePositionSource{positions: positions, detail: &positions[0]}
+	source := &fakePositionSource{positions: positions}
 	messenger := &fakeMessenger{}
 	bot := newPositionTestBot(links, source, messenger)
 	bot.now = func() time.Time { return now }
@@ -177,8 +160,8 @@ func TestPositionDetailRefetchesWithinCurrentLinkedAccounts(t *testing.T) {
 		},
 	}})
 
-	if source.getID != positions[0].ID || source.getPacifica != "pacifica-owner" || source.getHyperliquid != "0xhyperliquid" {
-		t.Fatalf("detail lookup = %q for %q / %q", source.getID, source.getPacifica, source.getHyperliquid)
+	if source.listCalls != 2 || source.listPacifica != "pacifica-owner" || source.listHyperliquid != "0xhyperliquid" {
+		t.Fatalf("detail list calls = %d for %q / %q", source.listCalls, source.listPacifica, source.listHyperliquid)
 	}
 	got := messenger.edited[0].text
 	for _, want := range []string{"💰 <b>PnL +$12.34</b>", "Price -$8.12", "Funding +$4.22 (realized)", "⚖️ Mismatch 2.00%", "liq $80.00", "20.0% away · Elevated", "past by 3.0% · Critical"} {
@@ -195,7 +178,7 @@ func TestRelinkingInvalidatesPositionSnapshot(t *testing.T) {
 	now := time.Now().UTC()
 	links := linkedAccountFixture()
 	positions := testPositions(now, 1)
-	source := &fakePositionSource{positions: positions, detail: &positions[0]}
+	source := &fakePositionSource{positions: positions}
 	messenger := &fakeMessenger{}
 	bot := newPositionTestBot(links, source, messenger)
 
@@ -215,8 +198,8 @@ func TestRelinkingInvalidatesPositionSnapshot(t *testing.T) {
 			Chat:      chat{ID: 42, Type: "private"},
 		},
 	}})
-	if source.getCalls != 0 || source.listPacifica != "different-owner" {
-		t.Fatalf("detail lookup = %d after list for %q, want current linked account", source.getCalls, source.listPacifica)
+	if source.listCalls != 2 || source.listPacifica != "different-owner" {
+		t.Fatalf("detail list calls = %d for %q, want current linked account", source.listCalls, source.listPacifica)
 	}
 	if !strings.Contains(messenger.edited[0].text, "Position unavailable") {
 		t.Fatalf("relinked detail = %+v", messenger.edited)

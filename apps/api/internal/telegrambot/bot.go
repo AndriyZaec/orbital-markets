@@ -33,7 +33,6 @@ type AccountLinks interface {
 
 type PositionSource interface {
 	ListRecentActivePositionsForAccounts(context.Context, string, string, int) ([]executor.LivePosition, error)
-	GetPositionForAccounts(context.Context, string, string, string) (*executor.LivePosition, error)
 }
 
 type Option func(*Bot)

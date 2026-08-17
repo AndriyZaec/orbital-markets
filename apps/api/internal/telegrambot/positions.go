@@ -3,9 +3,7 @@ package telegrambot
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
-	"errors"
 	"fmt"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
@@ -66,31 +64,18 @@ func (b *Bot) editPositionDetail(
 	if err != nil {
 		return fmt.Errorf("list Telegram positions for detail: %w", err)
 	}
-	positionID := ""
-	for _, position := range positions {
-		if telegramPositionToken(position.ID) == positionToken {
-			positionID = position.ID
+	var selected *executor.LivePosition
+	for index := range positions {
+		if telegramPositionToken(positions[index].ID) == positionToken {
+			selected = &positions[index]
 			break
 		}
 	}
-	if positionID == "" {
+	if selected == nil {
 		text, keyboard := renderMissingPosition(page, b.appURL)
 		return b.messenger.EditMessage(ctx, chatID, messageID, text, keyboard)
 	}
-	position, err := b.positions.GetPositionForAccounts(
-		ctx,
-		positionID,
-		link.AccountPacifica,
-		link.AccountHyperliquid,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		text, keyboard := renderMissingPosition(page, b.appURL)
-		return b.messenger.EditMessage(ctx, chatID, messageID, text, keyboard)
-	}
-	if err != nil {
-		return fmt.Errorf("get Telegram position detail: %w", err)
-	}
-	text, keyboard := renderPositionDetail(*position, page, b.appURL, b.now())
+	text, keyboard := renderPositionDetail(*selected, page, b.appURL, b.now())
 	return b.messenger.EditMessage(ctx, chatID, messageID, text, keyboard)
 }
 
