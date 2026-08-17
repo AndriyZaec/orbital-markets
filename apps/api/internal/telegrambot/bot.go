@@ -19,6 +19,8 @@ import (
 
 const webhookSecretHeader = "X-Telegram-Bot-Api-Secret-Token"
 
+const telegramUpdateDedupeSize = 4_096
+
 type OpportunitySource interface {
 	Opportunities() []domain.Opportunity
 }
@@ -57,6 +59,7 @@ type Bot struct {
 	links         AccountLinks
 	positions     PositionSource
 	snapshots     *snapshotStore
+	seenUpdates   *updateDeduper
 	now           func() time.Time
 }
 
@@ -74,6 +77,7 @@ func New(
 		webhookSecret: strings.TrimSpace(webhookSecret),
 		appURL:        strings.TrimRight(strings.TrimSpace(appURL), "/"),
 		snapshots:     newSnapshotStore(),
+		seenUpdates:   newUpdateDeduper(telegramUpdateDedupeSize),
 		now:           time.Now,
 	}
 	for _, option := range options {
@@ -83,6 +87,7 @@ func New(
 }
 
 type update struct {
+	UpdateID      int64          `json:"update_id"`
 	Message       *message       `json:"message"`
 	CallbackQuery *callbackQuery `json:"callback_query"`
 }
@@ -115,9 +120,22 @@ func (b *Bot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid update", http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	if !b.seenUpdates.add(incoming.UpdateID) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if incoming.CallbackQuery != nil {
+		b.acknowledgeCallback(r.Context(), incoming.CallbackQuery.ID)
+	}
 	if err := b.handleUpdate(r.Context(), incoming); err != nil {
 		b.logger.Error("telegram update failed", "err", err)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (b *Bot) acknowledgeCallback(ctx context.Context, callbackID string) {
+	if err := b.messenger.AnswerCallback(ctx, callbackID); err != nil {
+		b.logger.Warn("telegram callback acknowledgement failed", "err", err)
 	}
 }
 
@@ -157,7 +175,7 @@ func (b *Bot) handleUpdate(ctx context.Context, incoming update) error {
 
 func (b *Bot) claimAccountLink(ctx context.Context, chatID int64, token string) error {
 	if b.links == nil {
-		return b.messenger.SendMessage(ctx, chatID, "Account linking is not enabled.", InlineKeyboardMarkup{})
+		return b.messenger.SendMessage(ctx, chatID, "Account linking is not enabled.", mainMenuKeyboard(b.appURL))
 	}
 	if _, err := b.links.ConsumeLinkIntent(ctx, token, chatID); err != nil {
 		if !errors.Is(err, ErrInvalidLinkToken) {
@@ -165,38 +183,33 @@ func (b *Bot) claimAccountLink(ctx context.Context, chatID int64, token string) 
 		}
 		return b.messenger.SendMessage(ctx, chatID,
 			"This account link is invalid or expired. Create a new link in Orbital.",
-			InlineKeyboardMarkup{},
+			mainMenuKeyboard(b.appURL),
 		)
 	}
-	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{{Text: "Opportunities", CallbackData: "opportunities:refresh"}},
-		{{Text: "Positions", CallbackData: "positions:refresh"}},
-		{{Text: "Open Orbital", URL: b.appURL}},
-	}}
 	return b.messenger.SendMessage(ctx, chatID,
-		"<b>Accounts linked</b>\n\nThis chat can now view the connected Orbital accounts. No trading permissions were granted.",
-		keyboard,
+		"<b>✅ Accounts linked</b>\n\nRead-only watchlist enabled for this chat. No trading permissions were granted.",
+		mainMenuKeyboard(b.appURL),
 	)
 }
 
 func (b *Bot) unlinkAccount(ctx context.Context, chatID int64) error {
 	if b.links == nil {
-		return b.messenger.SendMessage(ctx, chatID, "No accounts are linked.", InlineKeyboardMarkup{})
+		return b.messenger.SendMessage(ctx, chatID, "No accounts are linked.", mainMenuKeyboard(b.appURL))
 	}
 	unlinked, err := b.links.Unlink(ctx, chatID)
 	if err != nil {
 		return fmt.Errorf("unlink Telegram accounts: %w", err)
 	}
 	if !unlinked {
-		return b.messenger.SendMessage(ctx, chatID, "No accounts are linked.", InlineKeyboardMarkup{})
+		return b.messenger.SendMessage(ctx, chatID, "No accounts are linked.", mainMenuKeyboard(b.appURL))
 	}
-	return b.messenger.SendMessage(ctx, chatID, "Accounts unlinked from this chat.", InlineKeyboardMarkup{})
+	return b.messenger.SendMessage(ctx, chatID,
+		"Accounts unlinked. Previously displayed data remains in this Telegram chat history.",
+		mainMenuKeyboard(b.appURL),
+	)
 }
 
 func (b *Bot) handleCallback(ctx context.Context, callback callbackQuery) error {
-	if err := b.messenger.AnswerCallback(ctx, callback.ID); err != nil {
-		b.logger.Warn("telegram callback acknowledgement failed", "err", err)
-	}
 	if callback.Message == nil || callback.Message.Chat.Type != "private" {
 		return nil
 	}
@@ -251,13 +264,10 @@ func (b *Bot) handleCallback(ctx context.Context, callback callbackQuery) error 
 }
 
 func (b *Bot) sendWelcome(ctx context.Context, chatID int64) error {
-	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{{Text: "Opportunities", CallbackData: "opportunities:refresh"}},
-		{{Text: "Positions", CallbackData: "positions:refresh"}},
-		{{Text: "Open Orbital", URL: b.appURL}},
-	}}
 	return b.messenger.SendMessage(ctx, chatID,
-		"<b>Orbital Markets</b>\n\nView current funding opportunities and linked live positions on demand.", keyboard)
+		"<b>Orbital Markets</b>\n\nFunding opportunities and active positions, on demand.",
+		mainMenuKeyboard(b.appURL),
+	)
 }
 
 func (b *Bot) sendOpportunities(ctx context.Context, chatID int64) error {

@@ -120,7 +120,5 @@ func positionsLinkRequiredText() string {
 }
 
 func positionsLinkKeyboard(appURL string) InlineKeyboardMarkup {
-	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{{Text: "Open Orbital", URL: appURL}},
-	}}
+	return mainMenuKeyboard(appURL)
 }

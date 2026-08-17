@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/telegrambot"
 )
 
 const maxTelegramAccountLength = 128
@@ -40,6 +43,11 @@ func (s *Server) handleTelegramLinkIntent(w http.ResponseWriter, r *http.Request
 		r.Context(), request.AccountPacifica, request.AccountHyperliquid,
 	)
 	if err != nil {
+		if errors.Is(err, telegrambot.ErrLinkRateLimited) {
+			w.Header().Set("Retry-After", "1")
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many Telegram link requests"})
+			return
+		}
 		s.logger.Error("create Telegram link intent", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create Telegram link"})
 		return

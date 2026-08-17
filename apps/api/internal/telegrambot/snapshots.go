@@ -10,6 +10,7 @@ import (
 )
 
 const snapshotTTL = 2 * time.Minute
+const maxOpportunitySnapshots = 1_000
 
 type opportunitySnapshot struct {
 	chatID        int64
@@ -37,6 +38,19 @@ func (s *snapshotStore) create(chatID int64, opportunities []domain.Opportunity)
 	for id, snapshot := range s.snapshots {
 		if now.Sub(snapshot.createdAt) >= snapshotTTL {
 			delete(s.snapshots, id)
+		}
+	}
+	if len(s.snapshots) >= maxOpportunitySnapshots {
+		oldestID := ""
+		var oldest opportunitySnapshot
+		for id, snapshot := range s.snapshots {
+			if oldestID == "" || snapshot.createdAt.Before(oldest.createdAt) {
+				oldestID = id
+				oldest = snapshot
+			}
+		}
+		if oldestID != "" {
+			delete(s.snapshots, oldestID)
 		}
 	}
 	id := randomSnapshotID()

@@ -61,8 +61,37 @@ func TestPositionsRequireLinkedAccounts(t *testing.T) {
 	if len(messenger.sent) != 1 || !strings.Contains(messenger.sent[0].text, "Link accounts") {
 		t.Fatalf("messages = %+v", messenger.sent)
 	}
-	if got := messenger.sent[0].keyboard.InlineKeyboard[0][0].URL; got != "https://app.example" {
+	if got := messenger.sent[0].keyboard.InlineKeyboard[1][0].URL; got != "https://app.example" {
 		t.Fatalf("link URL = %q", got)
+	}
+}
+
+func TestDashboardNavigationEditsTheExistingMessage(t *testing.T) {
+	now := time.Now().UTC()
+	links := linkedAccountFixture()
+	source := &fakePositionSource{positions: testPositions(now, 1)}
+	messenger := &fakeMessenger{}
+	bot := newPositionTestBot(links, source, messenger)
+
+	serveUpdate(t, bot, "secret", update{Message: &message{
+		Text: "/opportunities",
+		Chat: chat{ID: 42, Type: "private"},
+	}})
+	positionsCallback := messenger.sent[0].keyboard.InlineKeyboard[0][1].CallbackData
+	serveUpdate(t, bot, "secret", update{CallbackQuery: &callbackQuery{
+		ID:   "show-positions",
+		Data: positionsCallback,
+		Message: &message{
+			MessageID: 9,
+			Chat:      chat{ID: 42, Type: "private"},
+		},
+	}})
+
+	if len(messenger.sent) != 1 || len(messenger.edited) != 1 {
+		t.Fatalf("sent = %d, edited = %d", len(messenger.sent), len(messenger.edited))
+	}
+	if messenger.edited[0].messageID != 9 || !strings.Contains(messenger.edited[0].text, "📊 Active Positions") {
+		t.Fatalf("navigation edit = %+v", messenger.edited[0])
 	}
 }
 
@@ -84,6 +113,9 @@ func TestPositionsPaginationReloadsBoundedAccountScopedHistory(t *testing.T) {
 	first := messenger.sent[0]
 	if !strings.Contains(first.text, "1. ASSET-1") || strings.Contains(first.text, "6. ASSET-6") {
 		t.Fatalf("first page text = %q", first.text)
+	}
+	if strings.Contains(first.text, "Funding") || !strings.Contains(first.text, "💰 PnL") {
+		t.Fatalf("position summary is not compact: %q", first.text)
 	}
 	nextCallback := first.keyboard.InlineKeyboard[5][1].CallbackData
 	if !strings.HasPrefix(nextCallback, "positions:") || len(nextCallback) > 64 {
@@ -149,12 +181,12 @@ func TestPositionDetailRefetchesWithinCurrentLinkedAccounts(t *testing.T) {
 		t.Fatalf("detail lookup = %q for %q / %q", source.getID, source.getPacifica, source.getHyperliquid)
 	}
 	got := messenger.edited[0].text
-	for _, want := range []string{"Total: +$12.34", "Price: -$8.12", "Funding: +$4.22 (realized)", "Hedge mismatch: 2.00%", "liq $80.00", "20.0% (Elevated)", "past by 3.0% (Critical)"} {
+	for _, want := range []string{"💰 <b>PnL +$12.34</b>", "Price -$8.12", "Funding +$4.22 (realized)", "⚖️ Mismatch 2.00%", "liq $80.00", "20.0% away · Elevated", "past by 3.0% · Critical"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("detail text missing %q: %q", want, got)
 		}
 	}
-	if refresh := messenger.edited[0].keyboard.InlineKeyboard[1][0].CallbackData; !strings.HasPrefix(refresh, "position:") {
+	if refresh := messenger.edited[0].keyboard.InlineKeyboard[2][0].CallbackData; !strings.HasPrefix(refresh, "position:") {
 		t.Fatalf("detail refresh callback = %q", refresh)
 	}
 }

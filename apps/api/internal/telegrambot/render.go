@@ -19,8 +19,10 @@ func renderOpportunities(snapshotID string, snapshot opportunitySnapshot, page i
 	page = min(max(page, 0), totalPages-1)
 
 	var text strings.Builder
-	text.WriteString("<b>Top Opportunities</b>\n")
-	text.WriteString("Updated " + formatAge(latestDetection(snapshot.opportunities), now) + "\n")
+	text.WriteString("<b>🚀 Opportunities</b>\n")
+	if len(snapshot.opportunities) > 0 {
+		text.WriteString("Updated " + formatAge(latestDetection(snapshot.opportunities), now) + "\n")
+	}
 	if len(snapshot.opportunities) == 0 {
 		text.WriteString("\nNo opportunities available.")
 	} else {
@@ -29,18 +31,16 @@ func renderOpportunities(snapshotID string, snapshot opportunitySnapshot, page i
 		for index, opportunity := range snapshot.opportunities[start:end] {
 			longVenue, shortVenue := opportunityVenues(opportunity)
 			fmt.Fprintf(&text,
-				"\n<b>%d. %s · %s APR</b>\nLong %s / Short %s\nFunding: %s / %s per hour\nSize: %s",
+				"\n<b>%d. %s · %s APR</b>\n↗️ Long %s → ↘️ Short %s\n💵 Suggested size: %s",
 				start+index+1,
 				html.EscapeString(opportunity.Asset),
 				formatPercent(opportunity.AnnualizedGrossEdge, 2),
 				html.EscapeString(titleVenue(longVenue)),
 				html.EscapeString(titleVenue(shortVenue)),
-				formatPercent(fundingForVenue(opportunity, longVenue), 4),
-				formatPercent(fundingForVenue(opportunity, shortVenue), 4),
 				formatUSD(opportunity.RecommendedNotional),
 			)
 			if opportunity.ExecutionStatus != "executable" {
-				text.WriteString("\nStatus: Blocked")
+				text.WriteString("\n⚠️ Not executable")
 			}
 			text.WriteByte('\n')
 		}
@@ -50,18 +50,15 @@ func renderOpportunities(snapshotID string, snapshot opportunitySnapshot, page i
 	if totalPages > 1 {
 		row := make([]InlineKeyboardButton, 0, 3)
 		if page > 0 {
-			row = append(row, InlineKeyboardButton{Text: "<", CallbackData: opportunityPageCallback(snapshotID, page-1)})
+			row = append(row, InlineKeyboardButton{Text: "‹", CallbackData: opportunityPageCallback(snapshotID, page-1)})
 		}
 		row = append(row, InlineKeyboardButton{Text: fmt.Sprintf("%d / %d", page+1, totalPages), CallbackData: "noop"})
 		if page+1 < totalPages {
-			row = append(row, InlineKeyboardButton{Text: ">", CallbackData: opportunityPageCallback(snapshotID, page+1)})
+			row = append(row, InlineKeyboardButton{Text: "›", CallbackData: opportunityPageCallback(snapshotID, page+1)})
 		}
 		keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, row)
 	}
-	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, []InlineKeyboardButton{
-		{Text: "Refresh", CallbackData: "opportunities:refresh"},
-		{Text: "Open in Orbital", URL: appURL},
-	})
+	appendDashboardControls(&keyboard, "opportunities:refresh", appURL)
 	return strings.TrimSpace(text.String()), keyboard
 }
 
@@ -79,8 +76,10 @@ func renderPositions(
 	page = min(max(page, 0), totalPages-1)
 
 	var text strings.Builder
-	text.WriteString("<b>Live Positions</b>\n")
-	text.WriteString("Updated " + formatAge(latestPositionUpdate(positions), now) + "\n")
+	text.WriteString("<b>📊 Active Positions</b>\n")
+	if len(positions) > 0 {
+		text.WriteString("Updated " + formatAge(latestPositionUpdate(positions), now) + "\n")
+	}
 	keyboard := InlineKeyboardMarkup{}
 	if len(positions) == 0 {
 		text.WriteString("\nNo active positions found for the linked accounts.")
@@ -89,21 +88,21 @@ func renderPositions(
 		end := min(start+positionsPerPage, len(positions))
 		for index, position := range positions[start:end] {
 			absoluteIndex := start + index
+			liquidationRisk := worstLiquidationRisk(position)
 			fmt.Fprintf(&text,
-				"\n<b>%d. %s · %s</b>\n%s / %s · %s · %.1fx\nPnL: %s · Funding: %s\nLiq risk: %s\n",
+				"\n<b>%s %d. %s · %s</b>\n💰 PnL %s · %s Liq %s\n%s · %.1fx\n",
+				positionStateEmoji(position.State),
 				absoluteIndex+1,
 				html.EscapeString(position.Asset),
 				html.EscapeString(titleState(position.State)),
-				html.EscapeString(titleVenue(position.VenueA)),
-				html.EscapeString(titleVenue(position.VenueB)),
+				formatSignedUSD(position.TotalPnL),
+				liquidationRiskEmoji(liquidationRisk),
+				html.EscapeString(liquidationRisk),
 				formatUSD(position.Notional),
 				position.Leverage,
-				formatSignedUSD(position.TotalPnL),
-				formatSignedUSD(position.FundingPnL),
-				html.EscapeString(worstLiquidationRisk(position)),
 			)
 			keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, []InlineKeyboardButton{{
-				Text:         fmt.Sprintf("%d. %s · %s", absoluteIndex+1, position.Asset, titleState(position.State)),
+				Text:         fmt.Sprintf("%d · %s", absoluteIndex+1, position.Asset),
 				CallbackData: positionDetailCallback(page, telegramPositionToken(position.ID)),
 			}})
 		}
@@ -112,18 +111,15 @@ func renderPositions(
 	if totalPages > 1 {
 		row := make([]InlineKeyboardButton, 0, 3)
 		if page > 0 {
-			row = append(row, InlineKeyboardButton{Text: "<", CallbackData: positionPageCallback(page - 1)})
+			row = append(row, InlineKeyboardButton{Text: "‹", CallbackData: positionPageCallback(page - 1)})
 		}
 		row = append(row, InlineKeyboardButton{Text: fmt.Sprintf("%d / %d", page+1, totalPages), CallbackData: "noop"})
 		if page+1 < totalPages {
-			row = append(row, InlineKeyboardButton{Text: ">", CallbackData: positionPageCallback(page + 1)})
+			row = append(row, InlineKeyboardButton{Text: "›", CallbackData: positionPageCallback(page + 1)})
 		}
 		keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, row)
 	}
-	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, []InlineKeyboardButton{
-		{Text: "Refresh", CallbackData: "positions:refresh"},
-		{Text: "Open in Orbital", URL: appURL},
-	})
+	appendDashboardControls(&keyboard, "positions:refresh", appURL)
 	return strings.TrimSpace(text.String()), keyboard
 }
 
@@ -135,7 +131,8 @@ func renderPositionDetail(
 ) (string, InlineKeyboardMarkup) {
 	var text strings.Builder
 	fmt.Fprintf(&text,
-		"<b>%s Position</b>\nStatus: %s\n%s / %s\n\nNotional: %s\nLeverage: %.1fx\nHold time: %s\nCurrent spread: %s APR\n\n<b>PnL</b>\nTotal: %s\nPrice: %s\nFunding: %s (%s)\n\nHedge mismatch: %s\n\n<b>Liquidation</b>\n%s: %s\n%s: %s\n\nUpdated %s",
+		"%s <b>%s · %s</b>\n%s / %s\n%s · %.1fx · %s\n\n💰 <b>PnL %s</b>\nPrice %s · Funding %s (%s)\n\n⚖️ Mismatch %s\n📈 Spread %s APR\n\n🛡 <b>Liquidation</b>\n%s %s · %s\n%s %s · %s\n\nUpdated %s",
+		positionStateEmoji(position.State),
 		html.EscapeString(position.Asset),
 		html.EscapeString(titleState(position.State)),
 		html.EscapeString(titleVenue(position.VenueA)),
@@ -143,37 +140,56 @@ func renderPositionDetail(
 		formatUSD(position.Notional),
 		position.Leverage,
 		formatHoldTime(position.HoldHours),
-		formatPercent(position.CurrentSpread, 2),
 		formatSignedUSD(position.TotalPnL),
 		formatSignedUSD(position.PricePnL),
 		formatSignedUSD(position.FundingPnL),
 		html.EscapeString(titleFundingSource(position.FundingPnLSource)),
 		formatUnsignedPercent(position.HedgeMismatch, 2),
+		formatPercent(position.CurrentSpread, 2),
+		liquidationRiskEmoji(position.Leg1LiqRisk),
 		html.EscapeString(titleVenue(position.VenueA)),
-		formatLiquidation(position.Leg1CurPrice, position.Leg1LiqPrice, position.Leg1LiqDist, position.Leg1LiqRisk),
+		formatLiquidation(position.Leg1LiqPrice, position.Leg1LiqDist, position.Leg1LiqRisk),
+		liquidationRiskEmoji(position.Leg2LiqRisk),
 		html.EscapeString(titleVenue(position.VenueB)),
-		formatLiquidation(position.Leg2CurPrice, position.Leg2LiqPrice, position.Leg2LiqDist, position.Leg2LiqRisk),
+		formatLiquidation(position.Leg2LiqPrice, position.Leg2LiqDist, position.Leg2LiqRisk),
 		formatAge(positionUpdate(position), now),
 	)
 	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{{Text: "Back to positions", CallbackData: positionPageCallback(page)}},
-		{
-			{Text: "Refresh", CallbackData: positionDetailCallback(page, telegramPositionToken(position.ID))},
-			{Text: "Open in Orbital", URL: appURL},
-		},
+		{{Text: "← Back to positions", CallbackData: positionPageCallback(page)}},
 	}}
+	appendDashboardControls(&keyboard, positionDetailCallback(page, telegramPositionToken(position.ID)), appURL)
 	return text.String(), keyboard
 }
 
 func renderMissingPosition(page int, appURL string) (string, InlineKeyboardMarkup) {
-	return "<b>Position unavailable</b>\n\nIt no longer belongs to the linked accounts or is no longer available.", InlineKeyboardMarkup{
-		InlineKeyboard: [][]InlineKeyboardButton{
-			{{Text: "Back to positions", CallbackData: positionPageCallback(page)}},
-			{
-				{Text: "Refresh", CallbackData: "positions:refresh"},
-				{Text: "Open in Orbital", URL: appURL},
-			},
+	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+		{{Text: "← Back to positions", CallbackData: positionPageCallback(page)}},
+	}}
+	appendDashboardControls(&keyboard, "positions:refresh", appURL)
+	return "<b>⚪ Position unavailable</b>\n\nIt no longer belongs to the linked accounts or is no longer available.", keyboard
+}
+
+func appendDashboardControls(keyboard *InlineKeyboardMarkup, refreshCallback, appURL string) {
+	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard,
+		sectionNavigationRow(),
+		[]InlineKeyboardButton{
+			{Text: "↻ Refresh", CallbackData: refreshCallback},
+			{Text: "Open Orbital", URL: appURL},
 		},
+	)
+}
+
+func mainMenuKeyboard(appURL string) InlineKeyboardMarkup {
+	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+		sectionNavigationRow(),
+		{{Text: "Open Orbital", URL: appURL}},
+	}}
+}
+
+func sectionNavigationRow() []InlineKeyboardButton {
+	return []InlineKeyboardButton{
+		{Text: "🚀 Opportunities", CallbackData: "opportunities:refresh"},
+		{Text: "📊 Positions", CallbackData: "positions:refresh"},
 	}
 }
 
@@ -190,13 +206,6 @@ func opportunityVenues(opportunity domain.Opportunity) (string, string) {
 		return opportunity.VenuePair.VenueA, opportunity.VenuePair.VenueB
 	}
 	return opportunity.VenuePair.VenueB, opportunity.VenuePair.VenueA
-}
-
-func fundingForVenue(opportunity domain.Opportunity, venue string) float64 {
-	if strings.EqualFold(opportunity.VenuePair.VenueA, venue) {
-		return opportunity.FundingRateA
-	}
-	return opportunity.FundingRateB
 }
 
 func latestDetection(opportunities []domain.Opportunity) time.Time {
@@ -263,13 +272,19 @@ func formatHoldTime(hours float64) string {
 	return fmt.Sprintf("%dh %dm", int(duration.Hours()), int(duration.Minutes())%60)
 }
 
-func formatLiquidation(currentPrice, liquidationPrice, distance float64, risk string) string {
+func formatLiquidation(liquidationPrice, distance float64, risk string) string {
 	if liquidationPrice <= 0 {
-		return "Unavailable"
+		parts := []string{"liq unavailable"}
+		if distance != 0 {
+			parts = append(parts, formatLiquidationDistance(distance))
+		}
+		if strings.TrimSpace(risk) != "" {
+			parts = append(parts, html.EscapeString(titleState(risk)))
+		}
+		return strings.Join(parts, " · ")
 	}
 	return fmt.Sprintf(
-		"current %s · liq %s · %s (%s)",
-		formatPrice(currentPrice),
+		"liq %s · %s · %s",
 		formatPrice(liquidationPrice),
 		formatLiquidationDistance(distance),
 		html.EscapeString(titleState(risk)),
@@ -280,7 +295,37 @@ func formatLiquidationDistance(value float64) string {
 	if value < 0 {
 		return fmt.Sprintf("past by %.1f%%", math.Abs(value)*100)
 	}
-	return formatUnsignedPercent(value, 1)
+	return formatUnsignedPercent(value, 1) + " away"
+}
+
+func positionStateEmoji(state string) string {
+	switch strings.ToLower(state) {
+	case "pending":
+		return "⏳"
+	case "open":
+		return "🟢"
+	case "degraded":
+		return "🟠"
+	case "closing":
+		return "🔵"
+	default:
+		return "⚪"
+	}
+}
+
+func liquidationRiskEmoji(risk string) string {
+	switch strings.ToLower(risk) {
+	case "safe":
+		return "🟢"
+	case "elevated":
+		return "🟡"
+	case "warning":
+		return "🟠"
+	case "critical":
+		return "🔴"
+	default:
+		return "⚪"
+	}
 }
 
 func formatPrice(value float64) string {

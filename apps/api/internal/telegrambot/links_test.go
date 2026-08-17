@@ -115,3 +115,34 @@ func TestRelinkingChatReplacesWatchedAccounts(t *testing.T) {
 		t.Fatalf("relinked account = %+v, ok = %v, err = %v", link, ok, err)
 	}
 }
+
+func TestLinkIntentWritesAreRateLimited(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "telegram-rate-limit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	service := NewLinkService(database, "orbital_test_bot")
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+
+	for range maxLinkIntentsPerWindow {
+		if _, _, err := service.CreateLinkIntent(context.Background(), "sol-account", "0xabc"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := service.CreateLinkIntent(context.Background(), "sol-account", "0xabc"); !errors.Is(err, ErrLinkRateLimited) {
+		t.Fatalf("link intent beyond fixed window error = %v", err)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM telegram_link_intents`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != maxLinkIntentsPerWindow {
+		t.Fatalf("link intents = %d, want %d persisted writes", count, maxLinkIntentsPerWindow)
+	}
+	now = now.Add(-time.Hour)
+	if _, _, err := service.CreateLinkIntent(context.Background(), "sol-account", "0xabc"); err != nil {
+		t.Fatalf("link intent after backward clock adjustment: %v", err)
+	}
+}

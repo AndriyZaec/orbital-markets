@@ -99,8 +99,11 @@ func TestOpportunitiesPaginationUsesStableSnapshot(t *testing.T) {
 	if !strings.Contains(first.text, "1. ASSET-1") || strings.Contains(first.text, "6. ASSET-6") {
 		t.Fatalf("first page text = %q", first.text)
 	}
-	if len(first.keyboard.InlineKeyboard) != 2 {
-		t.Fatalf("keyboard rows = %d, want 2", len(first.keyboard.InlineKeyboard))
+	if strings.Contains(first.text, "Funding:") || !strings.Contains(first.text, "↗️ Long Pacifica → ↘️ Short Hyperliquid") {
+		t.Fatalf("opportunity summary is not compact: %q", first.text)
+	}
+	if len(first.keyboard.InlineKeyboard) != 3 {
+		t.Fatalf("keyboard rows = %d, want 3", len(first.keyboard.InlineKeyboard))
 	}
 	nextCallback := first.keyboard.InlineKeyboard[0][1].CallbackData
 	if !strings.HasPrefix(nextCallback, "opportunities:") {
@@ -203,6 +206,9 @@ func TestUnlinkUsesTelegramChatIdentity(t *testing.T) {
 	if links.unlinkedChat != 42 {
 		t.Fatalf("unlinked chat = %d, want 42", links.unlinkedChat)
 	}
+	if len(messenger.sent) != 1 || !strings.Contains(messenger.sent[0].text, "remains in this Telegram chat history") {
+		t.Fatalf("unlink message = %+v", messenger.sent)
+	}
 }
 
 func TestSnapshotCannotBeReadOrInvalidatedByAnotherChat(t *testing.T) {
@@ -213,6 +219,44 @@ func TestSnapshotCannotBeReadOrInvalidatedByAnotherChat(t *testing.T) {
 	}
 	if _, ok := store.get(id, 42); !ok {
 		t.Fatal("snapshot was invalidated by another chat")
+	}
+}
+
+func TestOpportunitySnapshotsRemainGloballyBounded(t *testing.T) {
+	store := newSnapshotStore()
+	first := store.create(42, nil)
+	second := store.create(42, nil)
+	if _, ok := store.get(first, 42); !ok {
+		t.Fatal("older message snapshot was invalidated")
+	}
+	if _, ok := store.get(second, 42); !ok {
+		t.Fatal("latest snapshot for the chat is missing")
+	}
+	for chatID := int64(1_000); chatID < 1_000+maxOpportunitySnapshots+10; chatID++ {
+		store.create(chatID, nil)
+	}
+	if len(store.snapshots) != maxOpportunitySnapshots {
+		t.Fatalf("snapshots = %d, want cap %d", len(store.snapshots), maxOpportunitySnapshots)
+	}
+}
+
+func TestWebhookIgnoresRepeatedUpdateID(t *testing.T) {
+	messenger := &fakeMessenger{}
+	bot := New(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&fakeOpportunitySource{},
+		messenger,
+		"secret",
+		"https://app.example",
+	)
+	incoming := update{
+		UpdateID: 99,
+		Message:  &message{Text: "/start", Chat: chat{ID: 42, Type: "private"}},
+	}
+	serveUpdate(t, bot, "secret", incoming)
+	serveUpdate(t, bot, "secret", incoming)
+	if len(messenger.sent) != 1 {
+		t.Fatalf("sent messages = %d, want one for replayed update", len(messenger.sent))
 	}
 }
 

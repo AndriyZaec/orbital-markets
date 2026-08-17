@@ -11,12 +11,16 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 const linkIntentTTL = 10 * time.Minute
+const linkIntentRateWindow = time.Second
+const maxLinkIntentsPerWindow = 5
 
 var ErrInvalidLinkToken = errors.New("invalid or expired Telegram link token")
+var ErrLinkRateLimited = errors.New("Telegram link creation is temporarily rate limited")
 
 type AccountLink struct {
 	ChatID             int64
@@ -26,9 +30,12 @@ type AccountLink struct {
 }
 
 type LinkService struct {
-	db          *sql.DB
-	botUsername string
-	now         func() time.Time
+	db           *sql.DB
+	botUsername  string
+	intentMu     sync.Mutex
+	intentWindow time.Time
+	intentCount  int
+	now          func() time.Time
 }
 
 func NewLinkService(database *sql.DB, botUsername string) *LinkService {
@@ -51,12 +58,16 @@ func (s *LinkService) CreateLinkIntent(
 	if s.botUsername == "" {
 		return "", time.Time{}, errors.New("Telegram bot username is not configured")
 	}
+	clockNow := s.now()
+	if !s.allowLinkIntent(clockNow) {
+		return "", time.Time{}, ErrLinkRateLimited
+	}
+	now := clockNow.UTC()
 
 	token, err := randomLinkToken()
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	now := s.now().UTC()
 	expiresAt := now.Add(linkIntentTTL)
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM telegram_link_intents WHERE expires_at <= ?`, now.Unix()); err != nil {
 		return "", time.Time{}, fmt.Errorf("clean expired Telegram link intents: %w", err)
@@ -77,6 +88,21 @@ func (s *LinkService) CreateLinkIntent(
 		RawQuery: url.Values{"start": []string{token}}.Encode(),
 	}
 	return deepLink.String(), expiresAt, nil
+}
+
+func (s *LinkService) allowLinkIntent(now time.Time) bool {
+	s.intentMu.Lock()
+	defer s.intentMu.Unlock()
+	elapsed := now.Sub(s.intentWindow)
+	if s.intentWindow.IsZero() || elapsed < 0 || elapsed >= linkIntentRateWindow {
+		s.intentWindow = now
+		s.intentCount = 0
+	}
+	if s.intentCount >= maxLinkIntentsPerWindow {
+		return false
+	}
+	s.intentCount++
+	return true
 }
 
 func (s *LinkService) ConsumeLinkIntent(ctx context.Context, token string, chatID int64) (AccountLink, error) {
