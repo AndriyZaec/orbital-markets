@@ -25,7 +25,7 @@ type fakePositionSource struct {
 	getCalls        int
 }
 
-func (s *fakePositionSource) ListRecentPositionsForAccounts(
+func (s *fakePositionSource) ListRecentActivePositionsForAccounts(
 	_ context.Context,
 	pacifica, hyperliquid string,
 	limit int,

@@ -30,7 +30,7 @@ type AccountLinks interface {
 }
 
 type PositionSource interface {
-	ListRecentPositionsForAccounts(context.Context, string, string, int) ([]executor.LivePosition, error)
+	ListRecentActivePositionsForAccounts(context.Context, string, string, int) ([]executor.LivePosition, error)
 	GetPositionForAccounts(context.Context, string, string, string) (*executor.LivePosition, error)
 }
 

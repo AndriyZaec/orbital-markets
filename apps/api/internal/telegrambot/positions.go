@@ -107,7 +107,7 @@ func (b *Bot) accountLink(ctx context.Context, chatID int64) (AccountLink, bool,
 }
 
 func (b *Bot) recentPositions(ctx context.Context, link AccountLink) ([]executor.LivePosition, error) {
-	return b.positions.ListRecentPositionsForAccounts(
+	return b.positions.ListRecentActivePositionsForAccounts(
 		ctx,
 		link.AccountPacifica,
 		link.AccountHyperliquid,

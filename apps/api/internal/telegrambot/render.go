@@ -83,7 +83,7 @@ func renderPositions(
 	text.WriteString("Updated " + formatAge(latestPositionUpdate(positions), now) + "\n")
 	keyboard := InlineKeyboardMarkup{}
 	if len(positions) == 0 {
-		text.WriteString("\nNo live positions found for the linked accounts.")
+		text.WriteString("\nNo active positions found for the linked accounts.")
 	} else {
 		start := page * positionsPerPage
 		end := min(start+positionsPerPage, len(positions))
