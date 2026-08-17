@@ -3,10 +3,18 @@ package telegrambot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestClientSendsTelegramMessage(t *testing.T) {
 	var method string
@@ -32,5 +40,26 @@ func TestClientSendsTelegramMessage(t *testing.T) {
 	}
 	if method != "/sendMessage" || payload.ChatID != 42 || payload.Text != "hello" || payload.ParseMode != "HTML" {
 		t.Fatalf("request method=%q payload=%+v", method, payload)
+	}
+}
+
+func TestClientTransportErrorDoesNotExposeBotToken(t *testing.T) {
+	const token = "secret-bot-token"
+	transportErr := errors.New("network unavailable")
+	client := NewClient(token, &http.Client{Transport: roundTripFunc(
+		func(*http.Request) (*http.Response, error) {
+			return nil, transportErr
+		},
+	)})
+
+	err := client.SendMessage(context.Background(), 42, "hello", InlineKeyboardMarkup{})
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("transport error exposed bot token: %q", err)
+	}
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("transport cause was not preserved: %v", err)
 	}
 }
