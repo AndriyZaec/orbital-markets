@@ -51,6 +51,12 @@ function fmtUsd(n: number | null): string {
 // Diagnostic pill state (label + colors). Copy is operator-friendly, not
 // adapter jargon: we say "Balance" not "balance stream", etc.
 type PillTone = 'ok' | 'pending' | 'off' | 'bad'
+interface DiagnosticPill {
+  label: string
+  tone: PillTone
+  loading?: boolean
+}
+
 const TONE: Record<PillTone, { dot: string; text: string }> = {
   ok:      { dot: 'bg-green-400',           text: 'text-green-400' },
   pending: { dot: 'bg-yellow-400',          text: 'text-yellow-400' },
@@ -58,28 +64,30 @@ const TONE: Record<PillTone, { dot: string; text: string }> = {
   bad:     { dot: 'bg-red-400',             text: 'text-red-400' },
 }
 
-function walletPill(r: VenueReadiness): { label: string; tone: PillTone } {
+function walletPill(r: VenueReadiness): DiagnosticPill {
   if (r.walletConnected) return { label: 'Connected', tone: 'ok' }
   return r.status === 'error' ? { label: 'Error', tone: 'bad' } : { label: 'Not connected', tone: 'off' }
 }
-function signerPill(r: VenueReadiness): { label: string; tone: PillTone } {
+function signerPill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
   return r.signerReady ? { label: 'Ready', tone: 'ok' } : { label: 'Missing', tone: 'pending' }
 }
-function agentPill(r: VenueReadiness): { label: string; tone: PillTone } {
+function agentPill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
-  if (r.agentStatus === 'authorizing') return { label: 'Authorizing', tone: 'pending' }
+  if (r.agentStatus === 'authorizing') return { label: 'Authorizing', tone: 'pending', loading: true }
   if (r.agentStatus === 'error') return { label: 'Error', tone: 'bad' }
   return r.agentReady ? { label: 'Ready', tone: 'ok' } : { label: 'Required', tone: 'pending' }
 }
-function balancePill(r: VenueReadiness): { label: string; tone: PillTone } {
+function balancePill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
   if (r.balanceReady) return { label: 'Ready', tone: 'ok' }
   // Stream up but snapshot is old — surface as Stale, not Pending, so the
   // operator can tell the difference between "still initializing" and
   // "data went stale after being fresh".
   if (r.streamReady && !r.accountFresh) return { label: 'Stale', tone: 'pending' }
-  if (r.balanceConnected || r.streamReady) return { label: 'Pending', tone: 'pending' }
+  if (r.status === 'balance_pending' || r.balanceConnected || r.streamReady) {
+    return { label: 'Pending', tone: 'pending', loading: true }
+  }
   return { label: 'Not connected', tone: 'off' }
 }
 
@@ -304,7 +312,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     <DiagRow label="Owner signer" pill={signerPill(readiness)} />
                     <DiagRow label="Authorization" pill={agentPill(readiness)} />
                     <DiagRow label="Balance" pill={balancePill(readiness)} />
-                    {(readiness.equity !== null || readiness.available !== null) && (
+                    {readiness.walletConnected && (
                       <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
                         <span className="text-muted-foreground">Equity / Available</span>
                         <span className="font-mono text-foreground">
@@ -530,14 +538,22 @@ function EvmWalletPicker({
   )
 }
 
-function DiagRow({ label, pill }: { label: string; pill: { label: string; tone: PillTone } }) {
+function DiagRow({ label, pill }: { label: string; pill: DiagnosticPill }) {
   const t = TONE[pill.tone]
+  const textColor = pill.loading ? 'text-cyan-400' : t.text
   return (
     <div className="flex items-center justify-between text-[10px]">
       <span className="text-muted-foreground">{label}</span>
       <div className="flex items-center gap-1.5">
-        <div className={`size-1.5 rounded-full ${t.dot}`} />
-        <span className={`font-medium ${t.text}`}>{pill.label}</span>
+        {pill.loading ? (
+          <div
+            className="size-2.5 animate-spin rounded-full border border-slate-500/40 border-t-cyan-400"
+            aria-hidden="true"
+          />
+        ) : (
+          <div className={`size-1.5 rounded-full ${t.dot}`} />
+        )}
+        <span className={`font-medium ${textColor}`}>{pill.label}</span>
       </div>
     </div>
   )
