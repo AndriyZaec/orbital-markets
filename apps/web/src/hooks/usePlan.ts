@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { usePageVisibility } from './usePageVisibility'
 
 type LiqRiskLevel = 'safe' | 'elevated' | 'warning' | 'critical' | ''
@@ -98,7 +98,7 @@ export function usePlan(
         if (typeof body.pair_max_leverage === 'number') {
           setMaxLeverage(body.pair_max_leverage)
         }
-        throw new Error(body.error || `HTTP ${resp.status}`)
+        throw apiError(resp.status, 'Unable to build an execution plan. Please try again.', body)
       }
       const data: ExecutionPlan = await resp.json()
       if (signal?.aborted || requestId !== requestSequence.current) return
@@ -107,7 +107,7 @@ export function usePlan(
       setError(null)
     } catch (e) {
       if (signal?.aborted || requestId !== requestSequence.current) return
-      setError(e instanceof Error ? e.message : 'Unknown error')
+      setError(userErrorMessage(e, 'Unable to build an execution plan. Please try again.'))
       setPlan(null)
     } finally {
       if (!signal?.aborted && requestId === requestSequence.current) {

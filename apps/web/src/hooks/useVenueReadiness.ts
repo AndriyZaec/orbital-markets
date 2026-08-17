@@ -1,5 +1,5 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useVenueAuthority, type SigningReadiness } from './useVenueAuthority'
 import { useLiveBalances } from './useLiveBalances'
 import { useTradingAgents } from './useTradingAgents'
@@ -220,7 +220,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       })
       if (!resp.ok) {
         const b = await resp.json().catch(() => ({}))
-        throw new Error(b.error || `HTTP ${resp.status}`)
+        throw apiError(resp.status, 'Unable to connect account data. Please try again.', b)
       }
       setEnsureStatus('ready')
       // Nudge balances so readiness can move to ready without waiting for
@@ -228,7 +228,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       balances.refetch().catch(() => {})
     } catch (e) {
       setEnsureStatus('error')
-      setEnsureError(e instanceof Error ? e.message : 'Unknown error')
+      setEnsureError(userErrorMessage(e, 'Unable to connect account data. Please try again.'))
     } finally {
       inflightRef.current = null
     }

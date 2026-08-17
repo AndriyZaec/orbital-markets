@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 import {
   livePositionPollInterval,
   runSingleFlight,
@@ -84,7 +84,7 @@ export function useLivePositions(pollInterval = 5_000) {
           account_hyperliquid: hyperliquidAddress,
         })
         const resp = await apiFetch(`/api/v1/live/positions?${query}`, { signal })
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        if (!resp.ok) throw await apiResponseError(resp, 'Unable to load live positions. Please try again.')
         const data: LivePosition[] = await resp.json()
         if (signal?.aborted || request !== requestSequence.current) return
         data.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
@@ -98,7 +98,7 @@ export function useLivePositions(pollInterval = 5_000) {
         if (signal?.aborted || request !== requestSequence.current) return
         setPositions([])
         setLoadedAccountKey(accountKey)
-        setError(e instanceof Error ? e.message : 'Unknown error')
+        setError(userErrorMessage(e, 'Unable to load live positions. Please try again.'))
       } finally {
         if (!signal?.aborted && request === requestSequence.current) setLoading(false)
       }

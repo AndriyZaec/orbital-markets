@@ -3,7 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useAccount, useSignTypedData, useSwitchChain } from 'wagmi'
 import { mainnet } from 'wagmi/chains'
 
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
 import {
   authorizeHyperliquidAgent,
@@ -189,5 +189,5 @@ async function relayAuthorization(
   })
   if (response.ok) return
   const body = await response.json().catch(() => null) as { error?: string } | null
-  throw new Error(body?.error ?? `Authorization failed (${response.status})`)
+  throw apiError(response.status, 'Unable to authorize the trading agent. Please try again.', body)
 }

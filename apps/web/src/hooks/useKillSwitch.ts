@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
@@ -71,7 +71,7 @@ export function useKillSwitch() {
         client_order_id: signed.client_order_id,
         venue: signed.venue,
         accepted: false,
-        error: body.error || `Submit failed: HTTP ${resp.status}`,
+        error: apiError(resp.status, 'Order submission failed. Check the position state.', body).message,
         submitted_at: '',
         responded_at: '',
       }
@@ -106,7 +106,7 @@ export function useKillSwitch() {
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
-        throw new Error(body.error || `Kill prepare failed: HTTP ${resp.status}`)
+        throw apiError(resp.status, 'Unable to prepare emergency close. Please try again.', body)
       }
 
       const data: {

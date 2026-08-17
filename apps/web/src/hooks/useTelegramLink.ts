@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { validatedTelegramURL } from '@/lib/telegram'
 
 interface TelegramLinkResponse {
@@ -25,7 +25,9 @@ export function useTelegramLink() {
         }),
       })
       const body = await response.json().catch(() => ({})) as TelegramLinkResponse
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`)
+      if (!response.ok) {
+        throw apiError(response.status, 'Telegram connection is not available yet. Please try again later.', body)
+      }
       const telegramURL = validatedTelegramURL(body.url)
       if (telegramWindow) {
         telegramWindow.opener = null
@@ -35,7 +37,7 @@ export function useTelegramLink() {
       }
     } catch (cause) {
       telegramWindow?.close()
-      setError(cause instanceof Error ? cause.message : 'Failed to open Telegram')
+      setError(userErrorMessage(cause, 'Unable to open Telegram. Please try again.'))
     } finally {
       setCreating(false)
     }

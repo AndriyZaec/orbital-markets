@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 
 export interface LiveFillDetail {
@@ -60,14 +60,14 @@ export function useLivePositionDetail(positionId: string | null) {
         account_hyperliquid: hyperliquidAddress,
       })
       const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`, { signal })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      if (!resp.ok) throw await apiResponseError(resp, 'This position is no longer available.')
       const d: LivePositionDetailData = await resp.json()
       if (signal?.aborted || request !== requestSequence.current) return
       setData(d)
     } catch (e) {
       if (signal?.aborted || request !== requestSequence.current) return
       setData(null)
-      setError(e instanceof Error ? e.message : 'Unknown error')
+      setError(userErrorMessage(e, 'Unable to load position details. Please try again.'))
     } finally {
       if (request === requestSequence.current) setLoading(false)
     }

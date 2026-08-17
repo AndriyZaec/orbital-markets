@@ -9,5 +9,6 @@ test('accepts only HTTPS Telegram deep links', () => {
   )
   assert.throws(() => validatedTelegramURL('https://example.com/phishing'))
   assert.throws(() => validatedTelegramURL('http://t.me/orbital_bot'))
+  assert.throws(() => validatedTelegramURL('not a URL'), /Invalid Telegram link/)
   assert.throws(() => validatedTelegramURL(undefined))
 })
