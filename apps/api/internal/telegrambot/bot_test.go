@@ -260,6 +260,99 @@ func TestWebhookIgnoresRepeatedUpdateID(t *testing.T) {
 	}
 }
 
+func TestBotRateLimitsActionsPerChat(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	messenger := &fakeMessenger{}
+	bot := New(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&fakeOpportunitySource{},
+		messenger,
+		"secret",
+		"https://app.example",
+	)
+	bot.now = func() time.Time { return now }
+
+	for updateID := int64(1); updateID <= 4; updateID++ {
+		serveUpdate(t, bot, "secret", update{
+			UpdateID: updateID,
+			Message:  &message{Text: "/opportunities", Chat: chat{ID: 42, Type: "private"}},
+		})
+	}
+	if len(messenger.sent) != 3 {
+		t.Fatalf("sent messages = %d, want initial burst of 3", len(messenger.sent))
+	}
+
+	now = now.Add(time.Second)
+	serveUpdate(t, bot, "secret", update{
+		UpdateID: 5,
+		Message:  &message{Text: "/opportunities", Chat: chat{ID: 42, Type: "private"}},
+	})
+	if len(messenger.sent) != 4 {
+		t.Fatalf("sent messages = %d, want one replenished action", len(messenger.sent))
+	}
+}
+
+func TestRefreshCooldownStillAcknowledgesCallbacks(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	messenger := &fakeMessenger{}
+	bot := New(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&fakeOpportunitySource{},
+		messenger,
+		"secret",
+		"https://app.example",
+	)
+	bot.now = func() time.Time { return now }
+
+	serveRefresh := func(updateID int64, callbackID string) {
+		serveUpdate(t, bot, "secret", update{
+			UpdateID: updateID,
+			CallbackQuery: &callbackQuery{
+				ID:      callbackID,
+				Data:    "opportunities:refresh",
+				Message: &message{MessageID: 11, Chat: chat{ID: 42, Type: "private"}},
+			},
+		})
+	}
+	serveRefresh(1, "refresh-1")
+	serveRefresh(2, "refresh-2")
+	serveRefresh(3, "refresh-3")
+	serveRefresh(4, "refresh-4")
+	if len(messenger.edited) != 1 {
+		t.Fatalf("refresh edits = %d, want 1 during cooldown", len(messenger.edited))
+	}
+	if len(messenger.acknowledged) != 3 {
+		t.Fatalf("acknowledged callbacks = %d, want initial burst of 3", len(messenger.acknowledged))
+	}
+
+	now = now.Add(refreshCooldown)
+	serveRefresh(5, "refresh-5")
+	if len(messenger.edited) != 2 {
+		t.Fatalf("refresh edits = %d, want 2 after cooldown", len(messenger.edited))
+	}
+	if len(messenger.acknowledged) != 4 {
+		t.Fatalf("acknowledged callbacks = %d, want 4 after cooldown", len(messenger.acknowledged))
+	}
+}
+
+func TestUnknownMessagesAreIgnored(t *testing.T) {
+	messenger := &fakeMessenger{}
+	bot := New(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&fakeOpportunitySource{},
+		messenger,
+		"secret",
+		"https://app.example",
+	)
+	serveUpdate(t, bot, "secret", update{
+		UpdateID: 1,
+		Message:  &message{Text: "hello", Chat: chat{ID: 42, Type: "private"}},
+	})
+	if len(messenger.sent) != 0 {
+		t.Fatalf("sent messages = %d, want unknown text ignored", len(messenger.sent))
+	}
+}
+
 func serveUpdate(t *testing.T, bot *Bot, secret string, incoming update) {
 	t.Helper()
 	body, err := json.Marshal(incoming)

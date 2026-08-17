@@ -60,6 +60,7 @@ type Bot struct {
 	positions     PositionSource
 	snapshots     *snapshotStore
 	seenUpdates   *updateDeduper
+	limits        *actionLimiter
 	now           func() time.Time
 }
 
@@ -80,6 +81,7 @@ func New(
 		seenUpdates:   newUpdateDeduper(telegramUpdateDedupeSize),
 		now:           time.Now,
 	}
+	bot.limits = newActionLimiter(func() time.Time { return bot.now() })
 	for _, option := range options {
 		option(bot)
 	}
@@ -124,9 +126,6 @@ func (b *Bot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if incoming.CallbackQuery != nil {
-		b.acknowledgeCallback(r.Context(), incoming.CallbackQuery.ID)
-	}
 	if err := b.handleUpdate(r.Context(), incoming); err != nil {
 		b.logger.Error("telegram update failed", "err", err)
 	}
@@ -141,6 +140,13 @@ func (b *Bot) acknowledgeCallback(ctx context.Context, callbackID string) {
 
 func (b *Bot) handleUpdate(ctx context.Context, incoming update) error {
 	if incoming.CallbackQuery != nil {
+		if incoming.CallbackQuery.Message == nil || incoming.CallbackQuery.Message.Chat.Type != "private" {
+			return nil
+		}
+		if !b.limits.allowAction(incoming.CallbackQuery.Message.Chat.ID) {
+			return nil
+		}
+		b.acknowledgeCallback(ctx, incoming.CallbackQuery.ID)
 		return b.handleCallback(ctx, *incoming.CallbackQuery)
 	}
 	if incoming.Message == nil || incoming.Message.Chat.Type != "private" {
@@ -153,6 +159,14 @@ func (b *Bot) handleUpdate(ctx context.Context, incoming update) error {
 	command := strings.ToLower(fields[0])
 	if at := strings.IndexByte(command, '@'); at >= 0 {
 		command = command[:at]
+	}
+	switch command {
+	case "/opportunities", "/positions", "/start", "/unlink", "/help":
+	default:
+		return nil
+	}
+	if !b.limits.allowAction(incoming.Message.Chat.ID) {
+		return nil
 	}
 	switch command {
 	case "/opportunities":
@@ -168,9 +182,8 @@ func (b *Bot) handleUpdate(ctx context.Context, incoming update) error {
 		return b.unlinkAccount(ctx, incoming.Message.Chat.ID)
 	case "/help":
 		return b.sendWelcome(ctx, incoming.Message.Chat.ID)
-	default:
-		return b.sendWelcome(ctx, incoming.Message.Chat.ID)
 	}
+	return nil
 }
 
 func (b *Bot) claimAccountLink(ctx context.Context, chatID int64, token string) error {
@@ -219,9 +232,15 @@ func (b *Bot) handleCallback(ctx context.Context, callback callbackQuery) error 
 		return nil
 	}
 	if callback.Data == "opportunities:refresh" {
+		if !b.limits.allowRefresh(chatID) {
+			return nil
+		}
 		return b.editFreshOpportunities(ctx, chatID, messageID)
 	}
 	if callback.Data == "positions:refresh" {
+		if !b.limits.allowRefresh(chatID) {
+			return nil
+		}
 		return b.editFreshPositions(ctx, chatID, messageID)
 	}
 	if strings.HasPrefix(callback.Data, "positions:") {
