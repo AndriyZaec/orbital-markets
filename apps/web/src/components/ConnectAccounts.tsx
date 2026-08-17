@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
+import { useTelegramLink } from '@/hooks/useTelegramLink'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import nadoLogo from '@/assets/nado.jpg'
 import gmtradeLogo from '@/assets/gm-trade.png'
 import driftLogo from '@/assets/drift.png'
+import telegramLogo from '@/assets/telegram-logo.svg'
 
 // Static venue metadata (logos, blurbs, chain, coming-soon flag). Runtime
 // readiness comes from useVenueReadiness — the single typed layer that
@@ -30,6 +32,8 @@ const VENUES: VenueDef[] = [
   { id: 'nado', name: 'Nado', logo: nadoLogo, description: 'High-performance DEX built on the Ink Network', chain: 'Ink', comingSoon: true },
   { id: 'gmtrade', name: 'GMTrade', logo: gmtradeLogo, description: 'Solana-based perpetual trading platform', chain: 'Solana', comingSoon: true },
 ]
+
+const FIRST_COMING_SOON_INDEX = VENUES.findIndex((venue) => venue.comingSoon)
 
 interface Props {
   open: boolean
@@ -97,6 +101,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     refreshBalances,
   } = useVenueReadiness()
   const tradingAgents = useTradingAgents()
+  const telegramLink = useTelegramLink()
   const { state: liveExecution } = useLiveExecution()
   const agentChangeBlocked = !['idle', 'open', 'degraded', 'aborted', 'failed'].includes(liveExecution.phase)
 
@@ -165,6 +170,15 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   }
 
   const summaryTone = TONE[aggregateTone(aggregate.statusLabel)]
+  const showTelegram = pacifica.walletConnected
+    && hyperliquid.walletConnected
+    && !!pacifica.address
+    && !!hyperliquid.address
+
+  const handleConnectTelegram = () => {
+    if (!pacifica.address || !hyperliquid.address) return
+    telegramLink.connect(pacifica.address, hyperliquid.address)
+  }
 
   return (
     <div
@@ -212,15 +226,45 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       <div className="flex-1 overflow-auto min-h-0 px-3 py-3">
         <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mb-2 px-1">Venues</p>
         <div className="flex flex-col gap-2">
-          {VENUES.map((venue) => {
+          {VENUES.map((venue, index) => {
             const readiness = getReadiness(venue.id)
             const isComingSoon = venue.comingSoon
             const isReady = !isComingSoon && readiness?.status === 'ready'
             const isErr = !isComingSoon && readiness?.status === 'error'
 
             return (
+              <Fragment key={venue.id}>
+                {index === FIRST_COMING_SOON_INDEX && (
+                  <>
+                    {showTelegram && (
+                      <div className="py-1 animate-in fade-in-0 duration-200">
+                        <div className="px-1 mb-2">
+                          <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium">
+                            Telegram
+                          </p>
+                          <p className="text-[10px] text-muted-foreground/70 mt-1 leading-relaxed">
+                            View opportunities and live positions from Telegram.
+                          </p>
+                        </div>
+                        <button
+                          onClick={handleConnectTelegram}
+                          disabled={telegramLink.creating}
+                          className="w-full h-10 rounded-lg border border-[#229ED9]/25 bg-[#229ED9]/10 hover:border-[#229ED9]/40 hover:bg-[#229ED9]/15 disabled:opacity-70 disabled:cursor-wait text-[#8bd3f5] flex items-center justify-center gap-2 text-xs font-semibold transition-colors"
+                        >
+                          <img src={telegramLogo} alt="" className="size-5" />
+                          {telegramLink.creating ? 'Opening Telegram...' : 'Connect Telegram'}
+                        </button>
+                        {telegramLink.error && (
+                          <p className="text-[10px] text-red-400 mt-1.5 px-1">{telegramLink.error}</p>
+                        )}
+                      </div>
+                    )}
+                    <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mt-2 px-1">
+                      Coming Soon
+                    </p>
+                  </>
+                )}
               <div
-                key={venue.id}
                 className={`rounded-lg border px-3 py-3 ${
                   isReady
                     ? 'border-green-500/20 bg-green-500/[0.03]'
@@ -333,6 +377,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 </div>
 
               </div>
+              </Fragment>
             )
           })}
         </div>
