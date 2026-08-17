@@ -74,7 +74,7 @@ func main() {
 	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
-	handler := withTelegramBot(logger, sc, srv.Handler())
+	handler := buildRootHandler(logger, sc, srv.Handler())
 
 	addr := envOr("ADDR", ":8080")
 	logger.Info("starting server", "addr", addr, "env", env)
