@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 )
 
 const webhookSecretHeader = "X-Telegram-Bot-Api-Secret-Token"
@@ -24,7 +25,13 @@ type OpportunitySource interface {
 
 type AccountLinks interface {
 	ConsumeLinkIntent(context.Context, string, int64) (AccountLink, error)
+	AccountLink(context.Context, int64) (AccountLink, bool, error)
 	Unlink(context.Context, int64) (bool, error)
+}
+
+type PositionSource interface {
+	ListRecentPositionsForAccounts(context.Context, string, string, int) ([]executor.LivePosition, error)
+	GetPositionForAccounts(context.Context, string, string, string) (*executor.LivePosition, error)
 }
 
 type Option func(*Bot)
@@ -35,6 +42,12 @@ func WithAccountLinks(links AccountLinks) Option {
 	}
 }
 
+func WithPositions(positions PositionSource) Option {
+	return func(bot *Bot) {
+		bot.positions = positions
+	}
+}
+
 type Bot struct {
 	logger        *slog.Logger
 	opportunities OpportunitySource
@@ -42,6 +55,7 @@ type Bot struct {
 	webhookSecret string
 	appURL        string
 	links         AccountLinks
+	positions     PositionSource
 	snapshots     *snapshotStore
 	now           func() time.Time
 }
@@ -125,6 +139,8 @@ func (b *Bot) handleUpdate(ctx context.Context, incoming update) error {
 	switch command {
 	case "/opportunities":
 		return b.sendOpportunities(ctx, incoming.Message.Chat.ID)
+	case "/positions":
+		return b.sendPositions(ctx, incoming.Message.Chat.ID)
 	case "/start":
 		if len(fields) > 1 {
 			return b.claimAccountLink(ctx, incoming.Message.Chat.ID, fields[1])
@@ -154,6 +170,7 @@ func (b *Bot) claimAccountLink(ctx context.Context, chatID int64, token string) 
 	}
 	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
 		{{Text: "Opportunities", CallbackData: "opportunities:refresh"}},
+		{{Text: "Positions", CallbackData: "positions:refresh"}},
 		{{Text: "Open Orbital", URL: b.appURL}},
 	}}
 	return b.messenger.SendMessage(ctx, chatID,
@@ -191,29 +208,56 @@ func (b *Bot) handleCallback(ctx context.Context, callback callbackQuery) error 
 	if callback.Data == "opportunities:refresh" {
 		return b.editFreshOpportunities(ctx, chatID, messageID)
 	}
+	if callback.Data == "positions:refresh" {
+		return b.editFreshPositions(ctx, chatID, messageID)
+	}
+	if strings.HasPrefix(callback.Data, "positions:") {
+		page, err := strconv.Atoi(strings.TrimPrefix(callback.Data, "positions:"))
+		if err != nil {
+			return nil
+		}
+		return b.editPositionPage(ctx, chatID, messageID, page)
+	}
+	if strings.HasPrefix(callback.Data, "position:") {
+		parts := strings.SplitN(callback.Data, ":", 3)
+		if len(parts) != 3 {
+			return nil
+		}
+		page, err := strconv.Atoi(parts[1])
+		if err != nil || parts[2] == "" {
+			return nil
+		}
+		return b.editPositionDetail(ctx, chatID, messageID, parts[2], page)
+	}
 	parts := strings.Split(callback.Data, ":")
-	if len(parts) != 3 || parts[0] != "opportunities" {
+	if len(parts) != 3 {
 		return nil
 	}
 	page, err := strconv.Atoi(parts[2])
 	if err != nil {
 		return nil
 	}
-	snapshot, ok := b.snapshots.get(parts[1], chatID)
-	if !ok {
-		return b.editFreshOpportunities(ctx, chatID, messageID)
+	switch parts[0] {
+	case "opportunities":
+		snapshot, ok := b.snapshots.get(parts[1], chatID)
+		if !ok {
+			return b.editFreshOpportunities(ctx, chatID, messageID)
+		}
+		text, keyboard := renderOpportunities(parts[1], snapshot, page, b.appURL, b.now())
+		return b.messenger.EditMessage(ctx, chatID, messageID, text, keyboard)
+	default:
+		return nil
 	}
-	text, keyboard := renderOpportunities(parts[1], snapshot, page, b.appURL, b.now())
-	return b.messenger.EditMessage(ctx, chatID, messageID, text, keyboard)
 }
 
 func (b *Bot) sendWelcome(ctx context.Context, chatID int64) error {
 	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
 		{{Text: "Opportunities", CallbackData: "opportunities:refresh"}},
+		{{Text: "Positions", CallbackData: "positions:refresh"}},
 		{{Text: "Open Orbital", URL: b.appURL}},
 	}}
 	return b.messenger.SendMessage(ctx, chatID,
-		"<b>Orbital Markets</b>\n\nView current funding opportunities on demand.", keyboard)
+		"<b>Orbital Markets</b>\n\nView current funding opportunities and linked live positions on demand.", keyboard)
 }
 
 func (b *Bot) sendOpportunities(ctx context.Context, chatID int64) error {

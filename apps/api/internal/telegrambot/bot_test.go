@@ -40,6 +40,9 @@ type fakeAccountLinks struct {
 	consumeToken string
 	consumeChat  int64
 	consumeErr   error
+	link         AccountLink
+	linked       bool
+	linkErr      error
 	unlinkedChat int64
 	unlinked     bool
 }
@@ -53,6 +56,12 @@ func (l *fakeAccountLinks) ConsumeLinkIntent(_ context.Context, token string, ch
 func (l *fakeAccountLinks) Unlink(_ context.Context, chatID int64) (bool, error) {
 	l.unlinkedChat = chatID
 	return l.unlinked, nil
+}
+
+func (l *fakeAccountLinks) AccountLink(_ context.Context, chatID int64) (AccountLink, bool, error) {
+	link := l.link
+	link.ChatID = chatID
+	return link, l.linked, l.linkErr
 }
 
 func (m *fakeMessenger) SendMessage(_ context.Context, chatID int64, text string, keyboard InlineKeyboardMarkup) error {

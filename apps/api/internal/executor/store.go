@@ -468,6 +468,20 @@ func (s *Store) ListPositionsForAccounts(ctx context.Context, pacifica, hyperliq
 		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
 }
 
+func (s *Store) ListRecentPositionsForAccounts(
+	ctx context.Context,
+	pacifica, hyperliquid string,
+	limit int,
+) ([]LivePosition, error) {
+	if limit <= 0 {
+		return []LivePosition{}, nil
+	}
+	return s.queryPositions(ctx,
+		`SELECT `+livePositionCols+` FROM live_positions
+		 WHERE account_pacifica = ? AND account_hyperliquid = ? ORDER BY started_at DESC LIMIT ?`,
+		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)), limit)
+}
+
 // ListOpenPositions returns positions in open or degraded state.
 func (s *Store) ListOpenPositions(ctx context.Context) ([]LivePosition, error) {
 	return s.queryPositions(ctx,

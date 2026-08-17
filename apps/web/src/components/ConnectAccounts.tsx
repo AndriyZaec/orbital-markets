@@ -399,7 +399,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
-            Authorization keys stay in this browser session. Clearing a local key does not revoke it at the venue. Pacifica authorization must be treated as having broad POST authority, including documented withdrawal endpoints.
+            Authorization keys stay in this browser session. Clearing a local key does not revoke it at the venue.
           </p>
         </div>
       </div>

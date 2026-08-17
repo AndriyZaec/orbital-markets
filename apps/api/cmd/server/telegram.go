@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/telegrambot"
 )
@@ -35,7 +36,10 @@ func buildTelegramIntegration(
 	var options []telegrambot.Option
 	if username := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_USERNAME")); username != "" {
 		links = telegrambot.NewLinkService(database, username)
-		options = append(options, telegrambot.WithAccountLinks(links))
+		options = append(options,
+			telegrambot.WithAccountLinks(links),
+			telegrambot.WithPositions(executor.NewStore(database, logger)),
+		)
 	} else {
 		logger.Warn("Telegram account linking disabled: TELEGRAM_BOT_USERNAME is not set")
 	}
