@@ -8,6 +8,9 @@ on:
       - '.github/workflows/deploy-api.yml'
   workflow_dispatch:  # manual trigger from the Actions tab
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-api
   cancel-in-progress: false
@@ -17,9 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: apps/api/go.mod
           cache-dependency-path: apps/api/go.sum
@@ -40,7 +45,9 @@ jobs:
         working-directory: apps/api
         run: go test -race ./internal/telegrambot
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.85
 
       - name: Deploy to Fly
         working-directory: apps/api
