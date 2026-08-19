@@ -12,6 +12,9 @@ on:
       - 'worker-v*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-worker
   cancel-in-progress: false
@@ -21,16 +24,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'pnpm'
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            apps/gate-worker/pnpm-lock.yaml
 
       - name: Install root deps (wrangler)
         run: pnpm install --frozen-lockfile
@@ -69,6 +77,10 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm typecheck
           pnpm test
+
+      - name: Validate Worker bundle
+        working-directory: apps/gate-worker
+        run: ../../node_modules/.bin/wrangler deploy --dry-run --config wrangler.local.toml
 
       - name: Apply D1 migrations
         working-directory: apps/gate-worker
