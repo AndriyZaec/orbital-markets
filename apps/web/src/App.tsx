@@ -12,6 +12,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group'
+import { SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
@@ -99,6 +106,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
+  const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
   // Header account status is driven by the same typed readiness layer used
   // by Connect Accounts and Execute Live — one source of truth for the
@@ -273,7 +281,14 @@ export default function App() {
                     onBack={closeOpportunity}
                   />
                 ) : (
-                  <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={selectOpportunity} />
+                  <OpportunityTable
+                    opportunities={opportunities}
+                    loading={loading}
+                    error={error}
+                    query={opportunityQuery}
+                    onQueryChange={setOpportunityQuery}
+                    onSelect={selectOpportunity}
+                  />
                 )}
               </div>
               <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative bg-[#080b12]" style={{ height: posHeight }}>
@@ -327,8 +342,13 @@ export default function App() {
 
 /* ── Opportunity Table ─────────────────────────────────── */
 
-function OpportunityTable({ opportunities, loading, error, onSelect }: {
-  opportunities: Opportunity[]; loading: boolean; error: string | null; onSelect: (id: string) => void
+function OpportunityTable({ opportunities, loading, error, query, onQueryChange, onSelect }: {
+  opportunities: Opportunity[]
+  loading: boolean
+  error: string | null
+  query: string
+  onQueryChange: (query: string) => void
+  onSelect: (id: string) => void
 }) {
   const [sortField, setSortField] = useState<SortField>('apr')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -342,15 +362,23 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
     }
   }
 
+  const filtered = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    if (!normalizedQuery) return opportunities
+    return opportunities.filter((opportunity) => (
+      opportunity.asset.toLowerCase().includes(normalizedQuery)
+    ))
+  }, [opportunities, query])
+
   const sorted = useMemo(() => {
-    if (opportunities.length === 0) return opportunities
-    return [...opportunities].sort((a, b) => {
+    if (filtered.length === 0) return filtered
+    return [...filtered].sort((a, b) => {
       const va = getSortValue(a, sortField)
       const vb = getSortValue(b, sortField)
       const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
       return sortDir === 'desc' ? -cmp : cmp
     })
-  }, [opportunities, sortField, sortDir])
+  }, [filtered, sortField, sortDir])
 
   return (
     <>
@@ -362,18 +390,54 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
           <p className="text-muted-foreground text-xs mt-3">Scanning opportunities...</p>
         </div>
       ) : (<>
-      <div className="px-5 pt-5 pb-3 shrink-0 bg-[#080b12] flex items-end justify-between gap-4">
-        <div>
-          <h2 className="text-base font-bold text-foreground">Funding Opportunities</h2>
+      <div className="shrink-0 bg-[#080b12] px-5 pb-3 pt-5">
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-base font-bold text-foreground">Opportunities</h2>
+          <span className="rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
+            {sorted.length} live
+          </span>
         </div>
-        <span className="mb-0.5 rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
-          {sorted.length} live
-        </span>
+      </div>
+      <div role="search" className="shrink-0 border-y border-border/70 bg-card/25 px-5 py-1.5">
+        <div className="w-full max-w-sm">
+          <label htmlFor="opportunity-search" className="sr-only">Search opportunities by asset</label>
+          <InputGroup className="h-8 rounded-md border-transparent bg-transparent shadow-none hover:bg-white/[0.02] focus-within:border-white/[0.08] focus-within:bg-white/[0.035]">
+            <InputGroupInput
+              id="opportunity-search"
+              type="search"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') onQueryChange('')
+              }}
+              placeholder="Search assets..."
+              autoComplete="off"
+              className="text-sm [&::-webkit-search-cancel-button]:appearance-none"
+            />
+            <InputGroupAddon align="inline-start">
+              <SearchIcon />
+            </InputGroupAddon>
+            {query && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  aria-label="Clear asset search"
+                  onClick={() => onQueryChange('')}
+                  className="cursor-pointer text-muted-foreground"
+                >
+                  <XIcon />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
       </div>
       <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
         {error && <p className="text-destructive text-sm px-5 py-6">Error: {error}</p>}
         {!loading && !error && opportunities.length === 0 && (
           <p className="text-muted-foreground text-sm px-5 py-6">No opportunities detected yet. Waiting for scan...</p>
+        )}
+        {!loading && !error && opportunities.length > 0 && sorted.length === 0 && (
+          <p className="text-muted-foreground text-sm px-5 py-6">No assets match "{query.trim()}".</p>
         )}
         {!loading && sorted.length > 0 && (
           <Table>
