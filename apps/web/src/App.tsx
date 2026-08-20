@@ -27,6 +27,7 @@ import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -160,9 +161,19 @@ export default function App() {
     setSelectedId(id)
   }, [])
 
-  const selectPositionOpportunity = useCallback((id: string) => {
-    if (selectedId === id || !opportunities.some((opportunity) => opportunity.id === id)) return
-    selectOpportunity(id)
+  const selectPositionOpportunity = useCallback((position: PositionOpportunityContext | null) => {
+    const opportunity = position ? findPositionOpportunity(opportunities, position) : null
+    if (opportunity) {
+      if (selectedId !== opportunity.id) selectOpportunity(opportunity.id)
+      return
+    }
+    if (selectedId === null) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('opportunity')
+    const historyState = { ...(window.history.state ?? {}) }
+    delete historyState.orbitalOpportunity
+    window.history.replaceState(historyState, '', url)
+    setSelectedId(null)
   }, [opportunities, selectOpportunity, selectedId])
 
   const closeOpportunity = useCallback(() => {
@@ -371,6 +382,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
   const pendingOrder = useRef<string[] | null>(null)
   const reorderTimer = useRef<number | null>(null)
   const interactionIdleTimer = useRef<number | null>(null)
+  const tableViewportRef = useRef<HTMLDivElement>(null)
   const pointerInside = useRef(false)
   const focusInside = useRef(false)
   const scrolling = useRef(false)
@@ -421,6 +433,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
   }, [])
 
   const flushPendingOrder = useCallback(() => {
+    focusInside.current = tableViewportRef.current?.contains(document.activeElement) ?? false
     if (pointerInside.current || focusInside.current || scrolling.current || !pendingOrder.current) return
     applyOrder(pendingOrder.current)
   }, [applyOrder])
@@ -554,6 +567,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
         </div>
       </div>
       <div
+        ref={tableViewportRef}
         className="flex-1 overflow-auto min-h-0 bg-[#080b12]"
         onPointerEnter={() => { pointerInside.current = true }}
         onPointerLeave={() => {
@@ -605,15 +619,8 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       if (row) rowRefs.current.set(opp.id, row)
                       else rowRefs.current.delete(opp.id)
                     }}
-                    tabIndex={0}
-                    aria-label={`Open ${opp.asset} opportunity details`}
                     className="group cursor-pointer border-b border-white/[0.045] outline-none transition-[background-color,box-shadow] hover:bg-white/[0.035] focus-visible:bg-white/[0.04] focus-visible:shadow-[inset_2px_0_0_#3b82f6]"
                     onClick={() => onSelect(opp.id)}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return
-                      event.preventDefault()
-                      onSelect(opp.id)
-                    }}
                   >
                     <TableCell className="py-3">
                       <div className="flex items-center gap-2.5">
@@ -651,9 +658,19 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">OI {fmtUsd(opp.available_notional)}</p>
                     </TableCell>
                     <TableCell className="py-3">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-35 transition-all group-hover:translate-x-0.5 group-hover:opacity-80 group-focus-visible:translate-x-0.5 group-focus-visible:opacity-80">
-                        <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
+                      <button
+                        type="button"
+                        aria-label={`Open ${opp.asset} opportunity details`}
+                        className="inline-flex size-7 cursor-pointer items-center justify-center rounded text-muted-foreground opacity-35 outline-none transition-all hover:bg-white/[0.05] hover:opacity-80 focus-visible:bg-white/[0.06] focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-blue-400/40 group-hover:translate-x-0.5 group-hover:opacity-80"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onSelect(opp.id)
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </button>
                     </TableCell>
                   </TableRow>
                 )

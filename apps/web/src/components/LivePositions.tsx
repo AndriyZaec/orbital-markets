@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useKillSwitch } from '@/hooks/useKillSwitch'
@@ -88,7 +88,7 @@ function VenueIcon({ venue }: { venue: string }) {
 
 interface LivePositionsProps {
   onConnectWallets?: () => void
-  onOpenOpportunity?: (opportunityId: string) => void
+  onOpenOpportunity?: (position: LivePosition | null) => void
 }
 
 export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePositionsProps = {}) {
@@ -109,16 +109,30 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
     }
   }
 
-  const selected = positions.find((p) => p.id === selectedId) ?? null
-
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded' || p.state === 'pending' || p.state === 'closing')
   const closedPositions = positions.filter((p) => p.state === 'closed' || p.state === 'failed')
   const displayed = tab === 'open' ? openPositions : closedPositions
+  const selected = displayed.find((p) => p.id === selectedId) ?? null
+
+  useEffect(() => {
+    if (selectedId !== null && selected === null) onOpenOpportunity?.(null)
+  }, [onOpenOpportunity, selected, selectedId])
 
   const handlePositionClick = (position: LivePosition) => {
     const opening = selectedId !== position.id
     setSelectedId(opening ? position.id : null)
-    if (opening && tab === 'open') onOpenOpportunity?.(position.opportunity_id)
+    onOpenOpportunity?.(opening && tab === 'open' ? position : null)
+  }
+
+  const handleTabChange = (nextTab: 'open' | 'closed') => {
+    setTab(nextTab)
+    setSelectedId(null)
+    onOpenOpportunity?.(null)
+  }
+
+  const closePositionDetail = () => {
+    setSelectedId(null)
+    onOpenOpportunity?.(null)
   }
 
   return (
@@ -127,10 +141,10 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
       <div className="px-5 py-2 flex items-center gap-3 shrink-0 bg-[#080b12]">
         <h2 className="text-sm font-semibold text-foreground">Positions</h2>
         <div className="flex gap-0 ml-1">
-          <TabBtn active={tab === 'open'} onClick={() => setTab('open')}>
+          <TabBtn active={tab === 'open'} onClick={() => handleTabChange('open')}>
             Open{openPositions.length > 0 && <span className="ml-1 text-muted-foreground">({openPositions.length})</span>}
           </TabBtn>
-          <TabBtn active={tab === 'closed'} onClick={() => setTab('closed')}>
+          <TabBtn active={tab === 'closed'} onClick={() => handleTabChange('closed')}>
             Closed{closedPositions.length > 0 && <span className="ml-1 text-muted-foreground">({closedPositions.length})</span>}
           </TabBtn>
         </div>
@@ -374,7 +388,7 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
       </div>
 
       {selected && (
-        <LivePositionDetail position={selected} onClose={() => setSelectedId(null)} onRefresh={refetch} />
+        <LivePositionDetail position={selected} onClose={closePositionDetail} onRefresh={refetch} />
       )}
     </>
   )
