@@ -21,6 +21,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { LivePositionDetail } from '@/components/LivePositionDetail'
+import { AssetIcon } from '@/components/AssetIcon'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -225,6 +226,7 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                   {kill.state.positions.map((p) => (
                     <div key={p.id} className="text-[11px]">
                       <div className="flex items-center gap-2">
+                        <AssetIcon asset={p.asset} size="sm" />
                         <span className="font-medium text-foreground">{p.asset}</span>
                         <span className="text-muted-foreground">{p.legs_to_close} leg{p.legs_to_close !== 1 ? 's' : ''}</span>
                         {p.error && <span className="text-red-400/70">{p.error}</span>}
@@ -332,6 +334,7 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                     <TableCell className="py-2">
                       <div className="flex items-center gap-2">
                         <div className={`size-1.5 rounded-full ${stateDot(pos.state)}`} />
+                        <AssetIcon asset={pos.asset} size="sm" />
                         <span className="font-medium text-foreground text-sm">{pos.asset}</span>
                       </div>
                     </TableCell>

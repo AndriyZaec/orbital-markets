@@ -1,6 +1,9 @@
 import { useMemo } from 'react'
 import { useLivePositions, type LivePosition } from '@/hooks/useLivePositions'
 import { useVenueReadiness, type VenueReadiness } from '@/hooks/useVenueReadiness'
+import { AssetIcon } from '@/components/AssetIcon'
+import pacificaLogo from '@/assets/pacifica-logo.svg'
+import hlLogo from '@/assets/hl-logo.svg'
 
 // Portfolio is the primary account/position surface for closed-beta users.
 // It reuses live balance / live position / venue-authority hooks — no new
@@ -203,7 +206,9 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
                     cat === 'degraded' ? 'text-red-400' : cat === 'open' ? 'text-green-400' : 'text-muted-foreground'
                   return (
                     <tr key={p.id} className="border-t border-border">
-                      <td className="px-3 py-2 font-medium text-foreground">{p.asset}</td>
+                      <td className="px-3 py-2 font-medium text-foreground">
+                        <div className="flex items-center gap-2"><AssetIcon asset={p.asset} size="sm" />{p.asset}</div>
+                      </td>
                       <td className={`px-3 py-2 ${stateColor}`}>{p.state}</td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">{fmtUsd(p.notional)}</td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">{fmtPct(p.basis_change)}</td>
@@ -256,7 +261,9 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
                   return (
                     <tr key={p.id} className="border-t border-border">
                       <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">{fmtRelative(ts)}</td>
-                      <td className="px-3 py-2 font-medium text-foreground">{p.asset}</td>
+                      <td className="px-3 py-2 font-medium text-foreground">
+                        <div className="flex items-center gap-2"><AssetIcon asset={p.asset} size="sm" />{p.asset}</div>
+                      </td>
                       <td className={`px-3 py-2 ${isTerminal ? 'text-muted-foreground' : 'text-foreground'}`}>{action}</td>
                       <td className="px-3 py-2 text-muted-foreground capitalize">
                         {p.venue_a} · {p.venue_b}
@@ -331,6 +338,11 @@ const STATUS_VIEW: Record<
   error:             { label: 'Error',           color: 'text-red-400',          dot: 'bg-red-400' },
 }
 
+const VENUE_LOGOS: Record<VenueReadiness['venue'], string> = {
+  pacifica: pacificaLogo,
+  hyperliquid: hlLogo,
+}
+
 function VenueCard({ readiness }: { readiness: VenueReadiness }) {
   const view = STATUS_VIEW[readiness.status]
   // Show a real number only when we actually have one from the backend.
@@ -339,7 +351,12 @@ function VenueCard({ readiness }: { readiness: VenueReadiness }) {
   return (
     <div className="rounded border border-border bg-white/[0.02] px-3 py-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-foreground">{readiness.label}</span>
+        <div className="flex items-center gap-2">
+          <span className="flex size-7 items-center justify-center rounded-md border border-border bg-white/[0.035]">
+            <img src={VENUE_LOGOS[readiness.venue]} alt="" className="size-5 object-contain" />
+          </span>
+          <span className="text-sm font-medium text-foreground">{readiness.label}</span>
+        </div>
         <span className={`text-[11px] flex items-center gap-1.5 ${view.color}`}>
           <span className={`size-1.5 rounded-full ${view.dot}`} />
           {view.label}

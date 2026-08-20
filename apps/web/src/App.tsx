@@ -12,6 +12,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
+import { AssetIcon } from '@/components/AssetIcon'
 import {
   InputGroup,
   InputGroupAddon,
@@ -483,8 +484,13 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                     }}
                   >
                     <TableCell className="py-3">
-                      <p className="font-semibold text-foreground">{opp.asset}</p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                      <div className="flex items-center gap-2.5">
+                        <AssetIcon asset={opp.asset} />
+                        <div>
+                          <p className="font-semibold text-foreground">{opp.asset}</p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell className="py-3">
                       <PositionRoute longVenue={longVenue} shortVenue={shortVenue} />
@@ -547,6 +553,7 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors -ml-1">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </button>
+          <AssetIcon asset={opp.asset} />
           <h2 className="text-xl font-bold text-foreground">{opp.asset}</h2>
         </div>
       </div>

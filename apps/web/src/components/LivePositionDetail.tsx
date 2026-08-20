@@ -7,6 +7,7 @@ import { monitoredLegVenues } from '@/lib/live-position-monitoring'
 import { formatSignedUsdPnL } from '@/lib/pnl-format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { AssetIcon } from '@/components/AssetIcon'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -116,6 +117,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
         {/* Header */}
         <div className="px-5 pt-5 pb-4 flex items-center justify-between border-b border-border">
           <div className="flex items-center gap-3">
+            <AssetIcon asset={pos.asset} />
             <h2 className="text-lg font-semibold text-foreground">{pos.asset}</h2>
             <Badge variant="outline" className={`text-[11px] ${stateColor(pos.state)}`}>{pos.state}</Badge>
           </div>

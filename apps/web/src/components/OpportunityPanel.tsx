@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
+import { AssetIcon } from '@/components/AssetIcon'
 
 interface Props {
   opportunity: Opportunity
@@ -229,6 +230,7 @@ export function OpportunityPanel({
       <div className="px-5 pt-5 pb-4 border-b border-border">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
+            <AssetIcon asset={opp.asset} size="sm" />
             <h2 className="text-base font-bold text-foreground">{opp.asset}</h2>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">

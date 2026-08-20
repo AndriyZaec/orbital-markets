@@ -3,6 +3,7 @@ import type { LiveExecutionState, ExecutionPhase, LegFillView, UnwindStatus } fr
 import { recoveryPresentation, type RecoveryTone } from '@/lib/degraded-execution'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
+import { AssetIcon } from '@/components/AssetIcon'
 
 interface Props {
   state: LiveExecutionState
@@ -189,9 +190,12 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div>
-            <h2 className="text-sm font-semibold text-foreground">
-              Live Execution{state.asset ? ` — ${state.asset}` : ''}
-            </h2>
+            <div className="flex items-center gap-2">
+              {state.asset && <AssetIcon asset={state.asset} size="sm" />}
+              <h2 className="text-sm font-semibold text-foreground">
+                Live Execution{state.asset ? ` — ${state.asset}` : ''}
+              </h2>
+            </div>
             {PHASE_HINT[state.phase] && (
               <p className="text-[10px] text-muted-foreground mt-0.5">{PHASE_HINT[state.phase]}</p>
             )}

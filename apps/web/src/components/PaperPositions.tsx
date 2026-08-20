@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { PositionDetail } from '@/components/PositionDetail'
+import { AssetIcon } from '@/components/AssetIcon'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -161,6 +162,7 @@ export function PaperPositions() {
                     <TableCell className="py-2">
                       <div className="flex items-center gap-2">
                         <div className={`size-1.5 rounded-full ${stateDot(pos.state)}`} />
+                        <AssetIcon asset={pos.asset} size="sm" />
                         <span className="font-medium text-foreground text-sm">{pos.asset}</span>
                       </div>
                     </TableCell>

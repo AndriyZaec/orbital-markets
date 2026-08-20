@@ -1,5 +1,6 @@
 import type { PaperPosition, Fill, Event } from '@/hooks/usePaperPositions'
 import { Badge } from '@/components/ui/badge'
+import { AssetIcon } from '@/components/AssetIcon'
 
 interface Props {
   position: PaperPosition
@@ -80,6 +81,7 @@ export function PositionDetail({ position: pos, onClose }: Props) {
         {/* Header */}
         <div className="px-5 pt-5 pb-4 flex items-center justify-between border-b border-border">
           <div className="flex items-center gap-3">
+            <AssetIcon asset={pos.asset} />
             <h2 className="text-lg font-semibold text-foreground">{pos.asset}</h2>
             <Badge variant="outline" className={`text-[11px] ${stateColor(pos.state)}`}>{pos.state}</Badge>
           </div>
