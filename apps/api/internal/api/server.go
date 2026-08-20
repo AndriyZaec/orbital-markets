@@ -20,21 +20,21 @@ import (
 )
 
 type Server struct {
-	ctx            context.Context // server-lifetime context, not per-request
-	scanner        *scanner.Scanner
-	executor       *paper.Executor
-	store          *paper.DBStore
-	db             *sql.DB
-	liveStore      *executor.Store // always available when DB exists — read-only live position access
-	live           *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
-	logger         *slog.Logger
-	mux            *http.ServeMux
-	handler        http.Handler // mux wrapped in middleware (recovery → logging → auth)
-	recoveryOwner  string
-	telegramLinks  TelegramLinker
-	signalMu       sync.Mutex
-	signalCache    map[string]opportunitySignal
-	signalCachedAt time.Time
+	ctx               context.Context // server-lifetime context, not per-request
+	scanner           *scanner.Scanner
+	executor          *paper.Executor
+	store             *paper.DBStore
+	db                *sql.DB
+	liveStore         *executor.Store // always available when DB exists — read-only live position access
+	live              *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	logger            *slog.Logger
+	mux               *http.ServeMux
+	handler           http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	recoveryOwner     string
+	telegramLinks     TelegramLinker
+	signalMu          sync.Mutex
+	signalFundingRows []scanner.SignalFundingRow
+	signalCachedAt    time.Time
 }
 
 func NewServer(
