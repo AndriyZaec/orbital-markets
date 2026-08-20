@@ -448,20 +448,20 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
           <p className="text-muted-foreground text-sm px-5 py-6">No assets match "{query.trim()}".</p>
         )}
         {!loading && sorted.length > 0 && (
-          <Table>
-            <TableHeader className="sticky top-0 z-10">
-              <TableRow className="hover:bg-transparent bg-[#080b12]">
+          <Table className="min-w-[940px]">
+            <TableHeader className="sticky top-0 z-10 bg-[#0b0f17]/95 backdrop-blur-md">
+              <TableRow className="border-b border-white/[0.08] bg-transparent shadow-[0_1px_0_rgba(255,255,255,0.02)] hover:bg-transparent">
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
-                <TableHead className="text-left">Position</TableHead>
-                <TableHead className="text-right">Venue Funding</TableHead>
-                <SortTH field="fundingSpread" label="Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <TableHead className="h-9 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Position</TableHead>
+                <TableHead className="h-9 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Venue Funding</TableHead>
+                <SortTH field="fundingSpread" label="Spread" current={sortField} dir={sortDir} onSort={handleSort} right divided />
                 <SortTH field="apr" label="Est. Return" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right divided />
                 <SortTH field="capacity" label="Liquidity" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <TableHead className="w-8" />
+                <TableHead className="h-9 w-8" />
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody className="[&_tr:nth-child(even)]:bg-white/[0.008]">
               {sorted.map((opp) => {
                 const isLongA = opp.direction === 'long_a_short_b'
                 const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
@@ -470,10 +470,21 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 const apr = opp.annualized_gross_edge
 
                 return (
-                  <TableRow key={opp.id} className="group cursor-pointer hover:bg-white/[0.025]" onClick={() => onSelect(opp.id)}>
+                  <TableRow
+                    key={opp.id}
+                    tabIndex={0}
+                    aria-label={`Open ${opp.asset} opportunity details`}
+                    className="group cursor-pointer border-b border-white/[0.045] outline-none transition-[background-color,box-shadow] hover:bg-white/[0.035] focus-visible:bg-white/[0.04] focus-visible:shadow-[inset_2px_0_0_#3b82f6]"
+                    onClick={() => onSelect(opp.id)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      onSelect(opp.id)
+                    }}
+                  >
                     <TableCell className="py-3">
                       <p className="font-semibold text-foreground">{opp.asset}</p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
                     </TableCell>
                     <TableCell className="py-3">
                       <PositionRoute longVenue={longVenue} shortVenue={shortVenue} />
@@ -482,7 +493,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <FundingRateLine label="PAC" value={fundingForVenue(opp, 'pacifica')} color="text-cyan-400" />
                       <FundingRateLine label="HL" value={fundingForVenue(opp, 'hyperliquid')} color="text-violet-400" />
                     </TableCell>
-                    <TableCell className="py-3 text-right font-mono text-foreground">
+                    <TableCell className="border-l border-white/[0.035] py-3 text-right font-mono text-foreground">
                       {fmtRate(Math.abs(opp.funding_spread))}
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">per hour</p>
                     </TableCell>
@@ -490,7 +501,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <p className="font-semibold text-emerald-400">{fmtPct(apr)}</p>
                       <p className="mt-0.5 text-[10px] text-muted-foreground">{fmtPct(apr * maxLev)} at {maxLev}x</p>
                     </TableCell>
-                    <TableCell className={`py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
+                    <TableCell className={`border-l border-white/[0.035] py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
                       {fmtPct(opp.entry_spread_estimate, 4)}
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">price spread</p>
                     </TableCell>
@@ -499,7 +510,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">OI {fmtUsd(opp.available_notional)}</p>
                     </TableCell>
                     <TableCell className="py-3">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-35 transition-all group-hover:translate-x-0.5 group-hover:opacity-80">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-35 transition-all group-hover:translate-x-0.5 group-hover:opacity-80 group-focus-visible:translate-x-0.5 group-focus-visible:opacity-80">
                         <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                       </svg>
                     </TableCell>
@@ -641,17 +652,27 @@ function NavBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   )
 }
 
-function SortTH({ field, label, current, dir, onSort, right }: {
-  field: SortField; label: string; current: SortField; dir: SortDir; onSort: (f: SortField) => void; right?: boolean
+function SortTH({ field, label, current, dir, onSort, right, divided }: {
+  field: SortField
+  label: string
+  current: SortField
+  dir: SortDir
+  onSort: (f: SortField) => void
+  right?: boolean
+  divided?: boolean
 }) {
   const active = current === field
   return (
     <TableHead
-      className={`cursor-pointer select-none transition-colors hover:text-foreground ${active ? 'text-foreground' : ''}`}
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={`h-9 p-0 text-[10px] font-semibold uppercase tracking-[0.08em] ${divided ? 'border-l border-white/[0.035]' : ''} ${active ? 'text-foreground' : 'text-muted-foreground/80'}`}
       style={{ textAlign: right ? 'right' : 'left' }}
-      onClick={() => onSort(field)}
     >
-      <span className={`flex items-center gap-1 ${right ? 'justify-end' : ''}`}>
+      <button
+        type="button"
+        onClick={() => onSort(field)}
+        className={`flex h-full w-full cursor-pointer items-center gap-1 px-4 uppercase outline-none transition-colors hover:text-foreground focus-visible:bg-white/[0.04] focus-visible:text-foreground ${right ? 'justify-end' : ''}`}
+      >
         {label}
         {active ? (
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
@@ -662,7 +683,7 @@ function SortTH({ field, label, current, dir, onSort, right }: {
             <path d="M3 4l2-2 2 2M3 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         )}
-      </span>
+      </button>
     </TableHead>
   )
 }
