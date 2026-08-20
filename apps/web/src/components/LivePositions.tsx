@@ -87,9 +87,10 @@ function VenueIcon({ venue }: { venue: string }) {
 
 interface LivePositionsProps {
   onConnectWallets?: () => void
+  onOpenOpportunity?: (opportunityId: string) => void
 }
 
-export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
+export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePositionsProps = {}) {
   const { positions, loading, error, refetch } = useLivePositions()
   const { aggregate } = useVenueReadiness()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -112,6 +113,12 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded' || p.state === 'pending' || p.state === 'closing')
   const closedPositions = positions.filter((p) => p.state === 'closed' || p.state === 'failed')
   const displayed = tab === 'open' ? openPositions : closedPositions
+
+  const handlePositionClick = (position: LivePosition) => {
+    const opening = selectedId !== position.id
+    setSelectedId(opening ? position.id : null)
+    if (opening && tab === 'open') onOpenOpportunity?.(position.opportunity_id)
+  }
 
   return (
     <>
@@ -320,7 +327,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
                   <TableRow
                     key={pos.id}
                     className={`cursor-pointer transition-colors border-border hover:bg-white/[0.02] ${isDegraded ? 'border-l-2 border-l-orange-400/50' : ''}`}
-                    onClick={() => setSelectedId(selectedId === pos.id ? null : pos.id)}
+                    onClick={() => handlePositionClick(pos)}
                   >
                     <TableCell className="py-2">
                       <div className="flex items-center gap-2">

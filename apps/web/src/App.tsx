@@ -140,6 +140,11 @@ export default function App() {
     setSelectedId(id)
   }, [])
 
+  const selectPositionOpportunity = useCallback((id: string) => {
+    if (selectedId === id || !opportunities.some((opportunity) => opportunity.id === id)) return
+    selectOpportunity(id)
+  }, [opportunities, selectOpportunity, selectedId])
+
   const closeOpportunity = useCallback(() => {
     if (window.history.state?.orbitalOpportunity === selectedId) {
       window.history.back()
@@ -296,7 +301,10 @@ export default function App() {
                   className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
                   onMouseDown={onResizeStart}
                 />
-                <LivePositions onConnectWallets={() => setShowAccounts(true)} />
+                <LivePositions
+                  onConnectWallets={() => setShowAccounts(true)}
+                  onOpenOpportunity={selectPositionOpportunity}
+                />
               </div>
             </>
           )}
