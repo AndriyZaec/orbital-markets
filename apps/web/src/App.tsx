@@ -700,7 +700,6 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="px-5 pt-4 pb-2 shrink-0">
-        <p className="text-[11px] text-muted-foreground mb-1">Funding Opportunities</p>
         <div className="flex items-center gap-2">
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors -ml-1">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -726,6 +725,7 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
           venueA={opp.venue_pair.venue_a}
           venueB={opp.venue_pair.venue_b}
           direction={opp.direction}
+          currentApr={opp.annualized_gross_edge}
           recommendedNotional={opp.recommended_notional}
           notional={notional}
           onNotionalChange={onNotionalChange}

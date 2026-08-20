@@ -326,7 +326,7 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                 <TH>Venues</TH>
                 <TH right>Size</TH>
                 <TH right>Lev</TH>
-                <TH right>Spread</TH>
+                <TH right>Funding APR</TH>
                 <TH right>Fund. PnL</TH>
                 <TH right>Price PnL</TH>
                 <TH right>Total PnL</TH>
@@ -361,7 +361,7 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                     </TableCell>
                     <TC>{fmtUsd(pos.notional)}</TC>
                     <TC>{pos.leverage}x</TC>
-                    <TC negative={pos.current_spread < 0}>{fmtPct(pos.current_spread)}</TC>
+                    <TC negative={pos.current_spread < 0}>{fmtPct(pos.current_spread, 2)}</TC>
                     <TC negative={pos.funding_pnl < 0}>{fmtPnL(pos.funding_pnl)}</TC>
                     <TC negative={pos.price_pnl < 0}>{fmtPnL(pos.price_pnl)}</TC>
                     <TableCell className={`text-right font-mono text-xs font-semibold py-2 ${pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`} style={{ textAlign: 'right' }}>

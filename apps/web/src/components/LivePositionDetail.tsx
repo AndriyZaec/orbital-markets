@@ -170,13 +170,12 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
           )}
         </div>
 
-        {/* Spread Health — only for open positions with monitoring data */}
-        {pos.state === 'open' && (pos.current_spread !== 0 || pos.entry_spread !== 0) && (
+        {/* Funding health — only for open positions with monitoring data */}
+        {pos.state === 'open' && (pos.current_spread !== 0 || pos.basis_change !== 0) && (
           <div className="px-5 py-4 border-b border-border">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Spread Health</p>
-            <div className="grid grid-cols-3 gap-4">
-              <InfoItem label="Entry Spread" value={fmtPct(pos.entry_spread)} />
-              <InfoItem label="Current Spread" value={fmtPct(pos.current_spread)} warn={pos.current_spread < 0} />
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Funding</p>
+            <div className="grid grid-cols-2 gap-4">
+              <InfoItem label="Current Funding APR" value={fmtPct(pos.current_spread, 2)} warn={pos.current_spread < 0} />
               <InfoItem label="Basis Change" value={fmtPct(pos.basis_change)} warn={pos.basis_change < 0} />
             </div>
           </div>

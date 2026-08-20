@@ -9,7 +9,6 @@ export interface FundingSample {
 }
 
 export interface FundingStats {
-  currentCarry: number
   averageCarry: number
   positiveShare: number
 }
@@ -45,7 +44,6 @@ export function calculateFundingStats(samples: FundingSample[], direction: Fundi
   const averageCarry = carries.reduce((sum, carry) => sum + carry, 0) / carries.length
 
   return {
-    currentCarry: annualizeFunding(carries[carries.length - 1]),
     averageCarry: annualizeFunding(averageCarry),
     positiveShare: carries.filter((carry) => carry > 0).length / carries.length,
   }
