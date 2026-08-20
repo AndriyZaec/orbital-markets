@@ -6,6 +6,14 @@ const HYPERLIQUID_ICON_ALIASES: Record<string, string> = {
   KSHIB: 'SHIB',
 }
 
+const DARK_ICON_STYLES: Record<string, string> = {
+  MEGA: 'brightness-0 invert',
+  NEAR: 'brightness-0 invert',
+  WLD: 'brightness-0 invert',
+  XPR: 'brightness-0 invert',
+  XRP: 'brightness-0 invert',
+}
+
 const SIZES = {
   sm: {
     slot: 'size-6',
@@ -25,6 +33,7 @@ export function AssetIcon({ asset, size = 'md' }: { asset: string; size?: keyof 
   const iconAsset = HYPERLIQUID_ICON_ALIASES[asset.toUpperCase()] ?? asset
   const iconURL = `https://app.hyperliquid.xyz/coins/${encodeURIComponent(iconAsset)}.svg`
   const styles = SIZES[size]
+  const iconStyle = DARK_ICON_STYLES[asset.toUpperCase()] ?? ''
 
   return (
     <span className={`flex shrink-0 items-center justify-center ${styles.slot}`}>
@@ -35,7 +44,7 @@ export function AssetIcon({ asset, size = 'md' }: { asset: string; size?: keyof 
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          className={`${styles.image} rounded-sm object-contain`}
+          className={`${styles.image} rounded-sm object-contain ${iconStyle}`}
           onError={() => setFailedAsset(asset)}
         />
       ) : (
