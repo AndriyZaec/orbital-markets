@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { memo, useState, useMemo, useEffect, useCallback, useLayoutEffect, useRef } from 'react'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
@@ -362,6 +362,16 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
 }) {
   const [sortField, setSortField] = useState<SortField>('apr')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [orderedIds, setOrderedIds] = useState<string[]>([])
+  const orderRef = useRef<string[]>([])
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>())
+  const previousRowPositions = useRef(new Map<string, number>())
+  const pendingOrder = useRef<string[] | null>(null)
+  const reorderTimer = useRef<number | null>(null)
+  const interactionIdleTimer = useRef<number | null>(null)
+  const pointerInside = useRef(false)
+  const focusInside = useRef(false)
+  const scrolling = useRef(false)
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -390,6 +400,101 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
     })
   }, [filtered, sortField, sortDir])
 
+  const applyOrder = useCallback((ids: string[]) => {
+    if (ids.length === orderRef.current.length && ids.every((id, index) => id === orderRef.current[index])) {
+      pendingOrder.current = null
+      return
+    }
+    previousRowPositions.current = new Map(
+      [...rowRefs.current].map(([id, row]) => [id, row.getBoundingClientRect().top]),
+    )
+    orderRef.current = ids
+    pendingOrder.current = null
+    setOrderedIds(ids)
+  }, [])
+
+  const flushPendingOrder = useCallback(() => {
+    if (pointerInside.current || focusInside.current || scrolling.current || !pendingOrder.current) return
+    applyOrder(pendingOrder.current)
+  }, [applyOrder])
+
+  const sortedIds = useMemo(() => sorted.map((opportunity) => opportunity.id), [sorted])
+  const controlsKey = `${sortField}\u0000${sortDir}\u0000${query.trim().toLowerCase()}`
+  const previousControlsKey = useRef(controlsKey)
+
+  useEffect(() => {
+    if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+    const controlsChanged = previousControlsKey.current !== controlsKey
+    previousControlsKey.current = controlsKey
+
+    if (orderRef.current.length === 0 || controlsChanged) {
+      pendingOrder.current = sortedIds
+      reorderTimer.current = window.setTimeout(() => applyOrder(sortedIds), 0)
+      return () => {
+        if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+      }
+    }
+    if (sortedIds.length === orderRef.current.length && sortedIds.every((id, index) => id === orderRef.current[index])) {
+      pendingOrder.current = null
+      return
+    }
+
+    pendingOrder.current = sortedIds
+    reorderTimer.current = window.setTimeout(flushPendingOrder, 500)
+    return () => {
+      if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+    }
+  }, [applyOrder, controlsKey, flushPendingOrder, sortedIds])
+
+  useLayoutEffect(() => {
+    const previous = previousRowPositions.current
+    previousRowPositions.current = new Map()
+    if (previous.size === 0 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+    for (const [id, row] of rowRefs.current) {
+      const oldTop = previous.get(id)
+      if (oldTop === undefined) continue
+      const delta = oldTop - row.getBoundingClientRect().top
+      if (Math.abs(delta) < 1) continue
+      row.animate(
+        [{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }],
+        { duration: 280, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+      )
+    }
+  }, [orderedIds])
+
+  useEffect(() => () => {
+    if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+    if (interactionIdleTimer.current !== null) window.clearTimeout(interactionIdleTimer.current)
+  }, [])
+
+  const displayed = useMemo(() => {
+    if (orderedIds.length === 0) return sorted
+    const byId = new Map(filtered.map((opportunity) => [opportunity.id, opportunity]))
+    const ordered = orderedIds.flatMap((id) => {
+      const opportunity = byId.get(id)
+      return opportunity ? [opportunity] : []
+    })
+    const knownIds = new Set(orderedIds)
+    return [...ordered, ...sorted.filter((opportunity) => !knownIds.has(opportunity.id))]
+  }, [filtered, orderedIds, sorted])
+
+  const finishInteraction = useCallback(() => {
+    if (interactionIdleTimer.current !== null) window.clearTimeout(interactionIdleTimer.current)
+    interactionIdleTimer.current = window.setTimeout(() => {
+      if (!pointerInside.current && !focusInside.current && !scrolling.current) flushPendingOrder()
+    }, 400)
+  }, [flushPendingOrder])
+
+  const handleTableScroll = useCallback(() => {
+    scrolling.current = true
+    if (interactionIdleTimer.current !== null) window.clearTimeout(interactionIdleTimer.current)
+    interactionIdleTimer.current = window.setTimeout(() => {
+      scrolling.current = false
+      if (!pointerInside.current && !focusInside.current) flushPendingOrder()
+    }, 400)
+  }, [flushPendingOrder])
+
   return (
     <>
       {loading ? (
@@ -404,7 +509,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-base font-bold text-foreground">Opportunities</h2>
           <span className="rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
-            {sorted.length} live
+            {displayed.length} live
           </span>
         </div>
       </div>
@@ -441,15 +546,29 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
           </InputGroup>
         </div>
       </div>
-      <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
+      <div
+        className="flex-1 overflow-auto min-h-0 bg-[#080b12]"
+        onPointerEnter={() => { pointerInside.current = true }}
+        onPointerLeave={() => {
+          pointerInside.current = false
+          finishInteraction()
+        }}
+        onFocusCapture={() => { focusInside.current = true }}
+        onBlurCapture={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+          focusInside.current = false
+          finishInteraction()
+        }}
+        onScroll={handleTableScroll}
+      >
         {error && <p className="text-destructive text-sm px-5 py-6">Error: {error}</p>}
         {!loading && !error && opportunities.length === 0 && (
           <p className="text-muted-foreground text-sm px-5 py-6">No opportunities detected yet. Waiting for scan...</p>
         )}
-        {!loading && !error && opportunities.length > 0 && sorted.length === 0 && (
+        {!loading && !error && opportunities.length > 0 && displayed.length === 0 && (
           <p className="text-muted-foreground text-sm px-5 py-6">No assets match "{query.trim()}".</p>
         )}
-        {!loading && sorted.length > 0 && (
+        {!loading && displayed.length > 0 && (
           <Table className="min-w-[1080px]">
             <TableHeader className="sticky top-0 z-10 bg-[#0b0f17]/95 backdrop-blur-md">
               <TableRow className="border-b border-white/[0.08] bg-transparent shadow-[0_1px_0_rgba(255,255,255,0.02)] hover:bg-transparent">
@@ -479,7 +598,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
               </TableRow>
             </TableHeader>
             <TableBody className="[&_tr:nth-child(even)]:bg-white/[0.008]">
-              {sorted.map((opp) => {
+              {displayed.map((opp) => {
                 const isLongA = opp.direction === 'long_a_short_b'
                 const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
                 const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
@@ -489,6 +608,10 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 return (
                   <TableRow
                     key={opp.id}
+                    ref={(row) => {
+                      if (row) rowRefs.current.set(opp.id, row)
+                      else rowRefs.current.delete(opp.id)
+                    }}
                     tabIndex={0}
                     aria-label={`Open ${opp.asset} opportunity details`}
                     className="group cursor-pointer border-b border-white/[0.045] outline-none transition-[background-color,box-shadow] hover:bg-white/[0.035] focus-visible:bg-white/[0.04] focus-visible:shadow-[inset_2px_0_0_#3b82f6]"
@@ -516,22 +639,22 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <FundingRateLine label="HL" value={fundingForVenue(opp, 'hyperliquid')} color="text-violet-400" />
                     </TableCell>
                     <TableCell className="border-l border-white/[0.035] py-3 text-right font-mono text-foreground">
-                      {fmtRate(Math.abs(opp.funding_spread))}
+                      <MetricFlash value={Math.abs(opp.funding_spread)}>{fmtRate(Math.abs(opp.funding_spread))}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">per hour</p>
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
-                      <p className="font-semibold text-emerald-400">{fmtPct(apr)}</p>
+                      <p className="font-semibold text-emerald-400"><MetricFlash value={apr}>{fmtPct(apr)}</MetricFlash></p>
                       <p className="mt-0.5 text-[10px] text-muted-foreground">{fmtPct(apr * maxLev)} at {maxLev}x</p>
                     </TableCell>
                     <TableCell className="py-3 text-right">
                       <OpportunitySignalCell signal={opp.signal_7d} />
                     </TableCell>
                     <TableCell className={`border-l border-white/[0.035] py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
-                      {fmtPct(opp.entry_spread_estimate, 4)}
+                      <MetricFlash value={opp.entry_spread_estimate}>{fmtPct(opp.entry_spread_estimate, 4)}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">price spread</p>
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono text-foreground">
-                      {fmtUsd(opp.best_price_capacity)}
+                      <MetricFlash value={opp.best_price_capacity}>{fmtUsd(opp.best_price_capacity)}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">OI {fmtUsd(opp.available_notional)}</p>
                     </TableCell>
                     <TableCell className="py-3">
@@ -736,10 +859,35 @@ function FundingRateLine({ label, value, color }: { label: string; value: number
   return (
     <p className={value !== null && value < 0 ? 'text-red-400' : 'text-foreground'}>
       <span className={`mr-1.5 text-[9px] font-sans font-semibold ${color}`}>{label}</span>
-      {value !== null ? fmtRate(value) : '—'}
+      <MetricFlash value={value}>{value !== null ? fmtRate(value) : '—'}</MetricFlash>
     </p>
   )
 }
+
+const MetricFlash = memo(function MetricFlash({ value, children }: { value: number | null; children: React.ReactNode }) {
+  const previousValue = useRef(value)
+  const elementRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const previous = previousValue.current
+    previousValue.current = value
+    if (previous === null || value === null || previous === value) return
+    const element = elementRef.current
+    if (!element || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+    element.getAnimations().forEach((animation) => animation.cancel())
+    const increased = value > previous
+    element.animate(
+      [
+        { color: increased ? '#6ee7b7' : '#fda4af' },
+        { color: getComputedStyle(element).color },
+      ],
+      { duration: 750, easing: 'ease-out' },
+    )
+  }, [value])
+
+  return <span ref={elementRef}>{children}</span>
+})
 
 const signalLabels: Record<OpportunitySignalStatus, string> = {
   persistent: 'Persistent',
