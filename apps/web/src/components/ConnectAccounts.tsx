@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
@@ -8,12 +8,9 @@ import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useTelegramLink } from '@/hooks/useTelegramLink'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
-import nadoLogo from '@/assets/nado.jpg'
-import gmtradeLogo from '@/assets/gm-trade.png'
-import driftLogo from '@/assets/drift.png'
 import telegramLogo from '@/assets/telegram-logo.svg'
 
-// Static venue metadata (logos, blurbs, chain, coming-soon flag). Runtime
+// Static venue metadata (logos, blurbs, chain). Runtime
 // readiness comes from useVenueReadiness — the single typed layer that
 // composes wallet + signer + balance state.
 interface VenueDef {
@@ -22,18 +19,12 @@ interface VenueDef {
   logo: string | null
   description: string
   chain: string
-  comingSoon: boolean
 }
 
 const VENUES: VenueDef[] = [
-  { id: 'pacifica', name: 'Pacifica', logo: pacificaLogo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana', comingSoon: false },
-  { id: 'hyperliquid', name: 'Hyperliquid', logo: hlLogo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1', comingSoon: false },
-  { id: 'drift', name: 'Drift', logo: driftLogo, description: 'Solana perp and spot DEX with cross-margin', chain: 'Solana', comingSoon: true },
-  { id: 'nado', name: 'Nado', logo: nadoLogo, description: 'High-performance DEX built on the Ink Network', chain: 'Ink', comingSoon: true },
-  { id: 'gmtrade', name: 'GMTrade', logo: gmtradeLogo, description: 'Solana-based perpetual trading platform', chain: 'Solana', comingSoon: true },
+  { id: 'pacifica', name: 'Pacifica', logo: pacificaLogo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana' },
+  { id: 'hyperliquid', name: 'Hyperliquid', logo: hlLogo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1' },
 ]
-
-const FIRST_COMING_SOON_INDEX = VENUES.findIndex((venue) => venue.comingSoon)
 
 interface Props {
   open: boolean
@@ -234,53 +225,19 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       <div className="flex-1 overflow-auto min-h-0 px-3 py-3">
         <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mb-2 px-1">Venues</p>
         <div className="flex flex-col gap-2">
-          {VENUES.map((venue, index) => {
+          {VENUES.map((venue) => {
             const readiness = getReadiness(venue.id)
-            const isComingSoon = venue.comingSoon
-            const isReady = !isComingSoon && readiness?.status === 'ready'
-            const isErr = !isComingSoon && readiness?.status === 'error'
+            const isReady = readiness?.status === 'ready'
+            const isErr = readiness?.status === 'error'
 
             return (
-              <Fragment key={venue.id}>
-                {index === FIRST_COMING_SOON_INDEX && (
-                  <>
-                    {showTelegram && (
-                      <div className="py-1 animate-in fade-in-0 duration-200">
-                        <div className="px-1 mb-2">
-                          <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium">
-                            Telegram
-                          </p>
-                          <p className="text-[10px] text-muted-foreground/70 mt-1 leading-relaxed">
-                            View opportunities and live positions from Telegram.
-                          </p>
-                        </div>
-                        <button
-                          onClick={handleConnectTelegram}
-                          disabled={telegramLink.creating}
-                          className="w-full h-10 rounded-lg border border-[#229ED9]/25 bg-[#229ED9]/10 hover:border-[#229ED9]/40 hover:bg-[#229ED9]/15 disabled:opacity-70 disabled:cursor-wait text-[#8bd3f5] flex items-center justify-center gap-2 text-xs font-semibold transition-colors"
-                        >
-                          <img src={telegramLogo} alt="" className="size-5" />
-                          {telegramLink.creating ? 'Opening Telegram...' : 'Connect Telegram'}
-                        </button>
-                        {telegramLink.error && (
-                          <p className="text-[10px] text-red-400 mt-1.5 px-1">{telegramLink.error}</p>
-                        )}
-                      </div>
-                    )}
-                    <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium mt-2 px-1">
-                      Coming Soon
-                    </p>
-                  </>
-                )}
-              <div
+              <div key={venue.id}
                 className={`rounded-lg border px-3 py-3 ${
                   isReady
                     ? 'border-green-500/20 bg-green-500/[0.03]'
                     : isErr
                       ? 'border-red-500/25 bg-red-500/[0.03]'
-                      : isComingSoon
-                        ? 'border-border bg-white/[0.01] opacity-50'
-                        : 'border-border bg-white/[0.02]'
+                      : 'border-border bg-white/[0.02]'
                 }`}
               >
                 {/* Top row: logo + name + address/description */}
@@ -305,8 +262,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   </div>
                 </div>
 
-                {/* Diagnostics — only for supported venues */}
-                {!isComingSoon && readiness && (
+                {/* Diagnostics */}
+                {readiness && (
                   <div className="mt-2 mb-2 rounded border border-border/60 bg-white/[0.02] px-2 py-2 flex flex-col gap-1">
                     <DiagRow label="Wallet" pill={walletPill(readiness)} />
                     <DiagRow label="Owner signer" pill={signerPill(readiness)} />
@@ -332,11 +289,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
                 {/* Action */}
                 <div className="flex items-center justify-end">
-                  {isComingSoon ? (
-                    <button disabled className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.04] text-muted-foreground/30 cursor-not-allowed">
-                      Coming Soon
-                    </button>
-                  ) : readiness?.walletConnected ? (
+                  {readiness?.walletConnected ? (
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
                       {!readiness.agentReady && (
                         <button
@@ -385,9 +338,33 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 </div>
 
               </div>
-              </Fragment>
             )
           })}
+
+          {showTelegram && (
+            <div className="py-1 animate-in fade-in-0 duration-200">
+              <div className="px-1 mb-2">
+                <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider font-medium">
+                  Telegram
+                </p>
+                <p className="text-[10px] text-muted-foreground/70 mt-1 leading-relaxed">
+                  View opportunities and live positions from Telegram.
+                </p>
+              </div>
+              <button
+                onClick={handleConnectTelegram}
+                disabled={telegramLink.creating}
+                className="w-full h-10 rounded-lg border border-[#229ED9]/25 bg-[#229ED9]/10 hover:border-[#229ED9]/40 hover:bg-[#229ED9]/15 disabled:opacity-70 disabled:cursor-wait text-[#8bd3f5] flex items-center justify-center gap-2 text-xs font-semibold transition-colors"
+              >
+                <img src={telegramLogo} alt="" className="size-5" />
+                {telegramLink.creating ? 'Opening Telegram...' : 'Connect Telegram'}
+              </button>
+              {telegramLink.error && (
+                <p className="text-[10px] text-red-400 mt-1.5 px-1">{telegramLink.error}</p>
+              )}
+            </div>
+          )}
+
         </div>
       </div>
 
