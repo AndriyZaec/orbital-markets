@@ -13,7 +13,6 @@ import {
 } from '@/components/ui/table'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
 
-import { PaperPositions } from '@/components/PaperPositions'
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
@@ -105,7 +104,7 @@ export default function App() {
   // by Connect Accounts and Execute Live — one source of truth for the
   // "is this trader actually ready to trade" signal.
   const { aggregate: accountsAggregate } = useVenueReadiness()
-  const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('live')
+  const tradingMode = 'live' as const
   // Matches useOpportunities' 60s poll interval — scanner refreshes every 60s.
   const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
@@ -282,13 +281,7 @@ export default function App() {
                   className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
                   onMouseDown={onResizeStart}
                 />
-                {tradingMode === 'paper' ? <PaperPositions /> : <LivePositions onConnectWallets={() => setShowAccounts(true)} />}
-                <button
-                  onClick={() => setTradingMode(tradingMode === 'live' ? 'paper' : 'live')}
-                  className="absolute bottom-1.5 right-3 text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
-                >
-                  {tradingMode === 'live' ? 'paper mode' : 'live mode'}
-                </button>
+                <LivePositions onConnectWallets={() => setShowAccounts(true)} />
               </div>
             </>
           )}

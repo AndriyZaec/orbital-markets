@@ -118,10 +118,6 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold text-foreground">{pos.asset}</h2>
             <Badge variant="outline" className={`text-[11px] ${stateColor(pos.state)}`}>{pos.state}</Badge>
-            <div className="flex items-center gap-1 rounded border border-blue-500/30 bg-blue-500/[0.06] px-1.5 py-px">
-              <div className="size-1.5 rounded-full bg-blue-400" />
-              <span className="text-[9px] text-blue-400 font-medium">LIVE</span>
-            </div>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">

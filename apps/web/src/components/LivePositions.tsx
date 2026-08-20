@@ -117,15 +117,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
     <>
       {/* Header */}
       <div className="px-5 py-2 flex items-center gap-3 shrink-0 bg-[#080b12]">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-foreground">Live Positions</h2>
-          {openPositions.length > 0 && (
-            <div className="flex items-center gap-1 rounded border border-green-500/30 bg-green-500/[0.06] px-1.5 py-px">
-              <div className="size-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-[9px] text-green-400 font-medium">LIVE</span>
-            </div>
-          )}
-        </div>
+        <h2 className="text-sm font-semibold text-foreground">Positions</h2>
         <div className="flex gap-0 ml-1">
           <TabBtn active={tab === 'open'} onClick={() => setTab('open')}>
             Open{openPositions.length > 0 && <span className="ml-1 text-muted-foreground">({openPositions.length})</span>}
@@ -282,22 +274,22 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
         {error && <p className="text-destructive text-xs px-5 py-3">Error: {error}</p>}
 
         {!loading && !error && displayed.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-8 gap-3">
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-5 py-4 text-center">
             {!aggregate.allReady ? (
               <>
                 <p className="text-muted-foreground text-xs">Connect both wallets and authorize each venue to start live trading</p>
                 {onConnectWallets && (
                   <button
                     onClick={onConnectWallets}
-                    className="text-xs font-medium px-3 py-1.5 rounded-md border border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08] transition-colors"
+                    className="cursor-pointer text-xs font-medium px-3 py-1.5 rounded-md border border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08] transition-colors"
                   >
                     Connect Wallets
                   </button>
                 )}
               </>
             ) : (
-              <p className="text-muted-foreground text-xs">
-                {positions.length === 0 ? 'No live positions yet.' : `No ${tab} live positions.`}
+              <p className="rounded-full bg-muted/35 px-3 py-1 text-xs text-muted-foreground">
+                {positions.length === 0 ? 'No positions yet' : `No ${tab} positions`}
               </p>
             )}
           </div>
@@ -401,7 +393,7 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`text-xs font-medium px-2 pb-0.5 border-b-2 transition-colors ${
+      className={`cursor-pointer text-xs font-medium px-2 pb-0.5 border-b-2 transition-colors ${
         active
           ? 'text-foreground border-foreground'
           : 'text-muted-foreground border-transparent hover:text-foreground'
