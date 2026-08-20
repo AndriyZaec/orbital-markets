@@ -33,7 +33,7 @@ import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
 type View = 'trade' | 'portfolio' | 'rebates' | 'agents'
-type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
 // Per-venue raw funding rate (single funding period, signed).
@@ -72,7 +72,27 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
     case 'fundingSpread': return Math.abs(opp.funding_spread)
     case 'pacificaRate': return fundingForVenue(opp, 'pacifica') ?? 0
     case 'hlRate': return fundingForVenue(opp, 'hyperliquid') ?? 0
+    case 'signal7d': return 0
   }
+}
+
+const signalSortRank: Record<OpportunitySignalStatus, number> = {
+  persistent: 7,
+  intermittent: 6,
+  new: 5,
+  choppy: 4,
+  reversed: 3,
+  faded: 2,
+  flat: 1,
+  limited: 0,
+}
+
+function compareOpportunitySignals(a: OpportunitySignal | null, b: OpportunitySignal | null) {
+  if (a === null) return b === null ? 0 : 1
+  if (b === null) return -1
+  return signalSortRank[a.status] - signalSortRank[b.status]
+    || a.activity - b.activity
+    || a.average_edge - b.average_edge
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -393,6 +413,11 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
   const sorted = useMemo(() => {
     if (filtered.length === 0) return filtered
     return [...filtered].sort((a, b) => {
+      if (sortField === 'signal7d') {
+        const comparison = compareOpportunitySignals(a.signal_7d, b.signal_7d)
+        if (a.signal_7d === null || b.signal_7d === null) return comparison
+        return sortDir === 'desc' ? -comparison : comparison
+      }
       const va = getSortValue(a, sortField)
       const vb = getSortValue(b, sortField)
       const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
@@ -577,21 +602,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 <TableHead className="h-9 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Venue Funding</TableHead>
                 <SortTH field="fundingSpread" label="Spread" current={sortField} dir={sortDir} onSort={handleSort} right divided />
                 <SortTH field="apr" label="Current APR" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <TableHead className="h-9 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                  <span className="inline-flex items-center justify-end gap-1">
-                    7d Signal
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger render={<button type="button" aria-label="Explain 7-day signal" className="inline-flex size-4 cursor-help items-center justify-center rounded text-muted-foreground/70 outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:bg-white/[0.06] focus-visible:text-foreground"><InfoIcon className="size-3" /></button>} />
-                        <TooltipContent side="top" align="end" className="block max-w-64 space-y-1 text-left normal-case tracking-normal">
-                          <p>7-day carry quality from hourly funding.</p>
-                          <p><strong>Avg:</strong> average annualized spread.</p>
-                          <p><strong>Active:</strong> hours above 1% APR.</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </span>
-                </TableHead>
+                <SignalSortTH current={sortField} dir={sortDir} onSort={handleSort} />
                 <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right divided />
                 <SortTH field="capacity" label="Liquidity" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <TableHead className="h-9 w-8" />
@@ -823,17 +834,56 @@ function SortTH({ field, label, current, dir, onSort, right, divided }: {
         className={`flex h-full w-full cursor-pointer items-center gap-1 px-4 uppercase outline-none transition-colors hover:text-foreground focus-visible:bg-white/[0.04] focus-visible:text-foreground ${right ? 'justify-end' : ''}`}
       >
         {label}
-        {active ? (
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
-            <path d={dir === 'desc' ? 'M2 4l3 3 3-3' : 'M2 6l3-3 3 3'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        ) : (
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0 opacity-30">
-            <path d="M3 4l2-2 2 2M3 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        )}
+        <SortIndicator active={active} dir={dir} />
       </button>
     </TableHead>
+  )
+}
+
+function SignalSortTH({ current, dir, onSort }: {
+  current: SortField
+  dir: SortDir
+  onSort: (field: SortField) => void
+}) {
+  const active = current === 'signal7d'
+  return (
+    <TableHead
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={`h-9 p-0 text-[10px] font-semibold uppercase tracking-[0.08em] ${active ? 'text-foreground' : 'text-muted-foreground/80'}`}
+    >
+      <div className="flex h-full items-center justify-end">
+        <button
+          type="button"
+          onClick={() => onSort('signal7d')}
+          className="flex h-full cursor-pointer items-center gap-1 pl-4 uppercase outline-none transition-colors hover:text-foreground focus-visible:bg-white/[0.04] focus-visible:text-foreground"
+        >
+          7d Signal
+          <SortIndicator active={active} dir={dir} />
+        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger render={<button type="button" aria-label="Explain 7-day signal" className="mr-4 inline-flex size-4 cursor-help items-center justify-center rounded text-muted-foreground/70 outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:bg-white/[0.06] focus-visible:text-foreground"><InfoIcon className="size-3" /></button>} />
+            <TooltipContent side="top" align="end" className="block max-w-64 space-y-1 text-left normal-case tracking-normal">
+              <p>7-day carry quality from hourly funding.</p>
+              <p><strong>Avg:</strong> average annualized spread.</p>
+              <p><strong>Active:</strong> hours above 1% APR.</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+    </TableHead>
+  )
+}
+
+function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
+  return active ? (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
+      <path d={dir === 'desc' ? 'M2 4l3 3 3-3' : 'M2 6l3-3 3 3'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  ) : (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0 opacity-30">
+      <path d="M3 4l2-2 2 2M3 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
   )
 }
 
