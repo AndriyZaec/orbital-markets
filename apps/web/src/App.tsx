@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
-import type { Opportunity } from '@/hooks/useOpportunities'
+import type { Opportunity, OpportunitySignal, OpportunitySignalStatus } from '@/hooks/useOpportunities'
 import {
   Table,
   TableBody,
@@ -19,7 +19,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group'
-import { SearchIcon, XIcon } from 'lucide-react'
+import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
@@ -28,6 +28,7 @@ import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { ForAgents } from '@/components/ForAgents'
 import { FundingChart } from '@/components/FundingChart'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -449,14 +450,29 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
           <p className="text-muted-foreground text-sm px-5 py-6">No assets match "{query.trim()}".</p>
         )}
         {!loading && sorted.length > 0 && (
-          <Table className="min-w-[940px]">
+          <Table className="min-w-[1080px]">
             <TableHeader className="sticky top-0 z-10 bg-[#0b0f17]/95 backdrop-blur-md">
               <TableRow className="border-b border-white/[0.08] bg-transparent shadow-[0_1px_0_rgba(255,255,255,0.02)] hover:bg-transparent">
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
                 <TableHead className="h-9 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Position</TableHead>
                 <TableHead className="h-9 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Venue Funding</TableHead>
                 <SortTH field="fundingSpread" label="Spread" current={sortField} dir={sortDir} onSort={handleSort} right divided />
-                <SortTH field="apr" label="Est. Return" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="apr" label="Current APR" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <TableHead className="h-9 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+                  <span className="inline-flex items-center justify-end gap-1">
+                    7d Signal
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger render={<button type="button" aria-label="Explain 7-day signal" className="inline-flex size-4 cursor-help items-center justify-center rounded text-muted-foreground/70 outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:bg-white/[0.06] focus-visible:text-foreground"><InfoIcon className="size-3" /></button>} />
+                        <TooltipContent side="top" align="end" className="block max-w-64 space-y-1 text-left normal-case tracking-normal">
+                          <p>7-day carry quality from hourly funding.</p>
+                          <p><strong>Avg:</strong> average annualized spread.</p>
+                          <p><strong>Active:</strong> hours above 1% APR.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </span>
+                </TableHead>
                 <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right divided />
                 <SortTH field="capacity" label="Liquidity" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <TableHead className="h-9 w-8" />
@@ -506,6 +522,9 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                     <TableCell className="py-3 text-right font-mono">
                       <p className="font-semibold text-emerald-400">{fmtPct(apr)}</p>
                       <p className="mt-0.5 text-[10px] text-muted-foreground">{fmtPct(apr * maxLev)} at {maxLev}x</p>
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <OpportunitySignalCell signal={opp.signal_7d} />
                     </TableCell>
                     <TableCell className={`border-l border-white/[0.035] py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
                       {fmtPct(opp.entry_spread_estimate, 4)}
@@ -719,6 +738,52 @@ function FundingRateLine({ label, value, color }: { label: string; value: number
       <span className={`mr-1.5 text-[9px] font-sans font-semibold ${color}`}>{label}</span>
       {value !== null ? fmtRate(value) : '—'}
     </p>
+  )
+}
+
+const signalLabels: Record<OpportunitySignalStatus, string> = {
+  persistent: 'Persistent',
+  intermittent: 'Intermittent',
+  new: 'New',
+  choppy: 'Choppy',
+  reversed: 'Reversed',
+  faded: 'Faded',
+  flat: 'Flat',
+  limited: 'Limited',
+}
+
+const signalMoons: Record<OpportunitySignalStatus, string> = {
+  persistent: '🌕',
+  intermittent: '🌓',
+  new: '🌒',
+  choppy: '🌗',
+  reversed: '🌘',
+  faded: '🌘',
+  flat: '🌑',
+  limited: '🌑',
+}
+
+function OpportunitySignalCell({ signal }: { signal: OpportunitySignal | null }) {
+  if (!signal) return <span className="font-mono text-muted-foreground">—</span>
+
+  const activity = Math.round(signal.activity * 100)
+  let detail = `${fmtPct(signal.average_edge)} avg · ${activity}% active`
+  if (signal.status === 'new') detail = `${activity}% active · recent`
+  if (signal.status === 'choppy') detail = `${activity}% active · flipping`
+  if (signal.status === 'reversed') detail = `${activity}% active · reversed`
+  if (signal.status === 'faded') detail = `${fmtPct(signal.average_edge)} avg · ${activity}% active`
+  if (signal.status === 'flat') detail = 'no meaningful carry'
+  if (signal.status === 'limited') detail = `${signal.samples} paired samples`
+  const moon = signalMoons[signal.status]
+
+  return (
+    <div className="ml-auto grid w-40 grid-cols-[minmax(0,1fr)_22px] items-center gap-2 text-right">
+      <span className="min-w-0">
+        <span className="block text-[11px] font-semibold text-foreground">{signalLabels[signal.status]}</span>
+        <span className="mt-0.5 block whitespace-nowrap text-[10px] text-muted-foreground">{detail}</span>
+      </span>
+      <span className={`text-[20px] leading-none ${signal.status === 'persistent' ? 'signal-moon-glow' : 'opacity-80'}`} aria-hidden="true">{moon}</span>
+    </div>
   )
 }
 

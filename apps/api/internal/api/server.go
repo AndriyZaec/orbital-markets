@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,18 +20,21 @@ import (
 )
 
 type Server struct {
-	ctx           context.Context // server-lifetime context, not per-request
-	scanner       *scanner.Scanner
-	executor      *paper.Executor
-	store         *paper.DBStore
-	db            *sql.DB
-	liveStore     *executor.Store // always available when DB exists — read-only live position access
-	live          *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
-	logger        *slog.Logger
-	mux           *http.ServeMux
-	handler       http.Handler // mux wrapped in middleware (recovery → logging → auth)
-	recoveryOwner string
-	telegramLinks TelegramLinker
+	ctx            context.Context // server-lifetime context, not per-request
+	scanner        *scanner.Scanner
+	executor       *paper.Executor
+	store          *paper.DBStore
+	db             *sql.DB
+	liveStore      *executor.Store // always available when DB exists — read-only live position access
+	live           *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	logger         *slog.Logger
+	mux            *http.ServeMux
+	handler        http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	recoveryOwner  string
+	telegramLinks  TelegramLinker
+	signalMu       sync.Mutex
+	signalCache    map[string]opportunitySignal
+	signalCachedAt time.Time
 }
 
 func NewServer(
@@ -157,10 +162,15 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	opps := s.scanner.Opportunities()
-	if len(opps) > limit {
-		opps = opps[:limit]
+	responses, err := s.opportunitiesWithSignals(r.Context(), opps)
+	if err != nil {
+		s.logger.Warn("opportunities: load 7d signals", "err", err)
+		responses = opportunityResponses(opps, nil)
 	}
-	writeJSON(w, http.StatusOK, opps)
+	if len(responses) > limit {
+		responses = responses[:limit]
+	}
+	writeJSON(w, http.StatusOK, responses)
 }
 
 func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {

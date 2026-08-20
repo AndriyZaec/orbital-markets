@@ -223,6 +223,10 @@ body {
 .orbital-brand:hover .orbital-logo i:first-child { animation: orbital-outer-spin 3.6s linear infinite; }
 .orbital-brand:hover .orbital-logo i:nth-child(2) { animation: orbital-inner-spin 2.9s linear infinite; }
 
+.signal-moon-glow {
+  filter: drop-shadow(0 0 2px rgba(253, 224, 71, 0.8)) drop-shadow(0 0 6px rgba(250, 204, 21, 0.38));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chart-reveal,
   .chart-endpoint,
