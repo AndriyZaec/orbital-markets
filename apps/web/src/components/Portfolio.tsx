@@ -1,6 +1,9 @@
 import { useMemo } from 'react'
 import { useLivePositions, type LivePosition } from '@/hooks/useLivePositions'
 import { useVenueReadiness, type VenueReadiness } from '@/hooks/useVenueReadiness'
+import { AssetIcon } from '@/components/AssetIcon'
+import pacificaLogo from '@/assets/pacifica-logo.svg'
+import hlLogo from '@/assets/hl-logo.svg'
 
 // Portfolio is the primary account/position surface for closed-beta users.
 // It reuses live balance / live position / venue-authority hooks — no new
@@ -125,7 +128,6 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">Portfolio</h1>
-          <p className="text-[12px] text-muted-foreground mt-0.5">Live account and position overview.</p>
         </div>
         <div className={`flex items-center gap-1.5 text-[12px] ${health.color}`}>
           <span className={`size-1.5 rounded-full ${health.dot}`} />
@@ -135,7 +137,7 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
 
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Tile label="Total Equity" value={fmtUsd(totalEquity)} hint="Across connected venues" />
+        <Tile label="Total Equity" value={fmtUsd(totalEquity)} hint="Across connected venues" tone="cyan" />
         <Tile label="Available" value={fmtUsd(totalAvailable)} hint="Free margin" />
         <Tile label="Open Notional" value={openCount > 0 ? fmtUsd(openNotional) : '--'} hint={`${openCount} open · ${degradedCount} degraded`} />
         <Tile
@@ -143,6 +145,7 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
           value={openCount > 0 ? fmtUsd(unrealizedPnl) : '--'}
           hint="Sum across open positions"
           valueClassName={unrealizedPnl > 0 ? 'text-green-400' : unrealizedPnl < 0 ? 'text-red-400' : ''}
+          tone={unrealizedPnl > 0 ? 'green' : unrealizedPnl < 0 ? 'rose' : 'plain'}
         />
       </div>
 
@@ -203,7 +206,9 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
                     cat === 'degraded' ? 'text-red-400' : cat === 'open' ? 'text-green-400' : 'text-muted-foreground'
                   return (
                     <tr key={p.id} className="border-t border-border">
-                      <td className="px-3 py-2 font-medium text-foreground">{p.asset}</td>
+                      <td className="px-3 py-2 font-medium text-foreground">
+                        <div className="flex items-center gap-2"><AssetIcon asset={p.asset} size="sm" />{p.asset}</div>
+                      </td>
                       <td className={`px-3 py-2 ${stateColor}`}>{p.state}</td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">{fmtUsd(p.notional)}</td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">{fmtPct(p.basis_change)}</td>
@@ -220,11 +225,6 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
               </tbody>
             </table>
           </div>
-        )}
-        {positions.length > recentPositions.length && (
-          <p className="text-[11px] text-muted-foreground/70 mt-2">
-            Showing {recentPositions.length} of {positions.length}. Full list in the bottom positions panel.
-          </p>
         )}
       </Section>
 
@@ -256,7 +256,9 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
                   return (
                     <tr key={p.id} className="border-t border-border">
                       <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">{fmtRelative(ts)}</td>
-                      <td className="px-3 py-2 font-medium text-foreground">{p.asset}</td>
+                      <td className="px-3 py-2 font-medium text-foreground">
+                        <div className="flex items-center gap-2"><AssetIcon asset={p.asset} size="sm" />{p.asset}</div>
+                      </td>
                       <td className={`px-3 py-2 ${isTerminal ? 'text-muted-foreground' : 'text-foreground'}`}>{action}</td>
                       <td className="px-3 py-2 text-muted-foreground capitalize">
                         {p.venue_a} · {p.venue_b}
@@ -286,19 +288,46 @@ function Tile({
   value,
   hint,
   valueClassName,
+  tone = 'plain',
 }: {
   label: string
   value: string
   hint?: string
   valueClassName?: string
+  tone?: TileTone
 }) {
+  const style = TILE_TONES[tone]
   return (
-    <div className="rounded border border-border bg-white/[0.02] px-3 py-3">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className={`mt-1 text-lg font-mono ${valueClassName ?? 'text-foreground'}`}>{value}</p>
-      {hint && <p className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</p>}
+    <div className={`relative overflow-hidden rounded-md border border-white/[0.07] bg-[#0b1018] px-3 py-3 transition-colors hover:border-white/[0.12] ${style.surface}`}>
+      <span className={`pointer-events-none absolute inset-x-0 top-0 h-px ${style.line}`} />
+      <div className="relative">
+        <p className="text-[11px] text-muted-foreground">{label}</p>
+        <p className={`mt-1 text-lg font-mono ${valueClassName ?? 'text-foreground'}`}>{value}</p>
+        {hint && <p className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</p>}
+      </div>
     </div>
   )
+}
+
+type TileTone = 'plain' | 'cyan' | 'green' | 'rose'
+
+const TILE_TONES: Record<TileTone, { surface: string; line: string }> = {
+  plain: {
+    surface: '',
+    line: 'bg-transparent',
+  },
+  cyan: {
+    surface: 'bg-[radial-gradient(circle_at_90%_-25%,rgba(34,211,238,0.07),transparent_62%)]',
+    line: 'bg-gradient-to-r from-transparent via-white/15 to-transparent',
+  },
+  green: {
+    surface: 'bg-[radial-gradient(circle_at_90%_-25%,rgba(34,197,94,0.07),transparent_62%)]',
+    line: 'bg-gradient-to-r from-transparent via-white/15 to-transparent',
+  },
+  rose: {
+    surface: 'bg-[radial-gradient(circle_at_90%_-25%,rgba(244,63,94,0.07),transparent_62%)]',
+    line: 'bg-gradient-to-r from-transparent via-white/15 to-transparent',
+  },
 }
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
@@ -318,17 +347,27 @@ function Section({ title, action, children }: { title: string; action?: React.Re
 // This card summarizes; the "Open Connect Accounts" link handles diagnosis.
 const STATUS_VIEW: Record<
   VenueReadiness['status'],
-  { label: string; color: string; dot: string }
+  { label: string; color: string; dot: string; loading?: boolean }
 > = {
   ready:             { label: 'Ready',           color: 'text-green-400',        dot: 'bg-green-400' },
   disconnected:      { label: 'Not connected',   color: 'text-muted-foreground', dot: 'bg-muted-foreground' },
   wallet_connected:  { label: 'Wallet only',     color: 'text-yellow-400',       dot: 'bg-yellow-400' },
   signer_missing:    { label: 'Signer missing',  color: 'text-yellow-400',       dot: 'bg-yellow-400' },
   agent_missing:     { label: 'Authorization required', color: 'text-yellow-400', dot: 'bg-yellow-400' },
-  agent_authorizing: { label: 'Authorizing',     color: 'text-yellow-400',       dot: 'bg-yellow-400' },
-  balance_pending:   { label: 'Balance pending', color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  agent_authorizing: { label: 'Authorizing',     color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
+  balance_pending:   { label: 'Pending',         color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   account_stale:     { label: 'Data stale',      color: 'text-yellow-400',       dot: 'bg-yellow-400' },
   error:             { label: 'Error',           color: 'text-red-400',          dot: 'bg-red-400' },
+}
+
+const VENUE_LOGOS: Record<VenueReadiness['venue'], string> = {
+  pacifica: pacificaLogo,
+  hyperliquid: hlLogo,
+}
+
+const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
+  pacifica: 'bg-[radial-gradient(circle_at_8%_0%,rgba(34,211,238,0.055),transparent_52%)]',
+  hyperliquid: 'bg-[radial-gradient(circle_at_8%_0%,rgba(139,92,246,0.055),transparent_52%)]',
 }
 
 function VenueCard({ readiness }: { readiness: VenueReadiness }) {
@@ -337,11 +376,20 @@ function VenueCard({ readiness }: { readiness: VenueReadiness }) {
   // On disconnect (or before the first snapshot) equity/available are null;
   // render "--" rather than an ambiguous $0.00.
   return (
-    <div className="rounded border border-border bg-white/[0.02] px-3 py-3">
+    <div className={`relative overflow-hidden rounded-md border border-white/[0.07] bg-[#0b1018] px-3 py-3 transition-colors hover:border-white/[0.12] ${VENUE_CARD_STYLES[readiness.venue]}`}>
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-foreground">{readiness.label}</span>
+        <div className="flex items-center gap-2">
+          <span className="flex size-7 items-center justify-center rounded-md border border-border bg-white/[0.035]">
+            <img src={VENUE_LOGOS[readiness.venue]} alt="" className="size-5 object-contain" />
+          </span>
+          <span className="text-sm font-medium text-foreground">{readiness.label}</span>
+        </div>
         <span className={`text-[11px] flex items-center gap-1.5 ${view.color}`}>
-          <span className={`size-1.5 rounded-full ${view.dot}`} />
+          {view.loading ? (
+            <span className="size-2.5 animate-spin rounded-full border border-slate-500/40 border-t-cyan-400" />
+          ) : (
+            <span className={`size-1.5 rounded-full ${view.dot}`} />
+          )}
           {view.label}
         </span>
       </div>

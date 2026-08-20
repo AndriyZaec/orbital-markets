@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { usePaperPositions } from '@/hooks/usePaperPositions'
+import { AssetIcon } from '@/components/AssetIcon'
 
 const MONTHLY_RATE = 0.0012
 const HOURS_PER_MONTH = 720
@@ -111,7 +112,9 @@ export function FeeRebates() {
               <tbody>
                 {accruals.map((a, i) => (
                   <tr key={i} className="border-t border-border hover:bg-white/[0.02] transition-colors">
-                    <td className="px-4 py-2.5 font-medium text-foreground">{a.asset}</td>
+                    <td className="px-4 py-2.5 font-medium text-foreground">
+                      <div className="flex items-center gap-2"><AssetIcon asset={a.asset} size="sm" />{a.asset}</div>
+                    </td>
                     <td className="px-4 py-2.5 text-right font-mono text-muted-foreground">{fmtUsd(a.notional)}</td>
                     <td className="px-4 py-2.5 text-right font-mono text-muted-foreground">{fmtDuration(a.durationMs)}</td>
                     <td className="px-4 py-2.5 text-right font-mono text-green-400">{fmtUsd(a.rebate)}</td>

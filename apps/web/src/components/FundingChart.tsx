@@ -15,6 +15,7 @@ interface Props {
   venueA: string
   venueB: string
   direction: FundingDirection
+  currentApr: number
   recommendedNotional: number
   notional: number
   onNotionalChange: (value: number) => void
@@ -26,7 +27,7 @@ type Timeframe = 'D' | 'W' | 'M'
 type ChartView = 'funding' | 'return'
 
 const rangeMap: Record<Timeframe, string> = { D: '24h', W: '7d', M: '30d' }
-const rangeLabel: Record<Timeframe, string> = { D: '24h', W: '7 days', M: '30 days' }
+const averageLabel: Record<Timeframe, string> = { D: '24H Average', W: '7D Average', M: '30D Average' }
 const horizonHours: Record<Timeframe, number> = { D: 24, W: 24 * 7, M: 24 * 30 }
 
 function formatTime(ts: string | number, tf: Timeframe) {
@@ -74,6 +75,7 @@ export function FundingChart({
   venueA,
   venueB,
   direction,
+  currentApr,
   recommendedNotional,
   notional: selectedNotional,
   onNotionalChange,
@@ -152,9 +154,9 @@ export function FundingChart({
         ) : view === 'funding' && stats ? (
           <>
             <div className="grid grid-cols-3 gap-3 mb-3 max-w-xl">
-              <Metric label="Current carry" value={formatRate(stats.currentCarry, true)} tone={stats.currentCarry} />
-              <Metric label={`${rangeLabel[tf]} average`} value={formatRate(stats.averageCarry, true)} tone={stats.averageCarry} />
-              <Metric label="Positive periods" value={`${Math.round(stats.positiveShare * 100)}%`} />
+              <Metric label="Current APR" value={formatRate(currentApr)} tone={currentApr} />
+              <Metric label={averageLabel[tf]} value={formatRate(stats.averageCarry, true)} tone={stats.averageCarry} />
+              <Metric label="Positive Periods" value={`${Math.round(stats.positiveShare * 100)}%`} />
             </div>
 
             <div className="h-5 mb-1 text-[11px] font-mono text-muted-foreground truncate">

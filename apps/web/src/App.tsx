@@ -1,8 +1,8 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { memo, useState, useMemo, useEffect, useCallback, useLayoutEffect, useRef } from 'react'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
-import type { Opportunity } from '@/hooks/useOpportunities'
+import type { Opportunity, OpportunitySignal, OpportunitySignalStatus } from '@/hooks/useOpportunities'
 import {
   Table,
   TableBody,
@@ -12,20 +12,27 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { OpportunityPanel } from '@/components/OpportunityPanel'
+import { AssetIcon } from '@/components/AssetIcon'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group'
+import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
-import { PaperPositions } from '@/components/PaperPositions'
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
-import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
-import { ForAgents } from '@/components/ForAgents'
 import { FundingChart } from '@/components/FundingChart'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'portfolio' | 'rebates' | 'agents'
-type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate'
+type View = 'trade' | 'portfolio'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
 // Per-venue raw funding rate (single funding period, signed).
@@ -64,7 +71,27 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
     case 'fundingSpread': return Math.abs(opp.funding_spread)
     case 'pacificaRate': return fundingForVenue(opp, 'pacifica') ?? 0
     case 'hlRate': return fundingForVenue(opp, 'hyperliquid') ?? 0
+    case 'signal7d': return 0
   }
+}
+
+const signalSortRank: Record<OpportunitySignalStatus, number> = {
+  persistent: 7,
+  intermittent: 6,
+  new: 5,
+  choppy: 4,
+  reversed: 3,
+  faded: 2,
+  flat: 1,
+  limited: 0,
+}
+
+function compareOpportunitySignals(a: OpportunitySignal | null, b: OpportunitySignal | null) {
+  if (a === null) return b === null ? 0 : 1
+  if (b === null) return -1
+  return signalSortRank[a.status] - signalSortRank[b.status]
+    || a.activity - b.activity
+    || a.average_edge - b.average_edge
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -100,12 +127,13 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>('trade')
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
+  const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
   // Header account status is driven by the same typed readiness layer used
   // by Connect Accounts and Execute Live — one source of truth for the
   // "is this trader actually ready to trade" signal.
   const { aggregate: accountsAggregate } = useVenueReadiness()
-  const [tradingMode, setTradingMode] = useState<'paper' | 'live'>('live')
+  const tradingMode = 'live' as const
   // Matches useOpportunities' 60s poll interval — scanner refreshes every 60s.
   const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
@@ -132,6 +160,21 @@ export default function App() {
     window.history.pushState({ ...window.history.state, orbitalOpportunity: id }, '', url)
     setSelectedId(id)
   }, [])
+
+  const selectPositionOpportunity = useCallback((position: PositionOpportunityContext | null) => {
+    const opportunity = position ? findPositionOpportunity(opportunities, position) : null
+    if (opportunity) {
+      if (selectedId !== opportunity.id) selectOpportunity(opportunity.id)
+      return
+    }
+    if (selectedId === null) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('opportunity')
+    const historyState = { ...(window.history.state ?? {}) }
+    delete historyState.orbitalOpportunity
+    window.history.replaceState(historyState, '', url)
+    setSelectedId(null)
+  }, [opportunities, selectOpportunity, selectedId])
 
   const closeOpportunity = useCallback(() => {
     if (window.history.state?.orbitalOpportunity === selectedId) {
@@ -233,17 +276,8 @@ export default function App() {
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'portfolio'} onClick={() => setActiveView('portfolio')}>Portfolio</NavBtn>
-          <NavBtn active={activeView === 'rebates'} onClick={() => setActiveView('rebates')}>Fee Rebates</NavBtn>
-          <button
-            onClick={() => setActiveView('agents')}
-            className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-all ${
-              activeView === 'agents' ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]'
-            }`}
-          >
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#9945FF] via-[#14F195] to-[#9945FF] bg-[length:200%_100%] animate-[gradient-shift_6s_ease-in-out_infinite]">
-              For Agents
-            </span>
-          </button>
+          <MarketingNavBtn>Fee Rebates</MarketingNavBtn>
+          <MarketingNavBtn>For Agents</MarketingNavBtn>
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {/* Refresh countdown */}
@@ -274,7 +308,14 @@ export default function App() {
                     onBack={closeOpportunity}
                   />
                 ) : (
-                  <OpportunityTable opportunities={opportunities} loading={loading} error={error} onSelect={selectOpportunity} />
+                  <OpportunityTable
+                    opportunities={opportunities}
+                    loading={loading}
+                    error={error}
+                    query={opportunityQuery}
+                    onQueryChange={setOpportunityQuery}
+                    onSelect={selectOpportunity}
+                  />
                 )}
               </div>
               <div className="shrink-0 border-t border-border flex flex-col min-h-0 relative bg-[#080b12]" style={{ height: posHeight }}>
@@ -282,13 +323,10 @@ export default function App() {
                   className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize z-10 hover:bg-blue-500/20 transition-colors"
                   onMouseDown={onResizeStart}
                 />
-                {tradingMode === 'paper' ? <PaperPositions /> : <LivePositions onConnectWallets={() => setShowAccounts(true)} />}
-                <button
-                  onClick={() => setTradingMode(tradingMode === 'live' ? 'paper' : 'live')}
-                  className="absolute bottom-1.5 right-3 text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
-                >
-                  {tradingMode === 'live' ? 'paper mode' : 'live mode'}
-                </button>
+                <LivePositions
+                  onConnectWallets={() => setShowAccounts(true)}
+                  onOpenOpportunity={selectPositionOpportunity}
+                />
               </div>
             </>
           )}
@@ -302,13 +340,6 @@ export default function App() {
             </PageBg>
           )}
 
-          {activeView === 'rebates' && (
-            <PageBg><FeeRebates /></PageBg>
-          )}
-
-          {activeView === 'agents' && (
-            <PageBg><ForAgents /></PageBg>
-          )}
         </div>
 
         {activeView === 'trade' && selected && (
@@ -334,11 +365,27 @@ export default function App() {
 
 /* ── Opportunity Table ─────────────────────────────────── */
 
-function OpportunityTable({ opportunities, loading, error, onSelect }: {
-  opportunities: Opportunity[]; loading: boolean; error: string | null; onSelect: (id: string) => void
+function OpportunityTable({ opportunities, loading, error, query, onQueryChange, onSelect }: {
+  opportunities: Opportunity[]
+  loading: boolean
+  error: string | null
+  query: string
+  onQueryChange: (query: string) => void
+  onSelect: (id: string) => void
 }) {
   const [sortField, setSortField] = useState<SortField>('apr')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [orderedIds, setOrderedIds] = useState<string[]>([])
+  const orderRef = useRef<string[]>([])
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>())
+  const previousRowPositions = useRef(new Map<string, number>())
+  const pendingOrder = useRef<string[] | null>(null)
+  const reorderTimer = useRef<number | null>(null)
+  const interactionIdleTimer = useRef<number | null>(null)
+  const tableViewportRef = useRef<HTMLDivElement>(null)
+  const pointerInside = useRef(false)
+  const focusInside = useRef(false)
+  const scrolling = useRef(false)
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -349,15 +396,124 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
     }
   }
 
+  const filtered = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    if (!normalizedQuery) return opportunities
+    return opportunities.filter((opportunity) => (
+      opportunity.asset.toLowerCase().includes(normalizedQuery)
+    ))
+  }, [opportunities, query])
+
   const sorted = useMemo(() => {
-    if (opportunities.length === 0) return opportunities
-    return [...opportunities].sort((a, b) => {
+    if (filtered.length === 0) return filtered
+    return [...filtered].sort((a, b) => {
+      if (sortField === 'signal7d') {
+        const comparison = compareOpportunitySignals(a.signal_7d, b.signal_7d)
+        if (a.signal_7d === null || b.signal_7d === null) return comparison
+        return sortDir === 'desc' ? -comparison : comparison
+      }
       const va = getSortValue(a, sortField)
       const vb = getSortValue(b, sortField)
       const cmp = typeof va === 'string' ? va.localeCompare(vb as string) : (va as number) - (vb as number)
       return sortDir === 'desc' ? -cmp : cmp
     })
-  }, [opportunities, sortField, sortDir])
+  }, [filtered, sortField, sortDir])
+
+  const applyOrder = useCallback((ids: string[]) => {
+    if (ids.length === orderRef.current.length && ids.every((id, index) => id === orderRef.current[index])) {
+      pendingOrder.current = null
+      return
+    }
+    previousRowPositions.current = new Map(
+      [...rowRefs.current].map(([id, row]) => [id, row.getBoundingClientRect().top]),
+    )
+    orderRef.current = ids
+    pendingOrder.current = null
+    setOrderedIds(ids)
+  }, [])
+
+  const flushPendingOrder = useCallback(() => {
+    focusInside.current = tableViewportRef.current?.contains(document.activeElement) ?? false
+    if (pointerInside.current || focusInside.current || scrolling.current || !pendingOrder.current) return
+    applyOrder(pendingOrder.current)
+  }, [applyOrder])
+
+  const sortedIds = useMemo(() => sorted.map((opportunity) => opportunity.id), [sorted])
+  const controlsKey = `${sortField}\u0000${sortDir}\u0000${query.trim().toLowerCase()}`
+  const previousControlsKey = useRef(controlsKey)
+
+  useEffect(() => {
+    if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+    const controlsChanged = previousControlsKey.current !== controlsKey
+    previousControlsKey.current = controlsKey
+
+    if (orderRef.current.length === 0 || controlsChanged) {
+      pendingOrder.current = sortedIds
+      reorderTimer.current = window.setTimeout(() => applyOrder(sortedIds), 0)
+      return () => {
+        if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+      }
+    }
+    if (sortedIds.length === orderRef.current.length && sortedIds.every((id, index) => id === orderRef.current[index])) {
+      pendingOrder.current = null
+      return
+    }
+
+    pendingOrder.current = sortedIds
+    reorderTimer.current = window.setTimeout(flushPendingOrder, 500)
+    return () => {
+      if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+    }
+  }, [applyOrder, controlsKey, flushPendingOrder, sortedIds])
+
+  useLayoutEffect(() => {
+    const previous = previousRowPositions.current
+    previousRowPositions.current = new Map()
+    if (previous.size === 0 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+    for (const [id, row] of rowRefs.current) {
+      const oldTop = previous.get(id)
+      if (oldTop === undefined) continue
+      const delta = oldTop - row.getBoundingClientRect().top
+      if (Math.abs(delta) < 1) continue
+      row.animate(
+        [{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }],
+        { duration: 280, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+      )
+    }
+  }, [orderedIds])
+
+  useEffect(() => () => {
+    if (reorderTimer.current !== null) window.clearTimeout(reorderTimer.current)
+    if (interactionIdleTimer.current !== null) window.clearTimeout(interactionIdleTimer.current)
+  }, [])
+
+  const displayed = useMemo(() => {
+    if (orderedIds.length === 0) return sorted
+    const byId = new Map(filtered.map((opportunity) => [opportunity.id, opportunity]))
+    const ordered = orderedIds.flatMap((id) => {
+      const opportunity = byId.get(id)
+      return opportunity ? [opportunity] : []
+    })
+    const knownIds = new Set(orderedIds)
+    return [...ordered, ...sorted.filter((opportunity) => !knownIds.has(opportunity.id))]
+  }, [filtered, orderedIds, sorted])
+
+  const finishInteraction = useCallback(() => {
+    if (interactionIdleTimer.current !== null) window.clearTimeout(interactionIdleTimer.current)
+    interactionIdleTimer.current = window.setTimeout(() => {
+      if (!pointerInside.current && !focusInside.current && !scrolling.current) flushPendingOrder()
+    }, 400)
+  }, [flushPendingOrder])
+
+  const handleTableScroll = useCallback(() => {
+    scrolling.current = true
+    if (interactionIdleTimer.current !== null) window.clearTimeout(interactionIdleTimer.current)
+    interactionIdleTimer.current = window.setTimeout(() => {
+      scrolling.current = false
+      if (!pointerInside.current && !focusInside.current) flushPendingOrder()
+    }, 400)
+  }, [flushPendingOrder])
 
   return (
     <>
@@ -369,35 +525,87 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
           <p className="text-muted-foreground text-xs mt-3">Scanning opportunities...</p>
         </div>
       ) : (<>
-      <div className="px-5 pt-5 pb-3 shrink-0 bg-[#080b12] flex items-end justify-between gap-4">
-        <div>
-          <h2 className="text-base font-bold text-foreground">Funding Opportunities</h2>
+      <div className="shrink-0 bg-[#080b12] px-5 pb-3 pt-5">
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-base font-bold text-foreground">Opportunities</h2>
+          <span className="rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
+            {displayed.length} live
+          </span>
         </div>
-        <span className="mb-0.5 rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
-          {sorted.length} live
-        </span>
       </div>
-      <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
+      <div role="search" className="shrink-0 border-y border-border/70 bg-card/25 px-5 py-1.5">
+        <div className="w-full max-w-sm">
+          <label htmlFor="opportunity-search" className="sr-only">Search opportunities by asset</label>
+          <InputGroup className="h-8 rounded-md border-transparent bg-transparent shadow-none hover:bg-white/[0.02] focus-within:border-white/[0.08] focus-within:bg-white/[0.035]">
+            <InputGroupInput
+              id="opportunity-search"
+              type="search"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') onQueryChange('')
+              }}
+              placeholder="Search assets..."
+              autoComplete="off"
+              className="text-sm [&::-webkit-search-cancel-button]:appearance-none"
+            />
+            <InputGroupAddon align="inline-start">
+              <SearchIcon />
+            </InputGroupAddon>
+            {query && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  aria-label="Clear asset search"
+                  onClick={() => onQueryChange('')}
+                  className="cursor-pointer text-muted-foreground"
+                >
+                  <XIcon />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
+      </div>
+      <div
+        ref={tableViewportRef}
+        className="flex-1 overflow-auto min-h-0 bg-[#080b12]"
+        onPointerEnter={() => { pointerInside.current = true }}
+        onPointerLeave={() => {
+          pointerInside.current = false
+          finishInteraction()
+        }}
+        onFocusCapture={() => { focusInside.current = true }}
+        onBlurCapture={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+          focusInside.current = false
+          finishInteraction()
+        }}
+        onScroll={handleTableScroll}
+      >
         {error && <p className="text-destructive text-sm px-5 py-6">Error: {error}</p>}
         {!loading && !error && opportunities.length === 0 && (
           <p className="text-muted-foreground text-sm px-5 py-6">No opportunities detected yet. Waiting for scan...</p>
         )}
-        {!loading && sorted.length > 0 && (
-          <Table>
-            <TableHeader className="sticky top-0 z-10">
-              <TableRow className="hover:bg-transparent bg-[#080b12]">
+        {!loading && !error && opportunities.length > 0 && displayed.length === 0 && (
+          <p className="text-muted-foreground text-sm px-5 py-6">No assets match "{query.trim()}".</p>
+        )}
+        {!loading && displayed.length > 0 && (
+          <Table className="min-w-[1080px]">
+            <TableHeader className="sticky top-0 z-10 bg-[#0b0f17]/95 backdrop-blur-md">
+              <TableRow className="border-b border-white/[0.08] bg-transparent shadow-[0_1px_0_rgba(255,255,255,0.02)] hover:bg-transparent">
                 <SortTH field="asset" label="Asset" current={sortField} dir={sortDir} onSort={handleSort} />
-                <TableHead className="text-left">Position</TableHead>
-                <TableHead className="text-right">Venue Funding</TableHead>
-                <SortTH field="fundingSpread" label="Spread" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="apr" label="Est. Return" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <TableHead className="h-9 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Position</TableHead>
+                <TableHead className="h-9 text-right text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Venue Funding</TableHead>
+                <SortTH field="fundingSpread" label="Spread" current={sortField} dir={sortDir} onSort={handleSort} right divided />
+                <SortTH field="apr" label="Current APR" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SignalSortTH current={sortField} dir={sortDir} onSort={handleSort} />
+                <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right divided />
                 <SortTH field="capacity" label="Liquidity" current={sortField} dir={sortDir} onSort={handleSort} right />
-                <TableHead className="w-8" />
+                <TableHead className="h-9 w-8" />
               </TableRow>
             </TableHeader>
-            <TableBody>
-              {sorted.map((opp) => {
+            <TableBody className="[&_tr:nth-child(even)]:bg-white/[0.008]">
+              {displayed.map((opp) => {
                 const isLongA = opp.direction === 'long_a_short_b'
                 const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
                 const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
@@ -405,10 +613,23 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                 const apr = opp.annualized_gross_edge
 
                 return (
-                  <TableRow key={opp.id} className="group cursor-pointer hover:bg-white/[0.025]" onClick={() => onSelect(opp.id)}>
+                  <TableRow
+                    key={opp.id}
+                    ref={(row) => {
+                      if (row) rowRefs.current.set(opp.id, row)
+                      else rowRefs.current.delete(opp.id)
+                    }}
+                    className="group cursor-pointer border-b border-white/[0.045] outline-none transition-[background-color,box-shadow] hover:bg-white/[0.035] focus-visible:bg-white/[0.04] focus-visible:shadow-[inset_2px_0_0_#3b82f6]"
+                    onClick={() => onSelect(opp.id)}
+                  >
                     <TableCell className="py-3">
-                      <p className="font-semibold text-foreground">{opp.asset}</p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                      <div className="flex items-center gap-2.5">
+                        <AssetIcon asset={opp.asset} />
+                        <div>
+                          <p className="font-semibold text-foreground">{opp.asset}</p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell className="py-3">
                       <PositionRoute longVenue={longVenue} shortVenue={shortVenue} />
@@ -417,26 +638,39 @@ function OpportunityTable({ opportunities, loading, error, onSelect }: {
                       <FundingRateLine label="PAC" value={fundingForVenue(opp, 'pacifica')} color="text-cyan-400" />
                       <FundingRateLine label="HL" value={fundingForVenue(opp, 'hyperliquid')} color="text-violet-400" />
                     </TableCell>
-                    <TableCell className="py-3 text-right font-mono text-foreground">
-                      {fmtRate(Math.abs(opp.funding_spread))}
+                    <TableCell className="border-l border-white/[0.035] py-3 text-right font-mono text-foreground">
+                      <MetricFlash value={Math.abs(opp.funding_spread)}>{fmtRate(Math.abs(opp.funding_spread))}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">per hour</p>
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
-                      <p className="font-semibold text-emerald-400">{fmtPct(apr)}</p>
+                      <p className="font-semibold text-emerald-400"><MetricFlash value={apr}>{fmtPct(apr)}</MetricFlash></p>
                       <p className="mt-0.5 text-[10px] text-muted-foreground">{fmtPct(apr * maxLev)} at {maxLev}x</p>
                     </TableCell>
-                    <TableCell className={`py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
-                      {fmtPct(opp.entry_spread_estimate, 4)}
+                    <TableCell className="py-3 text-right">
+                      <OpportunitySignalCell signal={opp.signal_7d} />
+                    </TableCell>
+                    <TableCell className={`border-l border-white/[0.035] py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
+                      <MetricFlash value={opp.entry_spread_estimate}>{fmtPct(opp.entry_spread_estimate, 4)}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">price spread</p>
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono text-foreground">
-                      {fmtUsd(opp.best_price_capacity)}
+                      <MetricFlash value={opp.best_price_capacity}>{fmtUsd(opp.best_price_capacity)}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">OI {fmtUsd(opp.available_notional)}</p>
                     </TableCell>
                     <TableCell className="py-3">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-muted-foreground opacity-35 transition-all group-hover:translate-x-0.5 group-hover:opacity-80">
-                        <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
+                      <button
+                        type="button"
+                        aria-label={`Open ${opp.asset} opportunity details`}
+                        className="inline-flex size-7 cursor-pointer items-center justify-center rounded text-muted-foreground opacity-35 outline-none transition-all hover:bg-white/[0.05] hover:opacity-80 focus-visible:bg-white/[0.06] focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-blue-400/40 group-hover:translate-x-0.5 group-hover:opacity-80"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onSelect(opp.id)
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </button>
                     </TableCell>
                   </TableRow>
                 )
@@ -466,11 +700,11 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="px-5 pt-4 pb-2 shrink-0">
-        <p className="text-[11px] text-muted-foreground mb-1">Funding Opportunities</p>
         <div className="flex items-center gap-2">
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors -ml-1">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </button>
+          <AssetIcon asset={opp.asset} />
           <h2 className="text-xl font-bold text-foreground">{opp.asset}</h2>
         </div>
       </div>
@@ -491,6 +725,7 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
           venueA={opp.venue_pair.venue_a}
           venueB={opp.venue_pair.venue_b}
           direction={opp.direction}
+          currentApr={opp.annualized_gross_edge}
           recommendedNotional={opp.recommended_notional}
           notional={notional}
           onNotionalChange={onNotionalChange}
@@ -570,35 +805,108 @@ function AccountsHeaderButton({
 
 function NavBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-colors ${active ? 'text-foreground bg-white/[0.06]' : 'text-muted-foreground hover:text-foreground'}`}>
+    <button
+      onClick={onClick}
+      className={`relative cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium outline-none transition-[color,background-color,box-shadow] focus-visible:ring-1 focus-visible:ring-cyan-400/40 ${active ? 'nav-glass-active text-foreground' : 'text-muted-foreground hover:bg-white/[0.03] hover:text-foreground'}`}
+    >
       {children}
     </button>
   )
 }
 
-function SortTH({ field, label, current, dir, onSort, right }: {
-  field: SortField; label: string; current: SortField; dir: SortDir; onSort: (f: SortField) => void; right?: boolean
+function MarketingNavBtn({ children }: { children: React.ReactNode }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger render={(
+          <button
+            type="button"
+            aria-disabled="true"
+            className="relative cursor-help rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground outline-none transition-[color,background-color] hover:bg-white/[0.03] hover:text-foreground focus-visible:bg-white/[0.03] focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-cyan-400/40"
+          >
+            {children}
+          </button>
+        )} />
+        <TooltipContent side="bottom" className="px-2 py-1 text-[10px]">
+          Coming soon
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+function SortTH({ field, label, current, dir, onSort, right, divided }: {
+  field: SortField
+  label: string
+  current: SortField
+  dir: SortDir
+  onSort: (f: SortField) => void
+  right?: boolean
+  divided?: boolean
 }) {
   const active = current === field
   return (
     <TableHead
-      className={`cursor-pointer select-none transition-colors hover:text-foreground ${active ? 'text-foreground' : ''}`}
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={`h-9 p-0 text-[10px] font-semibold uppercase tracking-[0.08em] ${divided ? 'border-l border-white/[0.035]' : ''} ${active ? 'text-foreground' : 'text-muted-foreground/80'}`}
       style={{ textAlign: right ? 'right' : 'left' }}
-      onClick={() => onSort(field)}
     >
-      <span className={`flex items-center gap-1 ${right ? 'justify-end' : ''}`}>
+      <button
+        type="button"
+        onClick={() => onSort(field)}
+        className={`flex h-full w-full cursor-pointer items-center gap-1 px-4 uppercase outline-none transition-colors hover:text-foreground focus-visible:bg-white/[0.04] focus-visible:text-foreground ${right ? 'justify-end' : ''}`}
+      >
         {label}
-        {active ? (
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
-            <path d={dir === 'desc' ? 'M2 4l3 3 3-3' : 'M2 6l3-3 3 3'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        ) : (
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0 opacity-30">
-            <path d="M3 4l2-2 2 2M3 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        )}
-      </span>
+        <SortIndicator active={active} dir={dir} />
+      </button>
     </TableHead>
+  )
+}
+
+function SignalSortTH({ current, dir, onSort }: {
+  current: SortField
+  dir: SortDir
+  onSort: (field: SortField) => void
+}) {
+  const active = current === 'signal7d'
+  return (
+    <TableHead
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={`h-9 p-0 text-[10px] font-semibold uppercase tracking-[0.08em] ${active ? 'text-foreground' : 'text-muted-foreground/80'}`}
+    >
+      <div className="flex h-full items-center justify-end">
+        <button
+          type="button"
+          onClick={() => onSort('signal7d')}
+          className="flex h-full cursor-pointer items-center gap-1 pl-4 uppercase outline-none transition-colors hover:text-foreground focus-visible:bg-white/[0.04] focus-visible:text-foreground"
+        >
+          7d Signal
+          <SortIndicator active={active} dir={dir} />
+        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger render={<button type="button" aria-label="Explain 7-day signal" className="mr-4 inline-flex size-4 cursor-help items-center justify-center rounded text-muted-foreground/70 outline-none transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:bg-white/[0.06] focus-visible:text-foreground"><InfoIcon className="size-3" /></button>} />
+            <TooltipContent side="top" align="end" className="block max-w-64 space-y-1 text-left normal-case tracking-normal">
+              <p>7-day carry quality from hourly funding.</p>
+              <p><strong>Avg:</strong> average annualized spread.</p>
+              <p><strong>Active:</strong> hours above 1% APR.</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+    </TableHead>
+  )
+}
+
+function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
+  return active ? (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
+      <path d={dir === 'desc' ? 'M2 4l3 3 3-3' : 'M2 6l3-3 3 3'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  ) : (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0 opacity-30">
+      <path d="M3 4l2-2 2 2M3 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
   )
 }
 
@@ -624,8 +932,79 @@ function FundingRateLine({ label, value, color }: { label: string; value: number
   return (
     <p className={value !== null && value < 0 ? 'text-red-400' : 'text-foreground'}>
       <span className={`mr-1.5 text-[9px] font-sans font-semibold ${color}`}>{label}</span>
-      {value !== null ? fmtRate(value) : '—'}
+      <MetricFlash value={value}>{value !== null ? fmtRate(value) : '—'}</MetricFlash>
     </p>
+  )
+}
+
+const MetricFlash = memo(function MetricFlash({ value, children }: { value: number | null; children: React.ReactNode }) {
+  const previousValue = useRef(value)
+  const elementRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const previous = previousValue.current
+    previousValue.current = value
+    if (previous === null || value === null || previous === value) return
+    const element = elementRef.current
+    if (!element || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+    element.getAnimations().forEach((animation) => animation.cancel())
+    const increased = value > previous
+    element.animate(
+      [
+        { color: increased ? '#6ee7b7' : '#fda4af' },
+        { color: getComputedStyle(element).color },
+      ],
+      { duration: 750, easing: 'ease-out' },
+    )
+  }, [value])
+
+  return <span ref={elementRef}>{children}</span>
+})
+
+const signalLabels: Record<OpportunitySignalStatus, string> = {
+  persistent: 'Persistent',
+  intermittent: 'Intermittent',
+  new: 'New',
+  choppy: 'Choppy',
+  reversed: 'Reversed',
+  faded: 'Faded',
+  flat: 'Flat',
+  limited: 'Limited',
+}
+
+const signalMoons: Record<OpportunitySignalStatus, string> = {
+  persistent: '🌕',
+  intermittent: '🌓',
+  new: '🌒',
+  choppy: '🌗',
+  reversed: '🌘',
+  faded: '🌘',
+  flat: '🌑',
+  limited: '🌑',
+}
+
+function OpportunitySignalCell({ signal }: { signal: OpportunitySignal | null }) {
+  if (!signal) return <span className="font-mono text-muted-foreground">—</span>
+
+  const activity = Math.round(signal.activity * 100)
+  let detail = `${fmtPct(signal.average_edge)} avg · ${activity}% active`
+  if (signal.status === 'new') detail = `${activity}% active · recent`
+  if (signal.status === 'choppy') detail = `${activity}% active · flipping`
+  if (signal.status === 'reversed') detail = `${activity}% active · reversed`
+  if (signal.status === 'faded') detail = `${fmtPct(signal.average_edge)} avg · ${activity}% active`
+  if (signal.status === 'flat') detail = 'no meaningful carry'
+  if (signal.status === 'limited') detail = `${signal.samples} paired samples`
+  const moon = signalMoons[signal.status]
+
+  return (
+    <div className="ml-auto grid w-40 grid-cols-[minmax(0,1fr)_22px] items-center gap-2 text-right">
+      <span className="min-w-0">
+        <span className="block text-[11px] font-semibold text-foreground">{signalLabels[signal.status]}</span>
+        <span className="mt-0.5 block whitespace-nowrap text-[10px] text-muted-foreground">{detail}</span>
+      </span>
+      <span className={`text-[20px] leading-none ${signal.status === 'persistent' ? 'signal-moon-glow' : 'opacity-80'}`} aria-hidden="true">{moon}</span>
+    </div>
   )
 }
 

@@ -2,6 +2,16 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 import { usePageVisibility } from './usePageVisibility'
 
+type OpportunitySignalStatus = 'persistent' | 'intermittent' | 'new' | 'choppy' | 'reversed' | 'faded' | 'flat' | 'limited'
+
+interface OpportunitySignal {
+  status: OpportunitySignalStatus
+  activity: number
+  direction_consistency: number
+  average_edge: number
+  samples: number
+}
+
 interface Opportunity {
   id: string
   detected_at: string
@@ -27,6 +37,7 @@ interface Opportunity {
   execution_status: 'executable' | 'blocked'
   risk_flags: string[] | null
   warnings: string[] | null
+  signal_7d: OpportunitySignal | null
 }
 
 // Default poll matches the backend scanner's 60s refresh cadence. Polling
@@ -73,4 +84,4 @@ export function useOpportunities(pollInterval = 60_000) {
   return { opportunities, loading, error, lastUpdated, refetch: fetch_ }
 }
 
-export type { Opportunity }
+export type { Opportunity, OpportunitySignal, OpportunitySignalStatus }

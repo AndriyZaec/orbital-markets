@@ -75,6 +75,36 @@
   --sidebar-ring: #2563eb;
 }
 
+.dark,
+.dark * {
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.dark::-webkit-scrollbar,
+.dark *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dark::-webkit-scrollbar-track,
+.dark *::-webkit-scrollbar-track,
+.dark::-webkit-scrollbar-corner,
+.dark *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.dark::-webkit-scrollbar-thumb,
+.dark *::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted-foreground) 28%, transparent);
+  border-radius: 999px;
+}
+
+.dark::-webkit-scrollbar-thumb:hover,
+.dark *::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--muted-foreground) 48%, transparent);
+}
+
 body {
   margin: 0;
   background-color: var(--background);
@@ -189,13 +219,54 @@ body {
 .orbital-logo i { position: absolute; border: 1px solid rgba(148, 163, 184, 0.55); border-radius: 50%; transform-origin: center; }
 .orbital-logo i:first-child { inset: 1px; transform: rotate(-22deg) scaleY(0.52); }
 .orbital-logo i:nth-child(2) { inset: 6px; transform: rotate(35deg) scaleY(0.65); }
-.orbital-logo b { position: absolute; inset: 0; margin: auto; width: 6px; height: 6px; border-radius: 50%; background: #06b6d4; box-shadow: 0 0 8px rgba(6, 182, 212, 0.8); }
+.orbital-logo b { position: absolute; inset: 0; margin: auto; width: 6px; height: 6px; border-radius: 50%; background: #06b6d4; box-shadow: 0 0 5px rgba(6, 182, 212, 0.75), 0 0 11px rgba(59, 130, 246, 0.3); }
 .orbital-brand:hover .orbital-logo i:first-child { animation: orbital-outer-spin 3.6s linear infinite; }
 .orbital-brand:hover .orbital-logo i:nth-child(2) { animation: orbital-inner-spin 2.9s linear infinite; }
+
+.signal-moon-glow {
+  filter: drop-shadow(0 0 2px rgba(253, 224, 71, 0.8)) drop-shadow(0 0 6px rgba(250, 204, 21, 0.38));
+}
+
+.nav-glass-active {
+  background-image: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0.075),
+    rgba(34, 211, 238, 0.055),
+    rgba(99, 102, 241, 0.07),
+    rgba(255, 255, 255, 0.075)
+  );
+  background-size: 220% 100%;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.075),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 4px 14px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(10px);
+  animation: gradient-shift 9s ease-in-out infinite;
+}
+
+.nav-glass-active::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0.16),
+    rgba(34, 211, 238, 0.34),
+    rgba(99, 102, 241, 0.3),
+    rgba(255, 255, 255, 0.12)
+  );
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .chart-reveal,
   .chart-endpoint,
+  .nav-glass-active,
   .orbital-brand:hover .orbital-logo i {
     animation: none;
   }

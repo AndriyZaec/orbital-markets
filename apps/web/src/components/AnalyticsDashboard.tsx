@@ -1,6 +1,7 @@
 import { useAnalytics } from '@/hooks/useAnalytics'
 import { usePaperPositions } from '@/hooks/usePaperPositions'
 import { useEffect, useState } from 'react'
+import { AssetIcon } from '@/components/AssetIcon'
 
 const INITIAL_NOW = Date.now()
 
@@ -178,7 +179,9 @@ export function AnalyticsDashboard() {
                   const ageStr = age < 3_600_000 ? Math.floor(age / 60_000) + 'm ago' : age < 86_400_000 ? Math.floor(age / 3_600_000) + 'h ago' : Math.floor(age / 86_400_000) + 'd ago'
                   return (
                     <tr key={p.id} className="border-t border-border">
-                      <td className="px-4 py-2 font-medium text-foreground">{p.asset}</td>
+                      <td className="px-4 py-2 font-medium text-foreground">
+                        <div className="flex items-center gap-2"><AssetIcon asset={p.asset} size="sm" />{p.asset}</div>
+                      </td>
                       <td className={`px-4 py-2 capitalize ${stateColor}`}>{p.state}</td>
                       <td className="px-4 py-2 text-right font-mono text-muted-foreground">{fmtUsd(p.target_notional)}</td>
                       <td className={`px-4 py-2 text-right font-mono ${pnlColor(p.total_pnl)}`}>{fmtUsd(p.total_pnl)}</td>

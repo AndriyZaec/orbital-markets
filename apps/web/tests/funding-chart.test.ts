@@ -29,7 +29,6 @@ test('summarizes signed carry rather than absolute edge', () => {
 
   assert.ok(stats)
   assert.ok(Math.abs(stats.averageCarry - 0.584) < 1e-12)
-  assert.ok(Math.abs(stats.currentCarry + 0.876) < 1e-12)
   assert.equal(stats.positiveShare, 2 / 3)
 })
 

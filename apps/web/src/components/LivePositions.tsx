@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useKillSwitch } from '@/hooks/useKillSwitch'
@@ -21,6 +21,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { LivePositionDetail } from '@/components/LivePositionDetail'
+import { AssetIcon } from '@/components/AssetIcon'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -87,9 +88,10 @@ function VenueIcon({ venue }: { venue: string }) {
 
 interface LivePositionsProps {
   onConnectWallets?: () => void
+  onOpenOpportunity?: (position: LivePosition | null) => void
 }
 
-export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
+export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePositionsProps = {}) {
   const { positions, loading, error, refetch } = useLivePositions()
   const { aggregate } = useVenueReadiness()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -107,30 +109,42 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
     }
   }
 
-  const selected = positions.find((p) => p.id === selectedId) ?? null
-
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded' || p.state === 'pending' || p.state === 'closing')
   const closedPositions = positions.filter((p) => p.state === 'closed' || p.state === 'failed')
   const displayed = tab === 'open' ? openPositions : closedPositions
+  const selected = displayed.find((p) => p.id === selectedId) ?? null
+
+  useEffect(() => {
+    if (selectedId !== null && selected === null) onOpenOpportunity?.(null)
+  }, [onOpenOpportunity, selected, selectedId])
+
+  const handlePositionClick = (position: LivePosition) => {
+    const opening = selectedId !== position.id
+    setSelectedId(opening ? position.id : null)
+    onOpenOpportunity?.(opening && tab === 'open' ? position : null)
+  }
+
+  const handleTabChange = (nextTab: 'open' | 'closed') => {
+    setTab(nextTab)
+    setSelectedId(null)
+    onOpenOpportunity?.(null)
+  }
+
+  const closePositionDetail = () => {
+    setSelectedId(null)
+    onOpenOpportunity?.(null)
+  }
 
   return (
     <>
       {/* Header */}
       <div className="px-5 py-2 flex items-center gap-3 shrink-0 bg-[#080b12]">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-foreground">Live Positions</h2>
-          {openPositions.length > 0 && (
-            <div className="flex items-center gap-1 rounded border border-green-500/30 bg-green-500/[0.06] px-1.5 py-px">
-              <div className="size-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-[9px] text-green-400 font-medium">LIVE</span>
-            </div>
-          )}
-        </div>
+        <h2 className="text-sm font-semibold text-foreground">Positions</h2>
         <div className="flex gap-0 ml-1">
-          <TabBtn active={tab === 'open'} onClick={() => setTab('open')}>
+          <TabBtn active={tab === 'open'} onClick={() => handleTabChange('open')}>
             Open{openPositions.length > 0 && <span className="ml-1 text-muted-foreground">({openPositions.length})</span>}
           </TabBtn>
-          <TabBtn active={tab === 'closed'} onClick={() => setTab('closed')}>
+          <TabBtn active={tab === 'closed'} onClick={() => handleTabChange('closed')}>
             Closed{closedPositions.length > 0 && <span className="ml-1 text-muted-foreground">({closedPositions.length})</span>}
           </TabBtn>
         </div>
@@ -226,6 +240,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
                   {kill.state.positions.map((p) => (
                     <div key={p.id} className="text-[11px]">
                       <div className="flex items-center gap-2">
+                        <AssetIcon asset={p.asset} size="sm" />
                         <span className="font-medium text-foreground">{p.asset}</span>
                         <span className="text-muted-foreground">{p.legs_to_close} leg{p.legs_to_close !== 1 ? 's' : ''}</span>
                         {p.error && <span className="text-red-400/70">{p.error}</span>}
@@ -282,22 +297,22 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
         {error && <p className="text-destructive text-xs px-5 py-3">Error: {error}</p>}
 
         {!loading && !error && displayed.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-8 gap-3">
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-5 py-4 text-center">
             {!aggregate.allReady ? (
               <>
                 <p className="text-muted-foreground text-xs">Connect both wallets and authorize each venue to start live trading</p>
                 {onConnectWallets && (
                   <button
                     onClick={onConnectWallets}
-                    className="text-xs font-medium px-3 py-1.5 rounded-md border border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08] transition-colors"
+                    className="cursor-pointer text-xs font-medium px-3 py-1.5 rounded-md border border-border bg-white/[0.04] text-muted-foreground hover:text-foreground hover:bg-white/[0.08] transition-colors"
                   >
                     Connect Wallets
                   </button>
                 )}
               </>
             ) : (
-              <p className="text-muted-foreground text-xs">
-                {positions.length === 0 ? 'No live positions yet.' : `No ${tab} live positions.`}
+              <p className="rounded-full bg-muted/35 px-3 py-1 text-xs text-muted-foreground">
+                {positions.length === 0 ? 'No positions yet' : `No ${tab} positions`}
               </p>
             )}
           </div>
@@ -311,7 +326,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
                 <TH>Venues</TH>
                 <TH right>Size</TH>
                 <TH right>Lev</TH>
-                <TH right>Spread</TH>
+                <TH right>Funding APR</TH>
                 <TH right>Fund. PnL</TH>
                 <TH right>Price PnL</TH>
                 <TH right>Total PnL</TH>
@@ -328,11 +343,12 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
                   <TableRow
                     key={pos.id}
                     className={`cursor-pointer transition-colors border-border hover:bg-white/[0.02] ${isDegraded ? 'border-l-2 border-l-orange-400/50' : ''}`}
-                    onClick={() => setSelectedId(selectedId === pos.id ? null : pos.id)}
+                    onClick={() => handlePositionClick(pos)}
                   >
                     <TableCell className="py-2">
                       <div className="flex items-center gap-2">
                         <div className={`size-1.5 rounded-full ${stateDot(pos.state)}`} />
+                        <AssetIcon asset={pos.asset} size="sm" />
                         <span className="font-medium text-foreground text-sm">{pos.asset}</span>
                       </div>
                     </TableCell>
@@ -345,7 +361,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
                     </TableCell>
                     <TC>{fmtUsd(pos.notional)}</TC>
                     <TC>{pos.leverage}x</TC>
-                    <TC negative={pos.current_spread < 0}>{fmtPct(pos.current_spread)}</TC>
+                    <TC negative={pos.current_spread < 0}>{fmtPct(pos.current_spread, 2)}</TC>
                     <TC negative={pos.funding_pnl < 0}>{fmtPnL(pos.funding_pnl)}</TC>
                     <TC negative={pos.price_pnl < 0}>{fmtPnL(pos.price_pnl)}</TC>
                     <TableCell className={`text-right font-mono text-xs font-semibold py-2 ${pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`} style={{ textAlign: 'right' }}>
@@ -372,7 +388,7 @@ export function LivePositions({ onConnectWallets }: LivePositionsProps = {}) {
       </div>
 
       {selected && (
-        <LivePositionDetail position={selected} onClose={() => setSelectedId(null)} onRefresh={refetch} />
+        <LivePositionDetail position={selected} onClose={closePositionDetail} onRefresh={refetch} />
       )}
     </>
   )
@@ -401,7 +417,7 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`text-xs font-medium px-2 pb-0.5 border-b-2 transition-colors ${
+      className={`cursor-pointer text-xs font-medium px-2 pb-0.5 border-b-2 transition-colors ${
         active
           ? 'text-foreground border-foreground'
           : 'text-muted-foreground border-transparent hover:text-foreground'

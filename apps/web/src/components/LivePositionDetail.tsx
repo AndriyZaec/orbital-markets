@@ -7,6 +7,7 @@ import { monitoredLegVenues } from '@/lib/live-position-monitoring'
 import { formatSignedUsdPnL } from '@/lib/pnl-format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { AssetIcon } from '@/components/AssetIcon'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -116,12 +117,9 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
         {/* Header */}
         <div className="px-5 pt-5 pb-4 flex items-center justify-between border-b border-border">
           <div className="flex items-center gap-3">
+            <AssetIcon asset={pos.asset} />
             <h2 className="text-lg font-semibold text-foreground">{pos.asset}</h2>
             <Badge variant="outline" className={`text-[11px] ${stateColor(pos.state)}`}>{pos.state}</Badge>
-            <div className="flex items-center gap-1 rounded border border-blue-500/30 bg-blue-500/[0.06] px-1.5 py-px">
-              <div className="size-1.5 rounded-full bg-blue-400" />
-              <span className="text-[9px] text-blue-400 font-medium">LIVE</span>
-            </div>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -172,13 +170,12 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
           )}
         </div>
 
-        {/* Spread Health — only for open positions with monitoring data */}
-        {pos.state === 'open' && (pos.current_spread !== 0 || pos.entry_spread !== 0) && (
+        {/* Funding health — only for open positions with monitoring data */}
+        {pos.state === 'open' && (pos.current_spread !== 0 || pos.basis_change !== 0) && (
           <div className="px-5 py-4 border-b border-border">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Spread Health</p>
-            <div className="grid grid-cols-3 gap-4">
-              <InfoItem label="Entry Spread" value={fmtPct(pos.entry_spread)} />
-              <InfoItem label="Current Spread" value={fmtPct(pos.current_spread)} warn={pos.current_spread < 0} />
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Funding</p>
+            <div className="grid grid-cols-2 gap-4">
+              <InfoItem label="Current Funding APR" value={fmtPct(pos.current_spread, 2)} warn={pos.current_spread < 0} />
               <InfoItem label="Basis Change" value={fmtPct(pos.basis_change)} warn={pos.basis_change < 0} />
             </div>
           </div>
