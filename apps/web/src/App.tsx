@@ -24,15 +24,13 @@ import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
-import { FeeRebates } from '@/components/FeeRebates'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
-import { ForAgents } from '@/components/ForAgents'
 import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'portfolio' | 'rebates' | 'agents'
+type View = 'trade' | 'portfolio'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
@@ -267,17 +265,8 @@ export default function App() {
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'portfolio'} onClick={() => setActiveView('portfolio')}>Portfolio</NavBtn>
-          <NavBtn active={activeView === 'rebates'} onClick={() => setActiveView('rebates')}>Fee Rebates</NavBtn>
-          <button
-            onClick={() => setActiveView('agents')}
-            className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-all ${
-              activeView === 'agents' ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]'
-            }`}
-          >
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#9945FF] via-[#14F195] to-[#9945FF] bg-[length:200%_100%] animate-[gradient-shift_6s_ease-in-out_infinite]">
-              For Agents
-            </span>
-          </button>
+          <MarketingNavBtn>Fee Rebates</MarketingNavBtn>
+          <MarketingNavBtn>For Agents</MarketingNavBtn>
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {/* Refresh countdown */}
@@ -340,13 +329,6 @@ export default function App() {
             </PageBg>
           )}
 
-          {activeView === 'rebates' && (
-            <PageBg><FeeRebates /></PageBg>
-          )}
-
-          {activeView === 'agents' && (
-            <PageBg><ForAgents /></PageBg>
-          )}
         </div>
 
         {activeView === 'trade' && selected && (
@@ -806,9 +788,33 @@ function AccountsHeaderButton({
 
 function NavBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} className={`px-3.5 py-1.5 rounded-md text-sm font-medium transition-colors ${active ? 'text-foreground bg-white/[0.06]' : 'text-muted-foreground hover:text-foreground'}`}>
+    <button
+      onClick={onClick}
+      className={`relative cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium outline-none transition-[color,background-color,box-shadow] focus-visible:ring-1 focus-visible:ring-cyan-400/40 ${active ? 'nav-glass-active text-foreground' : 'text-muted-foreground hover:bg-white/[0.03] hover:text-foreground'}`}
+    >
       {children}
     </button>
+  )
+}
+
+function MarketingNavBtn({ children }: { children: React.ReactNode }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger render={(
+          <button
+            type="button"
+            aria-disabled="true"
+            className="relative cursor-help rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground outline-none transition-[color,background-color] hover:bg-white/[0.03] hover:text-foreground focus-visible:bg-white/[0.03] focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-cyan-400/40"
+          >
+            {children}
+          </button>
+        )} />
+        <TooltipContent side="bottom" className="px-2 py-1 text-[10px]">
+          Coming soon
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
