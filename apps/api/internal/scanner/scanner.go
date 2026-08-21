@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,6 +63,26 @@ func (s *Scanner) MarketData(ctx context.Context) []venue.MarketData {
 		all = append(all, data...)
 	}
 	return all
+}
+
+// MarketSnapshot returns the latest cached snapshot for one venue and asset.
+func (s *Scanner) MarketSnapshot(ctx context.Context, venueName, asset string) (venue.MarketData, error) {
+	for _, adapter := range s.adapters {
+		if !strings.EqualFold(adapter.Name(), venueName) {
+			continue
+		}
+		data, err := adapter.FetchMarketData(ctx)
+		if err != nil {
+			return venue.MarketData{}, fmt.Errorf("fetch %s market data: %w", venueName, err)
+		}
+		for _, snapshot := range data {
+			if strings.EqualFold(snapshot.Asset, asset) {
+				return snapshot, nil
+			}
+		}
+		return venue.MarketData{}, fmt.Errorf("%s market data unavailable for %s", venueName, asset)
+	}
+	return venue.MarketData{}, fmt.Errorf("unsupported venue: %s", venueName)
 }
 
 const (

@@ -274,6 +274,19 @@ func normalizeHyperliquidAmount(amount float64, decimals int) (float64, string, 
 	return normalized, wire, nil
 }
 
+// NormalizeAmount rounds a base-asset amount down to Hyperliquid size precision.
+func NormalizeAmount(assetMap AssetMap, symbol string, amount float64) (float64, error) {
+	if assetMap == nil {
+		return 0, fmt.Errorf("hyperliquid asset map not configured")
+	}
+	decimals, ok := assetMap.SizeDecimals(symbol)
+	if !ok {
+		return 0, fmt.Errorf("size precision unavailable for asset: %s", symbol)
+	}
+	normalized, _, err := normalizeHyperliquidAmount(amount, decimals)
+	return normalized, err
+}
+
 func normalizeHyperliquidPrice(price float64, sizeDecimals int) (string, error) {
 	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
 		return "", fmt.Errorf("invalid price: %v", price)

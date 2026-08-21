@@ -16,12 +16,32 @@ import (
 type leverageTestAdapter struct {
 	name string
 	data []venue.MarketData
+	err  error
 }
 
 func (a leverageTestAdapter) Name() string { return a.name }
 
 func (a leverageTestAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
-	return a.data, nil
+	return a.data, a.err
+}
+
+func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
+	now := time.Now()
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)),
+		leverageTestAdapter{name: "pacifica", err: errors.New("must not fetch unrelated venue")},
+		leverageTestAdapter{name: "hyperliquid", data: []venue.MarketData{
+			{Venue: "hyperliquid", Asset: "SOL", BidPrice: 99, AskPrice: 101, Timestamp: now},
+			{Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, AskPrice: 0.0537, Timestamp: now},
+		}},
+	)
+
+	snapshot, err := s.MarketSnapshot(context.Background(), "hyperliquid", "2z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Asset != "2Z" || snapshot.BidPrice != 0.0536 {
+		t.Fatalf("snapshot = %+v, want Hyperliquid 2Z BBO", snapshot)
+	}
 }
 
 func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {

@@ -224,6 +224,12 @@ func normalizePacificaAmount(lotSizes LotSizeMap, symbol string, amount float64)
 	return parsed, wire, nil
 }
 
+// NormalizeAmount rounds a base-asset amount down to Pacifica's lot size.
+func NormalizeAmount(lotSizes LotSizeMap, symbol string, amount float64) (float64, error) {
+	normalized, _, err := normalizePacificaAmount(lotSizes, symbol, amount)
+	return normalized, err
+}
+
 // AttachSignature takes a signed action and produces the final MarketOrderRequest
 // ready for WS submission.
 func AttachSignature(
