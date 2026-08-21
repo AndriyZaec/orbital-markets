@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
-import { useLiveClose } from '@/hooks/useLiveClose'
+import { useLiveClose, type CloseOutcome } from '@/hooks/useLiveClose'
 import { canRequestLiveClose, hasActionableRecordedFills } from '@/lib/degraded-execution'
 import { monitoredLegVenues } from '@/lib/live-position-monitoring'
 import { formatSignedUsdPnL } from '@/lib/pnl-format'
+import { venueTradeUrl } from '@/lib/venue-links'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AssetIcon } from '@/components/AssetIcon'
+import { ExternalLinkIcon } from 'lucide-react'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
@@ -81,7 +83,7 @@ function needsAttention(state: string) {
 }
 
 export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props) {
-  const { data, loading, error: detailError } = useLivePositionDetail(pos.id)
+  const { data, loading, error: detailError, refetch } = useLivePositionDetail(pos.id)
   const fills = data?.fills ?? []
   const events = data?.events ?? []
   const [leg1Venue, leg2Venue] = monitoredLegVenues(fills, pos.venue_a, pos.venue_b)
@@ -95,8 +97,11 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
 
   // Refresh the parent list once close tracking reaches a terminal UI state.
   useEffect(() => {
-    if (closeDone || liveClose.state.phase === 'error') onRefresh?.()
-  }, [closeDone, liveClose.state.phase, onRefresh])
+    if (closeDone || liveClose.state.phase === 'error') {
+      onRefresh?.()
+      refetch()
+    }
+  }, [closeDone, liveClose.state.phase, onRefresh, refetch])
 
   const handleClose = () => {
     setConfirmClose(false)
@@ -144,6 +149,10 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
                 ? 'No actionable filled leg is recorded. Verify both venues directly before trading again.'
                 : reason ?? 'Review the recorded fills and event timeline before taking another action.'}
             </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <VenueTradeLink venue={pos.venue_a} symbol={pos.asset} />
+              {pos.venue_b !== pos.venue_a && <VenueTradeLink venue={pos.venue_b} symbol={pos.asset} />}
+            </div>
           </div>
         )}
 
@@ -267,11 +276,19 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             {closeDone && liveClose.state.failed > 0 && (
               <div className="text-[11px] space-y-1">
                 <p className="text-yellow-400">{liveClose.state.succeeded} accepted, {liveClose.state.failed} failed</p>
-                {liveClose.state.errors.map((e, i) => <p key={i} className="text-red-400/70">{e}</p>)}
+                {liveClose.state.outcomes.filter((outcome) => outcome.status === 'failed').map((outcome, i) => (
+                  <CloseFailure key={`${outcome.venue}-${outcome.symbol}-${i}`} outcome={outcome} />
+                ))}
               </div>
             )}
             {liveClose.state.phase === 'error' && (
-              <p className="text-[11px] text-red-400">{liveClose.state.errors[0]}</p>
+              <div className="space-y-2">
+                <p className="text-[11px] text-red-400">{liveClose.state.errors[0]}</p>
+                <div className="flex flex-wrap gap-2">
+                  <VenueTradeLink venue={pos.venue_a} symbol={pos.asset} />
+                  {pos.venue_b !== pos.venue_a && <VenueTradeLink venue={pos.venue_b} symbol={pos.asset} />}
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -288,6 +305,30 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function VenueTradeLink({ venue, symbol }: { venue: string; symbol: string }) {
+  const href = venueTradeUrl(venue, symbol)
+  if (!href) return null
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 rounded border border-border bg-white/[0.03] px-2 py-1 text-[10px] capitalize text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground"
+    >
+      Open {venue}<ExternalLinkIcon className="size-3" />
+    </a>
+  )
+}
+
+function CloseFailure({ outcome }: { outcome: CloseOutcome }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-red-500/15 bg-red-500/[0.03] px-2 py-1.5">
+      <p className="text-red-400/70">{outcome.venue} {outcome.symbol}: {outcome.error ?? 'rejected'}</p>
+      <VenueTradeLink venue={outcome.venue} symbol={outcome.symbol} />
     </div>
   )
 }

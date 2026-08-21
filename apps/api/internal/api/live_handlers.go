@@ -15,6 +15,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
@@ -238,6 +239,12 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "could not size live order from dollar notional"})
 		return
 	}
+	leg1Amount, err = s.normalizeLiveHedgeAmount(leg1Amount, leg1, leg2)
+	if err != nil {
+		s.logger.Error("live prepare: normalize hedge amount", "err", err, "asset", plan.Asset, "amount", leg1Amount)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "requested size cannot be represented on both venues"})
+		return
+	}
 	baselineLeg1Size, _ := currentVenuePosition(accounts, leg1.venue, leg1.symbol)
 	baselineLeg2Size, _ := currentVenuePosition(accounts, leg2.venue, leg2.symbol)
 	if math.Abs(baselineLeg1Size) > 1e-9 || math.Abs(baselineLeg2Size) > 1e-9 {
@@ -422,6 +429,37 @@ func liveBaseAmount(notional, price float64) (float64, error) {
 		return 0, fmt.Errorf("invalid price: %v", price)
 	}
 	return notional / price, nil
+}
+
+func (s *Server) normalizeLiveHedgeAmount(amount float64, legs ...legPlan) (float64, error) {
+	if s.live == nil || len(legs) == 0 {
+		return 0, fmt.Errorf("live execution not configured")
+	}
+	current := amount
+	for range 8 {
+		next := current
+		for _, leg := range legs {
+			var normalized float64
+			var err error
+			switch leg.venue {
+			case "pacifica":
+				normalized, err = paclive.NormalizeAmount(s.live.pacificaLotSizes, leg.symbol, current)
+			case "hyperliquid":
+				normalized, err = hllive.NormalizeAmount(s.live.hlAssetMap, leg.symbol, current)
+			default:
+				return 0, fmt.Errorf("unsupported venue: %s", leg.venue)
+			}
+			if err != nil {
+				return 0, fmt.Errorf("normalize %s amount: %w", leg.venue, err)
+			}
+			next = math.Min(next, normalized)
+		}
+		if math.Abs(next-current) <= 1e-9 {
+			return next, nil
+		}
+		current = next
+	}
+	return 0, fmt.Errorf("could not find a common venue amount")
 }
 
 func liveSessionLeg1Amount(session *LiveSession) float64 {
@@ -1037,7 +1075,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		}
 		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
 		sigReq, err := s.buildCloseSigningRequest(
-			fill, cloid, req.AccountPacifica, req.AccountHyperliquid,
+			r.Context(), fill, cloid, req.AccountPacifica, req.AccountHyperliquid,
 			req.AgentPacifica, req.AgentHyperliquid,
 		)
 		if err != nil {
@@ -1427,6 +1465,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			cloid := fmt.Sprintf("kill-%s-leg%d-%d", pos.ID[:8], fill.Leg, time.Now().UnixNano())
 
 			sigReq, err := s.buildCloseSigningRequest(
+				ctx,
 				fill,
 				cloid,
 				req.AccountPacifica,
@@ -1479,10 +1518,17 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+const maxCloseQuoteAge = 10 * time.Second
+
+type closeMarketSource interface {
+	MarketSnapshot(context.Context, string, string) (venue.MarketData, error)
+}
+
 // buildCloseSigningRequest builds a close signing request for a single filled leg.
 // accountPacifica is only used for Pacifica; Hyperliquid derives the account from
 // the signature at submit time.
 func (s *Server) buildCloseSigningRequest(
+	ctx context.Context,
 	fill executor.LiveFill,
 	clientOrderID string,
 	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
@@ -1506,6 +1552,34 @@ func (s *Server) buildCloseSigningRequest(
 	case "hyperliquid":
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
+		}
+		if s.closeMarkets == nil {
+			return nil, fmt.Errorf("current hyperliquid BBO for %s unavailable", fill.Symbol)
+		}
+		market, marketErr := s.closeMarkets.MarketSnapshot(ctx, fill.Venue, fill.Symbol)
+		if marketErr != nil {
+			return nil, fmt.Errorf("current hyperliquid BBO for %s unavailable: %w", fill.Symbol, marketErr)
+		}
+		quoteAge := time.Since(market.Timestamp)
+		if market.Timestamp.IsZero() || quoteAge > maxCloseQuoteAge || quoteAge < -time.Second {
+			return nil, fmt.Errorf("current hyperliquid BBO for %s is stale", fill.Symbol)
+		}
+		switch positionSide {
+		case domain.SideLong:
+			price = market.BidPrice
+			if price <= 0 || market.BidSize <= 0 {
+				return nil, fmt.Errorf("current hyperliquid bid for %s unavailable", fill.Symbol)
+			}
+		case domain.SideShort:
+			price = market.AskPrice
+			if price <= 0 || market.AskSize <= 0 {
+				return nil, fmt.Errorf("current hyperliquid ask for %s unavailable", fill.Symbol)
+			}
+		default:
+			return nil, fmt.Errorf("invalid position side: %q", fill.Side)
+		}
+		if math.IsNaN(price) || math.IsInf(price, 0) {
+			return nil, fmt.Errorf("current hyperliquid BBO for %s is invalid", fill.Symbol)
 		}
 		request, err = hllive.BuildClosePayload(
 			s.live.hlAssetMap,

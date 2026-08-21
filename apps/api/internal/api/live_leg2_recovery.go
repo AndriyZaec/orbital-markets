@@ -81,7 +81,8 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 		session.AgentPacifica, session.AgentHyperliquid,
 	)
 	if err != nil {
-		s.recoverInvalidHedge(w, ctx, session, reason+"; retry payload build failed")
+		s.logger.Warn("live advance: retry payload build failed", "session_id", session.ID, "venue", session.Leg2.venue, "symbol", session.Leg2.symbol, "remaining", remaining, "err", err)
+		s.recoverInvalidHedge(w, ctx, session, fmt.Sprintf("%s; retry payload build failed: %s", reason, err))
 		return
 	}
 	if retryBelowMinimumNotional(retryReq.Venue, retryReq.Amount, retryReq.Price) {

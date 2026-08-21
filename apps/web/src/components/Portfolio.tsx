@@ -88,11 +88,13 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
   const totalEquity = equityValues.length > 0 ? equityValues.reduce((a, b) => a + b, 0) : null
   const totalAvailable = availableValues.length > 0 ? availableValues.reduce((a, b) => a + b, 0) : null
 
-  const { openCount, degradedCount, openNotional, unrealizedPnl } = useMemo(() => {
+  const { openCount, degradedCount, openNotional, unrealizedPnl, realizedPnl, closedCount } = useMemo(() => {
     let openCount = 0
     let degradedCount = 0
     let openNotional = 0
     let unrealizedPnl = 0
+    let realizedPnl = 0
+    let closedCount = 0
     for (const p of positions) {
       const cat = categorize(p)
       if (cat === 'degraded') degradedCount++
@@ -100,9 +102,12 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
         openCount++
         openNotional += p.notional
         unrealizedPnl += p.total_pnl
+      } else if (p.state.toLowerCase() === 'closed') {
+        closedCount++
+        realizedPnl += p.total_pnl
       }
     }
-    return { openCount, degradedCount, openNotional, unrealizedPnl }
+    return { openCount, degradedCount, openNotional, unrealizedPnl, realizedPnl, closedCount }
   }, [positions])
 
   const recentPositions = positions.slice(0, 5)
@@ -136,7 +141,7 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
       </div>
 
       {/* Summary tiles */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Tile label="Total Equity" value={fmtUsd(totalEquity)} hint="Across connected venues" tone="cyan" />
         <Tile label="Available" value={fmtUsd(totalAvailable)} hint="Free margin" />
         <Tile label="Open Notional" value={openCount > 0 ? fmtUsd(openNotional) : '--'} hint={`${openCount} open · ${degradedCount} degraded`} />
@@ -146,6 +151,13 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
           hint="Sum across open positions"
           valueClassName={unrealizedPnl > 0 ? 'text-green-400' : unrealizedPnl < 0 ? 'text-red-400' : ''}
           tone={unrealizedPnl > 0 ? 'green' : unrealizedPnl < 0 ? 'rose' : 'plain'}
+        />
+        <Tile
+          label="Realized P&L"
+          value={closedCount > 0 ? fmtUsd(realizedPnl) : '--'}
+          hint={`${closedCount} closed position${closedCount === 1 ? '' : 's'}`}
+          valueClassName={realizedPnl > 0 ? 'text-green-400' : realizedPnl < 0 ? 'text-red-400' : ''}
+          tone={realizedPnl > 0 ? 'green' : realizedPnl < 0 ? 'rose' : 'plain'}
         />
       </div>
 

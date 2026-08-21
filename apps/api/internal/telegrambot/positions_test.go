@@ -97,7 +97,7 @@ func TestPositionsPaginationReloadsBoundedAccountScopedHistory(t *testing.T) {
 	if !strings.Contains(first.text, "1. ASSET-1") || strings.Contains(first.text, "6. ASSET-6") {
 		t.Fatalf("first page text = %q", first.text)
 	}
-	if strings.Contains(first.text, "Funding") || !strings.Contains(first.text, "💰 PnL") {
+	if strings.Contains(first.text, "Funding") || !strings.Contains(first.text, "PnL") {
 		t.Fatalf("position summary is not compact: %q", first.text)
 	}
 	nextCallback := first.keyboard.InlineKeyboard[5][1].CallbackData
@@ -121,6 +121,30 @@ func TestPositionsPaginationReloadsBoundedAccountScopedHistory(t *testing.T) {
 	}
 }
 
+func TestPositionPnLUsesSignSpecificMarkers(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	positions := testPositions(now, 3)
+	positions[0].TotalPnL = 12.34
+	positions[1].TotalPnL = -8.12
+
+	text, _ := renderPositions(positions, 0, "https://app.example", now)
+	for _, want := range []string{"🟢 PnL +$12.34", "🔴 PnL -$8.12", "⚪ PnL $0.00"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("positions text missing %q: %q", want, text)
+		}
+	}
+}
+
+func TestFormatAgeUsesHoursAndDays(t *testing.T) {
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	if got := formatAge(now.Add(-2*time.Hour), now); got != "2h ago" {
+		t.Fatalf("two-hour age = %q, want 2h ago", got)
+	}
+	if got := formatAge(now.Add(-72*time.Hour), now); got != "3d ago" {
+		t.Fatalf("three-day age = %q, want 3d ago", got)
+	}
+}
+
 func TestPositionDetailReloadsWithinCurrentLinkedAccounts(t *testing.T) {
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	positions := testPositions(now, 1)
@@ -128,6 +152,8 @@ func TestPositionDetailReloadsWithinCurrentLinkedAccounts(t *testing.T) {
 	positions[0].PricePnL = -8.12
 	positions[0].FundingPnL = 4.22
 	positions[0].FundingPnLSource = "realized"
+	positions[0].State = "degraded"
+	positions[0].HoldHours = 2.5
 	positions[0].HedgeMismatch = 0.02
 	positions[0].Leg1CurPrice = 100
 	positions[0].Leg1LiqPrice = 80
@@ -164,7 +190,7 @@ func TestPositionDetailReloadsWithinCurrentLinkedAccounts(t *testing.T) {
 		t.Fatalf("detail list calls = %d for %q / %q", source.listCalls, source.listPacifica, source.listHyperliquid)
 	}
 	got := messenger.edited[0].text
-	for _, want := range []string{"💰 <b>PnL +$12.34</b>", "Price -$8.12", "Funding +$4.22 (realized)", "⚖️ Mismatch 2.00%", "liq $80.00", "20.0% away · Elevated", "past by 3.0% · Critical"} {
+	for _, want := range []string{"Size $2.50k · Leverage 3.0x · Held 2h 30m", "🟢 <b>PnL +$12.34</b>", "Price -$8.12", "Funding +$4.22 (realized)", "⚖️ Mismatch 2.00%", "liq $80.00", "20.0% away · Elevated", "past by 3.0% · Critical", "Exposure may be incomplete. Review this position in Orbital now."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("detail text missing %q: %q", want, got)
 		}

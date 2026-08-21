@@ -6,6 +6,13 @@ import { useTradingAgents } from './useTradingAgents'
 
 export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
 
+export interface CloseOutcome {
+  venue: SigningRequest['venue']
+  symbol: string
+  status: 'accepted' | 'failed' | 'uncertain'
+  error?: string
+}
+
 export interface CloseState {
   phase: ClosePhase
   total: number
@@ -14,6 +21,7 @@ export interface CloseState {
   failed: number
   reconciled: boolean
   errors: string[]
+  outcomes: CloseOutcome[]
 }
 
 const INITIAL: CloseState = {
@@ -24,6 +32,7 @@ const INITIAL: CloseState = {
   failed: 0,
   reconciled: false,
   errors: [],
+  outcomes: [],
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -90,7 +99,9 @@ export function useLiveClose() {
 
       setState(s => ({ ...s, phase: 'signing', total: requests.length }))
       const errors: string[] = []
+      const outcomes: CloseOutcome[] = []
       let failed = 0
+      let succeeded = 0
       const signedActions: Array<{ request: SigningRequest; signed: SignedAction }> = []
 
       for (let i = 0; i < requests.length; i++) {
@@ -114,24 +125,33 @@ export function useLiveClose() {
             failed++
             const message = apiError(submitResp.status, 'Order submission failed. Check the position before retrying.', b).message
             errors.push(`${req.venue} ${req.symbol}: ${message}`)
-            setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
+            outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'failed', error: message })
+            setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))
             continue
           }
           const result: SubmissionResult = await submitResp.json()
 
           if (!result.accepted && !result.uncertain) {
             failed++
-            errors.push(`${req.venue} ${req.symbol}: ${result.error || 'rejected'}`)
+            const message = result.error || 'rejected'
+            errors.push(`${req.venue} ${req.symbol}: ${message}`)
+            outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'failed', error: message })
+          } else if (result.accepted) {
+            succeeded++
+            outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'accepted' })
+          } else {
+            outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'uncertain' })
           }
-          setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
+          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))
         } catch {
           errors.push(`${req.venue} ${req.symbol}: submission response uncertain; checking position state`)
-          setState(s => ({ ...s, submitted: i + 1, failed, errors: [...errors] }))
+          outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'uncertain' })
+          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))
         }
       }
 
       if (failed > 0) {
-        setState(s => ({ ...s, phase: 'done', failed, errors: [...errors] }))
+        setState(s => ({ ...s, phase: 'done', succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))
         return
       }
 

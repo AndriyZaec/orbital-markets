@@ -27,6 +27,7 @@ type Server struct {
 	db                *sql.DB
 	liveStore         *executor.Store // always available when DB exists — read-only live position access
 	live              *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	closeMarkets      closeMarketSource
 	logger            *slog.Logger
 	mux               *http.ServeMux
 	handler           http.Handler // mux wrapped in middleware (recovery → logging → auth)
@@ -64,6 +65,7 @@ func NewServer(
 		db:            database,
 		liveStore:     ls,
 		live:          live,
+		closeMarkets:  sc,
 		logger:        logger,
 		mux:           http.NewServeMux(),
 		recoveryOwner: uuid.NewString(),
