@@ -132,7 +132,6 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
 
   const closePositionDetail = () => {
     setSelectedId(null)
-    onOpenOpportunity?.(null)
   }
 
   return (
