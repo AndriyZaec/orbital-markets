@@ -90,11 +90,12 @@ func renderPositions(
 			absoluteIndex := start + index
 			liquidationRisk := worstLiquidationRisk(position)
 			fmt.Fprintf(&text,
-				"\n<b>%s %d. %s · %s</b>\n💰 PnL %s · %s Liq %s\n%s · %.1fx\n",
+				"\n<b>%s %d. %s · %s</b>\n%s PnL %s · %s Liq %s\n%s · %.1fx\n",
 				positionStateEmoji(position.State),
 				absoluteIndex+1,
 				html.EscapeString(position.Asset),
 				html.EscapeString(titleState(position.State)),
+				pnlEmoji(position.TotalPnL),
 				formatSignedUSD(position.TotalPnL),
 				liquidationRiskEmoji(liquidationRisk),
 				html.EscapeString(liquidationRisk),
@@ -131,7 +132,7 @@ func renderPositionDetail(
 ) (string, InlineKeyboardMarkup) {
 	var text strings.Builder
 	fmt.Fprintf(&text,
-		"%s <b>%s · %s</b>\n%s / %s\n%s · %.1fx · %s\n\n💰 <b>PnL %s</b>\nPrice %s · Funding %s (%s)\n\n⚖️ Mismatch %s\n📈 Spread %s APR\n\n🛡 <b>Liquidation</b>\n%s %s · %s\n%s %s · %s\n\nUpdated %s",
+		"%s <b>%s · %s</b>\n%s / %s\nSize %s · Leverage %.1fx · Held %s\n\n%s <b>PnL %s</b>\nPrice %s · Funding %s (%s)\n\n⚖️ Mismatch %s\n📈 Spread %s APR\n\n🛡 <b>Liquidation</b>\n%s %s · %s\n%s %s · %s",
 		positionStateEmoji(position.State),
 		html.EscapeString(position.Asset),
 		html.EscapeString(titleState(position.State)),
@@ -140,6 +141,7 @@ func renderPositionDetail(
 		formatUSD(position.Notional),
 		position.Leverage,
 		formatHoldTime(position.HoldHours),
+		pnlEmoji(position.TotalPnL),
 		formatSignedUSD(position.TotalPnL),
 		formatSignedUSD(position.PricePnL),
 		formatSignedUSD(position.FundingPnL),
@@ -152,8 +154,11 @@ func renderPositionDetail(
 		liquidationRiskEmoji(position.Leg2LiqRisk),
 		html.EscapeString(titleVenue(position.VenueB)),
 		formatLiquidation(position.Leg2LiqPrice, position.Leg2LiqDist, position.Leg2LiqRisk),
-		formatAge(positionUpdate(position), now),
 	)
+	if guidance := positionAttention(position); guidance != "" {
+		fmt.Fprintf(&text, "\n\n⚠️ %s", guidance)
+	}
+	fmt.Fprintf(&text, "\n\nUpdated %s", formatAge(positionUpdate(position), now))
 	keyboard := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
 		{{Text: "← Back to positions", CallbackData: positionPageCallback(page)}},
 	}}
@@ -226,7 +231,13 @@ func formatAge(timestamp, now time.Time) string {
 	if age < time.Minute {
 		return fmt.Sprintf("%ds ago", int(age.Seconds()))
 	}
-	return fmt.Sprintf("%dm ago", int(age.Minutes()))
+	if age < time.Hour {
+		return fmt.Sprintf("%dm ago", int(age.Minutes()))
+	}
+	if age < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(age.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(age.Hours()/24))
 }
 
 func formatPercent(value float64, decimals int) string {
@@ -254,6 +265,17 @@ func formatSignedUSD(value float64) string {
 		return "-" + formatted
 	default:
 		return formatted
+	}
+}
+
+func pnlEmoji(value float64) string {
+	switch {
+	case value > 0:
+		return "🟢"
+	case value < 0:
+		return "🔴"
+	default:
+		return "⚪"
 	}
 }
 
@@ -368,6 +390,16 @@ func worstLiquidationRisk(position executor.LivePosition) string {
 		return "Unavailable"
 	}
 	return titleState(worst)
+}
+
+func positionAttention(position executor.LivePosition) string {
+	if strings.EqualFold(position.State, "degraded") {
+		return "Exposure may be incomplete. Review this position in Orbital now."
+	}
+	if strings.EqualFold(worstLiquidationRisk(position), "critical") {
+		return "Liquidation risk is critical. Review this position in Orbital now."
+	}
+	return ""
 }
 
 func titleState(value string) string {
