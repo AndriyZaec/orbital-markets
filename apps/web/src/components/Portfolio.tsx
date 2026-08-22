@@ -4,6 +4,7 @@ import { useVenueReadiness, type VenueReadiness } from '@/hooks/useVenueReadines
 import { AssetIcon } from '@/components/AssetIcon'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
+import { portfolioPositionCategory } from '@/lib/portfolio-position'
 
 // Portfolio is the primary account/position surface for closed-beta users.
 // It reuses live balance / live position / venue-authority hooks — no new
@@ -29,9 +30,6 @@ function fmtPct(n: number) {
   if (!Number.isFinite(n)) return '--'
   return `${(n * 100).toFixed(2)}%`
 }
-
-const OPEN_STATES = new Set(['opening', 'open', 'monitoring', 'closing'])
-const DEGRADED_STATES = new Set(['degraded', 'broken_hedge', 'partial', 'stuck', 'error'])
 
 // State-to-human action label for the activity feed. Falls back to the raw
 // state so unknown states still render legibly instead of blanking.
@@ -66,10 +64,7 @@ function fmtRelative(iso: string): string {
 }
 
 function categorize(p: LivePosition) {
-  const s = p.state.toLowerCase()
-  if (DEGRADED_STATES.has(s) || p.hedge_mismatch > 0.01) return 'degraded'
-  if (OPEN_STATES.has(s)) return 'open'
-  return 'closed'
+  return portfolioPositionCategory(p.state, p.hedge_mismatch)
 }
 
 export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
