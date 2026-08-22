@@ -3,6 +3,7 @@ import { apiError, apiFetch, apiResponseError } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
+import { waitForClosedPosition } from '@/lib/live-close'
 
 export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
 
@@ -35,7 +36,7 @@ const INITIAL: CloseState = {
   outcomes: [],
 }
 
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 const closeConfirmationAttempts = 12
 const closeConfirmationPollMs = 2_000
 
@@ -44,21 +45,19 @@ async function waitForClose(positionId: string, pacificaAccount: string, hyperli
 		account_pacifica: pacificaAccount,
 		account_hyperliquid: hyperliquidAccount,
 	})
-  for (let attempt = 0; attempt < closeConfirmationAttempts; attempt++) {
-    const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
-    if (!resp.ok) {
-      throw await apiResponseError(resp, 'Unable to confirm the close. Check the position before retrying.')
-    }
-    const data: { position: { state: string } } = await resp.json()
-    if (data.position.state === 'closed') return
-    if (data.position.state === 'degraded') {
-      throw new Error('A close fill was not confirmed; manual action may be required')
-    }
-    if (attempt < closeConfirmationAttempts - 1) {
-      await delay(closeConfirmationPollMs)
-    }
-  }
-  throw new Error('Close fill confirmation timed out; check the position before retrying')
+  await waitForClosedPosition({
+    getPositionState: async () => {
+      const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
+      if (!resp.ok) {
+        throw await apiResponseError(resp, 'Unable to confirm the close. Check the position before retrying.')
+      }
+      const data: { position: { state: string } } = await resp.json()
+      return data.position.state
+    },
+    delay,
+    attempts: closeConfirmationAttempts,
+    pollMs: closeConfirmationPollMs,
+  })
 }
 
 export function useLiveClose() {
