@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { OrbitalField } from './OrbitalField'
+import { trackAnalytics } from './analytics'
 
 type Scene = 'hero' | 'access' | 'submitting' | 'received'
 
@@ -34,7 +35,14 @@ export function LandingPage() {
   const heroButtonRef = useRef<HTMLButtonElement>(null)
   const emailRef = useRef<HTMLInputElement>(null)
   const initializedRef = useRef(false)
+  const landingViewTrackedRef = useRef(false)
   const requestRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    if (landingViewTrackedRef.current) return
+    landingViewTrackedRef.current = true
+    trackAnalytics('landing_view', { source: 'landing' })
+  }, [])
 
   useEffect(() => {
     if (!initializedRef.current) {
@@ -58,6 +66,7 @@ export function LandingPage() {
   function openAccess() {
     setError(null)
     setScene('access')
+    trackAnalytics('access_cta_clicked')
   }
 
   function closeAccess() {
@@ -96,6 +105,10 @@ export function LandingPage() {
       if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
         throw new Error('Waitlist request returned an invalid response')
       }
+      trackAnalytics('waitlist_submitted', {
+        profile: String(form.get('profile') ?? ''),
+        monthly_volume: String(form.get('monthly_volume') ?? ''),
+      })
       requestRef.current = null
       setScene('received')
     } catch (requestError) {

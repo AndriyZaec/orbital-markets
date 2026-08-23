@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
@@ -6,6 +6,7 @@ import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/us
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useTelegramLink } from '@/hooks/useTelegramLink'
+import { trackAnalytics } from '@/lib/analytics'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import telegramLogo from '@/assets/telegram-logo.svg'
@@ -121,14 +122,48 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   // Which venue's wallet picker modal is open. Overlay-style — matches how
   // the Solana wallet-adapter modal renders and keeps the venue card tidy.
   const [pickerOpen, setPickerOpen] = useState<string | null>(null)
+  const previousWalletConnectedRef = useRef<Record<VenueId, boolean>>({
+    pacifica: false,
+    hyperliquid: false,
+  })
+  // Wallet providers restore persisted sessions on mount; only count a
+  // transition that follows an explicit connect action.
+  const manualConnectRequestedRef = useRef<Record<VenueId, boolean>>({
+    pacifica: false,
+    hyperliquid: false,
+  })
+
+  function requestManualConnect(venue: VenueId) {
+    manualConnectRequestedRef.current[venue] = true
+  }
 
   useEffect(() => {
     // Preserve existing parent contract: this counts fully-ready venues.
     onConnectionChange?.(aggregate.readyCount)
   }, [aggregate.readyCount, onConnectionChange])
 
+  useEffect(() => {
+    const current: Record<VenueId, boolean> = {
+      pacifica: pacifica.walletConnected,
+      hyperliquid: hyperliquid.walletConnected,
+    }
+    for (const venue of ['pacifica', 'hyperliquid'] as const) {
+      if (
+        current[venue]
+        && !previousWalletConnectedRef.current[venue]
+        && manualConnectRequestedRef.current[venue]
+      ) {
+        trackAnalytics('wallet_connected', { venue })
+        manualConnectRequestedRef.current[venue] = false
+      }
+    }
+    previousWalletConnectedRef.current = current
+  }, [pacifica.walletConnected, hyperliquid.walletConnected])
+
   const handleConnect = (venueId: string) => {
     if (venueId === 'pacifica') {
+      requestManualConnect('pacifica')
+      window.setTimeout(() => { manualConnectRequestedRef.current.pacifica = false }, 30_000)
       setSolModalVisible(true)
       return
     }
@@ -136,6 +171,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       // If exactly one EVM connector is installed, skip the picker; else open
       // the inline picker so the user chooses which wallet to connect.
       if (evmConnectors.length === 1) {
+        requestManualConnect('hyperliquid')
+        window.setTimeout(() => { manualConnectRequestedRef.current.hyperliquid = false }, 30_000)
         evmConnect({ connector: evmConnectors[0] })
         return
       }
@@ -146,6 +183,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const handlePickEvmConnector = (connectorUid: string) => {
     const c = evmConnectors.find((x) => x.uid === connectorUid)
     if (!c) return
+    requestManualConnect('hyperliquid')
+    window.setTimeout(() => { manualConnectRequestedRef.current.hyperliquid = false }, 30_000)
     evmConnect({ connector: c })
     setPickerOpen(null)
   }
@@ -158,8 +197,13 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     }
   }
 
-  const handleAuthorize = (venue: VenueId) => {
-    tradingAgents.authorize(venue).catch(() => {})
+  const handleAuthorize = async (venue: VenueId) => {
+    try {
+      await tradingAgents.authorize(venue)
+      trackAnalytics('agent_authorized', { venue })
+    } catch {
+      // The authorization UI owns the failure state.
+    }
   }
 
   const getReadiness = (venueId: string): VenueReadiness | null => {

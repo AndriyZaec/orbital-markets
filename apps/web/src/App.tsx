@@ -23,6 +23,7 @@ import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
+import { LiveAnalyticsDashboard } from '@/components/LiveAnalyticsDashboard'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { FundingChart } from '@/components/FundingChart'
@@ -31,7 +32,7 @@ import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'portfolio'
+type View = 'trade' | 'portfolio' | 'analytics'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
@@ -124,7 +125,9 @@ function opportunityIdFromURL() {
 }
 
 export default function App() {
-  const [activeView, setActiveView] = useState<View>('trade')
+  const [activeView, setActiveView] = useState<View>(() => (
+    window.location.pathname === '/analytics' ? 'analytics' : 'trade'
+  ))
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
   const [opportunityQuery, setOpportunityQuery] = useState('')
@@ -195,6 +198,13 @@ export default function App() {
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  useEffect(() => {
+    const path = activeView === 'analytics' ? '/analytics' : '/'
+    if (window.location.pathname !== path) {
+      window.history.replaceState(window.history.state, '', path)
+    }
+  }, [activeView])
 
   // Resizable positions panel
   const [posHeight, setPosHeight] = useState(280)
@@ -337,6 +347,12 @@ export default function App() {
                 onConnectWallets={() => setShowAccounts(true)}
                 onViewPositions={() => setActiveView('trade')}
               />
+            </PageBg>
+          )}
+
+          {activeView === 'analytics' && (
+            <PageBg>
+              <LiveAnalyticsDashboard />
             </PageBg>
           )}
 

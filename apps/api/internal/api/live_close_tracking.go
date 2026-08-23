@@ -25,7 +25,7 @@ func (s *Server) trackCloseSubmission(req *domain.SigningRequest, result *domain
 		Resolved: !result.Accepted, Error: result.Error,
 	}
 	if err := s.liveStore.UpsertCloseOutcome(s.ctx, outcome); err != nil {
-		s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID)
+		s.markCloseDegraded(s.ctx, req.PositionID)
 		return
 	}
 	if !result.Accepted {
@@ -33,7 +33,7 @@ func (s *Server) trackCloseSubmission(req *domain.SigningRequest, result *domain
 		return
 	}
 	if err := s.liveStore.MarkClosing(s.ctx, req.PositionID); err != nil {
-		s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID)
+		s.markCloseDegraded(s.ctx, req.PositionID)
 		return
 	}
 	s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_leg_submitted", executor.ExecStateClosing,
@@ -58,11 +58,11 @@ func (s *Server) recordAmbiguousCloseSubmission(req *domain.SigningRequest, reas
 		ClientOrderID: req.ClientOrderID, RequestedAmount: req.Amount,
 		Resolved: false, Error: reason,
 	}); err != nil {
-		s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID)
+		s.markCloseDegraded(s.ctx, req.PositionID)
 		return false
 	}
 	if err := s.liveStore.MarkClosing(s.ctx, req.PositionID); err != nil {
-		s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID)
+		s.markCloseDegraded(s.ctx, req.PositionID)
 		return false
 	}
 	s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_leg_uncertain", executor.ExecStateClosing,
@@ -97,7 +97,7 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 		outcome.Error = fmt.Sprintf("close fill %.1f%% below %.1f%% threshold", ratio*100, closeFillThreshold*100)
 	}
 	if err := s.liveStore.UpsertCloseOutcome(ctx, outcome); err != nil {
-		s.liveStore.MarkCloseDegraded(ctx, req.PositionID)
+		s.markCloseDegraded(ctx, req.PositionID)
 		return
 	}
 	if !confirmed {
@@ -127,7 +127,7 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 	progress, err := s.liveStore.GetCloseProgress(ctx, req.PositionID)
 	if err != nil {
 		s.logger.Error("live close: get progress", "err", err, "id", req.PositionID)
-		s.liveStore.MarkCloseDegraded(ctx, req.PositionID)
+		s.markCloseDegraded(ctx, req.PositionID)
 		return
 	}
 	if progress.Required > 0 && progress.Confirmed == progress.Required {
@@ -148,11 +148,12 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 		case positionExposureFlat:
 			changed, err := s.liveStore.MarkClosed(s.ctx, req.PositionID)
 			if err == nil && changed {
+				s.trackLivePositionClosed(position, "close_confirmed")
 				s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_complete", executor.ExecStateClosed,
 					fmt.Sprintf("%d close fills confirmed and venue exposure is flat", progress.Confirmed))
 			}
 		case positionExposurePresent:
-			if err := s.liveStore.MarkCloseDegraded(s.ctx, req.PositionID); err == nil {
+			if err := s.markCloseDegraded(s.ctx, req.PositionID); err == nil {
 				s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_residual", executor.ExecStateDegraded,
 					"close fills confirmed but fresh venue state shows residual exposure")
 			}
@@ -174,7 +175,7 @@ func (s *Server) markIncompleteCloseAfterGrace(positionID string) {
 	if err != nil || progress.Required == 0 || progress.Confirmed == progress.Required || progress.Failed > 0 || progress.Pending > 0 {
 		return
 	}
-	if err := s.liveStore.MarkCloseDegraded(s.ctx, positionID); err != nil {
+	if err := s.markCloseDegraded(s.ctx, positionID); err != nil {
 		return
 	}
 	s.liveStore.InsertEvent(s.ctx, positionID, "close_incomplete", executor.ExecStateDegraded,
@@ -185,7 +186,7 @@ func (s *Server) markCloseFailed(ctx context.Context, req *domain.SigningRequest
 	if reason == "" {
 		reason = "close order rejected"
 	}
-	if err := s.liveStore.MarkCloseDegraded(ctx, req.PositionID); err != nil {
+	if err := s.markCloseDegraded(ctx, req.PositionID); err != nil {
 		return
 	}
 	s.liveStore.InsertEvent(ctx, req.PositionID, "close_leg_failed", executor.ExecStateDegraded,

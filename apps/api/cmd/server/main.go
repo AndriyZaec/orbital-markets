@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
@@ -72,9 +73,13 @@ func main() {
 
 	// Live execution deps (non-custodial signing flow)
 	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
+	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
+	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	srv.EnableProductAnalytics(productAnalytics)
+	srv.EnableAnalyticsAccessToken(os.Getenv("ANALYTICS_ACCESS_TOKEN"))
 	if telegram != nil && telegram.links != nil {
 		srv.EnableTelegramLinks(telegram.links)
 	}

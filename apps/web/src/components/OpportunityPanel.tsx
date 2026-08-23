@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 import { AssetIcon } from '@/components/AssetIcon'
+import { trackAnalytics } from '@/lib/analytics'
 
 interface Props {
   opportunity: Opportunity
@@ -33,6 +34,13 @@ function fmtUsd(n: number) {
   if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return '$' + (n / 1_000).toFixed(1) + 'K'
   return '$' + n.toFixed(2)
+}
+
+function notionalBucket(n: number): string {
+  if (n < 1_000) return 'under_1k'
+  if (n < 10_000) return '1k_10k'
+  if (n < 100_000) return '10k_100k'
+  return '100k_plus'
 }
 
 function fmtPrice(n: number) {
@@ -120,6 +128,7 @@ export function OpportunityPanel({
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
   const opportunityMaxLev = opp.max_leverage || 1
+  const venuePair = `${longVenue}_${shortVenue}`
 
   const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: opportunityMaxLev })
   const leverage = leverageSelection.opportunityId === opp.id
@@ -175,6 +184,17 @@ export function OpportunityPanel({
   }, [refreshBalances])
   const { state: liveState, executeLive, reset: resetLive } = useLiveExecution()
   const [showLiveModal, setShowLiveModal] = useState(false)
+  const viewedOpportunityRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (viewedOpportunityRef.current === opp.id) return
+    viewedOpportunityRef.current = opp.id
+    trackAnalytics('opportunity_viewed', {
+      asset: opp.asset,
+      venue_pair: venuePair,
+      risk_tier: opp.risk_tier,
+    })
+  }, [opp.id, opp.asset, opp.risk_tier, venuePair])
 
   const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
   const shortLeg = plan ? (plan.leg_1.side === 'short' ? plan.leg_1 : plan.leg_2) : null
@@ -215,6 +235,12 @@ export function OpportunityPanel({
     // was already ready when the button enabled; this just tightens the
     // window between last-known-fresh and actual submission.
     refreshBalances().catch(() => {})
+    trackAnalytics('live_open_attempted', {
+      asset: opp.asset,
+      venue_pair: venuePair,
+      risk_tier: opp.risk_tier,
+      notional_bucket: notionalBucket(plan?.notional ?? notionalForPlan ?? opp.recommended_notional),
+    })
     setShowLiveModal(true)
     executeLive(opp.id, leverage, notionalForPlan)
   }

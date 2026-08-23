@@ -4,6 +4,7 @@ import { useVenueAuthority, type SigningReadiness } from './useVenueAuthority'
 import { useLiveBalances } from './useLiveBalances'
 import { useTradingAgents } from './useTradingAgents'
 import type { TradingAgentState } from '@/agents/types'
+import { trackAnalytics } from '@/lib/analytics'
 
 // Single typed readiness layer for Pacifica + Hyperliquid. Composes the
 // existing wallet-authority hook and the live-balances hook so the rest of
@@ -202,6 +203,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   const [ensureError, setEnsureError] = useState<string | null>(null)
   const inflightRef = useRef<string | null>(null)   // pair currently being ensured
   const attemptedRef = useRef<Set<string>>(new Set()) // pairs already auto-attempted
+  const readyPairsTrackedRef = useRef<Set<string>>(new Set())
 
   const pacSignerReady = authority.pacifica.readiness === 'ready'
   const hlSignerReady = authority.hyperliquid.readiness === 'ready'
@@ -250,7 +252,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
     await doEnsure(pacAddr, hlAddr)
   }, [pacAddr, hlAddr, doEnsure])
 
-  return useMemo<UseVenueReadinessResult>(() => {
+  const value = useMemo<UseVenueReadinessResult>(() => {
     const pacifica = buildReadiness({
       venue: 'pacifica',
       address: authority.pacifica.address,
@@ -298,6 +300,16 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       },
     }
   }, [authority.pacifica, authority.hyperliquid, tradingAgents.pacifica, tradingAgents.hyperliquid, balances, ensureStatus, ensureError, ensureAccounts])
+
+  useEffect(() => {
+    if (!value.aggregate.allReady || !pacAddr || !hlAddr) return
+    const pair = `${pacAddr}|${hlAddr}`
+    if (readyPairsTrackedRef.current.has(pair)) return
+    readyPairsTrackedRef.current.add(pair)
+    trackAnalytics('accounts_ready', { venue_pair: 'pacifica_hyperliquid' })
+  }, [value.aggregate.allReady, pacAddr, hlAddr])
+
+  return value
 }
 
 export function VenueReadinessProvider({ children }: { children: ReactNode }) {

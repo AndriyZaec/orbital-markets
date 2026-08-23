@@ -1091,9 +1091,13 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		signingRequests = append(signingRequests, sigReq)
 	}
 	if len(signingRequests) == 0 && venueDerived {
-		if _, err := s.liveStore.MarkClosed(r.Context(), id); err != nil {
+		changed, err := s.liveStore.MarkClosed(r.Context(), id)
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reconcile venue exposure"})
 			return
+		}
+		if changed {
+			s.trackLivePositionClosed(pos, "venue_reconciled")
 		}
 		s.liveStore.InsertEvent(r.Context(), id, "venue_reconciled_closed", executor.ExecStateClosed,
 			"fresh venue state shows no remaining position on either venue")
@@ -1229,6 +1233,7 @@ func (s *Server) markPositionClosedFromVenueTruth(ctx context.Context, position 
 		return false, err
 	}
 	if changed {
+		s.trackLivePositionClosed(position, "venue_reconciled")
 		s.liveStore.InsertEvent(ctx, position.ID, "venue_reconciled_closed", executor.ExecStateClosed,
 			"fresh venue state shows no remaining position on either venue")
 		s.logger.Info("live position: reconciled closed from venue state", "id", position.ID, "asset", position.Asset)
