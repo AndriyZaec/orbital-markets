@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { apiFetch } from '@/lib/api'
 import { Gate } from '@/components/Gate'
+import { trackAnalytics } from '@/lib/analytics'
 
 // Centralizes gate detection: a single probe to a gated endpoint
 // (/api/v1/opportunities). 200 means the __beta cookie is valid (or dev
@@ -13,6 +14,7 @@ type Status = 'checking' | 'open' | 'gated'
 
 export function GateProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>('checking')
+  const appOpenedTrackedRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -22,6 +24,10 @@ export function GateProvider({ children }: { children: ReactNode }) {
         const resp = await apiFetch('/api/v1/opportunities')
         if (cancelled) return
         setStatus(resp.ok ? 'open' : 'gated')
+        if (resp.ok && !appOpenedTrackedRef.current) {
+          appOpenedTrackedRef.current = true
+          trackAnalytics('app_opened')
+        }
       } catch {
         if (cancelled) return
         setStatus('gated')
