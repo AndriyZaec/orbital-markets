@@ -23,6 +23,7 @@ import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
 import { Portfolio } from '@/components/Portfolio'
+import { LiveAnalyticsDashboard } from '@/components/LiveAnalyticsDashboard'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { FundingChart } from '@/components/FundingChart'
@@ -31,7 +32,7 @@ import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 
-type View = 'trade' | 'portfolio'
+type View = 'trade' | 'portfolio' | 'analytics'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
@@ -276,6 +277,7 @@ export default function App() {
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'portfolio'} onClick={() => setActiveView('portfolio')}>Portfolio</NavBtn>
+          <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
           <MarketingNavBtn>Fee Rebates</MarketingNavBtn>
           <MarketingNavBtn>For Agents</MarketingNavBtn>
         </nav>
@@ -337,6 +339,12 @@ export default function App() {
                 onConnectWallets={() => setShowAccounts(true)}
                 onViewPositions={() => setActiveView('trade')}
               />
+            </PageBg>
+          )}
+
+          {activeView === 'analytics' && (
+            <PageBg>
+              <LiveAnalyticsDashboard />
             </PageBg>
           )}
 
