@@ -125,7 +125,9 @@ function opportunityIdFromURL() {
 }
 
 export default function App() {
-  const [activeView, setActiveView] = useState<View>('trade')
+  const [activeView, setActiveView] = useState<View>(() => (
+    window.location.pathname === '/analytics' ? 'analytics' : 'trade'
+  ))
   const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
   const [opportunityQuery, setOpportunityQuery] = useState('')
@@ -196,6 +198,13 @@ export default function App() {
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  useEffect(() => {
+    const path = activeView === 'analytics' ? '/analytics' : '/'
+    if (window.location.pathname !== path) {
+      window.history.replaceState(window.history.state, '', path)
+    }
+  }, [activeView])
 
   // Resizable positions panel
   const [posHeight, setPosHeight] = useState(280)
@@ -277,7 +286,6 @@ export default function App() {
         <nav className="flex items-center gap-1">
           <NavBtn active={activeView === 'trade'} onClick={() => setActiveView('trade')}>Trade</NavBtn>
           <NavBtn active={activeView === 'portfolio'} onClick={() => setActiveView('portfolio')}>Portfolio</NavBtn>
-          <NavBtn active={activeView === 'analytics'} onClick={() => setActiveView('analytics')}>Analytics</NavBtn>
           <MarketingNavBtn>Fee Rebates</MarketingNavBtn>
           <MarketingNavBtn>For Agents</MarketingNavBtn>
         </nav>
