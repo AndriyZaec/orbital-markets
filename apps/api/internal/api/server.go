@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api/middleware"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
@@ -33,9 +34,16 @@ type Server struct {
 	handler           http.Handler // mux wrapped in middleware (recovery → logging → auth)
 	recoveryOwner     string
 	telegramLinks     TelegramLinker
+	productAnalytics  *analytics.Emitter
 	signalMu          sync.Mutex
 	signalFundingRows []scanner.SignalFundingRow
 	signalCachedAt    time.Time
+}
+
+// EnableProductAnalytics configures optional best-effort product milestone
+// delivery. It must be called during startup, before Handler serves requests.
+func (s *Server) EnableProductAnalytics(emitter *analytics.Emitter) {
+	s.productAnalytics = emitter
 }
 
 func NewServer(
