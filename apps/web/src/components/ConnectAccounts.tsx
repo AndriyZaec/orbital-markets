@@ -126,6 +126,16 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     pacifica: false,
     hyperliquid: false,
   })
+  // Wallet providers restore persisted sessions on mount; only count a
+  // transition that follows an explicit connect action.
+  const manualConnectRequestedRef = useRef<Record<VenueId, boolean>>({
+    pacifica: false,
+    hyperliquid: false,
+  })
+
+  function requestManualConnect(venue: VenueId) {
+    manualConnectRequestedRef.current[venue] = true
+  }
 
   useEffect(() => {
     // Preserve existing parent contract: this counts fully-ready venues.
@@ -138,8 +148,13 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       hyperliquid: hyperliquid.walletConnected,
     }
     for (const venue of ['pacifica', 'hyperliquid'] as const) {
-      if (current[venue] && !previousWalletConnectedRef.current[venue]) {
+      if (
+        current[venue]
+        && !previousWalletConnectedRef.current[venue]
+        && manualConnectRequestedRef.current[venue]
+      ) {
         trackAnalytics('wallet_connected', { venue })
+        manualConnectRequestedRef.current[venue] = false
       }
     }
     previousWalletConnectedRef.current = current
@@ -147,6 +162,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   const handleConnect = (venueId: string) => {
     if (venueId === 'pacifica') {
+      requestManualConnect('pacifica')
+      window.setTimeout(() => { manualConnectRequestedRef.current.pacifica = false }, 30_000)
       setSolModalVisible(true)
       return
     }
@@ -154,6 +171,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       // If exactly one EVM connector is installed, skip the picker; else open
       // the inline picker so the user chooses which wallet to connect.
       if (evmConnectors.length === 1) {
+        requestManualConnect('hyperliquid')
+        window.setTimeout(() => { manualConnectRequestedRef.current.hyperliquid = false }, 30_000)
         evmConnect({ connector: evmConnectors[0] })
         return
       }
@@ -164,6 +183,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const handlePickEvmConnector = (connectorUid: string) => {
     const c = evmConnectors.find((x) => x.uid === connectorUid)
     if (!c) return
+    requestManualConnect('hyperliquid')
+    window.setTimeout(() => { manualConnectRequestedRef.current.hyperliquid = false }, 30_000)
     evmConnect({ connector: c })
     setPickerOpen(null)
   }

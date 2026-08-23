@@ -53,6 +53,8 @@ type Emitter struct {
 	client   *http.Client
 	queue    chan captureRequest
 	wg       sync.WaitGroup
+	closeMu  sync.RWMutex
+	closed   bool
 }
 
 func NewEmitter(logger *slog.Logger, apiKey, host string) *Emitter {
@@ -87,6 +89,11 @@ func (e *Emitter) Track(event, distinctID string, properties map[string]any) {
 	if !e.Enabled() || event == "" || distinctID == "" {
 		return
 	}
+	e.closeMu.RLock()
+	defer e.closeMu.RUnlock()
+	if e.closed {
+		return
+	}
 	request := captureRequest{
 		Event:      event,
 		DistinctID: distinctID,
@@ -105,7 +112,14 @@ func (e *Emitter) Close() {
 	if !e.Enabled() {
 		return
 	}
+	e.closeMu.Lock()
+	if e.closed {
+		e.closeMu.Unlock()
+		return
+	}
+	e.closed = true
 	close(e.queue)
+	e.closeMu.Unlock()
 	e.wg.Wait()
 }
 

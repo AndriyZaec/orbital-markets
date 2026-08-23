@@ -235,7 +235,7 @@ export function OpportunityPanel({
     // was already ready when the button enabled; this just tightens the
     // window between last-known-fresh and actual submission.
     refreshBalances().catch(() => {})
-    trackAnalytics('live_open_started', {
+    trackAnalytics('live_open_attempted', {
       asset: opp.asset,
       venue_pair: venuePair,
       risk_tier: opp.risk_tier,

@@ -203,7 +203,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   const [ensureError, setEnsureError] = useState<string | null>(null)
   const inflightRef = useRef<string | null>(null)   // pair currently being ensured
   const attemptedRef = useRef<Set<string>>(new Set()) // pairs already auto-attempted
-  const previousAllReadyRef = useRef(false)
+  const readyPairsTrackedRef = useRef<Set<string>>(new Set())
 
   const pacSignerReady = authority.pacifica.readiness === 'ready'
   const hlSignerReady = authority.hyperliquid.readiness === 'ready'
@@ -302,12 +302,12 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   }, [authority.pacifica, authority.hyperliquid, tradingAgents.pacifica, tradingAgents.hyperliquid, balances, ensureStatus, ensureError, ensureAccounts])
 
   useEffect(() => {
-    const ready = value.aggregate.allReady
-    if (ready && !previousAllReadyRef.current) {
-      trackAnalytics('accounts_ready', { venue_pair: 'pacifica_hyperliquid' })
-    }
-    previousAllReadyRef.current = ready
-  }, [value.aggregate.allReady])
+    if (!value.aggregate.allReady || !pacAddr || !hlAddr) return
+    const pair = `${pacAddr}|${hlAddr}`
+    if (readyPairsTrackedRef.current.has(pair)) return
+    readyPairsTrackedRef.current.add(pair)
+    trackAnalytics('accounts_ready', { venue_pair: 'pacifica_hyperliquid' })
+  }, [value.aggregate.allReady, pacAddr, hlAddr])
 
   return value
 }

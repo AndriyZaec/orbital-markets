@@ -744,7 +744,7 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 		s.logger.Error("live session: persist terminal result", "err", err, "session_id", sess.ID)
 		return posID
 	}
-	s.trackLiveOpenOutcome(sess, state)
+	s.trackLiveOpenOutcome(sess, state, reasons...)
 	s.finishLiveSession(ctx, sess, strings.Join(reasons, "; "))
 	return sess.Plan.ID
 }

@@ -16,7 +16,7 @@ export type AnalyticsEvent =
   | 'agent_authorized'
   | 'accounts_ready'
   | 'opportunity_viewed'
-  | 'live_open_started'
+  | 'live_open_attempted'
   | 'live_open_succeeded'
   | 'live_open_failed'
   | 'position_degraded'
