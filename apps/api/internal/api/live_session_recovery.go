@@ -73,7 +73,7 @@ func (s *Server) reconcileOpenPositions() {
 		if cachedExposureMatchesFills(exposure, fills) {
 			continue
 		}
-		if err := s.liveStore.MarkCloseDegraded(s.ctx, position.ID); err == nil {
+		if err := s.markCloseDegraded(s.ctx, position.ID); err == nil {
 			s.liveStore.InsertEvent(s.ctx, position.ID, "venue_exposure_changed", executor.ExecStateDegraded,
 				"fresh account snapshots no longer match the recorded open legs")
 		}
@@ -170,7 +170,7 @@ func (s *Server) reconcileClosingPositions() {
 				continue
 			}
 			if progress.Required > 0 && progress.Confirmed == progress.Required && progress.Pending == 0 {
-				if err := s.liveStore.MarkCloseDegraded(s.ctx, position.ID); err == nil {
+				if err := s.markCloseDegraded(s.ctx, position.ID); err == nil {
 					s.liveStore.InsertEvent(s.ctx, position.ID, "close_residual", executor.ExecStateDegraded,
 						"confirmed close fills left residual venue exposure")
 				}
