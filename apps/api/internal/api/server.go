@@ -21,29 +21,37 @@ import (
 )
 
 type Server struct {
-	ctx               context.Context // server-lifetime context, not per-request
-	scanner           *scanner.Scanner
-	executor          *paper.Executor
-	store             *paper.DBStore
-	db                *sql.DB
-	liveStore         *executor.Store // always available when DB exists — read-only live position access
-	live              *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
-	closeMarkets      closeMarketSource
-	logger            *slog.Logger
-	mux               *http.ServeMux
-	handler           http.Handler // mux wrapped in middleware (recovery → logging → auth)
-	recoveryOwner     string
-	telegramLinks     TelegramLinker
-	productAnalytics  *analytics.Emitter
-	signalMu          sync.Mutex
-	signalFundingRows []scanner.SignalFundingRow
-	signalCachedAt    time.Time
+	ctx                  context.Context // server-lifetime context, not per-request
+	scanner              *scanner.Scanner
+	executor             *paper.Executor
+	store                *paper.DBStore
+	db                   *sql.DB
+	liveStore            *executor.Store // always available when DB exists — read-only live position access
+	live                 *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	closeMarkets         closeMarketSource
+	logger               *slog.Logger
+	mux                  *http.ServeMux
+	handler              http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	recoveryOwner        string
+	telegramLinks        TelegramLinker
+	productAnalytics     *analytics.Emitter
+	analyticsAccessToken string
+	metricsMu            sync.Mutex
+	metricsCache         *analytics.LiveMetrics
+	metricsCachedAt      time.Time
+	signalMu             sync.Mutex
+	signalFundingRows    []scanner.SignalFundingRow
+	signalCachedAt       time.Time
 }
 
 // EnableProductAnalytics configures optional best-effort product milestone
 // delivery. It must be called during startup, before Handler serves requests.
 func (s *Server) EnableProductAnalytics(emitter *analytics.Emitter) {
 	s.productAnalytics = emitter
+}
+
+func (s *Server) EnableAnalyticsAccessToken(token string) {
+	s.analyticsAccessToken = token
 }
 
 func NewServer(
@@ -123,6 +131,7 @@ func (s *Server) routes() {
 
 	// Analytics
 	s.mux.HandleFunc("GET /api/v1/paper/analytics", s.handlePaperAnalytics)
+	s.mux.HandleFunc("GET /api/v1/analytics", s.handleLiveAnalytics)
 
 	// Historical data
 	s.mux.HandleFunc("GET /api/v1/history", s.handleHistory)

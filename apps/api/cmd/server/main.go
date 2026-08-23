@@ -79,6 +79,7 @@ func main() {
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
 	srv.EnableProductAnalytics(productAnalytics)
+	srv.EnableAnalyticsAccessToken(os.Getenv("ANALYTICS_ACCESS_TOKEN"))
 	if telegram != nil && telegram.links != nil {
 		srv.EnableTelegramLinks(telegram.links)
 	}
