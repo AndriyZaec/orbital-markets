@@ -19,6 +19,7 @@ const (
 	cookieName     = "__beta"
 	bearerPrefix   = "Bearer "
 	healthPath     = "/api/v1/health"
+	analyticsPath  = "/api/v1/analytics"
 	expectedAlgHdr = "HS256"
 )
 
@@ -32,7 +33,8 @@ var (
 // Auth returns middleware that verifies the __beta cookie (or Authorization:
 // Bearer header) against secret using HS256. On failure it responds 404 — the
 // gate is meant to be invisible to unauthorized clients. /api/v1/health is
-// always allowed through for CF and Fly health checks.
+// allowed through for health checks, while /api/v1/analytics performs its own
+// service-token authentication in the handler.
 //
 // If secret is empty the middleware is a no-op (dev bypass). Production wiring
 // must ensure a secret is set.
@@ -44,7 +46,7 @@ func Auth(secret string, logger *slog.Logger) func(http.Handler) http.Handler {
 	key := []byte(secret)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == healthPath {
+			if r.URL.Path == healthPath || r.URL.Path == analyticsPath {
 				next.ServeHTTP(w, r)
 				return
 			}
