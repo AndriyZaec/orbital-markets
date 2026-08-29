@@ -45,7 +45,8 @@ async function issueInvite(request: Request, env: Env, actor: AccessIdentity, en
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
   if (previous) {
-    if (previous.action !== 'invite.issued') return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
+    const metadata = JSON.parse(previous.metadata_json) as { waitlist_entry_id?: string }
+    if (previous.action !== 'invite.issued' || metadata.waitlist_entry_id !== entryId) return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
     return inviteResult(env, previous.target_id, true)
   }
 
@@ -88,7 +89,7 @@ async function resendInvite(request: Request, env: Env, actor: AccessIdentity, i
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
   if (previous) {
-    if (previous.action !== 'invite.resent') return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
+    if (previous.action !== 'invite.resent' || previous.target_id !== inviteId) return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
     return inviteResult(env, previous.target_id, true)
   }
   const invite = await findInvite(env, inviteId)
@@ -116,7 +117,7 @@ async function revokeInvite(request: Request, env: Env, actor: AccessIdentity, i
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
   if (previous) {
-    if (previous.action !== 'invite.revoked') return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
+    if (previous.action !== 'invite.revoked' || previous.target_id !== inviteId) return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
     return inviteResult(env, previous.target_id, true)
   }
   const invite = await findInvite(env, inviteId)
@@ -201,8 +202,8 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSe
         SET delivery_attempts = delivery_attempts + 1, delivery_error = 'delivery_in_progress', updated_at = ?
       WHERE id = ?
         AND status IN ('issued', 'sent', 'delivery_failed')
-        AND (delivery_error IS NULL OR delivery_error != 'delivery_in_progress' OR updated_at <= ?)`,
-  ).bind(claimTime, invite.id, claimTime - 300).run()
+        AND (? = 1 OR delivery_error IS NULL OR delivery_error != 'delivery_in_progress')`,
+  ).bind(claimTime, invite.id, forceSend ? 1 : 0).run()
   if (!claim.success || claim.meta.changes !== 1) {
     return { ok: false, response: jsonResponse(409, 'delivery_in_progress', 'Invite delivery is already in progress. Wait for it to settle before retrying.', { retryable: true }) }
   }

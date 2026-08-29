@@ -95,6 +95,9 @@ export function WaitlistPage({ mode = 'waitlist' }: { mode?: 'waitlist' | 'users
       setDetail(next)
       setRefresh((value) => value + 1)
     } catch (reason: unknown) {
+      if (detail) {
+        getWaitlistDetail(detail.entry.id).then(setDetail).catch(() => {})
+      }
       setActionError(reason instanceof Error ? reason.message : 'The invite action failed.')
     }
   }

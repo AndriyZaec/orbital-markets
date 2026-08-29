@@ -292,7 +292,7 @@ async function handleRedeem(request: Request, env: Env): Promise<Response> {
     : null;
   const cid = linkedCookieId ?? randomHex(16);
   const redeemedAt = now();
-  if (record.waitlist_entry_id) {
+  if (record.waitlist_entry_id && !linkedCookieId) {
     await persistRedemption(env, record.waitlist_entry_id, code, cid, redeemedAt);
   }
   const jwt = await signJWT({ cid, uid: record.waitlist_entry_id, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
@@ -326,7 +326,7 @@ async function persistRedemption(
         SET status = 'redeemed', bound_cookie_id = ?, redeemed_at = ?, updated_at = ?
       WHERE waitlist_entry_id = ?
         AND code = ?
-        AND status IN ('issued', 'sent', 'delivery_failed', 'redeemed')`,
+        AND status IN ('issued', 'sent', 'delivery_failed')`,
   )
     .bind(cookieId, redeemedAt, redeemedAt, waitlistEntryId, code)
     .run();
