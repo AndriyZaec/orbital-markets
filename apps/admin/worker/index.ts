@@ -1,4 +1,5 @@
 import { authenticateAccess } from './auth/access'
+import { handleInviteRoute } from './features/invites/routes'
 import { handleWaitlistRoute } from './features/waitlist/routes'
 import { jsonResponse } from './shared/http'
 import type { Env } from './types'
@@ -17,7 +18,12 @@ export default {
     }
     if (url.pathname.startsWith('/api/admin/')) {
       const path = url.pathname.replace('/api/admin/v1', '')
-      if (url.pathname.startsWith('/api/admin/v1/')) return await handleWaitlistRoute(request, env, identity, path)
+      if (url.pathname.startsWith('/api/admin/v1/')) {
+        if (path.startsWith('/invites/') || path.match(/^\/waitlist\/[^/]+\/invites$/)) {
+          return await handleInviteRoute(request, env, identity, path)
+        }
+        return await handleWaitlistRoute(request, env, identity, path)
+      }
       return jsonResponse(404, 'not_found', 'Admin route not found.')
     }
 
