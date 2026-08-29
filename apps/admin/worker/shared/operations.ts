@@ -1,7 +1,7 @@
 import type { AccessIdentity, Env } from '../types'
 import { jsonResponse } from './http'
 
-const COOLDOWN_SECONDS = 10
+const COOLDOWN_SECONDS = 60
 
 export function requestId(request: Request): string {
   return request.headers.get('x-request-id')?.trim() || crypto.randomUUID()
