@@ -1,6 +1,7 @@
 import type { AccessIdentity, Env } from '../../types'
 import { auditInsert, findIdempotentAction } from '../audit/service'
 import { jsonOk, jsonResponse, requireIdempotencyKey } from '../../shared/http'
+import { acquireMutationCooldown, logMutation } from '../../shared/operations'
 
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 const CODE_LENGTH = 12
@@ -61,11 +62,14 @@ async function issueInvite(request: Request, env: Env, actor: AccessIdentity, en
   } else if (invite.status === 'sent' && entry.status === 'invited') {
     return inviteResult(env, invite.id, false)
   }
+  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.issue')
+  if (cooldownResponse) return cooldownResponse
   const result = await deliverInvite(request, env, invite, entry.email)
   if (!result.ok) return result.response
   const timestamp = now()
   const action = auditInsert(env, actor, 'invite.issued', 'beta_invite', invite.id, { waitlist_entry_id: entryId }, keyOrResponse, timestamp)
   await env.WAITLIST_DB.batch([action])
+  logMutation(request, actor, 'invite.issued', 'beta_invite', invite.id)
   return inviteResult(env, invite.id, false)
 }
 
@@ -78,6 +82,8 @@ async function resendInvite(request: Request, env: Env, actor: AccessIdentity, i
   if (!invite) return jsonResponse(404, 'invite_not_found', 'Invite not found.')
   if (invite.status === 'revoked') return jsonResponse(409, 'invite_revoked', 'A disabled invite cannot be resent.')
   if (invite.status === 'redeemed') return jsonResponse(409, 'invite_redeemed', 'A redeemed invite cannot be resent.')
+  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.resend')
+  if (cooldownResponse) return cooldownResponse
   const entry = await env.WAITLIST_DB.prepare('SELECT id, email FROM waitlist_entries WHERE id = ?').bind(invite.waitlist_entry_id).first<{ id: string; email: string }>()
   if (!entry) return jsonResponse(409, 'waitlist_entry_not_found', 'The invite owner no longer exists.')
   const result = await deliverInvite(request, env, invite, entry.email)
@@ -85,6 +91,7 @@ async function resendInvite(request: Request, env: Env, actor: AccessIdentity, i
   await env.WAITLIST_DB.batch([
     auditInsert(env, actor, 'invite.resent', 'beta_invite', invite.id, { waitlist_entry_id: invite.waitlist_entry_id }, keyOrResponse, now()),
   ])
+  logMutation(request, actor, 'invite.resent', 'beta_invite', invite.id)
   return inviteResult(env, invite.id, false)
 }
 
@@ -95,6 +102,8 @@ async function revokeInvite(request: Request, env: Env, actor: AccessIdentity, i
   if (previous) return inviteResult(env, previous.target_id, true)
   const invite = await findInvite(env, inviteId)
   if (!invite) return jsonResponse(404, 'invite_not_found', 'Invite not found.')
+  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.revoke')
+  if (cooldownResponse) return cooldownResponse
   const timestamp = now()
   const result = await env.WAITLIST_DB.prepare(
     `UPDATE beta_invites SET status = 'revoked', revoked_at = ?, updated_at = ?
@@ -110,6 +119,7 @@ async function revokeInvite(request: Request, env: Env, actor: AccessIdentity, i
   await env.WAITLIST_DB.batch([
     auditInsert(env, actor, 'invite.revoked', 'beta_invite', invite.id, { waitlist_entry_id: invite.waitlist_entry_id }, keyOrResponse, timestamp),
   ])
+  logMutation(request, actor, 'invite.revoked', 'beta_invite', invite.id)
   return inviteResult(env, invite.id, false)
 }
 

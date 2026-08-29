@@ -23,7 +23,8 @@ gitignored environment when exercising the Worker directly.
 2. Set `TEAM_DOMAIN` and `POLICY_AUD` to that application's values.
 3. Replace the placeholder D1/KV identifiers in a local deployment config.
 4. Onboard the sender domain and configure the Email Sending binding.
-5. Run `pnpm deploy`.
+5. Set `ANALYTICS_API_TOKEN` as a Worker secret and point `ANALYTICS_API_URL` at the Go API.
+6. Run `pnpm deploy`.
 
 The D1 migration directory is shared with `apps/gate-worker/migrations` so the
 gate and admin Worker remain compatible during rollout.

@@ -9,6 +9,7 @@ import {
   readJson,
   requireIdempotencyKey,
 } from '../../shared/http'
+import { logMutation } from '../../shared/operations'
 
 const STATUSES = new Set(['pending', 'approved', 'rejected', 'invited'])
 const PROFILES = new Set(['active_trader', 'trading_team', 'researching'])
@@ -155,6 +156,7 @@ async function transitionWaitlist(request: Request, env: Env, actor: AccessIdent
     auditInsert(env, actor, `waitlist.${transition}`, 'waitlist_entry', id, { from: 'pending', to: transition }, keyOrResponse, timestamp),
   ])
   if (batch[0].meta.changes !== 1) return jsonResponse(409, 'invalid_state', 'The waitlist entry changed before this action was applied.')
+  logMutation(request, actor, `waitlist.${transition}`, 'waitlist_entry', id)
   return jsonOk({ ok: true, status: transition })
 }
 
@@ -179,6 +181,7 @@ async function bulkTransition(request: Request, env: Env, actor: AccessIdentity,
     auditInsert(env, actor, `waitlist.bulk_${transition}`, 'waitlist_batch', keyOrResponse, { ids: uniqueIds, to: transition }, keyOrResponse, timestamp),
   ])
   if (result[0].meta.changes !== uniqueIds.length) return jsonResponse(409, 'invalid_state', 'The selection changed before this action was applied.')
+  logMutation(request, actor, `waitlist.bulk_${transition}`, 'waitlist_batch', keyOrResponse)
   return jsonOk({ ok: true, status: transition, updated_ids: uniqueIds })
 }
 

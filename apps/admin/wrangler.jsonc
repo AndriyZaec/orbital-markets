@@ -27,7 +27,8 @@
   ],
   "vars": {
     "TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
-    "POLICY_AUD": "replace-with-access-application-audience"
+    "POLICY_AUD": "replace-with-access-application-audience",
+    "ANALYTICS_API_URL": "https://api.your-domain.example"
   },
   "observability": {
     "enabled": true,
