@@ -49,6 +49,17 @@ describe('admin Access boundary', () => {
     }), testEnv())
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ email: 'operator@example.com' })
+
+    const wrongAudience = await new SignJWT({ email: 'operator@example.com' })
+      .setProtectedHeader({ alg: 'RS256', kid: 'current' })
+      .setIssuer(teamDomain)
+      .setAudience('another-application')
+      .setExpirationTime('5m')
+      .sign(privateKey)
+    const denied = await worker.fetch(new Request('https://admin.orbitalmarkets.xyz/api/admin/v1/me', {
+      headers: { 'Cf-Access-Jwt-Assertion': wrongAudience },
+    }), testEnv())
+    expect(denied.status).toBe(403)
   })
 
   it('rejects an invalid Access assertion without exposing verification details', async () => {

@@ -166,13 +166,6 @@ async function createInvite(env: Env, entryId: string): Promise<InviteRow> {
 }
 
 async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSend: boolean): Promise<{ ok: true } | { ok: false; response: Response }> {
-  const attempt = invite.delivery_attempts + 1
-  const attemptResult = await env.WAITLIST_DB.prepare(
-    'UPDATE beta_invites SET delivery_attempts = ?, updated_at = ? WHERE id = ?',
-  ).bind(attempt, now(), invite.id).run()
-  if (!attemptResult.success || attemptResult.meta.changes !== 1) {
-    return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Invite delivery could not be started safely. Retry the same invite.', { retryable: true }) }
-  }
   try {
     await ensureKVRecord(env, invite)
   } catch (error) {
@@ -202,14 +195,16 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSe
   }
   const origin = env.APP_ORIGIN.replace(/\/$/, '')
   const redeemUrl = `${origin}/gate?invite=${encodeURIComponent(invite.code)}`
-  const sendStartedAt = now()
-  const sendState = await env.WAITLIST_DB.prepare(
+  const claimTime = now()
+  const claim = await env.WAITLIST_DB.prepare(
     `UPDATE beta_invites
-        SET status = 'sent', sent_at = COALESCE(sent_at, ?), delivery_error = NULL, updated_at = ?
-      WHERE id = ? AND status IN ('issued', 'sent', 'delivery_failed')`,
-  ).bind(sendStartedAt, sendStartedAt, invite.id).run()
-  if (!sendState.success || sendState.meta.changes !== 1) {
-    return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Invite delivery could not be started safely. Retry the same invite.', { retryable: true }) }
+        SET delivery_attempts = delivery_attempts + 1, delivery_error = 'delivery_in_progress', updated_at = ?
+      WHERE id = ?
+        AND status IN ('issued', 'sent', 'delivery_failed')
+        AND (delivery_error IS NULL OR delivery_error != 'delivery_in_progress' OR updated_at <= ?)`,
+  ).bind(claimTime, invite.id, claimTime - 300).run()
+  if (!claim.success || claim.meta.changes !== 1) {
+    return { ok: false, response: jsonResponse(409, 'delivery_in_progress', 'Invite delivery is already in progress. Wait for it to settle before retrying.', { retryable: true }) }
   }
   try {
     await env.EMAIL.send({
@@ -224,6 +219,14 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSe
     return { ok: false, response: jsonResponse(502, 'email_delivery_failed', 'Invite email was not accepted by the provider. Retry the same invite.', { retryable: true }) }
   }
   const timestamp = now()
+  const inviteState = await env.WAITLIST_DB.prepare(
+    `UPDATE beta_invites
+        SET status = 'sent', sent_at = COALESCE(sent_at, ?), delivery_error = NULL, updated_at = ?
+      WHERE id = ? AND status IN ('issued', 'sent', 'delivery_failed') AND delivery_error = 'delivery_in_progress'`,
+  ).bind(timestamp, timestamp, invite.id).run()
+  if (!inviteState.success || inviteState.meta.changes !== 1) {
+    return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Email was accepted but delivery state could not be persisted. Retry the same invite.', { retryable: true }) }
+  }
   const result = await env.WAITLIST_DB.prepare(
     `UPDATE waitlist_entries SET status = 'invited', updated_at = ?
       WHERE id = ? AND status IN ('approved', 'invited')`,

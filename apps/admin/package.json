@@ -9,7 +9,7 @@
     "typecheck": "tsc -b",
     "worker:typecheck": "tsc -p tsconfig.worker.json --noEmit",
     "test": "vitest run",
-    "deploy": "pnpm build && wrangler deploy",
+    "deploy": "pnpm build && wrangler deploy --config wrangler.local.jsonc",
     "preview": "pnpm build && wrangler dev"
   },
   "dependencies": {

@@ -13,6 +13,10 @@ pnpm worker:typecheck
 pnpm build
 ```
 
+For a direct production deployment, copy `wrangler.local.jsonc.example` to
+`wrangler.local.jsonc`, fill in resource IDs and Access values, then run
+`pnpm deploy`. The local file is ignored and must never be committed.
+
 The local Worker fails closed unless requests include a valid Access assertion.
 Do not add a production bypass. Configure a local Access test token only in a
 gitignored environment when exercising the Worker directly.

@@ -74,7 +74,8 @@ jobs:
               "POLICY_AUD": "${ACCESS_POLICY_AUD}",
               "ANALYTICS_API_URL": "${ANALYTICS_API_URL}",
               "INVITE_FROM_EMAIL": "beta@orbitalmarkets.xyz",
-              "APP_ORIGIN": "${ADMIN_APP_ORIGIN}"
+              "APP_ORIGIN": "${ADMIN_APP_ORIGIN}",
+              "INVITE_SENDING_ENABLED": "${INVITE_SENDING_ENABLED:-false}"
             },
             "observability": { "enabled": true, "head_sampling_rate": 1 }
           }
@@ -86,6 +87,7 @@ jobs:
           ACCESS_POLICY_AUD: ${{ secrets.ACCESS_POLICY_AUD }}
           ANALYTICS_API_URL: ${{ secrets.ANALYTICS_API_URL }}
           ADMIN_APP_ORIGIN: ${{ secrets.ADMIN_APP_ORIGIN }}
+          INVITE_SENDING_ENABLED: ${{ secrets.INVITE_SENDING_ENABLED }}
 
       - name: Typecheck and test
         working-directory: apps/admin
