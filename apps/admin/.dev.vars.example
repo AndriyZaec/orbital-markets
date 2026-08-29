@@ -1,0 +1,7 @@
+# Local Worker secrets and vars. Copy to .dev.vars (gitignored).
+ADMIN_TOKEN=replace-with-long-random-admin-token
+RESEND_API_KEY=replace-with-resend-api-key
+INVITE_FROM_EMAIL=Orbital Markets <support@beta.orbitalmarkets.xyz>
+APP_ORIGIN=https://app.orbitalmarkets.xyz
+ANALYTICS_API_TOKEN=local-only-token
+INVITE_SENDING_ENABLED=true

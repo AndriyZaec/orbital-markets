@@ -1,0 +1,35 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "orbital-admin",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-08-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/admin/*"]
+  },
+  "kv_namespaces": [{
+    "binding": "BETA_INVITES",
+    "id": "replace-with-production-kv-id"
+  }],
+  "d1_databases": [{
+    "binding": "WAITLIST_DB",
+    "database_name": "orbital-waitlist",
+    "database_id": "replace-with-production-d1-id",
+    "migrations_dir": "../gate-worker/migrations"
+  }],
+  "vars": {
+    "ANALYTICS_API_URL": "https://api.your-domain.example",
+    "RESEND_API_URL": "https://api.resend.com/emails",
+    "INVITE_FROM_EMAIL": "Orbital Markets <support@beta.orbitalmarkets.xyz>",
+    "APP_ORIGIN": "https://app.orbitalmarkets.xyz",
+    "INVITE_SENDING_ENABLED": "false"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

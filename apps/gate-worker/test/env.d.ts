@@ -8,6 +8,7 @@ declare namespace Cloudflare {
     WAITLIST_DB: D1Database;
     JWT_SECRET: string;
     COOKIE_DOMAIN: string;
+    LANDING_ORIGIN?: string;
     TEST_MIGRATIONS: import('cloudflare:test').D1Migration[];
   }
 }

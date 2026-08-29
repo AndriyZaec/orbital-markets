@@ -1,0 +1,19 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "orbital-admin-test",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "kv_namespaces": [
+    { "binding": "BETA_INVITES", "id": "00000000000000000000000000000000" }
+  ],
+  "d1_databases": [
+    {
+      "binding": "WAITLIST_DB",
+      "database_name": "orbital-waitlist-test",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../gate-worker/migrations"
+    }
+  ],
+  "vars": {}
+}

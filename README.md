@@ -132,6 +132,7 @@ The suggested notional is advisory, not a profitability guarantee. Users can ove
 - `apps/landing` - public React 19 landing and closed-beta request UI
 - `apps/web` - React 19 + TypeScript + Tailwind frontend
 - `apps/gate-worker` - Cloudflare Worker for closed-beta access
+- `apps/admin` - bearer-token-protected beta operations console on Cloudflare Workers
 - `SQLite` + embedded migrations + `sqlc`
 
 ### Core Models
@@ -268,5 +269,6 @@ Today Orbital has:
 - paper execution, monitoring, and analytics
 - non-custodial live open, recovery, close, and kill-switch flows
 - closed-beta access and production deployment infrastructure
+- Access-protected waitlist review, invite delivery, and operational analytics console
 
 The current focus is product validation and live execution hardening, not basic venue plumbing.

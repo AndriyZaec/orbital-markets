@@ -187,6 +187,95 @@ describe('beta cookie rolling refresh', () => {
   });
 });
 
+describe('linked invite redemption', () => {
+  it('persists the cookie and user identity link while issuing a uid claim', async () => {
+    const timestamp = Math.floor(Date.now() / 1_000);
+    const entryId = 'entry-linked';
+    const code = 'LINKEDINVITE';
+    await env.WAITLIST_DB.prepare(
+      `INSERT INTO waitlist_entries
+        (id, email, profile, monthly_volume, source, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'approved', ?, ?)`,
+    )
+      .bind(entryId, 'linked@example.com', 'active_trader', '100k_1m', 'landing', timestamp, timestamp)
+      .run();
+    await env.WAITLIST_DB.prepare(
+      `INSERT INTO beta_invites
+        (id, waitlist_entry_id, code, status, created_at, delivery_attempts, updated_at)
+       VALUES (?, ?, ?, 'sent', ?, 1, ?)`,
+    )
+      .bind('invite-linked', entryId, code, timestamp, timestamp)
+      .run();
+    await env.BETA_INVITES.put(`invite:${code}`, JSON.stringify({
+      waitlist_entry_id: entryId,
+      created_at: timestamp,
+    }));
+
+    const response = await exports.default.fetch('https://app.orbitalmarkets.xyz/gate/redeem', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+
+    expect(response.status).toBe(200);
+    const cookie = response.headers.get('set-cookie');
+    expect(cookie).toContain('__beta=');
+    const claims = JSON.parse(atob(cookie!.split('=')[1].split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { cid: string; uid: string };
+    expect(claims.uid).toBe(entryId);
+
+    const invite = await env.WAITLIST_DB.prepare(
+      'SELECT status, bound_cookie_id, redeemed_at FROM beta_invites WHERE code = ?',
+    ).bind(code).first<{ status: string; bound_cookie_id: string; redeemed_at: number }>();
+    expect(invite?.status).toBe('redeemed');
+    expect(invite?.bound_cookie_id).toBe(claims.cid);
+    expect(invite?.redeemed_at).toBeTypeOf('number');
+  });
+
+  it('continues accepting legacy invite records without a D1 link', async () => {
+    const cookie = await redeemInvite('LEGACYLINK');
+    expect(cookie).toContain('__beta=');
+  });
+
+  it('blocks new redemption after soft revoke while keeping the existing cookie valid', async () => {
+    const timestamp = Math.floor(Date.now() / 1_000);
+    const entryId = 'entry-soft-revoke';
+    const code = 'SOFTREVOKE01';
+    await env.WAITLIST_DB.prepare(
+      `INSERT INTO waitlist_entries
+        (id, email, profile, monthly_volume, source, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'approved', ?, ?)`,
+    ).bind(entryId, 'soft-revoke@example.com', 'active_trader', '100k_1m', 'landing', timestamp, timestamp).run();
+    await env.WAITLIST_DB.prepare(
+      `INSERT INTO beta_invites
+        (id, waitlist_entry_id, code, status, created_at, delivery_attempts, updated_at)
+       VALUES (?, ?, ?, 'sent', ?, 1, ?)`,
+    ).bind('invite-soft-revoke', entryId, code, timestamp, timestamp).run();
+    await env.BETA_INVITES.put(`invite:${code}`, JSON.stringify({ waitlist_entry_id: entryId, created_at: timestamp }));
+
+    const first = await exports.default.fetch('https://app.orbitalmarkets.xyz/gate/redeem', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const cookie = first.headers.get('set-cookie')!.split(';', 1)[0];
+    await env.WAITLIST_DB.prepare("UPDATE beta_invites SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE code = ?")
+      .bind(timestamp + 1, timestamp + 1, code).run();
+    await env.BETA_INVITES.put(`invite:${code}`, JSON.stringify({ waitlist_entry_id: entryId, created_at: timestamp, revoked_at: timestamp + 1 }));
+
+    const newBrowser = await exports.default.fetch('https://app.orbitalmarkets.xyz/gate/redeem', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    expect(newBrowser.status).toBe(404);
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('origin response')));
+    const existingBrowser = await exports.default.fetch('https://app.orbitalmarkets.xyz/dashboard', { headers: { cookie } });
+    expect(existingBrowser.status).toBe(200);
+    expect(await existingBrowser.text()).toBe('origin response');
+  });
+});
+
 async function redeemInvite(code: string): Promise<string> {
   await env.BETA_INVITES.put(`invite:${code}`, JSON.stringify({ created_at: Math.floor(Date.now() / 1_000) }));
   const response = await exports.default.fetch('https://app.orbitalmarkets.xyz/gate/redeem', {

@@ -1,0 +1,112 @@
+name: Deploy Admin Worker
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/admin/**'
+      - 'apps/gate-worker/migrations/**'
+      - '.github/workflows/deploy-admin.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-orbital-workers
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+
+      - name: Install admin dependencies
+        working-directory: apps/admin
+        run: pnpm install --frozen-lockfile
+
+      - name: Materialize production Worker config
+        working-directory: apps/admin
+        run: |
+          cat > wrangler.local.jsonc <<EOF
+          {
+            "name": "orbital-admin",
+            "main": "worker/index.ts",
+            "compatibility_date": "2026-08-29",
+            "compatibility_flags": ["nodejs_compat"],
+            "workers_dev": false,
+            "assets": {
+              "directory": "./dist/client",
+              "binding": "ASSETS",
+              "not_found_handling": "single-page-application",
+              "run_worker_first": ["/api/admin/*"]
+            },
+            "kv_namespaces": [{
+              "binding": "BETA_INVITES",
+              "id": "${BETA_INVITES_KV_ID}"
+            }],
+            "d1_databases": [{
+              "binding": "WAITLIST_DB",
+              "database_name": "orbital-waitlist",
+              "database_id": "${WAITLIST_D1_ID}",
+              "migrations_dir": "../gate-worker/migrations"
+            }],
+            "vars": {
+              "ANALYTICS_API_URL": "${ANALYTICS_API_URL}",
+              "RESEND_API_URL": "https://api.resend.com/emails",
+              "INVITE_FROM_EMAIL": "Orbital Markets <support@beta.orbitalmarkets.xyz>",
+              "APP_ORIGIN": "${ADMIN_APP_ORIGIN}",
+              "INVITE_SENDING_ENABLED": "${INVITE_SENDING_ENABLED:-false}"
+            },
+            "observability": { "enabled": true, "head_sampling_rate": 1 }
+          }
+          EOF
+        env:
+          BETA_INVITES_KV_ID: ${{ secrets.BETA_INVITES_KV_ID }}
+          WAITLIST_D1_ID: ${{ secrets.WAITLIST_D1_ID }}
+          ANALYTICS_API_URL: ${{ secrets.ANALYTICS_API_URL }}
+          ADMIN_APP_ORIGIN: ${{ secrets.ADMIN_APP_ORIGIN }}
+          INVITE_SENDING_ENABLED: ${{ secrets.INVITE_SENDING_ENABLED }}
+
+      - name: Typecheck and test
+        working-directory: apps/admin
+        run: |
+          pnpm typecheck
+          pnpm worker:typecheck
+          pnpm test
+
+      - name: Build assets
+        working-directory: apps/admin
+        run: pnpm build
+
+      - name: Validate Worker bundle
+        working-directory: apps/admin
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.local.jsonc
+
+      - name: Apply D1 migrations
+        working-directory: apps/admin
+        run: pnpm exec wrangler d1 migrations apply orbital-waitlist --remote --config wrangler.local.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy
+        working-directory: apps/admin
+        run: pnpm exec wrangler deploy --config wrangler.local.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -36,6 +36,7 @@ const WAITLIST_VOLUMES = new Set([
 
 interface InviteRecord {
   user_label?: string;
+  waitlist_entry_id?: string;
   created_at: number;
   used_at?: number;
   bound_cookie_id?: string;
@@ -44,6 +45,7 @@ interface InviteRecord {
 
 interface Claims {
   cid: string;
+  uid?: string;
   exp: number;
 }
 
@@ -88,7 +90,7 @@ export default {
       return response;
     }
 
-    const jwt = await signJWT({ cid: claims.cid, exp: currentTime + COOKIE_MAX_AGE }, env.JWT_SECRET);
+    const jwt = await signJWT({ cid: claims.cid, uid: claims.uid, exp: currentTime + COOKIE_MAX_AGE }, env.JWT_SECRET);
     return withCookie(response, jwt, env.COOKIE_DOMAIN);
   },
 } satisfies ExportedHandler<Env>;
@@ -279,20 +281,58 @@ async function handleRedeem(request: Request, env: Env): Promise<Response> {
     if (!existing || existing.cid !== record.bound_cookie_id) {
       return jsonResponse(404, { error: 'invalid code' });
     }
-    const jwt = await signJWT({ cid: existing.cid, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
+    const jwt = await signJWT({ cid: existing.cid, uid: record.waitlist_entry_id, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
     return setCookieResponse(jwt, env.COOKIE_DOMAIN);
   }
 
-  // First-time redeem: mint cookie_id, bind in KV, set cookie.
-  const cid = randomHex(16);
-  const jwt = await signJWT({ cid, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
+  // New admin-issued invites are linked to D1 before the KV record is updated.
+  // If the KV write fails, a retry can recover the same cookie id from D1.
+  const linkedCookieId = record.waitlist_entry_id
+    ? await redeemedCookieId(env, record.waitlist_entry_id, code)
+    : null;
+  const cid = linkedCookieId ?? randomHex(16);
+  const redeemedAt = now();
+  if (record.waitlist_entry_id && !linkedCookieId) {
+    await persistRedemption(env, record.waitlist_entry_id, code, cid, redeemedAt);
+  }
+  const jwt = await signJWT({ cid, uid: record.waitlist_entry_id, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
   const updated: InviteRecord = {
     ...record,
-    used_at: now(),
+    used_at: redeemedAt,
     bound_cookie_id: cid,
   };
   await env.BETA_INVITES.put(key, JSON.stringify(updated));
   return setCookieResponse(jwt, env.COOKIE_DOMAIN);
+}
+
+async function redeemedCookieId(env: Env, waitlistEntryId: string, code: string): Promise<string | null> {
+  const row = await env.WAITLIST_DB.prepare(
+    'SELECT bound_cookie_id FROM beta_invites WHERE waitlist_entry_id = ? AND code = ? AND status = \'redeemed\'',
+  )
+    .bind(waitlistEntryId, code)
+    .first<{ bound_cookie_id: string | null }>();
+  return row?.bound_cookie_id ?? null;
+}
+
+async function persistRedemption(
+  env: Env,
+  waitlistEntryId: string,
+  code: string,
+  cookieId: string,
+  redeemedAt: number,
+): Promise<void> {
+  const result = await env.WAITLIST_DB.prepare(
+    `UPDATE beta_invites
+        SET status = 'redeemed', bound_cookie_id = ?, redeemed_at = ?, updated_at = ?
+      WHERE waitlist_entry_id = ?
+        AND code = ?
+        AND status IN ('issued', 'sent', 'delivery_failed')`,
+  )
+    .bind(cookieId, redeemedAt, redeemedAt, waitlistEntryId, code)
+    .run();
+  if (!result.success || result.meta.changes !== 1) {
+    throw new Error('invite redemption linkage failed');
+  }
 }
 
 function setCookieResponse(jwt: string, cookieDomain: string): Response {

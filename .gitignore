@@ -11,6 +11,7 @@ node_modules/
 dist/
 .env
 .env.local
+*.tsbuildinfo
 
 # IDE
 .idea/
@@ -40,6 +41,8 @@ apps/gate-worker/.dev.vars
 apps/gate-worker/wrangler.local.toml
 apps/gate-worker/.wrangler/
 apps/gate-worker/scripts/output/
+apps/admin/wrangler.local.jsonc
+apps/admin/.wrangler/
 waitlist-export-*.csv
 invites-*.txt
 *.pem
