@@ -28,3 +28,12 @@ gitignored environment when exercising the Worker directly.
 
 The D1 migration directory is shared with `apps/gate-worker/migrations` so the
 gate and admin Worker remain compatible during rollout.
+
+## Backup and rollback
+
+Before a production migration, export the D1 database with
+`wrangler d1 export orbital-waitlist --remote --output waitlist-backup.sql` and
+store it outside the repository. Keep the previous Worker version available with
+`wrangler versions list`. A bad admin release can be reverted with
+`wrangler rollback <VERSION_ID>`; gate migrations are backward-compatible and
+must be rolled out before either Worker is switched to the new behavior.

@@ -31,7 +31,9 @@
   "vars": {
     "TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
     "POLICY_AUD": "replace-with-access-application-audience",
-    "ANALYTICS_API_URL": "https://api.your-domain.example"
+    "ANALYTICS_API_URL": "https://api.your-domain.example",
+    "INVITE_FROM_EMAIL": "beta@orbitalmarkets.xyz",
+    "APP_ORIGIN": "https://app.orbitalmarkets.xyz"
   },
   "observability": {
     "enabled": true,
