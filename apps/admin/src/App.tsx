@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { AuditPage } from './features/AuditPage'
+import { WaitlistPage } from './features/WaitlistPage'
 
 type AdminSection = 'overview' | 'waitlist' | 'users' | 'audit'
 
@@ -58,7 +60,7 @@ export function App() {
           <div><span className="eyebrow">Beta operations</span><h1>{sectionTitle(section)}</h1></div>
           <div className="operator"><span className="status-dot" />{identity.email}</div>
         </header>
-        <section className="page-content"><SectionPlaceholder section={section} /></section>
+        <section className="page-content">{section === 'waitlist' ? <WaitlistPage /> : section === 'audit' ? <AuditPage /> : <SectionPlaceholder section={section} />}</section>
       </main>
     </div>
   )
