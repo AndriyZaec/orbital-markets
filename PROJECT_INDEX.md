@@ -81,14 +81,14 @@ Local and production procedures are in `apps/gate-worker/README.md`.
 
 ### `apps/admin`
 
-Access-protected Cloudflare Worker console for beta operations. It owns the
+Bearer-token-protected Cloudflare Worker console for beta operations. It owns the
 waitlist review flow, invite lifecycle, audit log, and read-only live analytics.
-It uses the same D1 migrations, KV namespace, and Email Sending binding as the
-gate Worker; all admin routes validate the Cloudflare Access JWT server-side.
+It uses the same D1 migrations and KV namespace as the gate Worker and sends
+invitations through Resend; all admin API routes validate the shared token.
 
 ```text
 src/                  React/Vite admin shell and feature pages
-worker/auth/          Access JWT validation
+worker/auth/          admin token validation
 worker/features/      waitlist, invite, and audit capabilities
 worker/shared/        HTTP and operational helpers
 migrations/           shared with apps/gate-worker/migrations

@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-admin
+  group: deploy-orbital-workers
   cancel-in-progress: false
 
 jobs:

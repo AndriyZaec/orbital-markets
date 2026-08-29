@@ -132,7 +132,7 @@ The suggested notional is advisory, not a profitability guarantee. Users can ove
 - `apps/landing` - public React 19 landing and closed-beta request UI
 - `apps/web` - React 19 + TypeScript + Tailwind frontend
 - `apps/gate-worker` - Cloudflare Worker for closed-beta access
-- `apps/admin` - Cloudflare Access-protected beta operations console
+- `apps/admin` - bearer-token-protected beta operations console on Cloudflare Workers
 - `SQLite` + embedded migrations + `sqlc`
 
 ### Core Models
