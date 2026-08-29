@@ -33,7 +33,8 @@
     "POLICY_AUD": "replace-with-access-application-audience",
     "ANALYTICS_API_URL": "https://api.your-domain.example",
     "INVITE_FROM_EMAIL": "beta@orbitalmarkets.xyz",
-    "APP_ORIGIN": "https://app.orbitalmarkets.xyz"
+    "APP_ORIGIN": "https://app.orbitalmarkets.xyz",
+    "INVITE_SENDING_ENABLED": "false"
   },
   "observability": {
     "enabled": true,

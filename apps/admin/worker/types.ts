@@ -7,6 +7,7 @@ export interface Env {
   POLICY_AUD: string
   INVITE_FROM_EMAIL?: string
   APP_ORIGIN: string
+  INVITE_SENDING_ENABLED?: string
   ANALYTICS_API_URL?: string
   ANALYTICS_API_TOKEN?: string
 }

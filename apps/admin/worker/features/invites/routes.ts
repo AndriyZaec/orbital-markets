@@ -71,7 +71,7 @@ async function issueInvite(request: Request, env: Env, actor: AccessIdentity, en
   }
   const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.issue', entryId)
   if (cooldownResponse) return cooldownResponse
-  const result = await deliverInvite(env, invite, entry.email)
+  const result = await deliverInvite(env, invite, entry.email, false)
   if (!result.ok) {
     await recordDeliveryFailure(env, actor, invite.id, invite.waitlist_entry_id)
     return result.response
@@ -99,7 +99,7 @@ async function resendInvite(request: Request, env: Env, actor: AccessIdentity, i
   if (cooldownResponse) return cooldownResponse
   const entry = await env.WAITLIST_DB.prepare('SELECT id, email FROM waitlist_entries WHERE id = ?').bind(invite.waitlist_entry_id).first<{ id: string; email: string }>()
   if (!entry) return jsonResponse(409, 'waitlist_entry_not_found', 'The invite owner no longer exists.')
-  const result = await deliverInvite(env, invite, entry.email)
+  const result = await deliverInvite(env, invite, entry.email, true)
   if (!result.ok) {
     await recordDeliveryFailure(env, actor, invite.id, invite.waitlist_entry_id)
     return result.response
@@ -165,13 +165,32 @@ async function createInvite(env: Env, entryId: string): Promise<InviteRow> {
   return invite
 }
 
-async function deliverInvite(env: Env, invite: InviteRow, email: string): Promise<{ ok: true } | { ok: false; response: Response }> {
+async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSend: boolean): Promise<{ ok: true } | { ok: false; response: Response }> {
   const attempt = invite.delivery_attempts + 1
   const attemptResult = await env.WAITLIST_DB.prepare(
     'UPDATE beta_invites SET delivery_attempts = ?, updated_at = ? WHERE id = ?',
   ).bind(attempt, now(), invite.id).run()
   if (!attemptResult.success || attemptResult.meta.changes !== 1) {
     return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Invite delivery could not be started safely. Retry the same invite.', { retryable: true }) }
+  }
+  try {
+    await ensureKVRecord(env, invite)
+  } catch (error) {
+    await markDeliveryFailure(env, invite.id, safeError(error))
+    return { ok: false, response: jsonResponse(502, 'invite_kv_sync_failed', 'Invite could not be synchronized to KV. Retry the same invite.', { retryable: true }) }
+  }
+  if (!forceSend && invite.status === 'sent' && invite.sent_at !== null) {
+    const timestamp = now()
+    const result = await env.WAITLIST_DB.prepare(
+      `UPDATE waitlist_entries SET status = 'invited', updated_at = ?
+        WHERE id = ? AND status IN ('approved', 'invited')`,
+    ).bind(timestamp, invite.waitlist_entry_id).run()
+    if (!result.success || result.meta.changes !== 1) return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Invite delivery state could not be reconciled. Retry the same invite.', { retryable: true }) }
+    return { ok: true }
+  }
+  if (env.INVITE_SENDING_ENABLED !== 'true') {
+    await markDeliveryFailure(env, invite.id, 'invite sending is disabled')
+    return { ok: false, response: jsonResponse(503, 'email_delivery_disabled', 'Invite email delivery is disabled until explicitly enabled.', { retryable: false }) }
   }
   if (!env.EMAIL || !env.INVITE_FROM_EMAIL) {
     await markDeliveryFailure(env, invite.id, 'email binding or INVITE_FROM_EMAIL is not configured')
@@ -183,6 +202,15 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string): Promis
   }
   const origin = env.APP_ORIGIN.replace(/\/$/, '')
   const redeemUrl = `${origin}/gate?invite=${encodeURIComponent(invite.code)}`
+  const sendStartedAt = now()
+  const sendState = await env.WAITLIST_DB.prepare(
+    `UPDATE beta_invites
+        SET status = 'sent', sent_at = COALESCE(sent_at, ?), delivery_error = NULL, updated_at = ?
+      WHERE id = ? AND status IN ('issued', 'sent', 'delivery_failed')`,
+  ).bind(sendStartedAt, sendStartedAt, invite.id).run()
+  if (!sendState.success || sendState.meta.changes !== 1) {
+    return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Invite delivery could not be started safely. Retry the same invite.', { retryable: true }) }
+  }
   try {
     await env.EMAIL.send({
       to: email,
@@ -196,21 +224,31 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string): Promis
     return { ok: false, response: jsonResponse(502, 'email_delivery_failed', 'Invite email was not accepted by the provider. Retry the same invite.', { retryable: true }) }
   }
   const timestamp = now()
-  const result = await env.WAITLIST_DB.batch([
-    env.WAITLIST_DB.prepare(
-      `UPDATE beta_invites
-          SET status = 'sent', sent_at = COALESCE(sent_at, ?), delivery_error = NULL, updated_at = ?
-        WHERE id = ? AND status IN ('issued', 'sent', 'delivery_failed')`,
-    ).bind(timestamp, timestamp, invite.id),
-    env.WAITLIST_DB.prepare(
-      `UPDATE waitlist_entries SET status = 'invited', updated_at = ?
-        WHERE id = ? AND status IN ('approved', 'invited')`,
-    ).bind(timestamp, invite.waitlist_entry_id),
-  ])
-  if (result[0].meta.changes !== 1 || result[1].meta.changes !== 1) {
+  const result = await env.WAITLIST_DB.prepare(
+    `UPDATE waitlist_entries SET status = 'invited', updated_at = ?
+      WHERE id = ? AND status IN ('approved', 'invited')`,
+  ).bind(timestamp, invite.waitlist_entry_id).run()
+  if (!result.success || result.meta.changes !== 1) {
     return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Email was accepted but delivery state could not be persisted. Retry the same invite.', { retryable: true }) }
   }
   return { ok: true }
+}
+
+async function ensureKVRecord(env: Env, invite: InviteRow): Promise<void> {
+  const key = `${CODE_KEY_PREFIX}${invite.code}`
+  const raw = await env.BETA_INVITES.get(key)
+  let record: Record<string, unknown> = { waitlist_entry_id: invite.waitlist_entry_id, created_at: invite.created_at }
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) record = parsed as Record<string, unknown>
+    } catch {
+      throw new Error('corrupt KV invite record')
+    }
+  }
+  record.waitlist_entry_id = invite.waitlist_entry_id
+  record.created_at = invite.created_at
+  await env.BETA_INVITES.put(key, JSON.stringify(record))
 }
 
 async function activeInvite(env: Env, entryId: string): Promise<InviteRow | null> {

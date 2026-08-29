@@ -281,7 +281,7 @@ async function handleRedeem(request: Request, env: Env): Promise<Response> {
     if (!existing || existing.cid !== record.bound_cookie_id) {
       return jsonResponse(404, { error: 'invalid code' });
     }
-    const jwt = await signJWT({ cid: existing.cid, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
+    const jwt = await signJWT({ cid: existing.cid, uid: record.waitlist_entry_id, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
     return setCookieResponse(jwt, env.COOKIE_DOMAIN);
   }
 
