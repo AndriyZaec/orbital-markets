@@ -145,7 +145,10 @@ async function transitionWaitlist(request: Request, env: Env, actor: AccessIdent
   const keyOrResponse = requireIdempotencyKey(request)
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
-  if (previous) return jsonOk({ ok: true, idempotent: true, status: transition })
+  if (previous) {
+    if (previous.action !== `waitlist.${transition}` || previous.target_id !== id) return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
+    return jsonOk({ ok: true, idempotent: true, status: transition })
+  }
 
   const entry = await env.WAITLIST_DB.prepare('SELECT id, status FROM waitlist_entries WHERE id = ?').bind(id).first<{ id: string; status: string }>()
   if (!entry) return jsonResponse(404, 'waitlist_entry_not_found', 'Waitlist entry not found.')
@@ -165,6 +168,7 @@ async function bulkTransition(request: Request, env: Env, actor: AccessIdentity,
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
   if (previous) {
+    if (previous.action !== `waitlist.bulk_${transition}` || previous.target_id !== keyOrResponse) return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
     const metadata = JSON.parse(previous.metadata_json) as { ids?: unknown }
     return jsonOk({ ok: true, idempotent: true, status: transition, updated_ids: metadata.ids ?? [] })
   }

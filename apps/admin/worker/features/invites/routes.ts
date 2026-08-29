@@ -44,7 +44,10 @@ async function issueInvite(request: Request, env: Env, actor: AccessIdentity, en
   const keyOrResponse = requireIdempotencyKey(request)
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
-  if (previous) return inviteResult(env, previous.target_id, true)
+  if (previous) {
+    if (previous.action !== 'invite.issued') return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
+    return inviteResult(env, previous.target_id, true)
+  }
 
   const entry = await env.WAITLIST_DB.prepare('SELECT id, email, status FROM waitlist_entries WHERE id = ?').bind(entryId).first<WaitlistRow>()
   if (!entry) return jsonResponse(404, 'waitlist_entry_not_found', 'Waitlist entry not found.')
@@ -60,6 +63,10 @@ async function issueInvite(request: Request, env: Env, actor: AccessIdentity, en
       return jsonResponse(500, 'invite_create_failed', 'Invite could not be created.')
     }
   } else if (invite.status === 'sent' && entry.status === 'invited') {
+    await env.WAITLIST_DB.batch([
+      auditInsert(env, actor, 'invite.issued', 'beta_invite', invite.id, { waitlist_entry_id: entryId, reused: true }, keyOrResponse, now()),
+    ])
+    logMutation(request, actor, 'invite.issued', 'beta_invite', invite.id)
     return inviteResult(env, invite.id, false)
   }
   const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.issue')
@@ -77,7 +84,10 @@ async function resendInvite(request: Request, env: Env, actor: AccessIdentity, i
   const keyOrResponse = requireIdempotencyKey(request)
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
-  if (previous) return inviteResult(env, previous.target_id, true)
+  if (previous) {
+    if (previous.action !== 'invite.resent') return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
+    return inviteResult(env, previous.target_id, true)
+  }
   const invite = await findInvite(env, inviteId)
   if (!invite) return jsonResponse(404, 'invite_not_found', 'Invite not found.')
   if (invite.status === 'revoked') return jsonResponse(409, 'invite_revoked', 'A disabled invite cannot be resent.')
@@ -99,7 +109,10 @@ async function revokeInvite(request: Request, env: Env, actor: AccessIdentity, i
   const keyOrResponse = requireIdempotencyKey(request)
   if (keyOrResponse instanceof Response) return keyOrResponse
   const previous = await findIdempotentAction(env, actor, keyOrResponse)
-  if (previous) return inviteResult(env, previous.target_id, true)
+  if (previous) {
+    if (previous.action !== 'invite.revoked') return jsonResponse(409, 'idempotency_key_reused', 'The Idempotency-Key was already used for another action.')
+    return inviteResult(env, previous.target_id, true)
+  }
   const invite = await findInvite(env, inviteId)
   if (!invite) return jsonResponse(404, 'invite_not_found', 'Invite not found.')
   const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.revoke')
@@ -148,9 +161,12 @@ async function createInvite(env: Env, entryId: string): Promise<InviteRow> {
 
 async function deliverInvite(request: Request, env: Env, invite: InviteRow, email: string): Promise<{ ok: true } | { ok: false; response: Response }> {
   const attempt = invite.delivery_attempts + 1
-  await env.WAITLIST_DB.prepare(
+  const attemptResult = await env.WAITLIST_DB.prepare(
     'UPDATE beta_invites SET delivery_attempts = ?, updated_at = ? WHERE id = ?',
   ).bind(attempt, now(), invite.id).run()
+  if (!attemptResult.success || attemptResult.meta.changes !== 1) {
+    return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Invite delivery could not be started safely. Retry the same invite.', { retryable: true }) }
+  }
   if (!env.EMAIL || !env.INVITE_FROM_EMAIL) {
     await markDeliveryFailure(env, invite.id, 'email binding or INVITE_FROM_EMAIL is not configured')
     return { ok: false, response: jsonResponse(503, 'email_not_configured', 'Invite delivery is not configured.', { retryable: true }) }
