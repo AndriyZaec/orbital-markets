@@ -55,10 +55,6 @@ jobs:
               "not_found_handling": "single-page-application",
               "run_worker_first": ["/api/admin/*"]
             },
-            "send_email": [{
-              "name": "EMAIL",
-              "allowed_sender_addresses": ["beta@orbitalmarkets.xyz"]
-            }],
             "kv_namespaces": [{
               "binding": "BETA_INVITES",
               "id": "${BETA_INVITES_KV_ID}"
@@ -73,7 +69,8 @@ jobs:
               "TEAM_DOMAIN": "${ACCESS_TEAM_DOMAIN}",
               "POLICY_AUD": "${ACCESS_POLICY_AUD}",
               "ANALYTICS_API_URL": "${ANALYTICS_API_URL}",
-              "INVITE_FROM_EMAIL": "beta@orbitalmarkets.xyz",
+              "RESEND_API_URL": "https://api.resend.com/emails",
+              "INVITE_FROM_EMAIL": "Orbital Markets <support@orbitalmarkets.xyz>",
               "APP_ORIGIN": "${ADMIN_APP_ORIGIN}",
               "INVITE_SENDING_ENABLED": "${INVITE_SENDING_ENABLED:-false}"
             },

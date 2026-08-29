@@ -72,7 +72,7 @@ async function issueInvite(request: Request, env: Env, actor: AccessIdentity, en
   }
   const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.issue', entryId)
   if (cooldownResponse) return cooldownResponse
-  const result = await deliverInvite(env, invite, entry.email, false)
+  const result = await deliverInvite(env, invite, entry.email, false, keyOrResponse)
   if (!result.ok) {
     await recordDeliveryFailure(env, actor, invite.id, invite.waitlist_entry_id)
     return result.response
@@ -100,7 +100,7 @@ async function resendInvite(request: Request, env: Env, actor: AccessIdentity, i
   if (cooldownResponse) return cooldownResponse
   const entry = await env.WAITLIST_DB.prepare('SELECT id, email FROM waitlist_entries WHERE id = ?').bind(invite.waitlist_entry_id).first<{ id: string; email: string }>()
   if (!entry) return jsonResponse(409, 'waitlist_entry_not_found', 'The invite owner no longer exists.')
-  const result = await deliverInvite(env, invite, entry.email, true)
+  const result = await deliverInvite(env, invite, entry.email, true, keyOrResponse)
   if (!result.ok) {
     await recordDeliveryFailure(env, actor, invite.id, invite.waitlist_entry_id)
     return result.response
@@ -166,7 +166,7 @@ async function createInvite(env: Env, entryId: string): Promise<InviteRow> {
   return invite
 }
 
-async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSend: boolean): Promise<{ ok: true } | { ok: false; response: Response }> {
+async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSend: boolean, idempotencyKey: string): Promise<{ ok: true } | { ok: false; response: Response }> {
   try {
     await ensureKVRecord(env, invite)
   } catch (error) {
@@ -186,8 +186,8 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSe
     await markDeliveryFailure(env, invite.id, 'invite sending is disabled')
     return { ok: false, response: jsonResponse(503, 'email_delivery_disabled', 'Invite email delivery is disabled until explicitly enabled.', { retryable: false }) }
   }
-  if (!env.EMAIL || !env.INVITE_FROM_EMAIL) {
-    await markDeliveryFailure(env, invite.id, 'email binding or INVITE_FROM_EMAIL is not configured')
+  if (!env.RESEND_API_KEY || !env.INVITE_FROM_EMAIL) {
+    await markDeliveryFailure(env, invite.id, 'RESEND_API_KEY or INVITE_FROM_EMAIL is not configured')
     return { ok: false, response: jsonResponse(503, 'email_not_configured', 'Invite delivery is not configured.', { retryable: true }) }
   }
   if (!env.APP_ORIGIN) {
@@ -208,12 +208,13 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSe
     return { ok: false, response: jsonResponse(409, 'delivery_in_progress', 'Invite delivery is already in progress. Wait for it to settle before retrying.', { retryable: true }) }
   }
   try {
-    await env.EMAIL.send({
+    await sendResendEmail(env, {
       to: email,
-      from: { email: env.INVITE_FROM_EMAIL, name: 'Orbital Markets' },
+      from: env.INVITE_FROM_EMAIL,
       subject: 'Your Orbital Markets beta invitation',
       html: `<p>Welcome to the Orbital Markets closed beta.</p><p>Use the invitation code below to activate access:</p><p><strong>${invite.code}</strong></p><p><a href="${redeemUrl}">Open Orbital Markets</a></p><p>This invitation is intended for you and can be used in one browser.</p>`,
       text: `Welcome to the Orbital Markets closed beta.\n\nYour invitation code: ${invite.code}\n\nOpen ${redeemUrl} to activate access. This invitation is intended for you and can be used in one browser.`,
+      idempotencyKey,
     })
   } catch (error) {
     await markDeliveryFailure(env, invite.id, safeError(error))
@@ -236,6 +237,32 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSe
     return { ok: false, response: jsonResponse(503, 'delivery_state_not_persisted', 'Email was accepted but delivery state could not be persisted. Retry the same invite.', { retryable: true }) }
   }
   return { ok: true }
+}
+
+async function sendResendEmail(
+  env: Env,
+  message: { to: string; from: string; subject: string; html: string; text: string; idempotencyKey: string },
+): Promise<void> {
+  const response = await fetch(env.RESEND_API_URL ?? 'https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'content-type': 'application/json',
+      'idempotency-key': message.idempotencyKey,
+    },
+    body: JSON.stringify({
+      from: message.from,
+      to: [message.to],
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+    }),
+  })
+  if (!response.ok) throw new Error(`Resend rejected email (${response.status})`)
+  const result: unknown = await response.json()
+  if (!result || typeof result !== 'object' || !('id' in result) || typeof result.id !== 'string' || result.id === '') {
+    throw new Error('Resend returned an invalid message response')
+  }
 }
 
 async function ensureKVRecord(env: Env, invite: InviteRow): Promise<void> {

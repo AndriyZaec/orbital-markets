@@ -26,8 +26,8 @@ gitignored environment when exercising the Worker directly.
 1. Configure a Cloudflare Access self-hosted application for the admin hostname and restrict it to the operator group.
 2. Set `TEAM_DOMAIN` and `POLICY_AUD` to that application's values.
 3. Replace the placeholder D1/KV identifiers in a local deployment config.
-4. Onboard the sender domain and configure the Email Sending binding.
-5. Set `ANALYTICS_API_TOKEN` as a Worker secret and point `ANALYTICS_API_URL` at the Go API.
+4. Verify `orbitalmarkets.xyz` in Resend and configure `support@orbitalmarkets.xyz` as the sender.
+5. Set `RESEND_API_KEY` and `ANALYTICS_API_TOKEN` as Worker secrets, then point `ANALYTICS_API_URL` at the Go API.
 6. Keep `INVITE_SENDING_ENABLED=false` for the initial deployment and verify reads, approvals, audit records, and KV writes.
 7. Set `INVITE_SENDING_ENABLED=true` only for the dedicated production smoke-test window, then run the invite delivery checks.
 8. Run `pnpm deploy`.

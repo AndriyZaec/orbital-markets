@@ -2,7 +2,8 @@ export interface Env {
   ASSETS: Fetcher
   BETA_INVITES: KVNamespace
   WAITLIST_DB: D1Database
-  EMAIL?: SendEmail
+  RESEND_API_KEY?: string
+  RESEND_API_URL?: string
   TEAM_DOMAIN: string
   POLICY_AUD: string
   INVITE_FROM_EMAIL?: string

@@ -11,12 +11,6 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/admin/*"]
   },
-  "send_email": [
-    {
-      "name": "EMAIL",
-      "allowed_sender_addresses": ["beta@orbitalmarkets.xyz"]
-    }
-  ],
   "kv_namespaces": [
     { "binding": "BETA_INVITES", "id": "00000000000000000000000000000000" }
   ],
@@ -32,7 +26,8 @@
     "TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
     "POLICY_AUD": "replace-with-access-application-audience",
     "ANALYTICS_API_URL": "https://api.your-domain.example",
-    "INVITE_FROM_EMAIL": "beta@orbitalmarkets.xyz",
+    "RESEND_API_URL": "https://api.resend.com/emails",
+    "INVITE_FROM_EMAIL": "Orbital Markets <support@orbitalmarkets.xyz>",
     "APP_ORIGIN": "https://app.orbitalmarkets.xyz",
     "INVITE_SENDING_ENABLED": "false"
   },
