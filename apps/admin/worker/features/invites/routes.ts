@@ -202,8 +202,8 @@ async function deliverInvite(env: Env, invite: InviteRow, email: string, forceSe
         SET delivery_attempts = delivery_attempts + 1, delivery_error = 'delivery_in_progress', updated_at = ?
       WHERE id = ?
         AND status IN ('issued', 'sent', 'delivery_failed')
-        AND (? = 1 OR delivery_error IS NULL OR delivery_error != 'delivery_in_progress')`,
-  ).bind(claimTime, invite.id, forceSend ? 1 : 0).run()
+        AND (delivery_error IS NULL OR delivery_error != 'delivery_in_progress' OR ( ? = 1 AND updated_at <= ?))`,
+  ).bind(claimTime, invite.id, forceSend ? 1 : 0, claimTime - 300).run()
   if (!claim.success || claim.meta.changes !== 1) {
     return { ok: false, response: jsonResponse(409, 'delivery_in_progress', 'Invite delivery is already in progress. Wait for it to settle before retrying.', { retryable: true }) }
   }

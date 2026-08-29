@@ -61,7 +61,7 @@ export function App() {
           <div><span className="eyebrow">Beta operations</span><h1>{sectionTitle(section)}</h1></div>
           <div className="operator"><span className="status-dot" />{identity.email}</div>
         </header>
-        <section className="page-content">{section === 'overview' ? <AnalyticsPage /> : section === 'waitlist' ? <WaitlistPage /> : section === 'users' ? <WaitlistPage mode="users" /> : <AuditPage />}</section>
+        <section className="page-content">{section === 'overview' ? <AnalyticsPage /> : section === 'waitlist' ? <WaitlistPage key="waitlist" /> : section === 'users' ? <WaitlistPage key="users" mode="users" /> : <AuditPage />}</section>
       </main>
     </div>
   )

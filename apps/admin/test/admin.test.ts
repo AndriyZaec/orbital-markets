@@ -88,4 +88,22 @@ describe('invite lifecycle', () => {
     expect(retry.status).toBe(200)
     expect(await env.WAITLIST_DB.prepare('SELECT status, delivery_attempts FROM beta_invites').first()).toEqual({ status: 'sent', delivery_attempts: 2 })
   })
+
+  it('does not let concurrent resends overwrite an active delivery claim', async () => {
+    await addEntry('concurrent-owner', 'approved')
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => { release = resolve })
+    const send = vi.fn(async () => { await waiting; return { messageId: 'message-concurrent' } })
+    const inviteEnv = { ...testEnv, EMAIL: { send }, INVITE_FROM_EMAIL: 'beta@orbitalmarkets.xyz', APP_ORIGIN: 'https://app.orbitalmarkets.xyz', INVITE_SENDING_ENABLED: 'true' } as Env
+    const firstPromise = handleInviteRoute(request('/waitlist/concurrent-owner/invites', { method: 'POST', headers: { 'Idempotency-Key': 'issue-key-3' } }), inviteEnv, actor, '/waitlist/concurrent-owner/invites')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const invite = await env.WAITLIST_DB.prepare('SELECT id FROM beta_invites').first<{ id: string }>()
+    const secondPromise = handleInviteRoute(request(`/invites/${invite!.id}/resend`, { method: 'POST', headers: { 'Idempotency-Key': 'resend-key-3' } }), inviteEnv, actor, `/invites/${invite!.id}/resend`)
+    const second = await secondPromise
+    expect(second.status).toBe(409)
+    release()
+    expect((await firstPromise).status).toBe(200)
+    expect(await env.WAITLIST_DB.prepare('SELECT status FROM beta_invites').first()).toEqual({ status: 'sent' })
+    expect(send).toHaveBeenCalledTimes(1)
+  })
 })
