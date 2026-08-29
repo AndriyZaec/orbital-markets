@@ -19,6 +19,8 @@ export function WaitlistPage({ mode = 'waitlist' }: { mode?: 'waitlist' | 'users
   const [profile, setProfile] = useState('')
   const [volume, setVolume] = useState('')
   const [query, setQuery] = useState('')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [detail, setDetail] = useState<WaitlistDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -33,13 +35,15 @@ export function WaitlistPage({ mode = 'waitlist' }: { mode?: 'waitlist' | 'users
     if (profile) params.set('profile', profile)
     if (volume) params.set('monthly_volume', volume)
     if (query.trim()) params.set('q', query.trim())
+    if (fromDate) params.set('from', fromDate)
+    if (toDate) params.set('to', toDate)
     setLoading(true)
     listWaitlist(params, controller.signal)
       .then((response) => { setEntries(response.items); setSelected(new Set()); setError(null) })
       .catch((reason: unknown) => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'Unable to load waitlist.') })
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
-  }, [status, profile, volume, query, refresh])
+  }, [status, profile, volume, query, fromDate, toDate, refresh])
 
   async function applyTransition(ids: string[], transition: 'approve' | 'reject') {
     if (ids.length === 0) return
@@ -94,6 +98,7 @@ export function WaitlistPage({ mode = 'waitlist' }: { mode?: 'waitlist' | 'users
         {mode === 'waitlist' && <label>Status<select value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)}><option value="all">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="invited">Invited</option><option value="rejected">Rejected</option></select></label>}
         <label>Profile<select value={profile} onChange={(event) => setProfile(event.target.value)}><option value="">All profiles</option><option value="active_trader">Active trader</option><option value="trading_team">Trading team</option><option value="researching">Researching</option></select></label>
         <label>Volume<select value={volume} onChange={(event) => setVolume(event.target.value)}><option value="">All volumes</option><option value="under_10k">Under $10k</option><option value="10k_50k">$10k-$50k</option><option value="50k_100k">$50k-$100k</option><option value="100k_1m">$100k-$1m</option><option value="1m_10m">$1m-$10m</option><option value="10m_plus">$10m+</option></select></label>
+        {mode === 'waitlist' && <><label>From<input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label><label>To<input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label></>}
       </div>
       {mode === 'waitlist' && selected.size > 0 && <div className="bulk-bar"><strong>{selected.size} selected</strong><button type="button" className="primary-button" onClick={() => applyTransition([...selected], 'approve')}>Approve</button><button type="button" className="danger-button" onClick={() => applyTransition([...selected], 'reject')}>Reject</button></div>}
       {actionError && <p className="inline-error">{actionError}</p>}
@@ -109,7 +114,7 @@ function WaitlistRow({ entry, checked, onToggle, onDetail, onAction }: { entry: 
 }
 
 function DetailPanel({ detail, onClose, onInviteAction }: { detail: WaitlistDetail; onClose: () => void; onInviteAction: (action: 'issue' | 'resend' | 'revoke', id: string) => Promise<void> }) {
-  return <div className="detail-panel"><div className="detail-heading"><div><span className="panel-kicker">Applicant detail</span><h3>{detail.entry.email}</h3></div><button type="button" className="close-button" onClick={onClose}>Close</button></div><div className="detail-grid"><span>Profile<strong>{formatLabel(detail.entry.profile)}</strong></span><span>Volume<strong>{formatLabel(detail.entry.monthly_volume)}</strong></span><span>Status<strong>{detail.entry.status}</strong></span><span>Submitted<strong>{formatDate(detail.entry.created_at)}</strong></span></div><h4>Invite history</h4>{detail.invites.length === 0 ? <div className="invite-empty"><p className="muted">No invite issued.</p>{detail.entry.status === 'approved' && <button type="button" className="primary-button" onClick={() => onInviteAction('issue', detail.entry.id)}>Issue and send invite</button>}</div> : <div className="invite-list">{detail.invites.map((invite) => <div key={invite.id}><span className={`status status-${invite.status}`}>{invite.status}</span><code>{invite.code}</code><span className="muted">{formatDate(invite.created_at)}</span>{invite.status === 'delivery_failed' && <button type="button" className="icon-action" onClick={() => onInviteAction('resend', invite.id)}>Resend</button>}{['issued', 'sent', 'delivery_failed'].includes(invite.status) && <button type="button" className="icon-action reject" onClick={() => onInviteAction('revoke', invite.id)}>Disable invite</button>}</div>)}</div>}<h4>Recent audit</h4>{detail.audit.length === 0 ? <p className="muted">No actions recorded.</p> : <div className="audit-list">{detail.audit.slice(0, 8).map((action) => <div key={action.id}><strong>{action.action}</strong><span>{action.actor_email}</span><span className="muted">{formatDate(action.created_at)}</span></div>)}</div>}</div>
+  return <div className="detail-panel"><div className="detail-heading"><div><span className="panel-kicker">Applicant detail</span><h3>{detail.entry.email}</h3></div><button type="button" className="close-button" onClick={onClose}>Close</button></div><div className="detail-grid"><span>Profile<strong>{formatLabel(detail.entry.profile)}</strong></span><span>Volume<strong>{formatLabel(detail.entry.monthly_volume)}</strong></span><span>Status<strong>{detail.entry.status}</strong></span><span>Submitted<strong>{formatDate(detail.entry.created_at)}</strong></span></div><h4>Invite history</h4>{detail.invites.length === 0 ? <div className="invite-empty"><p className="muted">No invite issued.</p>{detail.entry.status === 'approved' && <button type="button" className="primary-button" onClick={() => onInviteAction('issue', detail.entry.id)}>Issue and send invite</button>}</div> : <div className="invite-list">{detail.invites.map((invite) => <div key={invite.id}><span className={`status status-${invite.status}`}>{invite.status}</span><code>{invite.code}</code><span className="muted">{formatDate(invite.created_at)}</span>{['issued', 'sent', 'delivery_failed'].includes(invite.status) && <button type="button" className="icon-action" onClick={() => onInviteAction('resend', invite.id)}>Resend</button>}{['issued', 'sent', 'delivery_failed'].includes(invite.status) && <button type="button" className="icon-action reject" onClick={() => onInviteAction('revoke', invite.id)}>Disable invite</button>}</div>)}</div>}<h4>Recent audit</h4>{detail.audit.length === 0 ? <p className="muted">No actions recorded.</p> : <div className="audit-list">{detail.audit.slice(0, 8).map((action) => <div key={action.id}><strong>{action.action}</strong><span>{action.actor_email}</span><span className="muted">{formatDate(action.created_at)}</span></div>)}</div>}</div>
 }
 
 function formatLabel(value: string): string { return value.replaceAll('_', ' ') }

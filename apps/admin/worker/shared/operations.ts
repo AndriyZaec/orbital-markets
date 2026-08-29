@@ -7,8 +7,8 @@ export function requestId(request: Request): string {
   return request.headers.get('x-request-id')?.trim() || crypto.randomUUID()
 }
 
-export async function acquireMutationCooldown(env: Env, actor: AccessIdentity, action: string): Promise<Response | null> {
-  const key = `admin-cooldown:${actor.email}:${action}`
+export async function acquireMutationCooldown(env: Env, actor: AccessIdentity, action: string, targetId: string): Promise<Response | null> {
+  const key = `admin-cooldown:${actor.email}:${action}:${targetId}`
   const existing = await env.BETA_INVITES.get(key)
   if (existing) return jsonResponse(429, 'mutation_rate_limited', 'Please wait before repeating this mutation.', { retry_after_seconds: COOLDOWN_SECONDS })
   await env.BETA_INVITES.put(key, '1', { expirationTtl: COOLDOWN_SECONDS })

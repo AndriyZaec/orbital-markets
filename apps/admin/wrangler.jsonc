@@ -12,7 +12,10 @@
     "run_worker_first": ["/api/admin/*"]
   },
   "send_email": [
-    { "name": "EMAIL" }
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["beta@orbitalmarkets.xyz"]
+    }
   ],
   "kv_namespaces": [
     { "binding": "BETA_INVITES", "id": "00000000000000000000000000000000" }

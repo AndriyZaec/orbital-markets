@@ -19,7 +19,7 @@ gitignored environment when exercising the Worker directly.
 
 ## Deployment
 
-1. Configure a Cloudflare Access self-hosted application for the admin hostname.
+1. Configure a Cloudflare Access self-hosted application for the admin hostname and restrict it to the operator group.
 2. Set `TEAM_DOMAIN` and `POLICY_AUD` to that application's values.
 3. Replace the placeholder D1/KV identifiers in a local deployment config.
 4. Onboard the sender domain and configure the Email Sending binding.

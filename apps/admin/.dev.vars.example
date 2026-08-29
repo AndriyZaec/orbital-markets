@@ -1,3 +1,6 @@
 # Local Worker secrets and vars. Copy to .dev.vars (gitignored).
 TEAM_DOMAIN=https://your-team.cloudflareaccess.com
 POLICY_AUD=replace-with-access-application-audience
+INVITE_FROM_EMAIL=beta@orbitalmarkets.xyz
+APP_ORIGIN=https://app.orbitalmarkets.xyz
+ANALYTICS_API_TOKEN=local-only-token

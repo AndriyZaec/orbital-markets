@@ -78,7 +78,7 @@ describe('invite lifecycle', () => {
   it('preserves a delivery failure for a safe resend', async () => {
     await addEntry('failed-owner', 'approved')
     const send = vi.fn().mockRejectedValueOnce(new Error('provider rejected message')).mockResolvedValue({ messageId: 'message-2' })
-    const inviteEnv = { ...testEnv, EMAIL: { send }, INVITE_FROM_EMAIL: 'beta@orbitalmarkets.xyz' } as Env
+    const inviteEnv = { ...testEnv, EMAIL: { send }, INVITE_FROM_EMAIL: 'beta@orbitalmarkets.xyz', APP_ORIGIN: 'https://app.orbitalmarkets.xyz' } as Env
     const first = await handleInviteRoute(request('/waitlist/failed-owner/invites', { method: 'POST', headers: { 'Idempotency-Key': 'issue-key-2' } }), inviteEnv, failedDeliveryActor, '/waitlist/failed-owner/invites')
     expect(first.status).toBe(502)
     const invite = await env.WAITLIST_DB.prepare('SELECT id, status, delivery_attempts FROM beta_invites').first<{ id: string; status: string; delivery_attempts: number }>()

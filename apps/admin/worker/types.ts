@@ -6,7 +6,7 @@ export interface Env {
   TEAM_DOMAIN: string
   POLICY_AUD: string
   INVITE_FROM_EMAIL?: string
-  APP_ORIGIN?: string
+  APP_ORIGIN: string
   ANALYTICS_API_URL?: string
   ANALYTICS_API_TOKEN?: string
 }

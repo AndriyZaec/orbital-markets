@@ -69,10 +69,13 @@ async function issueInvite(request: Request, env: Env, actor: AccessIdentity, en
     logMutation(request, actor, 'invite.issued', 'beta_invite', invite.id)
     return inviteResult(env, invite.id, false)
   }
-  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.issue')
+  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.issue', entryId)
   if (cooldownResponse) return cooldownResponse
-  const result = await deliverInvite(request, env, invite, entry.email)
-  if (!result.ok) return result.response
+  const result = await deliverInvite(env, invite, entry.email)
+  if (!result.ok) {
+    await recordDeliveryFailure(env, actor, invite.id, invite.waitlist_entry_id)
+    return result.response
+  }
   const timestamp = now()
   const action = auditInsert(env, actor, 'invite.issued', 'beta_invite', invite.id, { waitlist_entry_id: entryId }, keyOrResponse, timestamp)
   await env.WAITLIST_DB.batch([action])
@@ -92,12 +95,15 @@ async function resendInvite(request: Request, env: Env, actor: AccessIdentity, i
   if (!invite) return jsonResponse(404, 'invite_not_found', 'Invite not found.')
   if (invite.status === 'revoked') return jsonResponse(409, 'invite_revoked', 'A disabled invite cannot be resent.')
   if (invite.status === 'redeemed') return jsonResponse(409, 'invite_redeemed', 'A redeemed invite cannot be resent.')
-  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.resend')
+  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.resend', inviteId)
   if (cooldownResponse) return cooldownResponse
   const entry = await env.WAITLIST_DB.prepare('SELECT id, email FROM waitlist_entries WHERE id = ?').bind(invite.waitlist_entry_id).first<{ id: string; email: string }>()
   if (!entry) return jsonResponse(409, 'waitlist_entry_not_found', 'The invite owner no longer exists.')
-  const result = await deliverInvite(request, env, invite, entry.email)
-  if (!result.ok) return result.response
+  const result = await deliverInvite(env, invite, entry.email)
+  if (!result.ok) {
+    await recordDeliveryFailure(env, actor, invite.id, invite.waitlist_entry_id)
+    return result.response
+  }
   await env.WAITLIST_DB.batch([
     auditInsert(env, actor, 'invite.resent', 'beta_invite', invite.id, { waitlist_entry_id: invite.waitlist_entry_id }, keyOrResponse, now()),
   ])
@@ -115,7 +121,7 @@ async function revokeInvite(request: Request, env: Env, actor: AccessIdentity, i
   }
   const invite = await findInvite(env, inviteId)
   if (!invite) return jsonResponse(404, 'invite_not_found', 'Invite not found.')
-  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.revoke')
+  const cooldownResponse = await acquireMutationCooldown(env, actor, 'invite.revoke', inviteId)
   if (cooldownResponse) return cooldownResponse
   const timestamp = now()
   const result = await env.WAITLIST_DB.prepare(
@@ -159,7 +165,7 @@ async function createInvite(env: Env, entryId: string): Promise<InviteRow> {
   return invite
 }
 
-async function deliverInvite(request: Request, env: Env, invite: InviteRow, email: string): Promise<{ ok: true } | { ok: false; response: Response }> {
+async function deliverInvite(env: Env, invite: InviteRow, email: string): Promise<{ ok: true } | { ok: false; response: Response }> {
   const attempt = invite.delivery_attempts + 1
   const attemptResult = await env.WAITLIST_DB.prepare(
     'UPDATE beta_invites SET delivery_attempts = ?, updated_at = ? WHERE id = ?',
@@ -171,7 +177,11 @@ async function deliverInvite(request: Request, env: Env, invite: InviteRow, emai
     await markDeliveryFailure(env, invite.id, 'email binding or INVITE_FROM_EMAIL is not configured')
     return { ok: false, response: jsonResponse(503, 'email_not_configured', 'Invite delivery is not configured.', { retryable: true }) }
   }
-  const origin = env.APP_ORIGIN ?? new URL(request.url).origin
+  if (!env.APP_ORIGIN) {
+    await markDeliveryFailure(env, invite.id, 'APP_ORIGIN is not configured')
+    return { ok: false, response: jsonResponse(503, 'invite_origin_not_configured', 'Invite links are not configured.', { retryable: true }) }
+  }
+  const origin = env.APP_ORIGIN.replace(/\/$/, '')
   const redeemUrl = `${origin}/gate?invite=${encodeURIComponent(invite.code)}`
   try {
     await env.EMAIL.send({
@@ -231,6 +241,12 @@ async function markDeliveryFailure(env: Env, inviteId: string, error: string): P
     `UPDATE beta_invites SET status = 'delivery_failed', delivery_error = ?, updated_at = ?
       WHERE id = ? AND status IN ('issued', 'sent', 'delivery_failed')`,
   ).bind(error.slice(0, 500), now(), inviteId).run()
+}
+
+async function recordDeliveryFailure(env: Env, actor: AccessIdentity, inviteId: string, entryId: string): Promise<void> {
+  await env.WAITLIST_DB.batch([
+    auditInsert(env, actor, 'invite.delivery_failed', 'beta_invite', inviteId, { waitlist_entry_id: entryId, retryable: true }, null, now()),
+  ])
 }
 
 async function writeKVRevocation(env: Env, code: string, entryId: string, revokedAt: number): Promise<void> {

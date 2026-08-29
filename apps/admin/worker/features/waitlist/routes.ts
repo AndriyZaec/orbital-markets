@@ -102,8 +102,11 @@ async function detailWaitlist(env: Env, id: string): Promise<Response> {
   ).bind(id).all()
   const audit = await env.WAITLIST_DB.prepare(
     `SELECT id, actor_email, action, target_type, target_id, idempotency_key, metadata_json, created_at
-       FROM admin_actions WHERE target_type = 'waitlist_entry' AND target_id = ? ORDER BY created_at DESC LIMIT 100`,
-  ).bind(id).all()
+       FROM admin_actions
+      WHERE (target_type = 'waitlist_entry' AND target_id = ?)
+         OR (target_type = 'beta_invite' AND target_id IN (SELECT id FROM beta_invites WHERE waitlist_entry_id = ?))
+      ORDER BY created_at DESC LIMIT 100`,
+  ).bind(id, id).all()
   return jsonOk({ entry, invites: invites.results, audit: audit.results })
 }
 
