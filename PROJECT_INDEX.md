@@ -79,9 +79,26 @@ wrangler.toml      committed Worker configuration template
 
 Local and production procedures are in `apps/gate-worker/README.md`.
 
+### `apps/admin`
+
+Access-protected Cloudflare Worker console for beta operations. It owns the
+waitlist review flow, invite lifecycle, audit log, and read-only live analytics.
+It uses the same D1 migrations, KV namespace, and Email Sending binding as the
+gate Worker; all admin routes validate the Cloudflare Access JWT server-side.
+
+```text
+src/                  React/Vite admin shell and feature pages
+worker/auth/          Access JWT validation
+worker/features/      waitlist, invite, and audit capabilities
+worker/shared/        HTTP and operational helpers
+migrations/           shared with apps/gate-worker/migrations
+```
+
+Local and production procedures are in `apps/admin/README.md`.
+
 ## Automation
 
-`.github/workflows/` contains deployments for the API and gate Worker. Both
+`.github/workflows/` contains deployments for the API, gate Worker, and admin Worker. All
 workflows run their relevant checks before deployment. The landing and gated
 web application are deployed as separate Cloudflare Pages projects.
 
@@ -105,4 +122,7 @@ cd apps/landing && pnpm build
 # Gate Worker
 cd apps/gate-worker && pnpm typecheck
 cd apps/gate-worker && pnpm dev
+
+# Admin Worker
+cd apps/admin && pnpm test && pnpm typecheck && pnpm worker:typecheck && pnpm build
 ```
