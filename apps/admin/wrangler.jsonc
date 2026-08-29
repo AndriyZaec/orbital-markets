@@ -1,0 +1,36 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "orbital-admin",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-08-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/admin/*"]
+  },
+  "send_email": [
+    { "name": "EMAIL" }
+  ],
+  "kv_namespaces": [
+    { "binding": "BETA_INVITES", "id": "00000000000000000000000000000000" }
+  ],
+  "d1_databases": [
+    {
+      "binding": "WAITLIST_DB",
+      "database_name": "orbital-waitlist",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../gate-worker/migrations"
+    }
+  ],
+  "vars": {
+    "TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
+    "POLICY_AUD": "replace-with-access-application-audience"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

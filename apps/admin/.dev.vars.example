@@ -1,0 +1,3 @@
+# Local Worker secrets and vars. Copy to .dev.vars (gitignored).
+TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+POLICY_AUD=replace-with-access-application-audience
