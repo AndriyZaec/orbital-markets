@@ -66,11 +66,9 @@ jobs:
               "migrations_dir": "../gate-worker/migrations"
             }],
             "vars": {
-              "TEAM_DOMAIN": "${ACCESS_TEAM_DOMAIN}",
-              "POLICY_AUD": "${ACCESS_POLICY_AUD}",
               "ANALYTICS_API_URL": "${ANALYTICS_API_URL}",
               "RESEND_API_URL": "https://api.resend.com/emails",
-              "INVITE_FROM_EMAIL": "Orbital Markets <support@orbitalmarkets.xyz>",
+              "INVITE_FROM_EMAIL": "Orbital Markets <support@beta.orbitalmarkets.xyz>",
               "APP_ORIGIN": "${ADMIN_APP_ORIGIN}",
               "INVITE_SENDING_ENABLED": "${INVITE_SENDING_ENABLED:-false}"
             },
@@ -80,8 +78,6 @@ jobs:
         env:
           BETA_INVITES_KV_ID: ${{ secrets.BETA_INVITES_KV_ID }}
           WAITLIST_D1_ID: ${{ secrets.WAITLIST_D1_ID }}
-          ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
-          ACCESS_POLICY_AUD: ${{ secrets.ACCESS_POLICY_AUD }}
           ANALYTICS_API_URL: ${{ secrets.ANALYTICS_API_URL }}
           ADMIN_APP_ORIGIN: ${{ secrets.ADMIN_APP_ORIGIN }}
           INVITE_SENDING_ENABLED: ${{ secrets.INVITE_SENDING_ENABLED }}

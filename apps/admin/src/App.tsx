@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { clearAdminToken, getAdminToken, setAdminToken } from './api'
 import { AuditPage } from './features/AuditPage'
 import { AnalyticsPage } from './features/AnalyticsPage'
 import { WaitlistPage } from './features/WaitlistPage'
@@ -10,8 +11,12 @@ interface AdminIdentity {
 }
 
 async function loadIdentity(): Promise<AdminIdentity> {
-  const response = await fetch('/api/admin/v1/me', { credentials: 'same-origin' })
-  if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Cloudflare Access authentication required.' : 'Unable to load admin identity.')
+  const token = getAdminToken()
+  const response = await fetch('/api/admin/v1/me', {
+    credentials: 'same-origin',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Enter a valid admin token.' : 'Unable to load admin identity.')
   return await response.json() as AdminIdentity
 }
 
@@ -19,6 +24,8 @@ export function App() {
   const [section, setSection] = useState<AdminSection>('overview')
   const [identity, setIdentity] = useState<AdminIdentity | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [token, setToken] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     loadIdentity().then(setIdentity).catch((reason: unknown) => {
@@ -33,8 +40,27 @@ export function App() {
           <span className="eyebrow">Orbital Markets</span>
           <h1>Admin access required</h1>
           <p>{error}</p>
-          <p className="muted">Authenticate through the Cloudflare Access policy for this hostname, then reload.</p>
-          <button type="button" onClick={() => window.location.reload()}>Retry</button>
+          <p className="muted">Enter the admin token. It is kept only for this browser session.</p>
+          <form onSubmit={async (event) => {
+            event.preventDefault()
+            const nextToken = token.trim()
+            if (!nextToken) return
+            setSubmitting(true)
+            setError(null)
+            setAdminToken(nextToken)
+            try {
+              setIdentity(await loadIdentity())
+            } catch (reason: unknown) {
+              clearAdminToken()
+              setError(reason instanceof Error ? reason.message : 'Unable to authenticate.')
+            } finally {
+              setSubmitting(false)
+            }
+          }}>
+            <label className="auth-label" htmlFor="admin-token">Admin token</label>
+            <input id="admin-token" className="auth-input" type="password" autoComplete="current-password" value={token} onChange={(event) => setToken(event.target.value)} />
+            <button type="submit" disabled={submitting}>{submitting ? 'Checking...' : 'Continue'}</button>
+          </form>
         </div>
       </main>
     )
@@ -54,7 +80,7 @@ export function App() {
           <NavItem active={section === 'users'} onClick={() => setSection('users')} label="Users" />
           <NavItem active={section === 'audit'} onClick={() => setSection('audit')} label="Audit log" />
         </nav>
-        <div className="sidebar-footer"><span className="status-dot" /> Access protected</div>
+        <div className="sidebar-footer"><span className="status-dot" /> Token protected</div>
       </aside>
       <main className="content">
         <header className="topbar">

@@ -1,8 +1,8 @@
 # Orbital Admin
 
-Separate Cloudflare Worker admin console for closed-beta operations. Cloudflare
-Access protects the hostname, and the Worker independently validates the
-`Cf-Access-Jwt-Assertion` header before serving assets or admin APIs.
+Separate Cloudflare Worker admin console for closed-beta operations. The Worker
+protects admin assets and APIs with a bearer token stored as the `ADMIN_TOKEN`
+secret. The admin UI keeps the token only in the current browser session.
 
 ## Local development
 
@@ -14,23 +14,20 @@ pnpm build
 ```
 
 For a direct production deployment, copy `wrangler.local.jsonc.example` to
-`wrangler.local.jsonc`, fill in resource IDs and Access values, then run
+`wrangler.local.jsonc`, fill in resource IDs, then run
 `pnpm run deploy`. The local file is ignored and must never be committed.
 
-The local Worker fails closed unless requests include a valid Access assertion.
-Do not add a production bypass. Configure a local Access test token only in a
-gitignored environment when exercising the Worker directly.
+The Worker fails closed unless requests include a valid bearer token. Set the
+token with `wrangler secret put ADMIN_TOKEN` or in the Cloudflare dashboard.
 
 ## Deployment
 
-1. Configure a Cloudflare Access self-hosted application for the admin hostname and restrict it to the operator group.
-2. Set `TEAM_DOMAIN` and `POLICY_AUD` to that application's values.
-3. Replace the placeholder D1/KV identifiers in a local deployment config.
-4. Verify `orbitalmarkets.xyz` in Resend and configure `support@orbitalmarkets.xyz` as the sender.
-5. Set `RESEND_API_KEY` and `ANALYTICS_API_TOKEN` as Worker secrets, then point `ANALYTICS_API_URL` at the Go API.
-6. Keep `INVITE_SENDING_ENABLED=false` for the initial deployment and verify reads, approvals, audit records, and KV writes.
-7. Set `INVITE_SENDING_ENABLED=true` only for the dedicated production smoke-test window, then run the invite delivery checks.
-8. Run `pnpm deploy`.
+1. Replace the placeholder D1/KV identifiers in a local deployment config.
+2. Verify `beta.orbitalmarkets.xyz` in Resend and configure `support@beta.orbitalmarkets.xyz` as the sender.
+3. Set `ADMIN_TOKEN`, `RESEND_API_KEY`, and `ANALYTICS_API_TOKEN` as Worker secrets, then point `ANALYTICS_API_URL` at the Go API.
+4. Keep `INVITE_SENDING_ENABLED=false` for the initial deployment and verify reads, approvals, audit records, and KV writes.
+5. Set `INVITE_SENDING_ENABLED=true` only for the dedicated production smoke-test window, then run the invite delivery checks.
+6. Run `pnpm run deploy`.
 
 The D1 migration directory is shared with `apps/gate-worker/migrations` so the
 gate and admin Worker remain compatible during rollout.

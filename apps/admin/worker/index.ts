@@ -1,4 +1,4 @@
-import { authenticateAccess } from './auth/access'
+import { authenticateAdminToken } from './auth/admin-token'
 import { handleInviteRoute } from './features/invites/routes'
 import { handleWaitlistRoute } from './features/waitlist/routes'
 import { jsonResponse } from './shared/http'
@@ -9,10 +9,14 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const id = requestId(request)
     try {
-      const identity = await authenticateAccess(request, env)
+      const url = new URL(request.url)
+      if (!url.pathname.startsWith('/api/admin/')) {
+        return withRequestId(await env.ASSETS.fetch(request), id)
+      }
+
+      const identity = await authenticateAdminToken(request, env)
       if (identity instanceof Response) return withRequestId(identity, id)
 
-      const url = new URL(request.url)
       if (url.pathname === '/api/admin/v1/me' && request.method === 'GET') {
         return withRequestId(new Response(JSON.stringify({ email: identity.email }), {
           status: 200,
@@ -32,7 +36,7 @@ export default {
         return withRequestId(jsonResponse(404, 'not_found', 'Admin route not found.'), id)
       }
 
-      return withRequestId(await env.ASSETS.fetch(request), id)
+      return withRequestId(jsonResponse(404, 'not_found', 'Admin route not found.'), id)
     } catch (error) {
       console.log(JSON.stringify({
         level: 'error',

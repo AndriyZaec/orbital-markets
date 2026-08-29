@@ -9,6 +9,7 @@ import {
   transitionWaitlist,
   type WaitlistDetail,
   type WaitlistEntry,
+  type InviteRecord,
 } from '../api'
 
 type StatusFilter = 'all' | WaitlistEntry['status']
@@ -140,7 +141,15 @@ function WaitlistRow({ entry, checked, onToggle, onDetail, onAction }: { entry: 
 }
 
 function DetailPanel({ detail, onClose, onInviteAction }: { detail: WaitlistDetail; onClose: () => void; onInviteAction: (action: 'issue' | 'resend' | 'revoke', id: string) => Promise<void> }) {
-  return <div className="detail-panel"><div className="detail-heading"><div><span className="panel-kicker">Applicant detail</span><h3>{detail.entry.email}</h3></div><button type="button" className="close-button" onClick={onClose}>Close</button></div><div className="detail-grid"><span>Profile<strong>{formatLabel(detail.entry.profile)}</strong></span><span>Volume<strong>{formatLabel(detail.entry.monthly_volume)}</strong></span><span>Status<strong>{detail.entry.status}</strong></span><span>Submitted<strong>{formatDate(detail.entry.created_at)}</strong></span></div><h4>Invite history</h4>{detail.invites.length === 0 ? <div className="invite-empty"><p className="muted">No invite issued.</p>{detail.entry.status === 'approved' && <button type="button" className="primary-button" onClick={() => onInviteAction('issue', detail.entry.id)}>Issue and send invite</button>}</div> : <div className="invite-list">{detail.invites.map((invite) => <div key={invite.id}><span className={`status status-${invite.status}`}>{invite.status}</span><code>{invite.code}</code><span className="muted">{formatDate(invite.created_at)}</span>{invite.delivery_error && <span className="delivery-error">{invite.delivery_error}</span>}{['issued', 'sent', 'delivery_failed'].includes(invite.status) && <button type="button" className="icon-action" onClick={() => onInviteAction('resend', invite.id)}>Resend</button>}{['issued', 'sent', 'delivery_failed'].includes(invite.status) && <button type="button" className="icon-action reject" onClick={() => onInviteAction('revoke', invite.id)}>Disable invite</button>}</div>)}</div>}<h4>Recent audit</h4>{detail.audit.length === 0 ? <p className="muted">No actions recorded.</p> : <div className="audit-list">{detail.audit.slice(0, 8).map((action) => <div key={action.id}><strong>{action.action}</strong><span>{action.actor_email}</span><span className="muted">{formatDate(action.created_at)}</span></div>)}</div>}</div>
+  return <div className="detail-panel"><div className="detail-heading"><div><span className="panel-kicker">Applicant detail</span><h3>{detail.entry.email}</h3></div><button type="button" className="close-button" onClick={onClose}>Close</button></div><div className="detail-grid"><span>Profile<strong>{formatLabel(detail.entry.profile)}</strong></span><span>Volume<strong>{formatLabel(detail.entry.monthly_volume)}</strong></span><span>Status<strong>{detail.entry.status}</strong></span><span>Submitted<strong>{formatDate(detail.entry.created_at)}</strong></span></div><h4>Invite history</h4>{detail.invites.length === 0 ? <div className="invite-empty"><p className="muted">No invite issued.</p>{detail.entry.status === 'approved' && <button type="button" className="primary-button" onClick={() => onInviteAction('issue', detail.entry.id)}>Issue and send invite</button>}</div> : <div className="invite-list">{detail.invites.map((invite) => <div key={invite.id}><span className={`status status-${invite.status}`}>{invite.status}</span><code>{invite.code}</code><span className="muted">{formatDate(invite.created_at)}</span>{invite.delivery_error && <span className="delivery-error">{invite.delivery_error}</span>}{canResendInvite(invite.status) && <button type="button" className="icon-action" onClick={() => onInviteAction('resend', invite.id)}>Resend</button>}{canDisableInvite(invite.status) && <button type="button" className="icon-action reject" onClick={() => onInviteAction('revoke', invite.id)}>Disable invite</button>}</div>)}</div>}<h4>Recent audit</h4>{detail.audit.length === 0 ? <p className="muted">No actions recorded.</p> : <div className="audit-list">{detail.audit.slice(0, 8).map((action) => <div key={action.id}><strong>{action.action}</strong><span>{action.actor_email}</span><span className="muted">{formatDate(action.created_at)}</span></div>)}</div>}</div>
+}
+
+export function canResendInvite(status: InviteRecord['status']): boolean {
+  return ['issued', 'sent', 'delivery_failed'].includes(status)
+}
+
+export function canDisableInvite(status: InviteRecord['status']): boolean {
+  return ['issued', 'sent', 'delivery_failed', 'redeemed'].includes(status)
 }
 
 function formatLabel(value: string): string { return value.replaceAll('_', ' ') }

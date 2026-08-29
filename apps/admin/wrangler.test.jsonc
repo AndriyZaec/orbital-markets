@@ -15,8 +15,5 @@
       "migrations_dir": "../gate-worker/migrations"
     }
   ],
-  "vars": {
-    "TEAM_DOMAIN": "https://test.cloudflareaccess.com",
-    "POLICY_AUD": "test-audience"
-  }
+  "vars": {}
 }

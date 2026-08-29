@@ -63,7 +63,7 @@ describe('invite lifecycle', () => {
     await addEntry('invite-owner', 'approved')
     const send = vi.fn(async () => new Response(JSON.stringify({ id: 'message-1' }), { status: 200 }))
     vi.stubGlobal('fetch', send)
-    const inviteEnv = { ...testEnv, RESEND_API_KEY: 're_test', RESEND_API_URL: 'https://api.resend.com/emails', INVITE_FROM_EMAIL: 'Orbital Markets <support@orbitalmarkets.xyz>', APP_ORIGIN: 'https://app.orbitalmarkets.xyz', INVITE_SENDING_ENABLED: 'true' } as Env
+    const inviteEnv = { ...testEnv, RESEND_API_KEY: 're_test', RESEND_API_URL: 'https://api.resend.com/emails', INVITE_FROM_EMAIL: 'Orbital Markets <support@beta.orbitalmarkets.xyz>', APP_ORIGIN: 'https://app.orbitalmarkets.xyz', INVITE_SENDING_ENABLED: 'true' } as Env
     const issue = await handleInviteRoute(request('/waitlist/invite-owner/invites', { method: 'POST', headers: { 'Idempotency-Key': 'issue-key-1' } }), inviteEnv, actor, '/waitlist/invite-owner/invites')
     expect(issue.status).toBe(200)
     const issued = (await issue.json()).invite as { id: string; code: string; status: string }
@@ -81,7 +81,7 @@ describe('invite lifecycle', () => {
     await addEntry('failed-owner', 'approved')
     const send = vi.fn().mockRejectedValueOnce(new Error('provider rejected message')).mockResolvedValue(new Response(JSON.stringify({ id: 'message-2' }), { status: 200 }))
     vi.stubGlobal('fetch', send)
-    const inviteEnv = { ...testEnv, RESEND_API_KEY: 're_test', RESEND_API_URL: 'https://api.resend.com/emails', INVITE_FROM_EMAIL: 'Orbital Markets <support@orbitalmarkets.xyz>', APP_ORIGIN: 'https://app.orbitalmarkets.xyz', INVITE_SENDING_ENABLED: 'true' } as Env
+    const inviteEnv = { ...testEnv, RESEND_API_KEY: 're_test', RESEND_API_URL: 'https://api.resend.com/emails', INVITE_FROM_EMAIL: 'Orbital Markets <support@beta.orbitalmarkets.xyz>', APP_ORIGIN: 'https://app.orbitalmarkets.xyz', INVITE_SENDING_ENABLED: 'true' } as Env
     const first = await handleInviteRoute(request('/waitlist/failed-owner/invites', { method: 'POST', headers: { 'Idempotency-Key': 'issue-key-2' } }), inviteEnv, failedDeliveryActor, '/waitlist/failed-owner/invites')
     expect(first.status).toBe(502)
     const invite = await env.WAITLIST_DB.prepare('SELECT id, status, delivery_attempts FROM beta_invites').first<{ id: string; status: string; delivery_attempts: number }>()
@@ -98,7 +98,7 @@ describe('invite lifecycle', () => {
     const waiting = new Promise<void>((resolve) => { release = resolve })
     const send = vi.fn(async () => { await waiting; return new Response(JSON.stringify({ id: 'message-concurrent' }), { status: 200 }) })
     vi.stubGlobal('fetch', send)
-    const inviteEnv = { ...testEnv, RESEND_API_KEY: 're_test', RESEND_API_URL: 'https://api.resend.com/emails', INVITE_FROM_EMAIL: 'Orbital Markets <support@orbitalmarkets.xyz>', APP_ORIGIN: 'https://app.orbitalmarkets.xyz', INVITE_SENDING_ENABLED: 'true' } as Env
+    const inviteEnv = { ...testEnv, RESEND_API_KEY: 're_test', RESEND_API_URL: 'https://api.resend.com/emails', INVITE_FROM_EMAIL: 'Orbital Markets <support@beta.orbitalmarkets.xyz>', APP_ORIGIN: 'https://app.orbitalmarkets.xyz', INVITE_SENDING_ENABLED: 'true' } as Env
     const firstPromise = handleInviteRoute(request('/waitlist/concurrent-owner/invites', { method: 'POST', headers: { 'Idempotency-Key': 'issue-key-3' } }), inviteEnv, actor, '/waitlist/concurrent-owner/invites')
     await new Promise((resolve) => setTimeout(resolve, 0))
     const invite = await env.WAITLIST_DB.prepare('SELECT id FROM beta_invites').first<{ id: string }>()

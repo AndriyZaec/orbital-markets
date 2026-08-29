@@ -13,7 +13,11 @@ button { font: inherit; }
 .auth-card { width: min(100%, 430px); padding: 32px; border: 1px solid #27415f; border-radius: 16px; background: rgba(11, 25, 42, .88); box-shadow: 0 24px 80px rgba(0, 0, 0, .25); }
 .auth-card h1 { margin: 10px 0; font-size: 28px; letter-spacing: -.04em; }
 .auth-card p { color: #a8bad0; line-height: 1.6; }
+.auth-label { display: block; margin-top: 18px; color: #a8bad0; font-size: 12px; font-weight: 700; }
+.auth-input { width: 100%; margin-top: 7px; border: 1px solid #263e58; border-radius: 8px; padding: 11px 12px; color: #e8eef8; background: #0b1a2b; outline: none; }
+.auth-input:focus { border-color: #72d4ff; }
 .auth-card button { margin-top: 14px; border: 0; border-radius: 8px; padding: 10px 16px; color: #06101c; background: #72d4ff; cursor: pointer; font-weight: 700; }
+.auth-card button:disabled { cursor: wait; opacity: .6; }
 .muted { color: #71859d !important; font-size: 13px; }
 .eyebrow, .panel-kicker { color: #73cbe9; font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
 .app-shell { display: flex; min-height: 100vh; }

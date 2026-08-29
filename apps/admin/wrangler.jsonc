@@ -23,11 +23,9 @@
     }
   ],
   "vars": {
-    "TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
-    "POLICY_AUD": "replace-with-access-application-audience",
-    "ANALYTICS_API_URL": "https://api.your-domain.example",
+    "ANALYTICS_API_URL": "https://orbital-markets-funding.fly.dev",
     "RESEND_API_URL": "https://api.resend.com/emails",
-    "INVITE_FROM_EMAIL": "Orbital Markets <support@orbitalmarkets.xyz>",
+    "INVITE_FROM_EMAIL": "Orbital Markets <support@beta.orbitalmarkets.xyz>",
     "APP_ORIGIN": "https://app.orbitalmarkets.xyz",
     "INVITE_SENDING_ENABLED": "false"
   },

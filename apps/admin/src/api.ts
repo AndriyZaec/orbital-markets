@@ -59,6 +59,20 @@ export interface LiveAnalytics {
   }
 }
 
+const adminTokenStorageKey = 'orbital-admin-token'
+
+export function getAdminToken(): string {
+  return sessionStorage.getItem(adminTokenStorageKey) ?? ''
+}
+
+export function setAdminToken(token: string): void {
+  sessionStorage.setItem(adminTokenStorageKey, token)
+}
+
+export function clearAdminToken(): void {
+  sessionStorage.removeItem(adminTokenStorageKey)
+}
+
 export interface VolumeWindow {
   gross_venue_volume: number
   hedged_trade_volume: number
@@ -117,7 +131,7 @@ export async function revokeInvite(inviteId: string): Promise<void> {
 }
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(path, { credentials: 'same-origin', signal })
+  const response = await fetch(path, { credentials: 'same-origin', headers: authHeaders(), signal })
   return parseResponse<T>(response)
 }
 
@@ -125,10 +139,15 @@ async function mutate(path: string, body?: object): Promise<void> {
   const response = await fetch(path, {
     method: 'POST',
     credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', 'idempotency-key': crypto.randomUUID() },
+    headers: { ...authHeaders(), 'content-type': 'application/json', 'idempotency-key': crypto.randomUUID() },
     body: JSON.stringify(body ?? {}),
   })
   await parseResponse(response)
+}
+
+function authHeaders(): HeadersInit {
+  const token = getAdminToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
