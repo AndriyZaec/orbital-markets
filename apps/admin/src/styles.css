@@ -64,6 +64,8 @@ td input { accent-color: #72d4ff; }
 .status-invited { border-color: rgba(114, 167, 255, .3); color: #a8c8ff; background: rgba(114, 167, 255, .08); }
 .status-delivery_failed { border-color: rgba(245, 142, 74, .3); color: #ffb27e; background: rgba(245, 142, 74, .08); }
 .table-state { padding: 34px; color: #71859d; text-align: center; }
+.load-more { justify-self: center; border: 1px solid #2a4966; border-radius: 7px; padding: 9px 16px; color: #bceeff; background: rgba(114, 212, 255, .08); cursor: pointer; font-size: 11px; font-weight: 700; }
+.load-more:disabled { cursor: wait; opacity: .55; }
 .inline-error { margin: 0; border-left: 2px solid #e25b74; padding: 9px 12px; color: #ff9bad; background: rgba(226, 91, 116, .08); font-size: 12px; }
 .error-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid rgba(226, 91, 116, .25); border-radius: 10px; padding: 12px; color: #ff9bad; background: rgba(226, 91, 116, .08); font-size: 12px; }
 .error-panel p { margin: 0; }
@@ -79,6 +81,7 @@ td input { accent-color: #72d4ff; }
 .invite-empty .muted { margin-right: auto; }
 .invite-list, .audit-list { display: grid; gap: 7px; }
 .invite-list > div, .audit-list > div { display: flex; align-items: center; gap: 10px; border-top: 1px solid rgba(125, 164, 202, .1); padding-top: 9px; font-size: 11px; }
+.delivery-error { color: #ffb27e; }
 .audit-list strong { color: #dce8f5; }
 code { color: #9edfff; font-family: ui-monospace, monospace; font-size: 10px; }
 .analytics-cards, .analytics-columns, .health-grid { display: grid; gap: 12px; }

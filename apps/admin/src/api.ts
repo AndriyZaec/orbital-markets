@@ -94,8 +94,10 @@ export async function bulkTransition(ids: string[], transition: 'approve' | 'rej
   await mutate(`/api/admin/v1/waitlist/bulk-${transition}`, { ids })
 }
 
-export async function listAudit(signal?: AbortSignal): Promise<ListResponse<AuditRecord>> {
-  return get<ListResponse<AuditRecord>>('/api/admin/v1/audit?limit=100', signal)
+export async function listAudit(signal?: AbortSignal, cursor?: string): Promise<ListResponse<AuditRecord>> {
+  const params = new URLSearchParams({ limit: '100' })
+  if (cursor) params.set('cursor', cursor)
+  return get<ListResponse<AuditRecord>>(`/api/admin/v1/audit?${params.toString()}`, signal)
 }
 
 export async function getLiveAnalytics(signal?: AbortSignal): Promise<LiveAnalytics> {
