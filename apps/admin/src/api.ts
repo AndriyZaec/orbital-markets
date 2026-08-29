@@ -41,6 +41,38 @@ export interface AuditRecord {
   created_at: number
 }
 
+export interface LiveAnalytics {
+  generated_at: string
+  volume: {
+    all_time: VolumeWindow
+    last_24h: VolumeWindow
+    last_7d: VolumeWindow
+    by_venue: VolumeBreakdown[]
+    by_asset: VolumeBreakdown[]
+  }
+  trades: {
+    open_positions: number
+    degraded_positions: number
+    successful_opens: number
+    failed_opens: number
+    closed_trades: number
+  }
+}
+
+export interface VolumeWindow {
+  gross_venue_volume: number
+  hedged_trade_volume: number
+  open_volume: number
+  close_volume: number
+}
+
+export interface VolumeBreakdown {
+  key: string
+  gross_venue_volume: number
+  open_volume: number
+  close_volume: number
+}
+
 interface ListResponse<T> {
   items: T[]
   next_cursor: string | null
@@ -64,6 +96,22 @@ export async function bulkTransition(ids: string[], transition: 'approve' | 'rej
 
 export async function listAudit(signal?: AbortSignal): Promise<ListResponse<AuditRecord>> {
   return get<ListResponse<AuditRecord>>('/api/admin/v1/audit?limit=100', signal)
+}
+
+export async function getLiveAnalytics(signal?: AbortSignal): Promise<LiveAnalytics> {
+  return get<LiveAnalytics>('/api/admin/v1/analytics', signal)
+}
+
+export async function issueInvite(entryId: string): Promise<void> {
+  await mutate(`/api/admin/v1/waitlist/${encodeURIComponent(entryId)}/invites`)
+}
+
+export async function resendInvite(inviteId: string): Promise<void> {
+  await mutate(`/api/admin/v1/invites/${encodeURIComponent(inviteId)}/resend`)
+}
+
+export async function revokeInvite(inviteId: string): Promise<void> {
+  await mutate(`/api/admin/v1/invites/${encodeURIComponent(inviteId)}/revoke`)
 }
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {

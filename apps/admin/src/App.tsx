@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AuditPage } from './features/AuditPage'
+import { AnalyticsPage } from './features/AnalyticsPage'
 import { WaitlistPage } from './features/WaitlistPage'
 
 type AdminSection = 'overview' | 'waitlist' | 'users' | 'audit'
@@ -60,7 +61,7 @@ export function App() {
           <div><span className="eyebrow">Beta operations</span><h1>{sectionTitle(section)}</h1></div>
           <div className="operator"><span className="status-dot" />{identity.email}</div>
         </header>
-        <section className="page-content">{section === 'waitlist' ? <WaitlistPage /> : section === 'audit' ? <AuditPage /> : <SectionPlaceholder section={section} />}</section>
+        <section className="page-content">{section === 'overview' ? <AnalyticsPage /> : section === 'waitlist' ? <WaitlistPage /> : section === 'users' ? <WaitlistPage mode="users" /> : <AuditPage />}</section>
       </main>
     </div>
   )
@@ -72,14 +73,4 @@ function NavItem({ active, onClick, label }: { active: boolean; onClick: () => v
 
 function sectionTitle(section: AdminSection): string {
   return section === 'overview' ? 'Operations overview' : section === 'waitlist' ? 'Waitlist' : section === 'users' ? 'Users' : 'Audit log'
-}
-
-function SectionPlaceholder({ section }: { section: AdminSection }) {
-  const copy = {
-    overview: ['Admission pipeline', 'Review beta demand, invite delivery, and operational health in one place.'],
-    waitlist: ['Waitlist review', 'Filter applicants and make explicit approval decisions.'],
-    users: ['Beta users', 'Inspect invite history and the identity link for each approved applicant.'],
-    audit: ['Operator activity', 'Every admin mutation will appear here with its verified Access identity.'],
-  }[section]
-  return <div className="empty-panel"><span className="panel-kicker">Coming online</span><h2>{copy[0]}</h2><p>{copy[1]}</p></div>
 }
