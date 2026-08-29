@@ -235,6 +235,45 @@ describe('linked invite redemption', () => {
     const cookie = await redeemInvite('LEGACYLINK');
     expect(cookie).toContain('__beta=');
   });
+
+  it('blocks new redemption after soft revoke while keeping the existing cookie valid', async () => {
+    const timestamp = Math.floor(Date.now() / 1_000);
+    const entryId = 'entry-soft-revoke';
+    const code = 'SOFTREVOKE01';
+    await env.WAITLIST_DB.prepare(
+      `INSERT INTO waitlist_entries
+        (id, email, profile, monthly_volume, source, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'approved', ?, ?)`,
+    ).bind(entryId, 'soft-revoke@example.com', 'active_trader', '100k_1m', 'landing', timestamp, timestamp).run();
+    await env.WAITLIST_DB.prepare(
+      `INSERT INTO beta_invites
+        (id, waitlist_entry_id, code, status, created_at, delivery_attempts, updated_at)
+       VALUES (?, ?, ?, 'sent', ?, 1, ?)`,
+    ).bind('invite-soft-revoke', entryId, code, timestamp, timestamp).run();
+    await env.BETA_INVITES.put(`invite:${code}`, JSON.stringify({ waitlist_entry_id: entryId, created_at: timestamp }));
+
+    const first = await exports.default.fetch('https://app.orbitalmarkets.xyz/gate/redeem', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const cookie = first.headers.get('set-cookie')!.split(';', 1)[0];
+    await env.WAITLIST_DB.prepare("UPDATE beta_invites SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE code = ?")
+      .bind(timestamp + 1, timestamp + 1, code).run();
+    await env.BETA_INVITES.put(`invite:${code}`, JSON.stringify({ waitlist_entry_id: entryId, created_at: timestamp, revoked_at: timestamp + 1 }));
+
+    const newBrowser = await exports.default.fetch('https://app.orbitalmarkets.xyz/gate/redeem', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    expect(newBrowser.status).toBe(404);
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('origin response')));
+    const existingBrowser = await exports.default.fetch('https://app.orbitalmarkets.xyz/dashboard', { headers: { cookie } });
+    expect(existingBrowser.status).toBe(200);
+    expect(await existingBrowser.text()).toBe('origin response');
+  });
 });
 
 async function redeemInvite(code: string): Promise<string> {

@@ -50,4 +50,15 @@ describe('admin Access boundary', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ email: 'operator@example.com' })
   })
+
+  it('rejects an invalid Access assertion without exposing verification details', async () => {
+    const response = await worker.fetch(new Request('https://admin.orbitalmarkets.xyz/api/admin/v1/me', {
+      headers: { 'Cf-Access-Jwt-Assertion': 'not-a-jwt' },
+    }), testEnv())
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({
+      error: 'access_assertion_invalid',
+      message: 'Cloudflare Access assertion is invalid.',
+    })
+  })
 })
