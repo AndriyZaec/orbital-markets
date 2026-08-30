@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	agentApprovalTimeout = 10 * time.Second
-	maxApprovalResponse  = 64 << 10
+	agentApprovalTimeout  = 10 * time.Second
+	maxApprovalResponse   = 64 << 10
+	maxApprovalAge        = 5 * time.Minute
+	maxApprovalFutureSkew = 30 * time.Second
 )
 
 var (
@@ -66,14 +68,14 @@ type ApproveBuilderFeeRequest struct {
 
 func (r ApproveBuilderFeeRequest) Validate(now time.Time, expectedBuilder string) error {
 	if r.Action.Type != "approveBuilderFee" || r.Action.HyperliquidChain != "Mainnet" ||
-		r.Action.MaxFeeRate != "0.02%" || !strings.EqualFold(r.Action.Builder, expectedBuilder) {
+		r.Action.MaxFeeRate != OrbitalBuilder.MaxFeeRate || !strings.EqualFold(r.Action.Builder, expectedBuilder) {
 		return fmt.Errorf("invalid Hyperliquid builder fee approval action")
 	}
 	if !evmAddressPattern.MatchString(r.Action.Builder) || !evmAddressPattern.MatchString(r.OwnerAddress) ||
 		!hexChainPattern.MatchString(r.Action.SignatureChainID) {
 		return fmt.Errorf("invalid Hyperliquid builder fee approval action")
 	}
-	if delta := now.UnixMilli() - r.Action.Nonce; delta < -30_000 || delta > 30_000 {
+	if delta := time.Duration(now.UnixMilli()-r.Action.Nonce) * time.Millisecond; delta < -maxApprovalFutureSkew || delta > maxApprovalAge {
 		return fmt.Errorf("Hyperliquid builder fee approval nonce is stale")
 	}
 	if !hexScalarPattern.MatchString(r.Signature.R) || !hexScalarPattern.MatchString(r.Signature.S) ||
@@ -128,7 +130,7 @@ func (r ApproveAgentRequest) Validate(now time.Time) error {
 	if err != nil || chainID == 0 {
 		return fmt.Errorf("invalid Hyperliquid signature chain ID")
 	}
-	if delta := now.UnixMilli() - r.Action.Nonce; delta < -30_000 || delta > 30_000 {
+	if delta := time.Duration(now.UnixMilli()-r.Action.Nonce) * time.Millisecond; delta < -maxApprovalFutureSkew || delta > maxApprovalAge {
 		return fmt.Errorf("Hyperliquid agent approval nonce is stale")
 	}
 	if !hexScalarPattern.MatchString(r.Signature.R) || !hexScalarPattern.MatchString(r.Signature.S) ||
@@ -258,34 +260,48 @@ func NewDefaultAgentApprover() *AgentApprover {
 }
 
 func (a *AgentApprover) ApproveAgent(ctx context.Context, request ApproveAgentRequest) error {
+	return a.postApproval(ctx, request.Action, request.Action.Nonce, request.Signature, "agent approval")
+}
+
+func (a *AgentApprover) ApproveBuilderFee(ctx context.Context, request ApproveBuilderFeeRequest) error {
+	return a.postApproval(ctx, request.Action, request.Action.Nonce, request.Signature, "builder fee approval")
+}
+
+func (a *AgentApprover) postApproval(
+	ctx context.Context,
+	action any,
+	nonce int64,
+	signature EthereumSignature,
+	label string,
+) error {
 	body, err := json.Marshal(struct {
-		Action       ApproveAgentAction `json:"action"`
-		Nonce        int64              `json:"nonce"`
-		Signature    EthereumSignature  `json:"signature"`
-		VaultAddress *string            `json:"vaultAddress"`
-		ExpiresAfter *int64             `json:"expiresAfter"`
+		Action       any               `json:"action"`
+		Nonce        int64             `json:"nonce"`
+		Signature    EthereumSignature `json:"signature"`
+		VaultAddress *string           `json:"vaultAddress"`
+		ExpiresAfter *int64            `json:"expiresAfter"`
 	}{
-		Action: request.Action, Nonce: request.Action.Nonce, Signature: request.Signature,
+		Action: action, Nonce: nonce, Signature: signature,
 	})
 	if err != nil {
-		return fmt.Errorf("encode Hyperliquid agent approval: %w", err)
+		return fmt.Errorf("encode Hyperliquid %s: %w", label, err)
 	}
 
 	requestCtx, cancel := context.WithTimeout(ctx, agentApprovalTimeout)
 	defer cancel()
 	httpRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPost, a.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build Hyperliquid agent approval: %w", err)
+		return fmt.Errorf("build Hyperliquid %s: %w", label, err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	response, err := a.httpClient.Do(httpRequest)
 	if err != nil {
-		return fmt.Errorf("relay Hyperliquid agent approval: %w", err)
+		return fmt.Errorf("relay Hyperliquid %s: %w", label, err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxApprovalResponse))
 	if err != nil {
-		return fmt.Errorf("read Hyperliquid agent approval response: %w", err)
+		return fmt.Errorf("read Hyperliquid %s response: %w", label, err)
 	}
 
 	var result struct {
@@ -293,47 +309,10 @@ func (a *AgentApprover) ApproveAgent(ctx context.Context, request ApproveAgentRe
 		Response json.RawMessage `json:"response"`
 	}
 	if err := json.Unmarshal(responseBody, &result); err != nil {
-		return fmt.Errorf("invalid Hyperliquid agent approval response")
+		return fmt.Errorf("invalid Hyperliquid %s response", label)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || result.Status != "ok" {
-		return fmt.Errorf("Hyperliquid rejected agent approval: %s", venueApprovalError(result.Response))
-	}
-	return nil
-}
-
-func (a *AgentApprover) ApproveBuilderFee(ctx context.Context, request ApproveBuilderFeeRequest) error {
-	body, err := json.Marshal(struct {
-		Action       ApproveBuilderFeeAction `json:"action"`
-		Nonce        int64                   `json:"nonce"`
-		Signature    EthereumSignature       `json:"signature"`
-		VaultAddress *string                 `json:"vaultAddress"`
-		ExpiresAfter *int64                  `json:"expiresAfter"`
-	}{Action: request.Action, Nonce: request.Action.Nonce, Signature: request.Signature})
-	if err != nil {
-		return fmt.Errorf("encode Hyperliquid builder fee approval: %w", err)
-	}
-	requestCtx, cancel := context.WithTimeout(ctx, agentApprovalTimeout)
-	defer cancel()
-	httpRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPost, a.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build Hyperliquid builder fee approval: %w", err)
-	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	response, err := a.httpClient.Do(httpRequest)
-	if err != nil {
-		return fmt.Errorf("relay Hyperliquid builder fee approval: %w", err)
-	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxApprovalResponse))
-	if err != nil {
-		return fmt.Errorf("read Hyperliquid builder fee approval response: %w", err)
-	}
-	var result struct {
-		Status   string          `json:"status"`
-		Response json.RawMessage `json:"response"`
-	}
-	if err := json.Unmarshal(responseBody, &result); err != nil || response.StatusCode < 200 || response.StatusCode >= 300 || result.Status != "ok" {
-		return fmt.Errorf("Hyperliquid rejected builder fee approval: %s", venueApprovalError(result.Response))
+		return fmt.Errorf("Hyperliquid rejected %s: %s", label, venueApprovalError(result.Response))
 	}
 	return nil
 }

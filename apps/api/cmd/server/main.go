@@ -73,10 +73,6 @@ func main() {
 
 	// Live execution deps (non-custodial signing flow)
 	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
-	if err := liveDeps.ConfigureHyperliquidBuilder(os.Getenv("HYPERLIQUID_BUILDER_ADDRESS"), 20); err != nil {
-		logger.Error("invalid Hyperliquid builder configuration", "err", err)
-		os.Exit(1)
-	}
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database)

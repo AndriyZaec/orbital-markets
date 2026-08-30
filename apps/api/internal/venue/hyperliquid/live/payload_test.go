@@ -69,10 +69,9 @@ func TestBuildOpenPayloadUsesAssetSizePrecision(t *testing.T) {
 }
 
 func TestBuildOpenPayloadIncludesBuilderCodeInSignedAction(t *testing.T) {
-	builder := &BuilderCode{Address: "0x1111111111111111111111111111111111111111", Fee: 20}
-	request, err := BuildOpenPayloadWithBuilder(
+	request, err := BuildOpenPayload(
 		payloadTestAssetMap{index: 7, decimals: 3},
-		"VIRTUAL", domain.SideLong, 20.123, 1.25, "client-order", builder,
+		"VIRTUAL", domain.SideLong, 20.123, 1.25, "client-order",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +80,7 @@ func TestBuildOpenPayloadIncludesBuilderCodeInSignedAction(t *testing.T) {
 	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
 		t.Fatal(err)
 	}
-	if unsigned.Action.Builder == nil || unsigned.Action.Builder.Address != builder.Address || unsigned.Action.Builder.Fee != 20 {
+	if unsigned.Action.Builder == nil || unsigned.Action.Builder.Address != OrbitalBuilder.Address || unsigned.Action.Builder.Fee != OrbitalBuilder.Fee {
 		t.Fatalf("builder = %+v", unsigned.Action.Builder)
 	}
 }

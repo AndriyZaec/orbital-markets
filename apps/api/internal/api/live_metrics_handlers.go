@@ -43,22 +43,18 @@ func (s *Server) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) liveMetrics(r *http.Request) (*analytics.LiveMetrics, error) {
 	now := time.Now()
 	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
 	if s.metricsCache != nil && now.Sub(s.metricsCachedAt) < liveMetricsCacheTTL {
-		cached := s.metricsCache
-		s.metricsMu.Unlock()
-		return cached, nil
+		return s.metricsCache, nil
 	}
-	s.metricsMu.Unlock()
 
 	metrics, err := analytics.LoadLiveMetrics(r.Context(), s.db, now)
 	if err != nil {
 		return nil, err
 	}
 
-	s.metricsMu.Lock()
 	s.metricsCache = metrics
 	s.metricsCachedAt = now
-	s.metricsMu.Unlock()
 	return metrics, nil
 }
 

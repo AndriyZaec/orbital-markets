@@ -528,7 +528,7 @@ func (s *Server) buildOpenSigningRequest(
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
 		}
-		request, err = hllive.BuildOpenPayloadWithBuilder(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID, s.live.hlBuilder)
+		request, err = hllive.BuildOpenPayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	default:
 		return nil, fmt.Errorf("unsupported venue: %s", leg.venue)
 	}
@@ -557,7 +557,7 @@ func (s *Server) buildUnwindSigningRequest(
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
 		}
-		request, err = hllive.BuildClosePayloadWithBuilder(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID, s.live.hlBuilder)
+		request, err = hllive.BuildClosePayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	default:
 		return nil, fmt.Errorf("unsupported venue: %s", leg.venue)
 	}
@@ -1586,14 +1586,13 @@ func (s *Server) buildCloseSigningRequest(
 		if math.IsNaN(price) || math.IsInf(price, 0) {
 			return nil, fmt.Errorf("current hyperliquid BBO for %s is invalid", fill.Symbol)
 		}
-		request, err = hllive.BuildClosePayloadWithBuilder(
+		request, err = hllive.BuildClosePayload(
 			s.live.hlAssetMap,
 			fill.Symbol,
 			positionSide,
 			fill.FilledAmount,
 			price,
 			clientOrderID,
-			s.live.hlBuilder,
 		)
 	default:
 		return nil, fmt.Errorf("unsupported venue: %s", fill.Venue)

@@ -11,6 +11,7 @@ import {
   buildHyperliquidApproveBuilderFeeTypedData,
   authorizeHyperliquidAgent,
   hasApprovedHyperliquidBuilderFee,
+  hyperliquidBuilderAddress,
   signHyperliquidAgentRequest,
 } from '../src/agents/hyperliquid-agent.ts'
 import { loadStoredTradingAgent, saveStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
@@ -84,7 +85,10 @@ test('authorization relays no private key and persists only after venue acceptan
     ownerAddress: '0x14791697260E4c9A71f18484C9f997B308e59325',
     chainId: 1,
     now: () => 1_748_970_123_456,
+    builderFeeApproved: async () => true,
     signTypedData: async () => `0x${'1'.repeat(128)}1b`,
+    signBuilderTypedData: async () => `0x${'2'.repeat(128)}1b`,
+    relayBuilderApproval: async () => undefined,
     relay: async (request) => {
       relayed = JSON.stringify(request)
       assert.equal(storage.values.size, 0)
@@ -103,7 +107,7 @@ test('builder fee is approved before the Hyperliquid agent is persisted', async 
     storage,
     ownerAddress: '0x14791697260E4c9A71f18484C9f997B308e59325',
     chainId: 1,
-    builderAddress: '0x1111111111111111111111111111111111111111',
+    builderFeeApproved: async () => false,
     now: () => 1_748_970_123_456,
     signTypedData: async (typedData) => {
       assert.equal(typedData.message.nonce, 1_748_970_123_457n)
@@ -122,7 +126,7 @@ test('builder fee is approved before the Hyperliquid agent is persisted', async 
 
   assert.equal(
     loadStoredTradingAgent(storage, 'hyperliquid', '0x14791697260E4c9A71f18484C9f997B308e59325')?.builderAddress,
-    '0x1111111111111111111111111111111111111111',
+    hyperliquidBuilderAddress,
   )
 })
 
@@ -133,7 +137,6 @@ test('an existing 2 bp builder allowance skips the repeat wallet approval', asyn
     storage,
     ownerAddress: '0x14791697260E4c9A71f18484C9f997B308e59325',
     chainId: 1,
-    builderAddress: '0x1111111111111111111111111111111111111111',
     builderFeeApproved: async () => true,
     now: () => 1_748_970_123_456,
     signTypedData: async (typedData) => {
@@ -162,6 +165,15 @@ test('builder allowance lookup uses Hyperliquid tenths-of-a-basis-point units', 
   assert.deepEqual(JSON.parse(requestBodies[0]), {
     type: 'maxBuilderFee', user: agentAddress, builder: agentAddress,
   })
+})
+
+test('builder allowance lookup fails closed without prompting for a signature', async () => {
+  const fetcher = async () => new Response('unavailable', { status: 503 })
+
+  await assert.rejects(
+    hasApprovedHyperliquidBuilderFee(agentAddress, agentAddress, fetcher),
+    /allowance request failed with 503/,
+  )
 })
 
 test('a local Hyperliquid agent rejects payloads outside the L1 order policy', async () => {

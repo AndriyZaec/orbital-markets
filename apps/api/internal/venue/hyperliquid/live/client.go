@@ -204,6 +204,7 @@ func (c *Client) submitOrder(
 			Cloid:      cloid,
 		}},
 		Grouping: "na",
+		Builder:  OrbitalBuilderCode(),
 	}
 
 	nonce := time.Now().UnixMilli()

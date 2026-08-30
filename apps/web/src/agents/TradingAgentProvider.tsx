@@ -6,8 +6,10 @@ import { mainnet } from 'wagmi/chains'
 import { apiError, apiFetch } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
 import {
+  approveHyperliquidBuilderFee,
   authorizeHyperliquidAgent,
   hasApprovedHyperliquidBuilderFee,
+  hyperliquidBuilderAddress,
   type HyperliquidApproveAgentRequest,
   type HyperliquidApproveBuilderFeeRequest,
 } from './hyperliquid-agent.ts'
@@ -20,8 +22,6 @@ import {
 } from './storage.ts'
 import type { TradingAgentState, Venue } from './types'
 import { TradingAgentContext } from './TradingAgentContext'
-
-const hyperliquidBuilderAddress = import.meta.env?.VITE_HYPERLIQUID_BUILDER_ADDRESS?.trim()
 
 function missingState(venue: Venue, ownerAddress: string | null): TradingAgentState {
   return { venue, ownerAddress, agentAddress: null, status: 'missing', error: null }
@@ -87,6 +87,7 @@ function TradingAgentSession({
   const [pacifica, setPacifica] = useState(() => initialState('pacifica', pacificaOwner))
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
   const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner })
+  const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
   owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner }
   if (pacifica.ownerAddress !== pacificaOwner) {
     setPacifica(initialState('pacifica', pacificaOwner))
@@ -134,7 +135,6 @@ function TradingAgentSession({
       storage: browserStorage(),
       ownerAddress,
       chainId: mainnet.id,
-      builderAddress: hyperliquidBuilderAddress,
       builderFeeApproved: hasApprovedHyperliquidBuilderFee,
       signTypedData: (typedData) => signTypedData(typedData),
       signBuilderTypedData: (typedData) => signTypedData(typedData),
@@ -143,12 +143,52 @@ function TradingAgentSession({
     })
   }
 
+  const ensureHyperliquidBuilderFee = async (ownerAddress: string) => {
+    const normalizedOwner = ownerAddress.toLowerCase()
+    if (builderApproval.current) {
+      if (builderApproval.current.ownerAddress !== normalizedOwner) {
+        throw new Error('Hyperliquid owner changed during builder approval')
+      }
+      return builderApproval.current.promise
+    }
+    const approval = (async () => {
+      if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
+        throw new Error('Hyperliquid owner changed during builder approval')
+      }
+      if (await hasApprovedHyperliquidBuilderFee(ownerAddress, hyperliquidBuilderAddress)) return
+      if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
+        throw new Error('Hyperliquid owner changed during builder approval')
+      }
+      if (chainId !== mainnet.id) await switchToAuthorizationChain()
+      if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
+        throw new Error('Hyperliquid owner changed during builder approval')
+      }
+      await approveHyperliquidBuilderFee({
+        ownerAddress,
+        builderAddress: hyperliquidBuilderAddress,
+        chainId: mainnet.id,
+        signTypedData: (typedData) => signTypedData(typedData),
+        relay: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve-builder-fee', request),
+      })
+    })()
+    builderApproval.current = { ownerAddress: normalizedOwner, promise: approval }
+    try {
+      await approval
+    } finally {
+      builderApproval.current = null
+    }
+  }
+
   const sign = async (request: SigningRequest) => {
     const currentOwner = request.venue === 'pacifica' ? pacificaOwner : hyperliquidOwner
     const matches = request.venue === 'hyperliquid'
       ? currentOwner?.toLowerCase() === request.account.toLowerCase()
       : currentOwner === request.account
     if (!matches) throw new Error(`${request.venue} owner changed during execution`)
+    if (request.venue === 'hyperliquid') await ensureHyperliquidBuilderFee(request.account)
+    if (!ownerStillCurrent(request.venue, request.account, owners.current)) {
+      throw new Error(`${request.venue} owner changed during execution`)
+    }
     return signWithStoredTradingAgent(browserStorage(), request)
   }
 
@@ -183,7 +223,6 @@ function initialState(venue: Venue, ownerAddress: string | null): TradingAgentSt
     : null
   if (
     agent?.venue === 'hyperliquid' &&
-    hyperliquidBuilderAddress &&
     agent.builderAddress?.toLowerCase() !== hyperliquidBuilderAddress.toLowerCase()
   ) {
     clearStoredTradingAgent(browserStorage(), venue, agent.ownerAddress)

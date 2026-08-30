@@ -41,25 +41,6 @@ type LiveDeps struct {
 	agentAuthorizations *agentAuthorizationRegistry
 }
 
-func (d *LiveDeps) ConfigureHyperliquidBuilder(address string, fee int) error {
-	address = strings.TrimSpace(address)
-	if address == "" {
-		d.hlBuilder = nil
-		return nil
-	}
-	if !strings.HasPrefix(address, "0x") || len(address) != 42 {
-		return fmt.Errorf("invalid Hyperliquid builder address")
-	}
-	if _, err := hex.DecodeString(address[2:]); err != nil {
-		return fmt.Errorf("invalid Hyperliquid builder address")
-	}
-	if fee <= 0 || fee > 100 {
-		return fmt.Errorf("Hyperliquid builder fee must be between 0.1 and 10 basis points")
-	}
-	d.hlBuilder = &hllive.BuilderCode{Address: strings.ToLower(address), Fee: fee}
-	return nil
-}
-
 func NewLiveDeps(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -78,6 +59,7 @@ func NewLiveDeps(
 		liveStore:           liveStore,
 		sessions:            NewSessionManager(),
 		hlAssetMap:          hlAssetMap,
+		hlBuilder:           hllive.OrbitalBuilderCode(),
 		pacificaLotSizes:    pacificaLotSizes,
 		hlAgentApprover:     hlApprover,
 		hlBuilderApprover:   hlApprover,
