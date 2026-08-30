@@ -132,6 +132,7 @@ func (s *Server) routes() {
 	// Analytics
 	s.mux.HandleFunc("GET /api/v1/paper/analytics", s.handlePaperAnalytics)
 	s.mux.HandleFunc("GET /api/v1/analytics", s.handleLiveAnalytics)
+	s.mux.HandleFunc("GET /api/v1/public/metrics", s.handlePublicMetrics)
 
 	// Historical data
 	s.mux.HandleFunc("GET /api/v1/history", s.handleHistory)
@@ -149,6 +150,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
 	s.mux.HandleFunc("POST /api/v1/live/kill", s.handleLiveKill)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve", s.handleHyperliquidAgentApprove)
+	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve-builder-fee", s.handleHyperliquidBuilderFeeApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/bind", s.handlePacificaAgentBind)
 }
 

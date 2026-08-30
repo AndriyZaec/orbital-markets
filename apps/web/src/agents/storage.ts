@@ -47,6 +47,7 @@ function isStoredTradingAgent(value: unknown): value is StoredTradingAgent {
     agent.agentAddress.length > 0 &&
     typeof agent.privateKey === 'string' &&
     agent.privateKey.length > 0 &&
+    (agent.builderAddress === undefined || /^0x[0-9a-fA-F]{40}$/.test(agent.builderAddress)) &&
     typeof agent.authorizedAt === 'string' &&
     Number.isFinite(Date.parse(agent.authorizedAt))
   )

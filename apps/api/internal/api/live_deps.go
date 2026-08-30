@@ -33,10 +33,31 @@ type LiveDeps struct {
 	sessions            *SessionManager
 	accounts            *accountFeedRegistry
 	hlAssetMap          hllive.AssetMap
+	hlBuilder           *hllive.BuilderCode
 	pacificaLotSizes    pacificlive.LotSizeMap
 	hlAgentApprover     hyperliquidAgentApprover
+	hlBuilderApprover   hyperliquidBuilderApprover
 	pacificaAgentBinder pacificaAgentBinder
 	agentAuthorizations *agentAuthorizationRegistry
+}
+
+func (d *LiveDeps) ConfigureHyperliquidBuilder(address string, fee int) error {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		d.hlBuilder = nil
+		return nil
+	}
+	if !strings.HasPrefix(address, "0x") || len(address) != 42 {
+		return fmt.Errorf("invalid Hyperliquid builder address")
+	}
+	if _, err := hex.DecodeString(address[2:]); err != nil {
+		return fmt.Errorf("invalid Hyperliquid builder address")
+	}
+	if fee <= 0 || fee > 100 {
+		return fmt.Errorf("Hyperliquid builder fee must be between 0.1 and 10 basis points")
+	}
+	d.hlBuilder = &hllive.BuilderCode{Address: strings.ToLower(address), Fee: fee}
+	return nil
 }
 
 func NewLiveDeps(
@@ -51,13 +72,15 @@ func NewLiveDeps(
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
 		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
 	}
+	hlApprover := hllive.NewDefaultAgentApprover()
 	return &LiveDeps{
 		signingStore:        signingStore,
 		liveStore:           liveStore,
 		sessions:            NewSessionManager(),
 		hlAssetMap:          hlAssetMap,
 		pacificaLotSizes:    pacificaLotSizes,
-		hlAgentApprover:     hllive.NewDefaultAgentApprover(),
+		hlAgentApprover:     hlApprover,
+		hlBuilderApprover:   hlApprover,
 		pacificaAgentBinder: pacificlive.NewDefaultAgentBinder(),
 		agentAuthorizations: newAgentAuthorizationRegistry(liveStore),
 		accounts: newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{

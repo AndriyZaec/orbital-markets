@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	cookieName     = "__beta"
-	bearerPrefix   = "Bearer "
-	healthPath     = "/api/v1/health"
-	analyticsPath  = "/api/v1/analytics"
-	expectedAlgHdr = "HS256"
+	cookieName        = "__beta"
+	bearerPrefix      = "Bearer "
+	healthPath        = "/api/v1/health"
+	analyticsPath     = "/api/v1/analytics"
+	publicMetricsPath = "/api/v1/public/metrics"
+	expectedAlgHdr    = "HS256"
 )
 
 var (
@@ -33,8 +34,9 @@ var (
 // Auth returns middleware that verifies the __beta cookie (or Authorization:
 // Bearer header) against secret using HS256. On failure it responds 404 — the
 // gate is meant to be invisible to unauthorized clients. /api/v1/health is
-// allowed through for health checks, while /api/v1/analytics performs its own
-// service-token authentication in the handler.
+// allowed through for health checks, /api/v1/analytics performs its own
+// service-token authentication, and /api/v1/public/metrics exposes only a
+// deliberately limited aggregate.
 //
 // If secret is empty the middleware is a no-op (dev bypass). Production wiring
 // must ensure a secret is set.
@@ -46,7 +48,7 @@ func Auth(secret string, logger *slog.Logger) func(http.Handler) http.Handler {
 	key := []byte(secret)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == healthPath || r.URL.Path == analyticsPath {
+			if r.URL.Path == healthPath || r.URL.Path == analyticsPath || r.URL.Path == publicMetricsPath {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -9,6 +9,8 @@ import type { StoredTradingAgent } from './types'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
 const agentName = 'Orbital Markets'
+const builderFeeTenthsBps = 20
+const hyperliquidInfoUrl = 'https://api.hyperliquid.xyz/info'
 
 export interface HyperliquidApproveAgentAction {
   [key: string]: unknown
@@ -23,6 +25,22 @@ export interface HyperliquidApproveAgentAction {
 export interface HyperliquidApproveAgentRequest {
   owner_address: Address
   action: HyperliquidApproveAgentAction
+  signature: { r: Hex; s: Hex; v: 27 | 28 }
+}
+
+export interface HyperliquidApproveBuilderFeeAction {
+  [key: string]: unknown
+  type: 'approveBuilderFee'
+  hyperliquidChain: 'Mainnet'
+  signatureChainId: Hex
+  maxFeeRate: '0.02%'
+  builder: Address
+  nonce: number
+}
+
+export interface HyperliquidApproveBuilderFeeRequest {
+  owner_address: Address
+  action: HyperliquidApproveBuilderFeeAction
   signature: { r: Hex; s: Hex; v: 27 | 28 }
 }
 
@@ -70,18 +88,77 @@ export function buildHyperliquidApproveAgentTypedData(action: HyperliquidApprove
   }
 }
 
+export function buildHyperliquidApproveBuilderFeeAction(
+  builderAddress: string,
+  chainId: number,
+  nonce: number,
+): HyperliquidApproveBuilderFeeAction {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(builderAddress)) throw new Error('Invalid Hyperliquid builder address')
+  if (!Number.isSafeInteger(chainId) || chainId <= 0) throw new Error('Invalid wallet chain ID')
+  if (!Number.isSafeInteger(nonce) || nonce <= 0) throw new Error('Invalid builder approval nonce')
+  return {
+    type: 'approveBuilderFee',
+    hyperliquidChain: 'Mainnet',
+    signatureChainId: toHex(chainId),
+    maxFeeRate: '0.02%',
+    builder: builderAddress.toLowerCase() as Address,
+    nonce,
+  }
+}
+
+export function buildHyperliquidApproveBuilderFeeTypedData(action: HyperliquidApproveBuilderFeeAction) {
+  return {
+    domain: {
+      name: 'HyperliquidSignTransaction',
+      version: '1',
+      chainId: Number.parseInt(action.signatureChainId, 16),
+      verifyingContract: zeroAddress,
+    },
+    types: {
+      'HyperliquidTransaction:ApproveBuilderFee': [
+        { name: 'hyperliquidChain', type: 'string' },
+        { name: 'maxFeeRate', type: 'string' },
+        { name: 'builder', type: 'address' },
+        { name: 'nonce', type: 'uint64' },
+      ] as const,
+    },
+    primaryType: 'HyperliquidTransaction:ApproveBuilderFee' as const,
+    message: { ...action, nonce: BigInt(action.nonce) },
+  }
+}
+
 export async function authorizeHyperliquidAgent(options: {
   storage: StorageLike
   ownerAddress: string
   chainId: number
+  builderAddress?: string
+  builderFeeApproved?: (ownerAddress: string, builderAddress: string) => Promise<boolean>
   signTypedData: (typedData: ReturnType<typeof buildHyperliquidApproveAgentTypedData>) => Promise<Hex>
+  signBuilderTypedData?: (typedData: ReturnType<typeof buildHyperliquidApproveBuilderFeeTypedData>) => Promise<Hex>
   relay: (request: HyperliquidApproveAgentRequest) => Promise<void>
+  relayBuilderApproval?: (request: HyperliquidApproveBuilderFeeRequest) => Promise<void>
   now?: () => number
 }): Promise<StoredTradingAgent> {
   if (!/^0x[0-9a-fA-F]{40}$/.test(options.ownerAddress)) throw new Error('Invalid Hyperliquid owner address')
   const now = options.now?.() ?? Date.now()
+  const builderAddress = options.builderAddress
+  const builderAlreadyApproved = builderAddress
+    ? await options.builderFeeApproved?.(options.ownerAddress, builderAddress) ?? false
+    : false
+  const approveBuilder = !!builderAddress && !builderAlreadyApproved
+  if (approveBuilder) {
+    if (!options.signBuilderTypedData || !options.relayBuilderApproval) throw new Error('Hyperliquid builder approval unavailable')
+    const builderAction = buildHyperliquidApproveBuilderFeeAction(builderAddress, options.chainId, now)
+    const builderSignature = await options.signBuilderTypedData(buildHyperliquidApproveBuilderFeeTypedData(builderAction))
+    await options.relayBuilderApproval({
+      owner_address: options.ownerAddress as Address,
+      action: builderAction,
+      signature: splitEthereumSignature(builderSignature),
+    })
+  }
   const generated = generateHyperliquidAgent()
-  const action = buildHyperliquidApproveAgentAction(generated.agentAddress, options.chainId, now)
+  const agentNonce = approveBuilder ? now + 1 : now
+  const action = buildHyperliquidApproveAgentAction(generated.agentAddress, options.chainId, agentNonce)
   const ownerSignature = await options.signTypedData(buildHyperliquidApproveAgentTypedData(action))
   await options.relay({
     owner_address: options.ownerAddress as Address,
@@ -96,9 +173,29 @@ export async function authorizeHyperliquidAgent(options: {
     agentAddress: generated.agentAddress,
     privateKey: generated.privateKey,
     authorizedAt: new Date(now).toISOString(),
+    ...(builderAddress ? { builderAddress: builderAddress.toLowerCase() } : {}),
   }
   saveStoredTradingAgent(options.storage, agent)
   return agent
+}
+
+export async function hasApprovedHyperliquidBuilderFee(
+  ownerAddress: string,
+  builderAddress: string,
+  fetcher: typeof fetch = fetch,
+): Promise<boolean> {
+  try {
+    const response = await fetcher(hyperliquidInfoUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'maxBuilderFee', user: ownerAddress, builder: builderAddress }),
+    })
+    if (!response.ok) return false
+    const approved: unknown = await response.json()
+    return typeof approved === 'number' && approved >= builderFeeTenthsBps
+  } catch {
+    return false
+  }
 }
 
 function splitEthereumSignature(signature: Hex): { r: Hex; s: Hex; v: 27 | 28 } {
@@ -167,6 +264,7 @@ interface HyperliquidOrderAction {
     c: string
   }]
   grouping: 'na'
+  builder?: { b: Address; f: 20 }
 }
 
 interface HyperliquidLeverageAction {
@@ -286,7 +384,8 @@ function validateOrderAction(
   const valid =
     value?.type === 'order' &&
     value.grouping === 'na' &&
-    hasOnlyKeys(value, ['type', 'orders', 'grouping']) &&
+    hasOnlyKeys(value, value.builder ? ['type', 'orders', 'grouping', 'builder'] : ['type', 'orders', 'grouping']) &&
+    validBuilder(value.builder) &&
     !!order &&
     hasOnlyKeys(order, ['a', 'b', 'p', 's', 'r', 't', 'c']) &&
     Number.isSafeInteger(order.a) &&
@@ -305,6 +404,7 @@ function validateOrderAction(
     /^0x[0-9a-fA-F]{32}$/.test(order.c)
   if (!valid) throw new Error('Hyperliquid payload is not an allowed L1 order')
 
+  const builder = value.builder as Record<string, unknown> | undefined
   return {
     type: 'order',
     orders: [{
@@ -317,7 +417,16 @@ function validateOrderAction(
       c: order.c as string,
     }],
     grouping: 'na',
+    ...(builder ? { builder: { b: builder.b as Address, f: 20 as const } } : {}),
   }
+}
+
+function validBuilder(value: unknown): boolean {
+  const configured = import.meta.env?.VITE_HYPERLIQUID_BUILDER_ADDRESS?.trim().toLowerCase()
+  if (!configured) return value === undefined
+  if (!value || typeof value !== 'object') return false
+  const builder = value as Record<string, unknown>
+  return hasOnlyKeys(builder, ['b', 'f']) && builder.b === configured && builder.f === builderFeeTenthsBps
 }
 
 function normalizeHyperliquidPrice(price: number, sizeDecimals: number): string {

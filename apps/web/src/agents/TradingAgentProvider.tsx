@@ -7,7 +7,9 @@ import { apiError, apiFetch } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
 import {
   authorizeHyperliquidAgent,
+  hasApprovedHyperliquidBuilderFee,
   type HyperliquidApproveAgentRequest,
+  type HyperliquidApproveBuilderFeeRequest,
 } from './hyperliquid-agent.ts'
 import { authorizePacificaAgent, type PacificaBindAgentRequest } from './pacifica-agent.ts'
 import { signWithStoredTradingAgent } from './signing.ts'
@@ -18,6 +20,8 @@ import {
 } from './storage.ts'
 import type { TradingAgentState, Venue } from './types'
 import { TradingAgentContext } from './TradingAgentContext'
+
+const hyperliquidBuilderAddress = import.meta.env?.VITE_HYPERLIQUID_BUILDER_ADDRESS?.trim()
 
 function missingState(venue: Venue, ownerAddress: string | null): TradingAgentState {
   return { venue, ownerAddress, agentAddress: null, status: 'missing', error: null }
@@ -130,8 +134,12 @@ function TradingAgentSession({
       storage: browserStorage(),
       ownerAddress,
       chainId: mainnet.id,
-      signTypedData,
+      builderAddress: hyperliquidBuilderAddress,
+      builderFeeApproved: hasApprovedHyperliquidBuilderFee,
+      signTypedData: (typedData) => signTypedData(typedData),
+      signBuilderTypedData: (typedData) => signTypedData(typedData),
       relay: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve', request),
+      relayBuilderApproval: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve-builder-fee', request),
     })
   }
 
@@ -170,9 +178,17 @@ function ownerStillCurrent(
 }
 
 function initialState(venue: Venue, ownerAddress: string | null): TradingAgentState {
-  const agent = ownerAddress
+  let agent = ownerAddress
     ? loadAfterOwnerChange(browserStorage(), venue, null, ownerAddress)
     : null
+  if (
+    agent?.venue === 'hyperliquid' &&
+    hyperliquidBuilderAddress &&
+    agent.builderAddress?.toLowerCase() !== hyperliquidBuilderAddress.toLowerCase()
+  ) {
+    clearStoredTradingAgent(browserStorage(), venue, agent.ownerAddress)
+    agent = null
+  }
   return agent
     ? { venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null }
     : missingState(venue, ownerAddress)
@@ -180,7 +196,7 @@ function initialState(venue: Venue, ownerAddress: string | null): TradingAgentSt
 
 async function relayAuthorization(
   path: string,
-  request: PacificaBindAgentRequest | HyperliquidApproveAgentRequest,
+  request: PacificaBindAgentRequest | HyperliquidApproveAgentRequest | HyperliquidApproveBuilderFeeRequest,
 ): Promise<void> {
   const response = await apiFetch(path, {
     method: 'POST',
