@@ -23,6 +23,15 @@ type fakeHyperliquidAgentApprover struct {
 	request hllive.ApproveAgentRequest
 }
 
+type fakeHyperliquidBuilderApprover struct {
+	request hllive.ApproveBuilderFeeRequest
+}
+
+func (f *fakeHyperliquidBuilderApprover) ApproveBuilderFee(_ context.Context, request hllive.ApproveBuilderFeeRequest) error {
+	f.request = request
+	return nil
+}
+
 func (f *fakeHyperliquidAgentApprover) ApproveAgent(_ context.Context, request hllive.ApproveAgentRequest) error {
 	f.request = request
 	return nil
@@ -86,6 +95,53 @@ func TestHandleHyperliquidAgentApproveRejectsPrivateKeyFields(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d", response.Code)
 	}
+}
+
+func TestHandleHyperliquidBuilderFeeApproveValidatesConfiguredBuilder(t *testing.T) {
+	approver := &fakeHyperliquidBuilderApprover{}
+	builder := &hllive.BuilderCode{Address: "0x1111111111111111111111111111111111111111", Fee: 20}
+	server := &Server{live: &LiveDeps{hlBuilder: builder, hlBuilderApprover: approver}}
+	request := signedHyperliquidBuilderApproval(t, time.Now().UnixMilli(), builder.Address)
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+
+	server.handleHyperliquidBuilderFeeApprove(response, httptest.NewRequest(http.MethodPost, "/api/v1/live/agents/hyperliquid/approve-builder-fee", bytes.NewReader(body)))
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if approver.request.Action.MaxFeeRate != "0.02%" || approver.request.Action.Builder != builder.Address {
+		t.Fatalf("relayed action = %+v", approver.request.Action)
+	}
+}
+
+func signedHyperliquidBuilderApproval(t *testing.T, nonce int64, builder string) hllive.ApproveBuilderFeeRequest {
+	t.Helper()
+	request := hllive.ApproveBuilderFeeRequest{
+		OwnerAddress: "0x14791697260E4c9A71f18484C9f997B308e59325",
+		Action: hllive.ApproveBuilderFeeAction{
+			Type: "approveBuilderFee", HyperliquidChain: "Mainnet", SignatureChainID: "0x1",
+			MaxFeeRate: "0.02%", Builder: builder, Nonce: nonce,
+		},
+	}
+	digest, err := request.SigningHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyBytes, err := hex.DecodeString("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := secpECDSA.SignCompact(secp256k1.PrivKeyFromBytes(privateKeyBytes), digest[:], true)
+	request.Signature = hllive.EthereumSignature{
+		R: "0x" + hex.EncodeToString(compact[1:33]),
+		S: "0x" + hex.EncodeToString(compact[33:]),
+		V: int(compact[0]) - 4,
+	}
+	return request
 }
 
 func TestAgentChangeIsBlockedDuringActiveSession(t *testing.T) {

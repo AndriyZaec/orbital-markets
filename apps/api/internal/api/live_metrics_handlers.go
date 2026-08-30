@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -17,27 +18,44 @@ func (s *Server) handleLiveAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now()
-	s.metricsMu.Lock()
-	if s.metricsCache != nil && now.Sub(s.metricsCachedAt) < liveMetricsCacheTTL {
-		cached := s.metricsCache
-		s.metricsMu.Unlock()
-		writeJSON(w, http.StatusOK, cached)
-		return
-	}
-	s.metricsMu.Unlock()
-
-	metrics, err := analytics.LoadLiveMetrics(r.Context(), s.db, now)
+	metrics, err := s.liveMetrics(r)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load live analytics"})
 		return
 	}
+	writeJSON(w, http.StatusOK, metrics)
+}
 
+func (s *Server) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Del("Access-Control-Allow-Credentials")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	metrics, err := s.liveMetrics(r)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load public metrics"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"total_volume": fmt.Sprintf("%.2f", metrics.Volume.AllTime.GrossVenueVolume),
+	})
+}
+
+func (s *Server) liveMetrics(r *http.Request) (*analytics.LiveMetrics, error) {
+	now := time.Now()
 	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	if s.metricsCache != nil && now.Sub(s.metricsCachedAt) < liveMetricsCacheTTL {
+		return s.metricsCache, nil
+	}
+
+	metrics, err := analytics.LoadLiveMetrics(r.Context(), s.db, now)
+	if err != nil {
+		return nil, err
+	}
+
 	s.metricsCache = metrics
 	s.metricsCachedAt = now
-	s.metricsMu.Unlock()
-	writeJSON(w, http.StatusOK, metrics)
+	return metrics, nil
 }
 
 func (s *Server) analyticsTokenMatches(r *http.Request) bool {

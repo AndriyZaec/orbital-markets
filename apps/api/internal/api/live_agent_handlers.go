@@ -19,6 +19,10 @@ type hyperliquidAgentApprover interface {
 	ApproveAgent(context.Context, hllive.ApproveAgentRequest) error
 }
 
+type hyperliquidBuilderApprover interface {
+	ApproveBuilderFee(context.Context, hllive.ApproveBuilderFeeRequest) error
+}
+
 type pacificaAgentBinder interface {
 	BindAgent(context.Context, pacificlive.BindAgentRequest) error
 }
@@ -65,6 +69,34 @@ func (s *Server) handleHyperliquidAgentApprove(w http.ResponseWriter, r *http.Re
 	}
 	if err := s.live.recordAgentAuthorization(r.Context(), "hyperliquid", request.OwnerAddress, request.Action.AgentAddress); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Hyperliquid agent approved but local registration failed; reauthorize"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleHyperliquidBuilderFeeApprove(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil || s.live.hlBuilder == nil || s.live.hlBuilderApprover == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Hyperliquid builder fee unavailable"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAgentAuthorizationBody)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request hllive.ApproveBuilderFeeRequest
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := request.Validate(time.Now(), s.live.hlBuilder.Address); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.live.hlBuilderApprover.ApproveBuilderFee(r.Context(), request); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Hyperliquid builder fee approval rejected"})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -6,6 +6,7 @@ type Scene = 'hero' | 'access' | 'submitting' | 'received'
 
 const APP_URL = import.meta.env.VITE_APP_URL || 'https://app.orbitalmarkets.xyz'
 const WAITLIST_ENDPOINT = import.meta.env.VITE_WAITLIST_ENDPOINT || '/api/waitlist'
+const METRICS_ENDPOINT = import.meta.env.VITE_METRICS_ENDPOINT || 'https://orbital-markets-funding.fly.dev/api/v1/public/metrics'
 
 function Brand() {
   return (
@@ -32,6 +33,7 @@ export function LandingPage() {
   const [scene, setScene] = useState<Scene>('hero')
   const [paused, setPaused] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [totalVolume, setTotalVolume] = useState<string | null>(null)
   const heroButtonRef = useRef<HTMLButtonElement>(null)
   const emailRef = useRef<HTMLInputElement>(null)
   const initializedRef = useRef(false)
@@ -42,6 +44,21 @@ export function LandingPage() {
     if (landingViewTrackedRef.current) return
     landingViewTrackedRef.current = true
     trackAnalytics('landing_view', { source: 'landing' })
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch(METRICS_ENDPOINT, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Metrics request failed with ${response.status}`)
+        return response.json() as Promise<{ total_volume?: string }>
+      })
+      .then((metrics) => {
+        const volume = Number(metrics.total_volume)
+        if (Number.isFinite(volume) && volume >= 0) setTotalVolume(formatUsd(volume))
+      })
+      .catch(() => undefined)
+    return () => controller.abort()
   }, [])
 
   useEffect(() => {
@@ -142,20 +159,20 @@ export function LandingPage() {
       <section className="access" aria-hidden={!accessVisible} inert={!accessVisible}>
         {scene === 'received' ? (
           <div className="received" aria-live="polite">
-            <p>Private beta</p>
+            <p>Beta</p>
             <h2>Request received.</h2>
             <span>We will be in touch as the next cohort opens.</span>
             <button type="button" onClick={() => setScene('hero')}>Back to signal</button>
           </div>
         ) : (
           <>
-            <button className="back" type="button" onClick={closeAccess}>&lt;- Back to signal</button>
-            <div className="access-copy"><p>Private beta</p><h2>Request access.</h2><span>We are onboarding active perp traders in small cohorts.</span></div>
+            <button className="back" type="button" onClick={closeAccess}>&lt;- Back</button>
+            <div className="access-copy"><p>Beta</p><h2>Request access.</h2><span>For traders, teams, and researchers exploring a different way to trade perpetual markets.</span></div>
             <form className="form" onSubmit={submit} aria-busy={submitting}>
               <label><span>Email address</span><input ref={emailRef} name="email" type="email" autoComplete="email" required placeholder="you@somewhere.xyz" /></label>
               <div className="form-pair">
-                <label><span>You are</span><select name="profile" required defaultValue=""><option value="" disabled>Select profile</option><option value="active_trader">Active perp trader</option><option value="trading_team">Trading team or market maker</option><option value="researching">Researching delta-neutral strategies</option></select></label>
-                <label><span>Monthly perp volume</span><select name="monthly_volume" required defaultValue=""><option value="" disabled>Select range</option><option value="under_10k">Under $10k</option><option value="10k_50k">$10k - $50k</option><option value="50k_100k">$50k - $100k</option><option value="100k_1m">$100k - $1m</option><option value="1m_10m">$1m - $10m</option><option value="10m_plus">$10m+</option></select></label>
+                <label><span>You are</span><select name="profile" required defaultValue=""><option value="" disabled>Select profile</option><option value="active_trader">Active perp trader</option><option value="occasional_trader">Occasional perp trader</option><option value="defi_user">DeFi user</option><option value="return_seeker">Exploring better returns</option><option value="trading_team">Trading team or market maker</option><option value="researching">Researching delta-neutral strategies</option></select></label>
+                <label><span>Monthly perp volume</span><select name="monthly_volume" required defaultValue=""><option value="" disabled>Select range</option><option value="under_1k">Under $1k</option><option value="1k_10k">$1k - $10k</option><option value="10k_50k">$10k - $50k</option><option value="50k_100k">$50k - $100k</option><option value="100k_1m">$100k - $1m</option><option value="1m_plus">$1m+</option></select></label>
               </div>
               <button type="submit" disabled={submitting}>{submitting ? 'Submitting...' : 'Submit request'} {!submitting && <RocketIcon />}</button>
               {error && <p className="form-error" role="alert">{error}</p>}
@@ -165,9 +182,18 @@ export function LandingPage() {
       </section>
 
       <footer className="footer">
-        <span>Closed beta / 2026</span>
+        <div className="total-volume" aria-live="polite"><span>Total volume</span><strong>{totalVolume ?? '--'}</strong></div>
         <button type="button" onClick={() => setPaused((current) => !current)}>{paused ? 'Play field' : 'Pause field'}</button>
       </footer>
     </main>
   )
+}
+
+function formatUsd(value: number) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value)
 }

@@ -44,8 +44,14 @@ export function GateProvider({ children }: { children: ReactNode }) {
   }, [])
 
   if (status === 'checking') {
-    // Blank — no spinner, no flash of branded UI before gate decision.
-    return <div className="min-h-screen bg-black" />
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center" role="status" aria-live="polite">
+        <div className="flex flex-col items-center gap-3 text-neutral-400">
+          <span className="size-6 animate-spin rounded-full border border-neutral-700 border-t-cyan-400" aria-hidden="true" />
+          <span className="text-[10px] font-medium uppercase tracking-[0.2em]">Loading Orbital</span>
+        </div>
+      </div>
+    )
   }
   if (status === 'gated') {
     return <Gate />

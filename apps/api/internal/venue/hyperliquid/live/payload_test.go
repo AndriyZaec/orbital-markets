@@ -68,6 +68,23 @@ func TestBuildOpenPayloadUsesAssetSizePrecision(t *testing.T) {
 	}
 }
 
+func TestBuildOpenPayloadIncludesBuilderCodeInSignedAction(t *testing.T) {
+	request, err := BuildOpenPayload(
+		payloadTestAssetMap{index: 7, decimals: 3},
+		"VIRTUAL", domain.SideLong, 20.123, 1.25, "client-order",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unsigned HyperliquidUnsignedAction
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	if unsigned.Action.Builder == nil || unsigned.Action.Builder.Address != OrbitalBuilder.Address || unsigned.Action.Builder.Fee != OrbitalBuilder.Fee {
+		t.Fatalf("builder = %+v", unsigned.Action.Builder)
+	}
+}
+
 func TestBuildOpenPayloadUsesHyperliquidPricePrecision(t *testing.T) {
 	request, err := BuildOpenPayload(
 		payloadTestAssetMap{index: 7, decimals: 1},

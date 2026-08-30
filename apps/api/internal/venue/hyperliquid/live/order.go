@@ -1,13 +1,51 @@
 package live
 
-import "time"
+import (
+	_ "embed"
+	"encoding/json"
+	"regexp"
+	"time"
+)
+
+//go:embed builder_config.json
+var builderConfigJSON []byte
+
+var OrbitalBuilder = mustLoadBuilderConfig()
+
+type BuilderConfig struct {
+	Address    string `json:"address"`
+	Fee        int    `json:"fee"`
+	MaxFeeRate string `json:"maxFeeRate"`
+}
+
+func mustLoadBuilderConfig() BuilderConfig {
+	var config BuilderConfig
+	if err := json.Unmarshal(builderConfigJSON, &config); err != nil {
+		panic("decode Hyperliquid builder config: " + err.Error())
+	}
+	if !regexp.MustCompile(`^0x[0-9a-f]{40}$`).MatchString(config.Address) ||
+		config.Fee <= 0 || config.Fee > 100 || config.MaxFeeRate == "" {
+		panic("invalid Hyperliquid builder config")
+	}
+	return config
+}
 
 // OrderAction is the Hyperliquid exchange action for placing orders.
 // Hyperliquid uses a POST /exchange endpoint with EIP-712 typed signing.
 type OrderAction struct {
-	Type     string      `json:"type"` // "order"
-	Orders   []OrderSpec `json:"orders"`
-	Grouping string      `json:"grouping"` // "na" for single orders
+	Type     string       `json:"type"` // "order"
+	Orders   []OrderSpec  `json:"orders"`
+	Grouping string       `json:"grouping"` // "na" for single orders
+	Builder  *BuilderCode `json:"builder,omitempty"`
+}
+
+type BuilderCode struct {
+	Address string `json:"b"`
+	Fee     int    `json:"f"` // tenths of a basis point
+}
+
+func OrbitalBuilderCode() *BuilderCode {
+	return &BuilderCode{Address: OrbitalBuilder.Address, Fee: OrbitalBuilder.Fee}
 }
 
 type UpdateLeverageAction struct {

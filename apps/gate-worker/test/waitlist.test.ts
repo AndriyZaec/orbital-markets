@@ -27,6 +27,14 @@ function submitWaitlist(overrides: Record<string, string> = {}, origin = 'https:
 }
 
 describe('POST /api/waitlist', () => {
+  it.each(['occasional_trader', 'defi_user', 'return_seeker'])('accepts the %s profile', async (profile) => {
+    expect((await submitWaitlist({ profile })).status).toBe(202);
+  });
+
+  it.each(['under_1k', '1k_10k', '1m_plus'])('accepts the %s volume range', async (monthly_volume) => {
+    expect((await submitWaitlist({ monthly_volume })).status).toBe(202);
+  });
+
   it('stores a normalized pending request', async () => {
     const response = await submitWaitlist();
 

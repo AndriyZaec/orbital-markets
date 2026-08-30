@@ -208,6 +208,7 @@ func buildPayload(
 			Cloid:      cloid,
 		}},
 		Grouping: "na",
+		Builder:  OrbitalBuilderCode(),
 	}
 
 	nonce := nextHyperliquidNonce()

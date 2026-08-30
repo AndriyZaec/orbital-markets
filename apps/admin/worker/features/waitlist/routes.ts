@@ -12,8 +12,8 @@ import {
 import { logMutation } from '../../shared/operations'
 
 const STATUSES = new Set(['pending', 'approved', 'rejected', 'invited'])
-const PROFILES = new Set(['active_trader', 'trading_team', 'researching'])
-const VOLUMES = new Set(['under_10k', '10k_50k', '50k_100k', '100k_1m', '1m_10m', '10m_plus'])
+const PROFILES = new Set(['active_trader', 'occasional_trader', 'defi_user', 'return_seeker', 'trading_team', 'researching'])
+const VOLUMES = new Set(['under_1k', '1k_10k', 'under_10k', '10k_50k', '50k_100k', '100k_1m', '1m_plus', '1m_10m', '10m_plus'])
 
 interface WaitlistEntry {
   id: string
