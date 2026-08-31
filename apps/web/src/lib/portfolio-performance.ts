@@ -93,6 +93,8 @@ export function portfolioPerformance(
 
   return {
     ...totalPerformance,
-    byAsset: byAsset.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
+    // Input positions are newest-first, so Map insertion order preserves the
+    // most recently active assets for the share card.
+    byAsset,
   }
 }

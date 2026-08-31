@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
-import { EyeIcon, EyeOffIcon, Share2Icon } from 'lucide-react'
+import { CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, Share2Icon, XIcon } from 'lucide-react'
 import { useLivePositions, type LivePosition } from '@/hooks/useLivePositions'
 import { useVenueReadiness, type VenueReadiness } from '@/hooks/useVenueReadiness'
 import { AssetIcon } from '@/components/AssetIcon'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import { portfolioPositionCategory } from '@/lib/portfolio-position'
@@ -86,7 +95,8 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
   // One typed readiness layer, shared with the header and ConnectAccounts.
   const { pacifica, hyperliquid, aggregate: readiness } = useVenueReadiness()
   const [privateView, setPrivateView] = useState(false)
-  const [sharing, setSharing] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
   const [openedAt] = useState(() => Date.now())
   const activityAccountKey = `${pacifica.address ?? ''}|${hyperliquid.address ?? ''}`
   const [activitySnapshot, setActivitySnapshot] = useState<{
@@ -96,7 +106,15 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
 
   useEffect(() => {
     if (positionsLoading || activitySnapshot?.accountKey === activityAccountKey) return
-    setActivitySnapshot({ accountKey: activityAccountKey, positions: positions.slice(0, 10) })
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setActivitySnapshot({ accountKey: activityAccountKey, positions: positions.slice(0, 10) })
+      }
+    })
+    return () => {
+      cancelled = true
+    }
   }, [activityAccountKey, activitySnapshot?.accountKey, positions, positionsLoading])
 
   const recentActivity = activitySnapshot?.accountKey === activityAccountKey
@@ -172,16 +190,10 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
         ? 'rose'
         : 'plain'
 
-  const handleShare = async () => {
-    if (sharedPerformance.value === null || sharing) return
-    setSharing(true)
-    try {
-      await sharePerformanceCard(sharedPerformance)
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) console.error('Unable to share PnL card', error)
-    } finally {
-      setSharing(false)
-    }
+  const handleShare = () => {
+    if (sharedPerformance.value === null) return
+    setSharePerformance(sharedPerformance)
+    setShareOpen(true)
   }
 
   return (
@@ -204,16 +216,15 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
           </button>
         </div>
         <div className="flex items-center gap-3">
-          {privateView && sharedPerformance.value !== null && (
+          {sharedPerformance.value !== null && (
             <button
               type="button"
               onClick={handleShare}
-              disabled={sharing}
-              className="flex items-center gap-1.5 text-[12px] text-cyan-400 transition-colors hover:text-cyan-300 disabled:opacity-50"
+              className="flex items-center gap-1.5 text-[12px] text-cyan-400 transition-colors hover:text-cyan-300"
               aria-label="Share annualized return"
             >
               <Share2Icon className="size-3.5" />
-              <span className="hidden sm:inline">{sharing ? 'Preparing…' : 'Share'}</span>
+              <span className="hidden sm:inline">Share</span>
             </button>
           )}
           <div className={`flex items-center gap-1.5 text-[12px] ${health.color}`}>
@@ -384,11 +395,21 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
           </div>
         )}
       </Section>
+      <PortfolioShareDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        performance={sharePerformance}
+      />
     </div>
   )
 }
 
-async function sharePerformanceCard(performance: PortfolioPerformance): Promise<void> {
+interface ShareImage {
+  blob: Blob
+  file: File
+}
+
+async function createPerformanceCard(performance: PortfolioPerformance): Promise<ShareImage> {
   const canvas = document.createElement('canvas')
   canvas.width = 1200
   canvas.height = 630
@@ -402,55 +423,71 @@ async function sharePerformanceCard(performance: PortfolioPerformance): Promise<
   ctx.fillStyle = background
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
+  const lowerGlow = ctx.createRadialGradient(120, 610, 0, 120, 610, 520)
+  lowerGlow.addColorStop(0, 'rgba(37, 99, 235, 0.14)')
+  lowerGlow.addColorStop(1, 'rgba(37, 99, 235, 0)')
+  ctx.fillStyle = lowerGlow
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+  ctx.lineWidth = 1
+  for (let x = 0; x <= canvas.width; x += 80) {
+    ctx.strokeStyle = x % 320 === 0
+      ? 'rgba(103, 232, 249, 0.09)'
+      : 'rgba(103, 232, 249, 0.055)'
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x, canvas.height)
+    ctx.stroke()
+  }
+  for (let y = 0; y <= canvas.height; y += 70) {
+    ctx.strokeStyle = y % 280 === 0
+      ? 'rgba(103, 232, 249, 0.09)'
+      : 'rgba(103, 232, 249, 0.055)'
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(canvas.width, y)
+    ctx.stroke()
+  }
+
   const glow = ctx.createRadialGradient(980, 80, 0, 980, 80, 520)
   glow.addColorStop(0, 'rgba(34, 211, 238, 0.20)')
   glow.addColorStop(1, 'rgba(34, 211, 238, 0)')
   ctx.fillStyle = glow
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
+  drawOrbitalMark(ctx, 72, 55, 40)
   ctx.fillStyle = '#f8fafc'
-  ctx.font = '600 34px Geist, system-ui, sans-serif'
-  ctx.fillText('ORBITAL', 72, 82)
+  ctx.font = "650 34px 'Geist Variable', system-ui, sans-serif"
+  ctx.fillText('ORBITAL MARKETS', 128, 84)
+
   ctx.fillStyle = '#67e8f9'
-  ctx.font = '500 19px Geist, system-ui, sans-serif'
-  ctx.fillText('MARKET-NEUTRAL PERFORMANCE', 72, 124)
-
-  ctx.fillStyle = '#94a3b8'
-  ctx.font = '500 22px Geist, system-ui, sans-serif'
-  ctx.fillText(performance.annualized ? 'Annualized Return' : 'Return on Deployed Capital', 72, 220)
+  ctx.font = '600 18px ui-monospace, SFMono-Regular, Menlo, monospace'
+  ctx.fillText((performance.annualized ? 'Annualized Return' : 'Return on Deployed Capital').toUpperCase(), 72, 210)
   ctx.fillStyle = performance.value >= 0 ? '#4ade80' : '#fb7185'
-  ctx.font = '700 92px Geist, system-ui, sans-serif'
+  ctx.font = "700 96px 'Geist Variable', system-ui, sans-serif"
   ctx.fillText(fmtReturn(performance.value), 66, 326)
-  ctx.fillStyle = '#94a3b8'
-  ctx.font = '400 20px Geist, system-ui, sans-serif'
-  ctx.fillText('Realized + unrealized P&L on deployed capital', 72, 370)
 
-  const assets = performance.byAsset.slice(0, 4)
+  const assets = performance.byAsset.slice(0, 3)
   if (assets.length > 0) {
     ctx.fillStyle = '#64748b'
-    ctx.font = '500 17px Geist, system-ui, sans-serif'
+    ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
     ctx.fillText('BY ASSET', 730, 215)
 
     assets.forEach((asset, index) => {
       const y = 265 + index * 62
       ctx.fillStyle = '#e2e8f0'
-      ctx.font = '600 22px Geist, system-ui, sans-serif'
+      ctx.font = "600 22px 'Geist Variable', system-ui, sans-serif"
       ctx.fillText(asset.asset, 730, y)
       ctx.fillStyle = asset.value >= 0 ? '#4ade80' : '#fb7185'
-      ctx.font = '600 22px Geist, system-ui, sans-serif'
+      ctx.font = '600 20px ui-monospace, SFMono-Regular, Menlo, monospace'
       ctx.textAlign = 'right'
       ctx.fillText(fmtReturn(asset.value), 1115, y)
       ctx.textAlign = 'left'
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.14)'
-      ctx.beginPath()
-      ctx.moveTo(730, y + 22)
-      ctx.lineTo(1115, y + 22)
-      ctx.stroke()
     })
   }
 
   ctx.fillStyle = '#475569'
-  ctx.font = '400 16px Geist, system-ui, sans-serif'
+  ctx.font = "400 16px 'Geist Variable', system-ui, sans-serif"
   ctx.fillText(`Generated ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 72, 576)
   ctx.textAlign = 'right'
   ctx.fillText('orbital.markets', 1128, 576)
@@ -460,22 +497,187 @@ async function sharePerformanceCard(performance: PortfolioPerformance): Promise<
     canvas.toBlob((value) => value ? resolve(value) : reject(new Error('Unable to encode performance card')), 'image/png')
   })
   const file = new File([blob], 'orbital-return.png', { type: 'image/png' })
+  return { blob, file }
+}
 
-  if (navigator.share && navigator.canShare?.({ files: [file] })) {
-    await navigator.share({
-      title: performance.annualized ? 'Orbital Annualized Return' : 'Orbital Return',
-      text: `${fmtReturn(performance.value)} ${performance.annualized ? 'annualized return' : 'return on deployed capital'} with Orbital`,
-      files: [file],
+function drawOrbitalMark(ctx: CanvasRenderingContext2D, x: number, y: number, size: number): void {
+  ctx.save()
+  ctx.translate(x + size / 2, y + size / 2)
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.72)'
+  ctx.lineWidth = 1.5
+  ctx.rotate(-0.38)
+  ctx.beginPath()
+  ctx.ellipse(0, 0, size / 2, size / 4, 0, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.rotate(0.95)
+  ctx.beginPath()
+  ctx.ellipse(0, 0, size / 3.2, size / 5, 0, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.fillStyle = '#22d3ee'
+  ctx.shadowColor = 'rgba(34, 211, 238, 0.8)'
+  ctx.shadowBlur = 10
+  ctx.beginPath()
+  ctx.arc(0, 0, 5, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+function PortfolioShareDialog({
+  open,
+  onOpenChange,
+  performance,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  performance: PortfolioPerformance | null
+}) {
+  const [image, setImage] = useState<(ShareImage & { url: string }) | null>(null)
+  const [status, setStatus] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open || !performance || performance.value === null) return
+    let cancelled = false
+    let imageUrl: string | null = null
+    setImage(null)
+    setStatus(null)
+    setError(null)
+
+    createPerformanceCard(performance).then((result) => {
+      imageUrl = URL.createObjectURL(result.blob)
+      if (cancelled) {
+        URL.revokeObjectURL(imageUrl)
+        return
+      }
+      setImage({ ...result, url: imageUrl })
+    }).catch(() => {
+      if (!cancelled) setError('Unable to prepare the performance card.')
     })
-    return
+
+    return () => {
+      cancelled = true
+      if (imageUrl) URL.revokeObjectURL(imageUrl)
+    }
+  }, [open, performance])
+
+  const canNativeShare = !!image
+    && typeof navigator.share === 'function'
+    && !!navigator.canShare?.({ files: [image.file] })
+
+  const nativeShare = async () => {
+    if (!image || !performance || performance.value === null || !canNativeShare) return
+    setStatus(null)
+    setError(null)
+    try {
+      await navigator.share({
+        title: performance.annualized ? 'Orbital Annualized Return' : 'Orbital Return',
+        text: `${fmtReturn(performance.value)} ${performance.annualized ? 'annualized return' : 'return on deployed capital'} with Orbital`,
+        files: [image.file],
+      })
+      setStatus('Shared successfully.')
+    } catch (shareError) {
+      if (!(shareError instanceof DOMException && shareError.name === 'AbortError')) {
+        setError('System sharing is unavailable. Copy or download the image instead.')
+      }
+    }
   }
 
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = file.name
-  link.click()
-  URL.revokeObjectURL(url)
+  const copyImage = async () => {
+    if (!image) return
+    setStatus(null)
+    setError(null)
+    try {
+      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Unsupported')
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': image.blob })])
+      setStatus('Image copied to clipboard.')
+    } catch {
+      setError('This browser cannot copy images. Download the PNG instead.')
+    }
+  }
+
+  const downloadImage = () => {
+    if (!image) return
+    const link = document.createElement('a')
+    link.href = image.url
+    link.download = image.file.name
+    link.click()
+    setError(null)
+    setStatus('PNG downloaded.')
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-[#080d15] text-slate-100 sm:max-w-2xl" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.14em] text-slate-100">
+            <Share2Icon className="size-4 text-cyan-400" />
+            Share performance
+          </DialogTitle>
+        </DialogHeader>
+        <DialogClose
+          render={(
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="absolute top-2 right-2 text-slate-300 hover:bg-white/10 hover:text-white"
+            />
+          )}
+        >
+          <XIcon />
+          <span className="sr-only">Close</span>
+        </DialogClose>
+
+        {image ? (
+          <img
+            src={image.url}
+            alt="Orbital performance share card preview"
+            className="w-full rounded-lg ring-1 ring-foreground/10"
+          />
+        ) : (
+          <div className="flex aspect-[40/21] items-center justify-center rounded-lg bg-muted/40 text-sm text-muted-foreground">
+            {error ?? 'Preparing preview…'}
+          </div>
+        )}
+
+        {error && image && <p role="status" className="text-xs text-destructive">{error}</p>}
+        {status && image && <p role="status" className="text-xs text-muted-foreground">{status}</p>}
+
+        <DialogFooter className="border-white/[0.07] bg-[#080d15] sm:justify-between">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              className="bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white"
+              onClick={copyImage}
+              disabled={!image}
+            >
+              <CopyIcon data-icon="inline-start" />
+              Copy image
+            </Button>
+            <Button
+              variant="ghost"
+              className="bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white"
+              onClick={downloadImage}
+              disabled={!image}
+            >
+              <DownloadIcon data-icon="inline-start" />
+              Download PNG
+            </Button>
+          </div>
+          {canNativeShare && (
+            <Button
+              variant="ghost"
+              className="bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/15 hover:text-cyan-200"
+              onClick={nativeShare}
+              disabled={!image}
+            >
+              <Share2Icon data-icon="inline-start" />
+              Share image
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 function Tile({
