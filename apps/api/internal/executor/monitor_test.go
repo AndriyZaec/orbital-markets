@@ -54,6 +54,30 @@ func TestLegPricePnLReturnsQuoteCurrencyValue(t *testing.T) {
 	}
 }
 
+func TestCurrentFundingAPRPreservesPositionDirection(t *testing.T) {
+	tests := []struct {
+		name     string
+		leg1Side domain.Side
+		leg1Rate float64
+		leg2Side domain.Side
+		leg2Rate float64
+		expected float64
+	}{
+		{name: "short leg 1 receives positive carry", leg1Side: domain.SideShort, leg1Rate: 0.000010, leg2Side: domain.SideLong, leg2Rate: 0.000002, expected: 0.07008},
+		{name: "short leg 1 pays after funding flip", leg1Side: domain.SideShort, leg1Rate: 0.000003, leg2Side: domain.SideLong, leg2Rate: 0.000006, expected: -0.02628},
+		{name: "short leg 2 pays after funding flip", leg1Side: domain.SideLong, leg1Rate: 0.000006, leg2Side: domain.SideShort, leg2Rate: 0.000003, expected: -0.02628},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := currentFundingAPR(test.leg1Side, test.leg1Rate, test.leg2Side, test.leg2Rate)
+			if math.Abs(got-test.expected) > 1e-9 {
+				t.Fatalf("current funding APR = %v, want %v", got, test.expected)
+			}
+		})
+	}
+}
+
 func TestMonitoredLiquidationPricePrefersNativeVenueValue(t *testing.T) {
 	if got := monitoredLiquidationPrice(72, 100, domain.SideLong, 5); got != 72 {
 		t.Fatalf("native liquidation price = %v, want 72", got)
