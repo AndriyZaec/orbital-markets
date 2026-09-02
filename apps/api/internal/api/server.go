@@ -132,6 +132,7 @@ func (s *Server) routes() {
 	// Analytics
 	s.mux.HandleFunc("GET /api/v1/paper/analytics", s.handlePaperAnalytics)
 	s.mux.HandleFunc("GET /api/v1/analytics", s.handleLiveAnalytics)
+	s.mux.HandleFunc("GET /api/v1/analytics/weekly-apr", s.handleWeeklyAPR)
 	s.mux.HandleFunc("GET /api/v1/public/metrics", s.handlePublicMetrics)
 
 	// Historical data

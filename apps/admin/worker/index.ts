@@ -27,7 +27,8 @@ export default {
         const path = url.pathname.replace('/api/admin/v1', '')
         if (url.pathname.startsWith('/api/admin/v1/')) {
           let response: Response
-          if (path === '/analytics' && request.method === 'GET') response = await proxyAnalytics(env)
+          if (path === '/analytics' && request.method === 'GET') response = await proxyAnalytics(env, '/api/v1/analytics')
+          else if (path === '/weekly-apr' && request.method === 'GET') response = await proxyAnalytics(env, '/api/v1/analytics/weekly-apr')
           else if (path.startsWith('/invites/') || path.match(/^\/waitlist\/[^/]+\/invites$/)) {
             response = await handleInviteRoute(request, env, identity, path)
           } else response = await handleWaitlistRoute(request, env, identity, path)
@@ -49,12 +50,12 @@ export default {
   },
 } satisfies ExportedHandler<Env>
 
-async function proxyAnalytics(env: Env): Promise<Response> {
+async function proxyAnalytics(env: Env, upstreamPath: string): Promise<Response> {
   if (!env.ANALYTICS_API_URL || !env.ANALYTICS_API_TOKEN) {
     return jsonResponse(503, 'analytics_not_configured', 'Live analytics is not configured.', { retryable: true })
   }
   try {
-    const response = await fetch(`${env.ANALYTICS_API_URL.replace(/\/$/, '')}/api/v1/analytics`, {
+    const response = await fetch(`${env.ANALYTICS_API_URL.replace(/\/$/, '')}${upstreamPath}`, {
       headers: { 'x-analytics-token': env.ANALYTICS_API_TOKEN },
     })
     const body = await response.text()

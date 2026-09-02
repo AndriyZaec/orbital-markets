@@ -20,6 +20,7 @@ const (
 	bearerPrefix      = "Bearer "
 	healthPath        = "/api/v1/health"
 	analyticsPath     = "/api/v1/analytics"
+	weeklyAPRPath     = "/api/v1/analytics/weekly-apr"
 	publicMetricsPath = "/api/v1/public/metrics"
 	expectedAlgHdr    = "HS256"
 )
@@ -34,7 +35,7 @@ var (
 // Auth returns middleware that verifies the __beta cookie (or Authorization:
 // Bearer header) against secret using HS256. On failure it responds 404 — the
 // gate is meant to be invisible to unauthorized clients. /api/v1/health is
-// allowed through for health checks, /api/v1/analytics performs its own
+// allowed through for health checks, analytics endpoints perform their own
 // service-token authentication, and /api/v1/public/metrics exposes only a
 // deliberately limited aggregate.
 //
@@ -48,7 +49,7 @@ func Auth(secret string, logger *slog.Logger) func(http.Handler) http.Handler {
 	key := []byte(secret)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == healthPath || r.URL.Path == analyticsPath || r.URL.Path == publicMetricsPath {
+			if r.URL.Path == healthPath || r.URL.Path == analyticsPath || r.URL.Path == weeklyAPRPath || r.URL.Path == publicMetricsPath {
 				next.ServeHTTP(w, r)
 				return
 			}

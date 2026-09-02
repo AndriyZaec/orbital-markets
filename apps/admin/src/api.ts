@@ -59,6 +59,20 @@ export interface LiveAnalytics {
   }
 }
 
+export interface WeeklyAPRRow {
+  week_start: string
+  ticker: string
+  venue_long: string
+  venue_short: string
+  max_apr: number
+  weekly_average_apr: number
+}
+
+export interface WeeklyAPRReport {
+  generated_at: string
+  rows: WeeklyAPRRow[]
+}
+
 const adminTokenStorageKey = 'orbital-admin-token'
 
 export function getAdminToken(): string {
@@ -116,6 +130,10 @@ export async function listAudit(signal?: AbortSignal, cursor?: string): Promise<
 
 export async function getLiveAnalytics(signal?: AbortSignal): Promise<LiveAnalytics> {
   return get<LiveAnalytics>('/api/admin/v1/analytics', signal)
+}
+
+export async function getWeeklyAPR(signal?: AbortSignal): Promise<WeeklyAPRReport> {
+  return get<WeeklyAPRReport>('/api/admin/v1/weekly-apr', signal)
 }
 
 export async function issueInvite(entryId: string): Promise<void> {
