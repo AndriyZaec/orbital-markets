@@ -153,7 +153,7 @@ export function LandingPage() {
         <p>Delta-neutral execution for perpetual markets</p>
         <h1>Trade the spread.<span>Not the market.</span></h1>
         <p>One non-custodial execution flow for hedged positions across perpetual venues, subject to execution, basis, and liquidation risk.</p>
-        <button ref={heroButtonRef} type="button" onClick={openAccess}>Join Orbital <RocketIcon /></button>
+        <button ref={heroButtonRef} type="button" onClick={openAccess}>Join Waitlist <RocketIcon /></button>
       </section>
 
       <section className="access" aria-hidden={!accessVisible} inert={!accessVisible}>
