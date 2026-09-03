@@ -13,7 +13,11 @@ import {
   type HyperliquidApproveAgentRequest,
   type HyperliquidApproveBuilderFeeRequest,
 } from './hyperliquid-agent.ts'
-import { authorizePacificaAgent, type PacificaBindAgentRequest } from './pacifica-agent.ts'
+import {
+  authorizePacificaAgent,
+  type PacificaApproveBuilderCodeRequest,
+  type PacificaBindAgentRequest,
+} from './pacifica-agent.ts'
 import { signWithStoredTradingAgent } from './signing.ts'
 import {
   clearStoredTradingAgent,
@@ -126,6 +130,7 @@ function TradingAgentSession({
       ownerAddress,
       signMessage: solanaSignMessage,
       relay: (request) => relayAuthorization('/api/v1/live/agents/pacifica/bind', request),
+      relayBuilderApproval: (request) => relayAuthorization('/api/v1/live/agents/pacifica/approve-builder-code', request),
     })
   }
 
@@ -185,7 +190,9 @@ function TradingAgentSession({
       ? currentOwner?.toLowerCase() === request.account.toLowerCase()
       : currentOwner === request.account
     if (!matches) throw new Error(`${request.venue} owner changed during execution`)
-    if (request.venue === 'hyperliquid') await ensureHyperliquidBuilderFee(request.account)
+    if (request.venue === 'hyperliquid' && (request.action === 'open' || request.action === 'close')) {
+      await ensureHyperliquidBuilderFee(request.account)
+    }
     if (!ownerStillCurrent(request.venue, request.account, owners.current)) {
       throw new Error(`${request.venue} owner changed during execution`)
     }
@@ -235,7 +242,7 @@ function initialState(venue: Venue, ownerAddress: string | null): TradingAgentSt
 
 async function relayAuthorization(
   path: string,
-  request: PacificaBindAgentRequest | HyperliquidApproveAgentRequest | HyperliquidApproveBuilderFeeRequest,
+  request: PacificaBindAgentRequest | PacificaApproveBuilderCodeRequest | HyperliquidApproveAgentRequest | HyperliquidApproveBuilderFeeRequest,
 ): Promise<void> {
   const response = await apiFetch(path, {
     method: 'POST',

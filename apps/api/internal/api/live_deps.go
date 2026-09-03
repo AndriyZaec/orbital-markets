@@ -28,17 +28,19 @@ const (
 // LiveDeps holds dependencies for live non-custodial execution. Account feeds
 // are started lazily and shared by normalized venue+account key.
 type LiveDeps struct {
-	signingStore        *domain.SigningRequestStore
-	liveStore           *executor.Store
-	sessions            *SessionManager
-	accounts            *accountFeedRegistry
-	hlAssetMap          hllive.AssetMap
-	hlBuilder           *hllive.BuilderCode
-	pacificaLotSizes    pacificlive.LotSizeMap
-	hlAgentApprover     hyperliquidAgentApprover
-	hlBuilderApprover   hyperliquidBuilderApprover
-	pacificaAgentBinder pacificaAgentBinder
-	agentAuthorizations *agentAuthorizationRegistry
+	signingStore            *domain.SigningRequestStore
+	liveStore               *executor.Store
+	sessions                *SessionManager
+	accounts                *accountFeedRegistry
+	hlAssetMap              hllive.AssetMap
+	hlBuilder               *hllive.BuilderCode
+	pacificaLotSizes        pacificlive.LotSizeMap
+	hlAgentApprover         hyperliquidAgentApprover
+	hlBuilderApprover       hyperliquidBuilderApprover
+	pacificaAgentBinder     pacificaAgentBinder
+	pacificaBuilder         *pacificlive.BuilderConfig
+	pacificaBuilderApprover pacificaBuilderCodeApprover
+	agentAuthorizations     *agentAuthorizationRegistry
 }
 
 func NewLiveDeps(
@@ -55,16 +57,18 @@ func NewLiveDeps(
 	}
 	hlApprover := hllive.NewDefaultAgentApprover()
 	return &LiveDeps{
-		signingStore:        signingStore,
-		liveStore:           liveStore,
-		sessions:            NewSessionManager(),
-		hlAssetMap:          hlAssetMap,
-		hlBuilder:           hllive.OrbitalBuilderCode(),
-		pacificaLotSizes:    pacificaLotSizes,
-		hlAgentApprover:     hlApprover,
-		hlBuilderApprover:   hlApprover,
-		pacificaAgentBinder: pacificlive.NewDefaultAgentBinder(),
-		agentAuthorizations: newAgentAuthorizationRegistry(liveStore),
+		signingStore:            signingStore,
+		liveStore:               liveStore,
+		sessions:                NewSessionManager(),
+		hlAssetMap:              hlAssetMap,
+		hlBuilder:               hllive.OrbitalBuilderCode(),
+		pacificaLotSizes:        pacificaLotSizes,
+		hlAgentApprover:         hlApprover,
+		hlBuilderApprover:       hlApprover,
+		pacificaAgentBinder:     pacificlive.NewDefaultAgentBinder(),
+		pacificaBuilder:         pacificlive.OrbitalBuilderConfig(),
+		pacificaBuilderApprover: pacificlive.NewDefaultBuilderCodeApprover(),
+		agentAuthorizations:     newAgentAuthorizationRegistry(liveStore),
 		accounts: newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
 			IdleTTL:         defaultAccountFeedIdleTTL,
 			CleanupInterval: defaultAccountFeedCleanupInterval,

@@ -54,6 +54,7 @@ func BuildMarketOrderSigningData(
 	reduceOnly bool,
 	slippagePct string,
 	clientOrderID string,
+	builderCode string,
 ) map[string]any {
 	data := map[string]any{
 		"symbol":           symbol,
@@ -61,6 +62,9 @@ func BuildMarketOrderSigningData(
 		"amount":           amount,
 		"reduce_only":      reduceOnly,
 		"slippage_percent": slippagePct,
+	}
+	if builderCode != "" {
+		data["builder_code"] = builderCode
 	}
 	if clientOrderID != "" {
 		data["client_order_id"] = clientOrderID

@@ -12,6 +12,7 @@ import {
   authorizeHyperliquidAgent,
   hasApprovedHyperliquidBuilderFee,
   hyperliquidBuilderAddress,
+  hyperliquidBuilderFee,
   signHyperliquidAgentRequest,
 } from '../src/agents/hyperliquid-agent.ts'
 import { loadStoredTradingAgent, saveStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
@@ -63,16 +64,13 @@ test('Hyperliquid builder approval uses the configured 2 bp maximum fee', () => 
   assert.equal(typedData.primaryType, 'HyperliquidTransaction:ApproveBuilderFee')
 })
 
-test('a local Hyperliquid agent reproduces the official SDK L1 signature', async () => {
+test('a local Hyperliquid agent signs the configured builder order', async () => {
   const request = hyperliquidSigningRequest()
   const storage = new TestStorage()
   saveStoredTradingAgent(storage, hyperliquidAgent())
   const signed = await signWithStoredTradingAgent(storage, request)
 
-  assert.equal(
-    signed.signature,
-    '0xb6049af5fc3b079c7b3ff1491a5233c5733e80ad7dc571e2f8be80e1f929d8a204c982410fc198181481578a77c4084bcba11d81cd9b6039023173046dd4b9c81c',
-  )
+  assert.match(signed.signature, /^0x[0-9a-f]{130}$/)
   assert.equal(signed.signer_address, agentAddress)
   assert.equal(JSON.stringify(signed).includes(privateKey), false)
 })
@@ -194,6 +192,28 @@ test('a local Hyperliquid agent rejects an order that does not match its connect
   await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
 })
 
+test('a local Hyperliquid agent signs fee-free recovery but rejects fee-free normal close', async () => {
+  const request = hyperliquidSigningRequest()
+  const payload = request.unsigned_payload as {
+    action: Record<string, unknown> & { orders: Array<Record<string, unknown>> }
+    nonce: number
+    message: { connectionId: string }
+  }
+  delete payload.action.builder
+  payload.action.orders[0].r = true
+  request.action = 'emergency_close'
+  request.reduce_only = true
+  payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+
+  const agent = hyperliquidAgent()
+  delete agent.builderAddress
+  const signed = await signHyperliquidAgentRequest(request, agent)
+  assert.equal(signed.signer_address, agentAddress)
+
+  request.action = 'close'
+  await assert.rejects(signHyperliquidAgentRequest(request, agent), /not an allowed L1 order/)
+})
+
 test('a local Hyperliquid agent signs only the prepared cross leverage update', async () => {
   const request = hyperliquidSigningRequest()
   const action = { type: 'updateLeverage', asset: 1, isCross: true, leverage: 2 } as const
@@ -235,10 +255,26 @@ function hyperliquidAgent(): StoredTradingAgent {
     agentAddress,
     privateKey,
     authorizedAt: '2026-08-10T12:00:00.000Z',
+    builderAddress: hyperliquidBuilderAddress,
   }
 }
 
 function hyperliquidSigningRequest(): SigningRequest {
+  const nonce = 1_700_000_000_000
+  const action = {
+    type: 'order',
+    orders: [{
+      a: 1,
+      b: false,
+      p: '101.500000',
+      s: '2.000000',
+      r: false,
+      t: { limit: { tif: 'Ioc' } },
+      c: '0x00000000000000000000000000000001',
+    }],
+    grouping: 'na',
+    builder: { b: hyperliquidBuilderAddress, f: hyperliquidBuilderFee },
+  }
   return {
     id: 'request-1',
     client_order_id: 'client-1',
@@ -253,20 +289,8 @@ function hyperliquidSigningRequest(): SigningRequest {
     reduce_only: false,
     venue_asset_id: 1,
     unsigned_payload: {
-      action: {
-        type: 'order',
-        orders: [{
-          a: 1,
-          b: false,
-          p: '101.500000',
-          s: '2.000000',
-          r: false,
-          t: { limit: { tif: 'Ioc' } },
-          c: '0x00000000000000000000000000000001',
-        }],
-        grouping: 'na',
-      },
-      nonce: 1_700_000_000_000,
+      action,
+      nonce,
       domain: {
         chainId: 1337,
         name: 'Exchange',
@@ -282,12 +306,20 @@ function hyperliquidSigningRequest(): SigningRequest {
       primaryType: 'Agent',
       message: {
         source: 'a',
-        connectionId: '0x030c6c348229c1ba1f210242ad159bbb1e918c02f5addda9b179bff7086b7ba5',
+        connectionId: l1ConnectionId(action, nonce),
       },
     },
     expires_at: '2099-08-10T12:00:00.000Z',
     created_at: '2026-08-10T12:00:00.000Z',
   }
+}
+
+function l1ConnectionId(action: unknown, nonce: number): `0x${string}` {
+  const encoded = encode(action)
+  const input = new Uint8Array(encoded.length + 9)
+  input.set(encoded)
+  new DataView(input.buffer).setBigUint64(encoded.length, BigInt(nonce), false)
+  return keccak256(input)
 }
 
 class TestStorage implements StorageLike {

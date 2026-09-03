@@ -10,6 +10,7 @@ export interface StoredTradingAgent {
   privateKey: string
   authorizedAt: string
   builderAddress?: string
+  builderCode?: string
 }
 
 export interface TradingAgentState {

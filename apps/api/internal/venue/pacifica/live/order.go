@@ -26,6 +26,7 @@ type MarketOrderRequest struct {
 	ReduceOnly    bool   `json:"reduce_only"`
 	SlippagePct   string `json:"slippage_percent"`
 	ClientOrderID string `json:"client_order_id"`
+	BuilderCode   string `json:"builder_code,omitempty"`
 }
 
 type UpdateLeverageRequest struct {

@@ -4,7 +4,7 @@ export interface SigningRequest {
   position_id?: string
   leg?: number
   venue: 'pacifica' | 'hyperliquid'
-  action: 'open' | 'close' | 'update_leverage'
+  action: 'open' | 'close' | 'unwind' | 'emergency_close' | 'update_leverage'
   account: string
   signer?: string
   symbol: string

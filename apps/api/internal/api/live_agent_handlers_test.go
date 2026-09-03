@@ -167,6 +167,48 @@ type fakePacificaAgentBinder struct {
 	request pacificlive.BindAgentRequest
 }
 
+type fakePacificaBuilderApprover struct {
+	request pacificlive.ApproveBuilderCodeRequest
+}
+
+func (f *fakePacificaBuilderApprover) ApproveBuilderCode(_ context.Context, request pacificlive.ApproveBuilderCodeRequest) error {
+	f.request = request
+	return nil
+}
+
+func TestHandlePacificaBuilderCodeApproveValidatesAndRelays(t *testing.T) {
+	approver := &fakePacificaBuilderApprover{}
+	builder := pacificlive.OrbitalBuilderConfig()
+	server := &Server{live: &LiveDeps{pacificaBuilder: builder, pacificaBuilderApprover: approver}}
+	owner := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	timestamp := time.Now().UnixMilli()
+	message, err := pacificlive.BuildSigningMessage("approve_builder_code", timestamp, 30_000, map[string]any{
+		"builder_code": builder.Code,
+		"max_fee_rate": builder.MaxFeeRate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := pacificlive.ApproveBuilderCodeRequest{
+		Account: ownerAddress(owner), Signature: base58.Encode(ed25519.Sign(owner, message)),
+		Timestamp: timestamp, ExpiryWindow: 30_000, BuilderCode: builder.Code, MaxFeeRate: builder.MaxFeeRate,
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+
+	server.handlePacificaBuilderCodeApprove(response, httptest.NewRequest(http.MethodPost, "/api/v1/live/agents/pacifica/approve-builder-code", bytes.NewReader(body)))
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if approver.request.BuilderCode != "orbitalmarkets" || approver.request.MaxFeeRate != "0.0002" {
+		t.Fatalf("relayed request = %+v", approver.request)
+	}
+}
+
 func (f *fakePacificaAgentBinder) BindAgent(_ context.Context, request pacificlive.BindAgentRequest) error {
 	f.request = request
 	return nil

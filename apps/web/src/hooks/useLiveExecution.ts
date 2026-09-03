@@ -276,7 +276,7 @@ function useLiveExecutionState() {
         .map((request) => request.venue))
       if (leg1Requests.length !== 4 || leverageVenues.size !== 2 ||
         !leg1Requests.some((request) => request.action === 'open') ||
-        !leg1Requests.some((request) => request.action === 'close' && request.reduce_only)) {
+        !leg1Requests.some((request) => request.action === 'unwind' && request.reduce_only)) {
         throw new Error('Expected two leverage updates plus leg-1 open and unwind requests')
       }
 

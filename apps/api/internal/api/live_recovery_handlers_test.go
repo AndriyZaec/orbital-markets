@@ -17,6 +17,7 @@ import (
 	appdb "github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
 func TestLiveCloseUsesPersistedResidualExposure(t *testing.T) {
@@ -399,6 +400,16 @@ func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	}
 	if len(body.SigningRequests) != 1 || body.SigningRequests[0].Amount != 2.75 {
 		t.Fatalf("signing requests = %+v, want residual amount 2.75", body.SigningRequests)
+	}
+	if body.SigningRequests[0].Action != "emergency_close" {
+		t.Fatalf("action = %q, want emergency_close", body.SigningRequests[0].Action)
+	}
+	var unsigned pacificlive.PacificaUnsignedOrder
+	if err := json.Unmarshal(body.SigningRequests[0].UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	if unsigned.BuilderCode != "" {
+		t.Fatalf("emergency close builder code = %q", unsigned.BuilderCode)
 	}
 }
 

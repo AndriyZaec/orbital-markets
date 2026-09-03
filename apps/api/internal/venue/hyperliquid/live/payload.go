@@ -89,6 +89,7 @@ func BuildOpenPayload(
 		false,
 		clientOrderID,
 		"open",
+		OrbitalBuilderCode(),
 	)
 }
 
@@ -101,6 +102,41 @@ func BuildClosePayload(
 	amount float64,
 	price float64,
 	clientOrderID string,
+) (*domain.SigningRequest, error) {
+	return buildClosePayload(assetMap, symbol, positionSide, amount, price, clientOrderID, "close", OrbitalBuilderCode())
+}
+
+func BuildUnwindPayload(
+	assetMap AssetMap,
+	symbol string,
+	positionSide domain.Side,
+	amount float64,
+	price float64,
+	clientOrderID string,
+) (*domain.SigningRequest, error) {
+	return buildClosePayload(assetMap, symbol, positionSide, amount, price, clientOrderID, "unwind", nil)
+}
+
+func BuildEmergencyClosePayload(
+	assetMap AssetMap,
+	symbol string,
+	positionSide domain.Side,
+	amount float64,
+	price float64,
+	clientOrderID string,
+) (*domain.SigningRequest, error) {
+	return buildClosePayload(assetMap, symbol, positionSide, amount, price, clientOrderID, "emergency_close", nil)
+}
+
+func buildClosePayload(
+	assetMap AssetMap,
+	symbol string,
+	positionSide domain.Side,
+	amount float64,
+	price float64,
+	clientOrderID string,
+	action string,
+	builder *BuilderCode,
 ) (*domain.SigningRequest, error) {
 	// Invert: close long = sell, close short = buy
 	closeSide := domain.SideLong
@@ -116,7 +152,8 @@ func BuildClosePayload(
 		price,
 		true,
 		clientOrderID,
-		"close",
+		action,
+		builder,
 	)
 }
 
@@ -162,6 +199,7 @@ func buildPayload(
 	reduceOnly bool,
 	clientOrderID string,
 	action string,
+	builder *BuilderCode,
 ) (*domain.SigningRequest, error) {
 	assetIdx, ok := assetMap.AssetIndex(symbol)
 	if !ok {
@@ -208,7 +246,7 @@ func buildPayload(
 			Cloid:      cloid,
 		}},
 		Grouping: "na",
-		Builder:  OrbitalBuilderCode(),
+		Builder:  builder,
 	}
 
 	nonce := nextHyperliquidNonce()
