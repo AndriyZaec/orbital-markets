@@ -38,7 +38,7 @@ a { color: inherit; text-decoration: none; }
 .total-volume strong { color: #67e8f9; font-size: 11px; letter-spacing: .04em; text-shadow: 0 0 12px rgba(6,182,212,.38); }
 .hero > button, .form > button { display: flex; align-items: center; gap: 5px; justify-content: center; height: 54px; margin-top: clamp(24px, 3.6vh, 40px); padding: 0 22px; border: 1px solid rgba(255,255,255,.1); border-radius: 0; background: #2563eb; color: white; font-family: 'Geist Variable', system-ui, sans-serif; font-size: 14px; font-weight: 520; letter-spacing: -.01em; cursor: pointer; transition: background 180ms ease, transform 180ms ease; }
 .hero > button:hover, .form > button:hover { background: #1d4ed8; transform: translateY(-1px); }
-.hero > button:focus-visible, .form > button:focus-visible, .back:focus-visible, .footer button:focus-visible, .header a:focus-visible { outline: 2px solid #06b6d4; outline-offset: 4px; }
+.hero > button:focus-visible, .form > button:focus-visible, .back:focus-visible, .footer button:focus-visible, .footer a:focus-visible, .header a:focus-visible { outline: 2px solid #06b6d4; outline-offset: 4px; }
 .form > button:disabled { cursor: wait; opacity: .65; transform: none; }
 .action-icon { width: 16px; height: 16px; flex: none; }
 
@@ -63,8 +63,12 @@ a { color: inherit; text-decoration: none; }
 .received > button { margin-top: 30px; padding: 10px 0; border: 0; border-bottom: 1px solid #718096; background: transparent; color: #cbd5e1; font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .07em; text-transform: uppercase; cursor: pointer; }
 
 .footer { position: absolute; z-index: 4; right: clamp(24px, 3.6vw, 58px); bottom: clamp(20px, 2.8vw, 38px); left: clamp(24px, 3.6vw, 58px); display: flex; align-items: center; justify-content: space-between; color: #526074; font: 560 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .09em; text-transform: uppercase; }
-.footer button { padding: 8px 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
-.footer button:hover { color: #94a3b8; }
+.footer-actions { display: flex; align-items: center; gap: 22px; }
+.footer button, .footer a { padding: 8px 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.footer button:hover, .footer a:hover { color: #94a3b8; }
+.x-link { display: flex; align-items: center; opacity: .45; transition: opacity 180ms ease; }
+.x-link:hover { opacity: .8; }
+.x-link img { width: 12px; height: auto; }
 
 .scene-access .hero, .scene-submitting .hero, .scene-received .hero { opacity: 0; filter: blur(8px); pointer-events: none; transform: translate(-50%, -56%) scale(.96); }
 .scene-access .access, .scene-submitting .access, .scene-received .access { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); }

@@ -183,7 +183,12 @@ export function LandingPage() {
 
       <footer className="footer">
         <div className="total-volume" aria-live="polite"><span>Total volume</span><strong>{totalVolume ?? '--'}</strong></div>
-        <button type="button" onClick={() => setPaused((current) => !current)}>{paused ? 'Play field' : 'Pause field'}</button>
+        <div className="footer-actions">
+          <a className="x-link" href="https://x.com/Orbital_Markets" target="_blank" rel="noreferrer" aria-label="Orbital Markets on X" title="Orbital Markets on X">
+            <img src="/x-logo.svg" alt="" />
+          </a>
+          <button type="button" onClick={() => setPaused((current) => !current)}>{paused ? 'Play field' : 'Pause field'}</button>
+        </div>
       </footer>
     </main>
   )
