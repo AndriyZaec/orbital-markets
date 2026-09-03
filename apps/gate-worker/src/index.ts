@@ -28,6 +28,7 @@ const WAITLIST_PROFILES = new Set([
   'active_trader',
   'occasional_trader',
   'defi_user',
+  'points_airdrop_hunter',
   'return_seeker',
   'trading_team',
   'researching',

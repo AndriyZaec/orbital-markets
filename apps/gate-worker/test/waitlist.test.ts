@@ -27,7 +27,7 @@ function submitWaitlist(overrides: Record<string, string> = {}, origin = 'https:
 }
 
 describe('POST /api/waitlist', () => {
-  it.each(['occasional_trader', 'defi_user', 'return_seeker'])('accepts the %s profile', async (profile) => {
+  it.each(['occasional_trader', 'defi_user', 'points_airdrop_hunter', 'return_seeker'])('accepts the %s profile', async (profile) => {
     expect((await submitWaitlist({ profile })).status).toBe(202);
   });
 
