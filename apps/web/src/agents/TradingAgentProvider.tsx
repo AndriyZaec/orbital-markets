@@ -129,6 +129,7 @@ function TradingAgentSession({
       storage: browserStorage(),
       ownerAddress,
       signMessage: solanaSignMessage,
+      builderCodeApproved: hasApprovedPacificaBuilderCode,
       relay: (request) => relayAuthorization('/api/v1/live/agents/pacifica/bind', request),
       relayBuilderApproval: (request) => relayAuthorization('/api/v1/live/agents/pacifica/approve-builder-code', request),
     })
@@ -252,4 +253,12 @@ async function relayAuthorization(
   if (response.ok) return
   const body = await response.json().catch(() => null) as { error?: string } | null
   throw apiError(response.status, 'Unable to authorize the trading agent. Please try again.', body)
+}
+
+async function hasApprovedPacificaBuilderCode(ownerAddress: string): Promise<boolean> {
+  const response = await apiFetch(`/api/v1/live/agents/pacifica/builder-code-approval?account=${encodeURIComponent(ownerAddress)}`)
+  if (!response.ok) throw apiError(response.status, 'Unable to verify Pacifica builder approval. Please try again.')
+  const body = await response.json() as { approved?: unknown }
+  if (typeof body.approved !== 'boolean') throw new Error('Pacifica returned an invalid builder approval status')
+  return body.approved
 }

@@ -31,6 +31,10 @@ type pacificaBuilderCodeApprover interface {
 	ApproveBuilderCode(context.Context, pacificlive.ApproveBuilderCodeRequest) error
 }
 
+type pacificaBuilderCodeApprovalReader interface {
+	HasBuilderCodeApproval(context.Context, string, pacificlive.BuilderConfig) (bool, error)
+}
+
 func (s *Server) handleHyperliquidAgentApprove(w http.ResponseWriter, r *http.Request) {
 	if s.live == nil || s.live.hlAgentApprover == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live agent authorization unavailable"})
@@ -179,6 +183,21 @@ func (s *Server) handlePacificaBuilderCodeApprove(w http.ResponseWriter, r *http
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePacificaBuilderCodeApproval(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil || s.live.pacificaBuilder == nil || s.live.pacificaBuilderApprovalReader == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Pacifica builder approval unavailable"})
+		return
+	}
+	approved, err := s.live.pacificaBuilderApprovalReader.HasBuilderCodeApproval(
+		r.Context(), r.URL.Query().Get("account"), *s.live.pacificaBuilder,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to verify Pacifica builder approval"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"approved": approved})
 }
 
 func (s *Server) agentChangeBlocked(ctx context.Context, venue, owner string) (bool, error) {

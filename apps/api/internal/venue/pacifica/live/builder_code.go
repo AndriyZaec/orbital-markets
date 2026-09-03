@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 const (
 	approveBuilderCodeURL      = "https://api.pacifica.fi/api/v1/account/builder_codes/approve"
+	builderCodeApprovalsURL    = "https://api.pacifica.fi/api/v1/account/builder_codes/approvals"
 	builderApprovalTimeout     = 10 * time.Second
 	builderApprovalExpiry      = 30_000
 	maxBuilderApprovalResponse = 64 << 10
@@ -103,16 +105,17 @@ func (r ApproveBuilderCodeRequest) Validate(now time.Time, expected BuilderConfi
 }
 
 type BuilderCodeApprover struct {
-	endpoint   string
-	httpClient *http.Client
+	approveEndpoint   string
+	approvalsEndpoint string
+	httpClient        *http.Client
 }
 
-func NewBuilderCodeApprover(endpoint string, httpClient *http.Client) *BuilderCodeApprover {
-	return &BuilderCodeApprover{endpoint: endpoint, httpClient: httpClient}
+func NewBuilderCodeApprover(approveEndpoint, approvalsEndpoint string, httpClient *http.Client) *BuilderCodeApprover {
+	return &BuilderCodeApprover{approveEndpoint: approveEndpoint, approvalsEndpoint: approvalsEndpoint, httpClient: httpClient}
 }
 
 func NewDefaultBuilderCodeApprover() *BuilderCodeApprover {
-	return NewBuilderCodeApprover(approveBuilderCodeURL, &http.Client{Timeout: builderApprovalTimeout})
+	return NewBuilderCodeApprover(approveBuilderCodeURL, builderCodeApprovalsURL, &http.Client{Timeout: builderApprovalTimeout})
 }
 
 func (a *BuilderCodeApprover) ApproveBuilderCode(ctx context.Context, request ApproveBuilderCodeRequest) error {
@@ -122,7 +125,7 @@ func (a *BuilderCodeApprover) ApproveBuilderCode(ctx context.Context, request Ap
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, builderApprovalTimeout)
 	defer cancel()
-	httpRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPost, a.endpoint, bytes.NewReader(body))
+	httpRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPost, a.approveEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build Pacifica builder approval: %w", err)
 	}
@@ -140,4 +143,52 @@ func (a *BuilderCodeApprover) ApproveBuilderCode(ctx context.Context, request Ap
 		return fmt.Errorf("Pacifica builder approval returned HTTP %d: %s", response.StatusCode, string(responseBody))
 	}
 	return nil
+}
+
+func (a *BuilderCodeApprover) HasBuilderCodeApproval(ctx context.Context, account string, expected BuilderConfig) (bool, error) {
+	owner, err := base58.Decode(account)
+	if err != nil || len(owner) != ed25519.PublicKeySize {
+		return false, fmt.Errorf("invalid Pacifica owner account")
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, builderApprovalTimeout)
+	defer cancel()
+	endpoint := a.approvalsEndpoint + "?account=" + url.QueryEscape(account)
+	httpRequest, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, fmt.Errorf("build Pacifica builder approvals request: %w", err)
+	}
+	response, err := a.httpClient.Do(httpRequest)
+	if err != nil {
+		return false, fmt.Errorf("fetch Pacifica builder approvals: %w", err)
+	}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBuilderApprovalResponse))
+	if readErr != nil {
+		return false, fmt.Errorf("read Pacifica builder approvals response: %w", readErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("Pacifica builder approvals returned HTTP %d", response.StatusCode)
+	}
+	type approval struct {
+		BuilderCode string `json:"builder_code"`
+		MaxFeeRate  string `json:"max_fee_rate"`
+	}
+	var approvals []approval
+	if err := json.Unmarshal(body, &approvals); err != nil {
+		var wrapped struct {
+			Data []approval `json:"data"`
+		}
+		if wrappedErr := json.Unmarshal(body, &wrapped); wrappedErr != nil {
+			return false, fmt.Errorf("decode Pacifica builder approvals: %w", err)
+		}
+		approvals = wrapped.Data
+	}
+	requiredRate, _ := strconv.ParseFloat(expected.FeeRate, 64)
+	for _, approval := range approvals {
+		approvedRate, parseErr := strconv.ParseFloat(approval.MaxFeeRate, 64)
+		if approval.BuilderCode == expected.Code && parseErr == nil && approvedRate >= requiredRate {
+			return true, nil
+		}
+	}
+	return false, nil
 }

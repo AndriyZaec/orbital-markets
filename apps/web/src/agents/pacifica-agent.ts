@@ -58,26 +58,29 @@ export async function authorizePacificaAgent(options: {
   storage: StorageLike
   ownerAddress: string
   signMessage: (message: Uint8Array) => Promise<Uint8Array>
+  builderCodeApproved: (ownerAddress: string) => Promise<boolean>
   relay: (request: PacificaBindAgentRequest) => Promise<void>
   relayBuilderApproval: (request: PacificaApproveBuilderCodeRequest) => Promise<void>
   now?: () => number
 }): Promise<StoredTradingAgent> {
-  const approvalTimestamp = options.now?.() ?? Date.now()
-  const approvalMessage = buildPacificaSigningMessage('approve_builder_code', approvalTimestamp, builderApprovalExpiryWindow, {
-    builder_code: pacificaBuilderCode,
-    max_fee_rate: pacificaBuilderMaxFeeRate,
-  })
-  const approvalSignature = await options.signMessage(approvalMessage)
-  if (approvalSignature.length !== nacl.sign.signatureLength) throw new Error('Invalid Pacifica builder approval signature')
-  await options.relayBuilderApproval({
-    account: options.ownerAddress,
-    agent_wallet: null,
-    signature: bs58.encode(approvalSignature),
-    timestamp: approvalTimestamp,
-    expiry_window: builderApprovalExpiryWindow,
-    builder_code: pacificaBuilderCode,
-    max_fee_rate: pacificaBuilderMaxFeeRate,
-  })
+  if (!await options.builderCodeApproved(options.ownerAddress)) {
+    const approvalTimestamp = options.now?.() ?? Date.now()
+    const approvalMessage = buildPacificaSigningMessage('approve_builder_code', approvalTimestamp, builderApprovalExpiryWindow, {
+      builder_code: pacificaBuilderCode,
+      max_fee_rate: pacificaBuilderMaxFeeRate,
+    })
+    const approvalSignature = await options.signMessage(approvalMessage)
+    if (approvalSignature.length !== nacl.sign.signatureLength) throw new Error('Invalid Pacifica builder approval signature')
+    await options.relayBuilderApproval({
+      account: options.ownerAddress,
+      agent_wallet: null,
+      signature: bs58.encode(approvalSignature),
+      timestamp: approvalTimestamp,
+      expiry_window: builderApprovalExpiryWindow,
+      builder_code: pacificaBuilderCode,
+      max_fee_rate: pacificaBuilderMaxFeeRate,
+    })
+  }
   const generated = generatePacificaAgent()
   const bindTimestamp = options.now?.() ?? Date.now()
   const message = buildPacificaSigningMessage('bind_agent_wallet', bindTimestamp, bindExpiryWindow, {

@@ -88,6 +88,7 @@ test('Pacifica authorization relays no private key and persists only after bindi
   const agent = await authorizePacificaAgent({
     storage,
     ownerAddress,
+    builderCodeApproved: async () => false,
     now: () => now++,
     signMessage: async () => new Uint8Array(64),
     relay: async (request) => {
@@ -114,6 +115,26 @@ test('Pacifica authorization relays no private key and persists only after bindi
     builder_code: pacificaBuilderCode,
     max_fee_rate: pacificaBuilderMaxFeeRate,
   })
+})
+
+test('Pacifica authorization skips an already-approved builder code', async () => {
+  const storage = new TestStorage()
+  let signatures = 0
+  await authorizePacificaAgent({
+    storage,
+    ownerAddress,
+    builderCodeApproved: async () => true,
+    signMessage: async () => {
+      signatures++
+      return new Uint8Array(64)
+    },
+    relayBuilderApproval: async () => {
+      throw new Error('builder approval should be skipped')
+    },
+    relay: async () => undefined,
+  })
+
+  assert.equal(signatures, 1)
 })
 
 test('a local Pacifica agent rejects non-order payloads', async () => {

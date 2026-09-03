@@ -1,7 +1,10 @@
 package live
 
 import (
+	"context"
 	"crypto/ed25519"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -29,5 +32,27 @@ func TestApproveBuilderCodeRequestValidatesConfiguredBuilder(t *testing.T) {
 	request.MaxFeeRate = "0.001"
 	if err := request.Validate(time.UnixMilli(timestamp), OrbitalBuilder); err == nil {
 		t.Fatal("unexpected max fee rate was accepted")
+	}
+}
+
+func TestHasBuilderCodeApprovalAcceptsSufficientAllowance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Query().Get("account") != OrbitalBuilder.Owner {
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+		_, _ = w.Write([]byte(`[
+			{"builder_code":"other","max_fee_rate":"1"},
+			{"builder_code":"orbitalmarkets","max_fee_rate":"0.0002"}
+		]`))
+	}))
+	defer server.Close()
+	client := NewBuilderCodeApprover(server.URL, server.URL, server.Client())
+
+	approved, err := client.HasBuilderCodeApproval(context.Background(), OrbitalBuilder.Owner, OrbitalBuilder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approved {
+		t.Fatal("sufficient builder allowance was not recognized")
 	}
 }

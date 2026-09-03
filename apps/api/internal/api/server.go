@@ -154,6 +154,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve-builder-fee", s.handleHyperliquidBuilderFeeApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/bind", s.handlePacificaAgentBind)
 	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/approve-builder-code", s.handlePacificaBuilderCodeApprove)
+	s.mux.HandleFunc("GET /api/v1/live/agents/pacifica/builder-code-approval", s.handlePacificaBuilderCodeApproval)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

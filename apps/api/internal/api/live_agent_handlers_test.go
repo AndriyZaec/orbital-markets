@@ -171,6 +171,32 @@ type fakePacificaBuilderApprover struct {
 	request pacificlive.ApproveBuilderCodeRequest
 }
 
+type fakePacificaBuilderApprovalReader struct {
+	account  string
+	approved bool
+}
+
+func (f *fakePacificaBuilderApprovalReader) HasBuilderCodeApproval(_ context.Context, account string, _ pacificlive.BuilderConfig) (bool, error) {
+	f.account = account
+	return f.approved, nil
+}
+
+func TestHandlePacificaBuilderCodeApprovalReturnsCurrentStatus(t *testing.T) {
+	reader := &fakePacificaBuilderApprovalReader{approved: true}
+	server := &Server{live: &LiveDeps{
+		pacificaBuilder: pacificlive.OrbitalBuilderConfig(), pacificaBuilderApprovalReader: reader,
+	}}
+	response := httptest.NewRecorder()
+
+	server.handlePacificaBuilderCodeApproval(response, httptest.NewRequest(
+		http.MethodGet, "/api/v1/live/agents/pacifica/builder-code-approval?account=sol-owner", nil,
+	))
+
+	if response.Code != http.StatusOK || reader.account != "sol-owner" || !bytes.Contains(response.Body.Bytes(), []byte(`"approved":true`)) {
+		t.Fatalf("status = %d, account = %q, body = %s", response.Code, reader.account, response.Body.String())
+	}
+}
+
 func (f *fakePacificaBuilderApprover) ApproveBuilderCode(_ context.Context, request pacificlive.ApproveBuilderCodeRequest) error {
 	f.request = request
 	return nil
