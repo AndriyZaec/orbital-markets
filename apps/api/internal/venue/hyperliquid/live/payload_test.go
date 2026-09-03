@@ -85,6 +85,32 @@ func TestBuildOpenPayloadIncludesBuilderCodeInSignedAction(t *testing.T) {
 	}
 }
 
+func TestBuildRecoveryPayloadsOmitBuilderCode(t *testing.T) {
+	builders := []struct {
+		name   string
+		action string
+		build  func(AssetMap, string, domain.Side, float64, float64, string) (*domain.SigningRequest, error)
+	}{
+		{name: "unwind", action: "unwind", build: BuildUnwindPayload},
+		{name: "emergency close", action: "emergency_close", build: BuildEmergencyClosePayload},
+	}
+	for _, test := range builders {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := test.build(payloadTestAssetMap{index: 7, decimals: 3}, "VIRTUAL", domain.SideLong, 20.123, 1.25, "client-order")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var unsigned HyperliquidUnsignedAction
+			if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+				t.Fatal(err)
+			}
+			if request.Action != test.action || !request.ReduceOnly || unsigned.Action.Builder != nil {
+				t.Fatalf("request = %+v, action = %+v", request, unsigned.Action)
+			}
+		})
+	}
+}
+
 func TestBuildOpenPayloadUsesHyperliquidPricePrecision(t *testing.T) {
 	request, err := BuildOpenPayload(
 		payloadTestAssetMap{index: 7, decimals: 1},

@@ -11,6 +11,7 @@ import (
 )
 
 const liveMetricsCacheTTL = time.Minute
+const weeklyAPRWeeks = 12
 
 func (s *Server) handleLiveAnalytics(w http.ResponseWriter, r *http.Request) {
 	if !s.analyticsTokenMatches(r) {
@@ -24,6 +25,20 @@ func (s *Server) handleLiveAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, metrics)
+}
+
+func (s *Server) handleWeeklyAPR(w http.ResponseWriter, r *http.Request) {
+	if !s.analyticsTokenMatches(r) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+
+	report, err := analytics.LoadWeeklyAPR(r.Context(), s.db, time.Now(), weeklyAPRWeeks)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load weekly APR"})
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
 }
 
 func (s *Server) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {

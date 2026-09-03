@@ -3,8 +3,9 @@ import { clearAdminToken, getAdminToken, setAdminToken } from './api'
 import { AuditPage } from './features/AuditPage'
 import { AnalyticsPage } from './features/AnalyticsPage'
 import { WaitlistPage } from './features/WaitlistPage'
+import { WeeklyAPRPage } from './features/WeeklyAPRPage'
 
-type AdminSection = 'overview' | 'waitlist' | 'users' | 'audit'
+type AdminSection = 'overview' | 'weekly-apr' | 'waitlist' | 'users' | 'audit'
 
 interface AdminIdentity {
   email: string
@@ -76,6 +77,7 @@ export function App() {
         <div className="brand"><span className="brand-mark">O</span><span>Orbital <small>ADMIN</small></span></div>
         <nav aria-label="Admin sections">
           <NavItem active={section === 'overview'} onClick={() => setSection('overview')} label="Overview" />
+          <NavItem active={section === 'weekly-apr'} onClick={() => setSection('weekly-apr')} label="Weekly APR" />
           <NavItem active={section === 'waitlist'} onClick={() => setSection('waitlist')} label="Waitlist" />
           <NavItem active={section === 'users'} onClick={() => setSection('users')} label="Users" />
           <NavItem active={section === 'audit'} onClick={() => setSection('audit')} label="Audit log" />
@@ -87,7 +89,7 @@ export function App() {
           <div><span className="eyebrow">Beta operations</span><h1>{sectionTitle(section)}</h1></div>
           <div className="operator"><span className="status-dot" />{identity.email}</div>
         </header>
-        <section className="page-content">{section === 'overview' ? <AnalyticsPage /> : section === 'waitlist' ? <WaitlistPage key="waitlist" /> : section === 'users' ? <WaitlistPage key="users" mode="users" /> : <AuditPage />}</section>
+        <section className="page-content">{section === 'overview' ? <AnalyticsPage /> : section === 'weekly-apr' ? <WeeklyAPRPage /> : section === 'waitlist' ? <WaitlistPage key="waitlist" /> : section === 'users' ? <WaitlistPage key="users" mode="users" /> : <AuditPage />}</section>
       </main>
     </div>
   )
@@ -98,5 +100,5 @@ function NavItem({ active, onClick, label }: { active: boolean; onClick: () => v
 }
 
 function sectionTitle(section: AdminSection): string {
-  return section === 'overview' ? 'Operations overview' : section === 'waitlist' ? 'Waitlist' : section === 'users' ? 'Users' : 'Audit log'
+  return section === 'overview' ? 'Operations overview' : section === 'weekly-apr' ? 'Weekly APR' : section === 'waitlist' ? 'Waitlist' : section === 'users' ? 'Users' : 'Audit log'
 }

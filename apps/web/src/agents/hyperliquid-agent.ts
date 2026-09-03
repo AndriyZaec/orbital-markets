@@ -350,8 +350,8 @@ function allowedL1OrderPayload(request: SigningRequest, agent: StoredTradingAgen
     agent.venue === 'hyperliquid' &&
     request.account.toLowerCase() === agent.ownerAddress.toLowerCase() &&
     request.signer?.toLowerCase() === agent.agentAddress.toLowerCase() &&
-    (request.action === 'open' || request.action === 'close') &&
-    (request.action !== 'close' || request.reduce_only) &&
+    (request.action === 'open' || request.action === 'close' || request.action === 'unwind' || request.action === 'emergency_close') &&
+    (request.action === 'open' || request.reduce_only) &&
     Date.parse(request.expires_at) > Date.now() &&
     payload?.primaryType === 'Agent' &&
     domain?.chainId === 1337 &&
@@ -414,7 +414,7 @@ function validateOrderAction(
     value?.type === 'order' &&
     value.grouping === 'na' &&
     hasOnlyKeys(value, value.builder ? ['type', 'orders', 'grouping', 'builder'] : ['type', 'orders', 'grouping']) &&
-    validBuilder(value.builder, agent) &&
+    validBuilder(value.builder, request.action, agent) &&
     !!order &&
     hasOnlyKeys(order, ['a', 'b', 'p', 's', 'r', 't', 'c']) &&
     Number.isSafeInteger(order.a) &&
@@ -450,8 +450,9 @@ function validateOrderAction(
   }
 }
 
-function validBuilder(value: unknown, agent: StoredTradingAgent): boolean {
-  if (!agent.builderAddress) return value === undefined
+function validBuilder(value: unknown, action: string, agent: StoredTradingAgent): boolean {
+  if (action === 'unwind' || action === 'emergency_close') return value === undefined
+  if (agent.builderAddress?.toLowerCase() !== hyperliquidBuilderAddress.toLowerCase()) return false
   if (!value || typeof value !== 'object') return false
   const builder = value as Record<string, unknown>
   return hasOnlyKeys(builder, ['b', 'f']) && builder.b === hyperliquidBuilderAddress && builder.f === hyperliquidBuilderFee

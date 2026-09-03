@@ -108,13 +108,13 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 	}
 
 	update := MonitorUpdate{}
-
-	// Current spread (annualized funding edge)
-	update.CurrentSpread = domain.AnnualizedGrossEdge(leg1Snap.FundingRate, leg2Snap.FundingRate)
-
-	// Venue UIs report unrealized PnL against mark price, not executable BBO.
 	leg1Side := domain.Side(leg1.Side)
 	leg2Side := domain.Side(leg2.Side)
+
+	// Preserve the open position's direction so a funding reversal becomes negative carry.
+	update.CurrentSpread = currentFundingAPR(leg1Side, leg1Snap.FundingRate, leg2Side, leg2Snap.FundingRate)
+
+	// Venue UIs report unrealized PnL against mark price, not executable BBO.
 	update.Leg1CurPrice = leg1Snap.MarkPrice
 	update.Leg2CurPrice = leg2Snap.MarkPrice
 
@@ -184,6 +184,17 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 			"asset", pos.Asset,
 			"basis_change", fmt.Sprintf("%.2f%%", update.BasisChange*100),
 		)
+	}
+}
+
+func currentFundingAPR(leg1Side domain.Side, leg1Rate float64, leg2Side domain.Side, leg2Rate float64) float64 {
+	switch {
+	case leg1Side == domain.SideShort && leg2Side == domain.SideLong:
+		return domain.AnnualizeRate(domain.CarryEdgePerHour(leg1Rate, leg2Rate))
+	case leg1Side == domain.SideLong && leg2Side == domain.SideShort:
+		return domain.AnnualizeRate(domain.CarryEdgePerHour(leg2Rate, leg1Rate))
+	default:
+		return 0
 	}
 }
 

@@ -13,7 +13,11 @@ import {
   type HyperliquidApproveAgentRequest,
   type HyperliquidApproveBuilderFeeRequest,
 } from './hyperliquid-agent.ts'
-import { authorizePacificaAgent, type PacificaBindAgentRequest } from './pacifica-agent.ts'
+import {
+  authorizePacificaAgent,
+  type PacificaApproveBuilderCodeRequest,
+  type PacificaBindAgentRequest,
+} from './pacifica-agent.ts'
 import { signWithStoredTradingAgent } from './signing.ts'
 import {
   clearStoredTradingAgent,
@@ -125,7 +129,9 @@ function TradingAgentSession({
       storage: browserStorage(),
       ownerAddress,
       signMessage: solanaSignMessage,
+      builderCodeApproved: hasApprovedPacificaBuilderCode,
       relay: (request) => relayAuthorization('/api/v1/live/agents/pacifica/bind', request),
+      relayBuilderApproval: (request) => relayAuthorization('/api/v1/live/agents/pacifica/approve-builder-code', request),
     })
   }
 
@@ -185,7 +191,9 @@ function TradingAgentSession({
       ? currentOwner?.toLowerCase() === request.account.toLowerCase()
       : currentOwner === request.account
     if (!matches) throw new Error(`${request.venue} owner changed during execution`)
-    if (request.venue === 'hyperliquid') await ensureHyperliquidBuilderFee(request.account)
+    if (request.venue === 'hyperliquid' && (request.action === 'open' || request.action === 'close')) {
+      await ensureHyperliquidBuilderFee(request.account)
+    }
     if (!ownerStillCurrent(request.venue, request.account, owners.current)) {
       throw new Error(`${request.venue} owner changed during execution`)
     }
@@ -235,7 +243,7 @@ function initialState(venue: Venue, ownerAddress: string | null): TradingAgentSt
 
 async function relayAuthorization(
   path: string,
-  request: PacificaBindAgentRequest | HyperliquidApproveAgentRequest | HyperliquidApproveBuilderFeeRequest,
+  request: PacificaBindAgentRequest | PacificaApproveBuilderCodeRequest | HyperliquidApproveAgentRequest | HyperliquidApproveBuilderFeeRequest,
 ): Promise<void> {
   const response = await apiFetch(path, {
     method: 'POST',
@@ -245,4 +253,12 @@ async function relayAuthorization(
   if (response.ok) return
   const body = await response.json().catch(() => null) as { error?: string } | null
   throw apiError(response.status, 'Unable to authorize the trading agent. Please try again.', body)
+}
+
+async function hasApprovedPacificaBuilderCode(ownerAddress: string): Promise<boolean> {
+  const response = await apiFetch(`/api/v1/live/agents/pacifica/builder-code-approval?account=${encodeURIComponent(ownerAddress)}`)
+  if (!response.ok) throw apiError(response.status, 'Unable to verify Pacifica builder approval. Please try again.')
+  const body = await response.json() as { approved?: unknown }
+  if (typeof body.approved !== 'boolean') throw new Error('Pacifica returned an invalid builder approval status')
+  return body.approved
 }

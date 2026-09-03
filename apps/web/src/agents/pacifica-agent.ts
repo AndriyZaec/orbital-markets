@@ -2,11 +2,16 @@ import bs58 from 'bs58'
 import nacl from 'tweetnacl'
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
+import builderConfig from '../../../api/internal/venue/pacifica/live/builder_config.json' with { type: 'json' }
 import { saveStoredTradingAgent, type StorageLike } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 
 const bindExpiryWindow = 30_000
+const builderApprovalExpiryWindow = 30_000
 const maxOrderExpiryWindow = 120_000
+
+export const pacificaBuilderCode = builderConfig.code
+export const pacificaBuilderMaxFeeRate = builderConfig.maxFeeRate
 
 export interface PacificaBindAgentRequest {
   account: string
@@ -14,6 +19,16 @@ export interface PacificaBindAgentRequest {
   timestamp: number
   expiry_window: number
   agent_wallet: string
+}
+
+export interface PacificaApproveBuilderCodeRequest {
+  account: string
+  agent_wallet: null
+  signature: string
+  timestamp: number
+  expiry_window: number
+  builder_code: string
+  max_fee_rate: string
 }
 
 export function generatePacificaAgent(): { privateKey: string; agentAddress: string } {
@@ -43,12 +58,32 @@ export async function authorizePacificaAgent(options: {
   storage: StorageLike
   ownerAddress: string
   signMessage: (message: Uint8Array) => Promise<Uint8Array>
+  builderCodeApproved: (ownerAddress: string) => Promise<boolean>
   relay: (request: PacificaBindAgentRequest) => Promise<void>
+  relayBuilderApproval: (request: PacificaApproveBuilderCodeRequest) => Promise<void>
   now?: () => number
 }): Promise<StoredTradingAgent> {
-  const timestamp = options.now?.() ?? Date.now()
+  if (!await options.builderCodeApproved(options.ownerAddress)) {
+    const approvalTimestamp = options.now?.() ?? Date.now()
+    const approvalMessage = buildPacificaSigningMessage('approve_builder_code', approvalTimestamp, builderApprovalExpiryWindow, {
+      builder_code: pacificaBuilderCode,
+      max_fee_rate: pacificaBuilderMaxFeeRate,
+    })
+    const approvalSignature = await options.signMessage(approvalMessage)
+    if (approvalSignature.length !== nacl.sign.signatureLength) throw new Error('Invalid Pacifica builder approval signature')
+    await options.relayBuilderApproval({
+      account: options.ownerAddress,
+      agent_wallet: null,
+      signature: bs58.encode(approvalSignature),
+      timestamp: approvalTimestamp,
+      expiry_window: builderApprovalExpiryWindow,
+      builder_code: pacificaBuilderCode,
+      max_fee_rate: pacificaBuilderMaxFeeRate,
+    })
+  }
   const generated = generatePacificaAgent()
-  const message = buildPacificaSigningMessage('bind_agent_wallet', timestamp, bindExpiryWindow, {
+  const bindTimestamp = options.now?.() ?? Date.now()
+  const message = buildPacificaSigningMessage('bind_agent_wallet', bindTimestamp, bindExpiryWindow, {
     agent_wallet: generated.agentAddress,
   })
   const ownerSignature = await options.signMessage(message)
@@ -56,7 +91,7 @@ export async function authorizePacificaAgent(options: {
   await options.relay({
     account: options.ownerAddress,
     signature: bs58.encode(ownerSignature),
-    timestamp,
+    timestamp: bindTimestamp,
     expiry_window: bindExpiryWindow,
     agent_wallet: generated.agentAddress,
   })
@@ -67,7 +102,8 @@ export async function authorizePacificaAgent(options: {
     ownerAddress: options.ownerAddress,
     agentAddress: generated.agentAddress,
     privateKey: generated.privateKey,
-    authorizedAt: new Date(timestamp).toISOString(),
+    authorizedAt: new Date(bindTimestamp).toISOString(),
+    builderCode: pacificaBuilderCode,
   }
   saveStoredTradingAgent(options.storage, agent)
   return agent
@@ -95,14 +131,16 @@ export async function signPacificaAgentRequest(
 }
 
 function orderSigningMessage(order: PacificaOrder): Uint8Array {
-  return buildPacificaSigningMessage('create_market_order', order.timestamp, order.expiry_window, {
+  const data: Record<string, unknown> = {
     amount: order.amount,
     client_order_id: order.client_order_id,
     reduce_only: order.reduce_only,
     side: order.side,
     slippage_percent: order.slippage_percent,
     symbol: order.symbol,
-  })
+  }
+  if (order.builder_code) data.builder_code = order.builder_code
+  return buildPacificaSigningMessage('create_market_order', order.timestamp, order.expiry_window, data)
 }
 
 interface PacificaLeverageUpdate {
@@ -149,6 +187,7 @@ interface PacificaOrder {
   reduce_only: boolean
   slippage_percent: string
   client_order_id: string
+  builder_code?: string
 }
 
 function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent): PacificaOrder {
@@ -160,7 +199,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     agent.venue === 'pacifica' &&
     request.account === agent.ownerAddress &&
     request.signer === agent.agentAddress &&
-    (request.action === 'open' || request.action === 'close') &&
+    (request.action === 'open' || request.action === 'close' || request.action === 'unwind' || request.action === 'emergency_close') &&
     Date.parse(request.expires_at) > Date.now() &&
     Number.isSafeInteger(order?.timestamp) &&
     Number.isSafeInteger(order?.expiry_window) &&
@@ -172,13 +211,19 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     amount > 0 &&
     Math.abs(amount - request.amount) < 1e-12 &&
     order?.reduce_only === request.reduce_only &&
-    (request.action !== 'close' || order.reduce_only === true) &&
+    (request.action === 'open' || order.reduce_only === true) &&
     Number.isFinite(slippage) &&
     slippage >= 0 &&
     slippage <= 1 &&
-    order?.client_order_id === request.client_order_id
+    order?.client_order_id === request.client_order_id &&
+    validPacificaBuilder(order?.builder_code, request.action, agent)
   if (!allowed) throw new Error('Pacifica payload is not an allowed market order')
   return order as PacificaOrder
+}
+
+function validPacificaBuilder(value: unknown, action: string, agent: StoredTradingAgent): boolean {
+  if (action === 'unwind' || action === 'emergency_close') return value === undefined
+  return agent.builderCode === pacificaBuilderCode && value === pacificaBuilderCode
 }
 
 function sortCanonical(value: unknown): unknown {

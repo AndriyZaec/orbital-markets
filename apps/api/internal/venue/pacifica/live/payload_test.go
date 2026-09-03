@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,8 +35,38 @@ func TestBuildClosePayloadPreservesResidualAmount(t *testing.T) {
 	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
 		t.Fatal(err)
 	}
-	if unsigned.Amount != "2.75" || unsigned.Side != "ask" {
+	if unsigned.Amount != "2.75" || unsigned.Side != "ask" || unsigned.BuilderCode != OrbitalBuilder.Code {
 		t.Fatalf("unsigned order = %+v, want ask amount 2.75", unsigned)
+	}
+}
+
+func TestBuildRecoveryPayloadsOmitBuilderCode(t *testing.T) {
+	builders := []struct {
+		name   string
+		action string
+		build  func(LotSizeMap, string, string, domain.Side, float64, float64, string) (*domain.SigningRequest, error)
+	}{
+		{name: "unwind", action: "unwind", build: BuildUnwindPayload},
+		{name: "emergency close", action: "emergency_close", build: BuildEmergencyClosePayload},
+	}
+	for _, test := range builders {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := test.build(payloadTestLotSizes, "owner", "SOL", domain.SideLong, 2.75, 100, "client-id")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var unsigned PacificaUnsignedOrder
+			if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+				t.Fatal(err)
+			}
+			if request.Action != test.action || !request.ReduceOnly || unsigned.BuilderCode != "" {
+				t.Fatalf("request = %+v, unsigned = %+v", request, unsigned)
+			}
+			wire, err := json.Marshal(unsigned)
+			if err != nil || strings.Contains(string(wire), "builder_code") {
+				t.Fatalf("wire payload includes builder code: %s (err=%v)", wire, err)
+			}
+		})
 	}
 }
 
@@ -46,6 +77,13 @@ func TestBuildOpenPayloadPreservesRequestedAmount(t *testing.T) {
 	}
 	if request.Amount != 0.125 || request.Action != "open" || request.ReduceOnly {
 		t.Fatalf("request summary = %+v, want open amount 0.125", request)
+	}
+	var unsigned PacificaUnsignedOrder
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	if unsigned.BuilderCode != "orbitalmarkets" {
+		t.Fatalf("builder code = %q", unsigned.BuilderCode)
 	}
 }
 
@@ -75,11 +113,14 @@ func TestBuildOpenPayloadVenueExpiryCoversRequestLifetime(t *testing.T) {
 
 func TestAttachSignatureKeepsOwnerAndAgentIdentities(t *testing.T) {
 	request := &domain.SigningRequest{Account: "owner-wallet", Signer: "agent-wallet"}
-	order := AttachSignature(PacificaUnsignedOrder{Symbol: "BTC"}, domain.SignedAction{
+	order := AttachSignature(PacificaUnsignedOrder{Symbol: "BTC", BuilderCode: "orbitalmarkets"}, domain.SignedAction{
 		SignerAddress: "agent-wallet", Signature: "signature",
 	}, request)
 	if order.Account != "owner-wallet" || order.AgentWallet != "agent-wallet" {
 		t.Fatalf("order identities = account %q agent %q", order.Account, order.AgentWallet)
+	}
+	if order.BuilderCode != "orbitalmarkets" {
+		t.Fatalf("builder code = %q", order.BuilderCode)
 	}
 }
 

@@ -552,12 +552,12 @@ func (s *Server) buildUnwindSigningRequest(
 	var err error
 	switch leg.venue {
 	case "pacifica":
-		request, err = paclive.BuildClosePayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+		request, err = paclive.BuildUnwindPayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	case "hyperliquid":
 		if s.live.hlAssetMap == nil {
 			return nil, fmt.Errorf("hyperliquid asset map not configured")
 		}
-		request, err = hllive.BuildClosePayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
+		request, err = hllive.BuildUnwindPayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
 	default:
 		return nil, fmt.Errorf("unsupported venue: %s", leg.venue)
 	}
@@ -610,7 +610,7 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1b. Reject open actions — live opens must go through /live/advance.
-	if sigReq.Action != "close" || !sigReq.ReduceOnly {
+	if (sigReq.Action != "close" && sigReq.Action != "emergency_close") || !sigReq.ReduceOnly {
 		s.logger.Warn("live submit: rejected non-close action",
 			"request_id", signed.RequestID,
 			"action", sigReq.Action,
@@ -1469,7 +1469,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 
 			cloid := fmt.Sprintf("kill-%s-leg%d-%d", pos.ID[:8], fill.Leg, time.Now().UnixNano())
 
-			sigReq, err := s.buildCloseSigningRequest(
+			sigReq, err := s.buildEmergencyCloseSigningRequest(
 				ctx,
 				fill,
 				cloid,
@@ -1538,6 +1538,25 @@ func (s *Server) buildCloseSigningRequest(
 	clientOrderID string,
 	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
 ) (*domain.SigningRequest, error) {
+	return s.buildCloseSigningRequestForAction(ctx, fill, clientOrderID, accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid, false)
+}
+
+func (s *Server) buildEmergencyCloseSigningRequest(
+	ctx context.Context,
+	fill executor.LiveFill,
+	clientOrderID string,
+	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
+) (*domain.SigningRequest, error) {
+	return s.buildCloseSigningRequestForAction(ctx, fill, clientOrderID, accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid, true)
+}
+
+func (s *Server) buildCloseSigningRequestForAction(
+	ctx context.Context,
+	fill executor.LiveFill,
+	clientOrderID string,
+	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
+	emergency bool,
+) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
 
@@ -1545,7 +1564,11 @@ func (s *Server) buildCloseSigningRequest(
 	var err error
 	switch fill.Venue {
 	case "pacifica":
-		request, err = paclive.BuildClosePayload(
+		buildClose := paclive.BuildClosePayload
+		if emergency {
+			buildClose = paclive.BuildEmergencyClosePayload
+		}
+		request, err = buildClose(
 			s.live.pacificaLotSizes,
 			accountPacifica,
 			fill.Symbol,
@@ -1586,7 +1609,11 @@ func (s *Server) buildCloseSigningRequest(
 		if math.IsNaN(price) || math.IsInf(price, 0) {
 			return nil, fmt.Errorf("current hyperliquid BBO for %s is invalid", fill.Symbol)
 		}
-		request, err = hllive.BuildClosePayload(
+		buildClose := hllive.BuildClosePayload
+		if emergency {
+			buildClose = hllive.BuildEmergencyClosePayload
+		}
+		request, err = buildClose(
 			s.live.hlAssetMap,
 			fill.Symbol,
 			positionSide,

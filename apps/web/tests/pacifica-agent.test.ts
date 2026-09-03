@@ -6,6 +6,8 @@ import nacl from 'tweetnacl'
 import {
   authorizePacificaAgent,
   buildPacificaSigningMessage,
+  pacificaBuilderCode,
+  pacificaBuilderMaxFeeRate,
   signPacificaAgentRequest,
 } from '../src/agents/pacifica-agent.ts'
 import { saveStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
@@ -32,15 +34,24 @@ test('Pacifica bind_agent_wallet canonical bytes match the official fixture', ()
   )
 })
 
-test('a local Pacifica agent reproduces the official market-order signature', async () => {
+test('a local Pacifica agent signs the configured builder code', async () => {
   const storage = new TestStorage()
   saveStoredTradingAgent(storage, pacificaAgent())
   const signed = await signWithStoredTradingAgent(storage, pacificaSigningRequest())
 
-  assert.equal(
-    signed.signature,
-    '4ocxSPtuRPfQb734p6geJd5NELvXdPPMuT29QuWvAuZQf2soUaSe3T6XC5Js5q9XAmJcN3MNQamkJSZu6ekA93B9',
-  )
+  const request = pacificaSigningRequest()
+  const order = request.unsigned_payload as Record<string, unknown>
+  const expectedMessage = buildPacificaSigningMessage('create_market_order', order.timestamp as number, order.expiry_window as number, {
+    amount: order.amount,
+    builder_code: pacificaBuilderCode,
+    client_order_id: order.client_order_id,
+    reduce_only: order.reduce_only,
+    side: order.side,
+    slippage_percent: order.slippage_percent,
+    symbol: order.symbol,
+  })
+  const keyPair = nacl.sign.keyPair.fromSecretKey(bs58.decode(pacificaAgent().privateKey))
+  assert.equal(signed.signature, bs58.encode(nacl.sign.detached(expectedMessage, keyPair.secretKey)))
   assert.equal(signed.signer_address, agentAddress)
   assert.equal(JSON.stringify(signed).includes(pacificaAgent().privateKey), false)
 })
@@ -72,13 +83,20 @@ test('a local Pacifica agent signs only the prepared leverage update', async () 
 test('Pacifica authorization relays no private key and persists only after binding', async () => {
   const storage = new TestStorage()
   let relayed = ''
+  let builderRelayed = ''
+  let now = 1_748_970_123_456
   const agent = await authorizePacificaAgent({
     storage,
     ownerAddress,
-    now: () => 1_748_970_123_456,
+    builderCodeApproved: async () => false,
+    now: () => now++,
     signMessage: async () => new Uint8Array(64),
     relay: async (request) => {
       relayed = JSON.stringify(request)
+      assert.equal(storage.values.size, 0)
+    },
+    relayBuilderApproval: async (request) => {
+      builderRelayed = JSON.stringify(request)
       assert.equal(storage.values.size, 0)
     },
   })
@@ -87,12 +105,65 @@ test('Pacifica authorization relays no private key and persists only after bindi
   assert.equal(relayed.includes('private'), false)
   assert.equal(relayed.includes('bind_agent_wallet'), false)
   assert.equal(JSON.parse(relayed).expiry_window, 30_000)
+  assert.equal(JSON.parse(relayed).timestamp, 1_748_970_123_457)
+  assert.deepEqual(JSON.parse(builderRelayed), {
+    account: ownerAddress,
+    agent_wallet: null,
+    signature: bs58.encode(new Uint8Array(64)),
+    timestamp: 1_748_970_123_456,
+    expiry_window: 30_000,
+    builder_code: pacificaBuilderCode,
+    max_fee_rate: pacificaBuilderMaxFeeRate,
+  })
+})
+
+test('Pacifica authorization skips an already-approved builder code', async () => {
+  const storage = new TestStorage()
+  let signatures = 0
+  await authorizePacificaAgent({
+    storage,
+    ownerAddress,
+    builderCodeApproved: async () => true,
+    signMessage: async () => {
+      signatures++
+      return new Uint8Array(64)
+    },
+    relayBuilderApproval: async () => {
+      throw new Error('builder approval should be skipped')
+    },
+    relay: async () => undefined,
+  })
+
+  assert.equal(signatures, 1)
 })
 
 test('a local Pacifica agent rejects non-order payloads', async () => {
   const request = pacificaSigningRequest()
   request.unsigned_payload = { timestamp: 1_748_970_123_456, expiry_window: 5_000 }
   await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
+})
+
+test('a local Pacifica agent rejects an altered builder code', async () => {
+  const request = pacificaSigningRequest()
+  request.unsigned_payload = { ...(request.unsigned_payload as object), builder_code: 'otherbuilder' }
+  await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
+})
+
+test('a local Pacifica agent signs fee-free recovery but rejects fee-free normal close', async () => {
+  const request = pacificaSigningRequest()
+  const order = request.unsigned_payload as Record<string, unknown>
+  delete order.builder_code
+  order.reduce_only = true
+  request.action = 'emergency_close'
+  request.reduce_only = true
+
+  const agent = pacificaAgent()
+  delete agent.builderCode
+  const signed = await signPacificaAgentRequest(request, agent)
+  assert.equal(signed.signer_address, agentAddress)
+
+  request.action = 'close'
+  await assert.rejects(signPacificaAgentRequest(request, agent), /not an allowed market order/)
 })
 
 function pacificaAgent(): StoredTradingAgent {
@@ -104,6 +175,7 @@ function pacificaAgent(): StoredTradingAgent {
     agentAddress: bs58.encode(keyPair.publicKey),
     privateKey: bs58.encode(keyPair.secretKey),
     authorizedAt: '2026-08-10T12:00:00.000Z',
+    builderCode: pacificaBuilderCode,
   }
 }
 
@@ -129,6 +201,7 @@ function pacificaSigningRequest(): SigningRequest {
       reduce_only: false,
       slippage_percent: '0.5',
       client_order_id: '12345678-1234-1234-1234-123456789abc',
+      builder_code: pacificaBuilderCode,
     },
     expires_at: '2099-08-10T12:00:00.000Z',
     created_at: '2026-08-10T12:00:00.000Z',

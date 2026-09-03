@@ -51,4 +51,25 @@ describe('admin token boundary', () => {
       message: 'The admin token is invalid.',
     })
   })
+
+  it('proxies weekly APR with the server-side analytics token', async () => {
+    const upstream = vi.fn(async () => new Response(JSON.stringify({ generated_at: '2026-09-02T12:00:00Z', rows: [] }), {
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', upstream)
+    const configured = {
+      ...testEnv(),
+      ANALYTICS_API_URL: 'https://api.orbitalmarkets.xyz/',
+      ANALYTICS_API_TOKEN: 'analytics-secret',
+    }
+
+    const response = await worker.fetch(new Request('https://admin.orbitalmarkets.xyz/api/admin/v1/weekly-apr', {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    }), configured)
+
+    expect(response.status).toBe(200)
+    expect(upstream).toHaveBeenCalledWith('https://api.orbitalmarkets.xyz/api/v1/analytics/weekly-apr', {
+      headers: { 'x-analytics-token': 'analytics-secret' },
+    })
+  })
 })

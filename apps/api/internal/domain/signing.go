@@ -20,7 +20,7 @@ type SigningRequest struct {
 
 	// Venue context
 	Venue  string `json:"venue"`  // "pacifica" or "hyperliquid"
-	Action string `json:"action"` // "open", "close", or "update_leverage"
+	Action string `json:"action"` // "open", "close", "unwind", "emergency_close", or "update_leverage"
 	// Account owns venue state; Signer is the owner or authorized agent expected to sign.
 	Account string `json:"account"`
 	Signer  string `json:"signer,omitempty"`

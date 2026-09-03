@@ -41,6 +41,7 @@ type PacificaUnsignedOrder struct {
 	ReduceOnly    bool   `json:"reduce_only"`
 	SlippagePct   string `json:"slippage_percent"`
 	ClientOrderID string `json:"client_order_id"`
+	BuilderCode   string `json:"builder_code,omitempty"`
 }
 
 type PacificaUnsignedLeverage struct {
@@ -99,6 +100,7 @@ func BuildOpenPayload(
 		defaultOpenSlippagePct,
 		ensureUUID(clientOrderID),
 		"open",
+		OrbitalBuilder.Code,
 	)
 }
 
@@ -112,6 +114,44 @@ func BuildClosePayload(
 	amount float64,
 	price float64,
 	clientOrderID string,
+) (*domain.SigningRequest, error) {
+	return buildClosePayload(lotSizes, account, symbol, positionSide, amount, price, clientOrderID, "close", OrbitalBuilder.Code)
+}
+
+func BuildUnwindPayload(
+	lotSizes LotSizeMap,
+	account string,
+	symbol string,
+	positionSide domain.Side,
+	amount float64,
+	price float64,
+	clientOrderID string,
+) (*domain.SigningRequest, error) {
+	return buildClosePayload(lotSizes, account, symbol, positionSide, amount, price, clientOrderID, "unwind", "")
+}
+
+func BuildEmergencyClosePayload(
+	lotSizes LotSizeMap,
+	account string,
+	symbol string,
+	positionSide domain.Side,
+	amount float64,
+	price float64,
+	clientOrderID string,
+) (*domain.SigningRequest, error) {
+	return buildClosePayload(lotSizes, account, symbol, positionSide, amount, price, clientOrderID, "emergency_close", "")
+}
+
+func buildClosePayload(
+	lotSizes LotSizeMap,
+	account string,
+	symbol string,
+	positionSide domain.Side,
+	amount float64,
+	price float64,
+	clientOrderID string,
+	action string,
+	builderCode string,
 ) (*domain.SigningRequest, error) {
 	// Invert: close long = ask, close short = bid
 	closeSide := "ask"
@@ -129,7 +169,8 @@ func BuildClosePayload(
 		true,
 		defaultCloseSlippagePct,
 		ensureUUID(clientOrderID),
-		"close",
+		action,
+		builderCode,
 	)
 }
 
@@ -144,6 +185,7 @@ func buildPayload(
 	slippagePct string,
 	clientOrderID string,
 	action string,
+	builderCode string,
 ) (*domain.SigningRequest, error) {
 	now := time.Now()
 	normalizedAmount, amountWire, err := normalizePacificaAmount(lotSizes, symbol, amount)
@@ -160,6 +202,7 @@ func buildPayload(
 		ReduceOnly:    reduceOnly,
 		SlippagePct:   slippagePct,
 		ClientOrderID: clientOrderID,
+		BuilderCode:   builderCode,
 	}
 	requestExpiresAt := time.UnixMilli(unsigned.Timestamp).Add(signingRequestTTL)
 
@@ -249,6 +292,7 @@ func AttachSignature(
 		ReduceOnly:    unsigned.ReduceOnly,
 		SlippagePct:   unsigned.SlippagePct,
 		ClientOrderID: unsigned.ClientOrderID,
+		BuilderCode:   unsigned.BuilderCode,
 	}
 }
 

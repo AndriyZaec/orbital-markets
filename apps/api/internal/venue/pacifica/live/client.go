@@ -176,7 +176,7 @@ func (c *Client) buildAndSign(
 	timestamp := now.UnixMilli()
 
 	// Build the data portion of the signing payload
-	data := BuildMarketOrderSigningData(symbol, side, amount, reduceOnly, slippagePct, clientOrderID)
+	data := BuildMarketOrderSigningData(symbol, side, amount, reduceOnly, slippagePct, clientOrderID, OrbitalBuilder.Code)
 
 	// Build the canonical signing message (sorted keys, compact JSON)
 	signingBytes, err := BuildSigningMessage("create_market_order", timestamp, expiryWindowMs, data)
@@ -201,6 +201,7 @@ func (c *Client) buildAndSign(
 		ReduceOnly:    reduceOnly,
 		SlippagePct:   slippagePct,
 		ClientOrderID: clientOrderID,
+		BuilderCode:   OrbitalBuilder.Code,
 	}, nil
 }
 
