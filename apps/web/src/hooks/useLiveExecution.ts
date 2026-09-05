@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { apiError, apiFetch } from '@/lib/api'
 import { subscribeLiveSessionEvents } from '@/lib/live-events'
-import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
+import { liveAccountsQuery, liveVenueBindingsBody, type VenueAddressMap } from '@/lib/live-bindings'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
@@ -209,11 +209,14 @@ function useLiveExecutionState() {
   useEffect(() => { pacificaRef.current = pacificaAddress }, [pacificaAddress])
   useEffect(() => { hyperliquidRef.current = hyperliquidAddress }, [hyperliquidAddress])
 
-  const postAdvance = async (body: Record<string, unknown>): Promise<AdvanceResp> => {
+  const postAdvance = async (
+    accounts: VenueAddressMap,
+    body: Record<string, unknown>,
+  ): Promise<AdvanceResp> => {
     const resp = await apiFetch('/api/v1/live/advance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, ...liveVenueBindingsBody(accounts) }),
     })
     if (!resp.ok) {
       const b = await resp.json().catch(() => ({}))
@@ -240,6 +243,10 @@ function useLiveExecutionState() {
     setState({ ...INITIAL_STATE, phase: 'preparing' })
 
     let exposurePossible = false
+    const preparedAccounts = {
+      pacifica: pacificaAddress,
+      hyperliquid: hyperliquidAddress,
+    }
 
     try {
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
@@ -362,7 +369,7 @@ function useLiveExecutionState() {
       exposurePossible = true
       let adv1: AdvanceResp
       try {
-        adv1 = await postAdvance({ session_id: prep.session_id, signed_actions: signedLeg1 })
+        adv1 = await postAdvance(preparedAccounts, { session_id: prep.session_id, signed_actions: signedLeg1 })
       } catch (e) {
         setState((s) => ({
           ...s,
@@ -408,7 +415,7 @@ function useLiveExecutionState() {
       {
         const changed = detectAccountChange()
         if (changed) {
-          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
@@ -428,7 +435,7 @@ function useLiveExecutionState() {
       try {
         signedLeg2 = await tradingAgents.sign(leg2Req)
       } catch (e) {
-        const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+        const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
         setState((s) => ({
           ...s,
           phase: 'aborted',
@@ -444,7 +451,7 @@ function useLiveExecutionState() {
       {
         const changed = detectAccountChange()
         if (changed) {
-          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
@@ -463,7 +470,7 @@ function useLiveExecutionState() {
       setState((s) => ({ ...s, phase: 'submitting_leg2' }))
       let adv2: AdvanceResp
       try {
-        adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedLeg2] })
+        adv2 = await postAdvance(preparedAccounts, { session_id: prep.session_id, signed_actions: [signedLeg2] })
       } catch (e) {
         setState((s) => ({
           ...s,
@@ -487,7 +494,7 @@ function useLiveExecutionState() {
         }))
 
         const abortRetry = async (failureReason: string): Promise<AdvanceResp | null> => {
-          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
           if (!abortResp) {
             setState((s) => ({
               ...s,
@@ -522,7 +529,7 @@ function useLiveExecutionState() {
             } else {
               setState((s) => ({ ...s, phase: 'submitting_leg2_retry' }))
               try {
-                adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedRetry] })
+                adv2 = await postAdvance(preparedAccounts, { session_id: prep.session_id, signed_actions: [signedRetry] })
               } catch (e) {
                 setState((s) => ({
                   ...s,
