@@ -718,19 +718,18 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 	if s.live.liveStore == nil {
 		return ""
 	}
-	posID := sess.Plan.ID
 	claimed, err := s.live.liveStore.ClaimDurableSession(ctx, sess.ID, s.recoveryOwner, sessionRecoveryLease)
 	if err != nil || !claimed {
 		s.logger.Error("live session: terminal persistence lease unavailable", "err", err, "session_id", sess.ID)
-		return posID
+		return ""
 	}
 	res := &executor.ExecutionResult{
 		OpportunityID: sess.Plan.OpportunityID,
 		PlanID:        sess.Plan.ID,
 		Asset:         sess.Plan.Asset,
 		State:         state,
-		Leg1:          legResultFrom(sess.Leg1, sess.Leg1Fill, sess.Leg1OpenReqID, liveSessionLeg1Amount(sess)),
-		Leg2:          legResultFrom(sess.Leg2, sess.Leg2Fill, sess.Leg2OpenReqID, liveSessionLeg2Amount(sess)),
+		Leg1:          legResultFrom(sess.Leg1, sess.Leg1Fill, signingClientOrderID(sess.Leg1OpenReq, sess.Leg1OpenReqID), liveSessionLeg1Amount(sess)),
+		Leg2:          legResultFrom(sess.Leg2, sess.Leg2Fill, signingClientOrderID(sess.Leg2RetryReq, signingClientOrderID(sess.Leg2OpenReq, sess.Leg2OpenReqID)), liveSessionLeg2Amount(sess)),
 		Recovery:      sess.Recovery,
 		Reasons:       reasons,
 		StartedAt:     sess.CreatedAt,
@@ -742,7 +741,7 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 		sess.Plan.Notional, sess.Plan.Leverage.Leverage,
 	); err != nil {
 		s.logger.Error("live session: persist terminal result", "err", err, "session_id", sess.ID)
-		return posID
+		return ""
 	}
 	s.trackLiveOpenOutcome(sess, state, reasons...)
 	s.finishLiveSession(ctx, sess, strings.Join(reasons, "; "))
@@ -777,6 +776,13 @@ func legResultFrom(leg legPlan, fill *normFill, clientOrderID string, requestedA
 		}
 	}
 	return lr
+}
+
+func signingClientOrderID(request *domain.SigningRequest, fallback string) string {
+	if request != nil && request.ClientOrderID != "" {
+		return request.ClientOrderID
+	}
+	return fallback
 }
 
 // unwindJSON returns the API-facing fields for an unwind result.

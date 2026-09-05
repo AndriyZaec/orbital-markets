@@ -1,6 +1,15 @@
 package api
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+)
 
 func TestMergeNormFillsCalculatesAggregateHedge(t *testing.T) {
 	first := &normFill{FilledAmount: 4, AvgFillPrice: 100, Fee: 0.4, Filled: true}
@@ -57,5 +66,37 @@ func TestRetryMinimumAppliesOnlyToNormalizedHyperliquidNotional(t *testing.T) {
 	}
 	if retryBelowMinimumNotional("pacifica", 0.01, 100) {
 		t.Fatal("Hyperliquid minimum must not suppress Pacifica retries")
+	}
+}
+
+func TestCompleteHedgeOpenReportsRecoveringWhenTerminalPersistenceFails(t *testing.T) {
+	server := &Server{
+		live:   &LiveDeps{sessions: NewSessionManager()},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	session := &LiveSession{
+		ID:   "session-1",
+		Plan: &domain.ExecutionPlan{ID: "position-1"},
+	}
+	recorder := httptest.NewRecorder()
+
+	server.completeHedgeOpen(recorder, context.Background(), session, 0)
+
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != string(sessRecovering) {
+		t.Fatalf("status = %v, want %s", response["status"], sessRecovering)
+	}
+	if _, exists := response["position_id"]; exists {
+		t.Fatalf("position_id must not be reported before terminal persistence: %v", response["position_id"])
+	}
+}
+
+func TestSigningClientOrderIDUsesVenueFacingIdentifier(t *testing.T) {
+	request := &domain.SigningRequest{ID: "signing-request", ClientOrderID: "venue-client-order"}
+	if got := signingClientOrderID(request, request.ID); got != request.ClientOrderID {
+		t.Fatalf("client order ID = %q, want %q", got, request.ClientOrderID)
 	}
 }

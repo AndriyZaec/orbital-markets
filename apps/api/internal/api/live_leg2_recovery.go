@@ -203,6 +203,17 @@ func (s *Server) completeHedgeOpen(w http.ResponseWriter, ctx context.Context, s
 	session.State = sessOpen
 	s.live.sessions.remove(session.ID)
 	positionID := s.persistSession(ctx, session, executor.ExecStateOpen)
+	if positionID == "" {
+		session.State = sessRecovering
+		reason := "hedge opened but terminal persistence is pending; reconciliation started"
+		s.logger.Error("live advance: hedge persistence pending", "session_id", session.ID, "mismatch", mismatch)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": session.ID, "status": string(sessRecovering),
+			"leg1_fill": fillView(session.Leg1Fill, 0), "leg2_fill": fillView(session.Leg2Fill, 0),
+			"mismatch": mismatch, "reason": reason,
+		})
+		return
+	}
 	s.logger.Info("live advance: hedge open", "session_id", session.ID, "mismatch", mismatch, "position_id", positionID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": session.ID, "status": string(sessOpen),
@@ -237,12 +248,19 @@ func (s *Server) recoverInvalidHedge(w http.ResponseWriter, ctx context.Context,
 	}
 	fullReason := reason + unwindReasonSuffix(unwind)
 	positionID := s.persistSession(ctx, session, state, fullReason)
+	if positionID == "" {
+		session.State = sessRecovering
+		fullReason += "; terminal persistence is pending; reconciliation started"
+	}
 	response := map[string]any{
 		"session_id": session.ID, "status": string(session.State),
 		"leg1_fill": fillView(session.Leg1Fill, 0), "leg2_fill": fillView(session.Leg2Fill, 0),
-		"mismatch": hedgeMismatch(fillAmount(session.Leg1Fill), fillAmount(session.Leg2Fill)),
-		"reason":   fullReason, "position_id": positionID,
+		"mismatch":           hedgeMismatch(fillAmount(session.Leg1Fill), fillAmount(session.Leg2Fill)),
+		"reason":             fullReason,
 		"remaining_exposure": remainingExposureView(session),
+	}
+	if positionID != "" {
+		response["position_id"] = positionID
 	}
 	for key, value := range unwindJSON(unwind) {
 		response[key] = value
