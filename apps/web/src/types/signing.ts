@@ -43,8 +43,13 @@ export interface SubmissionResult {
 export interface PrepareRequest {
   opportunity_id: string
   leverage: number
-  account_pacifica: string
-  account_hyperliquid: string
+  requested_notional?: number
+  accounts: Record<string, string>
+  agents: Record<string, string>
+  account_pacifica?: string
+  account_hyperliquid?: string
+  agent_pacifica?: string
+  agent_hyperliquid?: string
 }
 
 export interface PrepareResponse {

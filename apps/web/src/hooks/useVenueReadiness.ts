@@ -5,6 +5,7 @@ import { useLiveBalances } from './useLiveBalances'
 import { useTradingAgents } from './useTradingAgents'
 import type { TradingAgentState } from '@/agents/types'
 import { trackAnalytics } from '@/lib/analytics'
+import { liveVenueBindingsBody } from '@/lib/live-bindings'
 
 // Single typed readiness layer for Pacifica + Hyperliquid. Composes the
 // existing wallet-authority hook and the live-balances hook so the rest of
@@ -218,7 +219,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       const resp = await apiFetch('/api/v1/live/accounts/ensure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_pacifica: pac, account_hyperliquid: hl }),
+        body: JSON.stringify(liveVenueBindingsBody({ pacifica: pac, hyperliquid: hl })),
       })
       if (!resp.ok) {
         const b = await resp.json().catch(() => ({}))

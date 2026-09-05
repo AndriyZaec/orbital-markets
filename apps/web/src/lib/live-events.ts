@@ -1,4 +1,5 @@
 import { apiUrl } from './api.ts'
+import { liveAccountsKey, liveAccountsQuery, type VenueAddressMap } from './live-bindings.ts'
 
 export type LiveAccountEvent =
   | { type: 'connected' | 'disconnected' }
@@ -19,24 +20,19 @@ export function hasActiveLiveExposure(data: unknown): boolean {
   })
 }
 
-function liveEventsUrl(pacificaAccount: string, hyperliquidAccount: string, sessionId?: string) {
-  const query = new URLSearchParams({
-    account_pacifica: pacificaAccount,
-    account_hyperliquid: hyperliquidAccount,
-  })
-  if (sessionId) query.set('session_id', sessionId)
+function liveEventsUrl(accounts: VenueAddressMap, sessionId?: string) {
+  const query = liveAccountsQuery(accounts, sessionId ? { session_id: sessionId } : {})
   return apiUrl(`/api/v1/live/events?${query}`)
 }
 
 export function subscribeLiveAccountEvents(
-  pacificaAccount: string,
-  hyperliquidAccount: string,
+  accounts: VenueAddressMap,
   listener: (event: LiveAccountEvent) => void,
 ): () => void {
-  const key = `${pacificaAccount}|${hyperliquidAccount.toLowerCase()}`
+  const key = liveAccountsKey(accounts)
   let channel = accountChannels.get(key)
   if (!channel) {
-    const source = new EventSource(liveEventsUrl(pacificaAccount, hyperliquidAccount), { withCredentials: true })
+    const source = new EventSource(liveEventsUrl(accounts), { withCredentials: true })
     channel = { source, listeners: new Set(), connected: false }
     accountChannels.set(key, channel)
     const dispatch = (event: LiveAccountEvent) => {
@@ -73,13 +69,12 @@ export function subscribeLiveAccountEvents(
 }
 
 export function subscribeLiveSessionEvents(
-  pacificaAccount: string,
-  hyperliquidAccount: string,
+  accounts: VenueAddressMap,
   sessionId: string,
   onConnection: (connected: boolean) => void,
   onSession: (data: unknown) => void,
 ): () => void {
-  const source = new EventSource(liveEventsUrl(pacificaAccount, hyperliquidAccount, sessionId), {
+  const source = new EventSource(liveEventsUrl(accounts, sessionId), {
     withCredentials: true,
   })
   source.onopen = () => onConnection(true)

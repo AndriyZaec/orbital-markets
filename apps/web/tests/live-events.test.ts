@@ -31,11 +31,13 @@ test('account event subscribers share one EventSource per wallet pair', () => {
   Object.defineProperty(globalThis, 'EventSource', { value: FakeEventSource, configurable: true })
   try {
     const lateEvents: string[] = []
-    const unsubscribeBalances = subscribeLiveAccountEvents('sol-wallet', '0xWallet', () => {})
+    const unsubscribeBalances = subscribeLiveAccountEvents(
+      { pacifica: 'sol-wallet', hyperliquid: '0xWallet' },
+      () => {},
+    )
     sources[0].onopen?.()
     const unsubscribePositions = subscribeLiveAccountEvents(
-      'sol-wallet',
-      '0xwallet',
+      { hyperliquid: '0xwallet', pacifica: 'sol-wallet' },
       (event) => lateEvents.push(event.type),
     )
     assert.equal(sources.length, 1)

@@ -4,6 +4,7 @@ import { runSingleFlight, shouldMonitorLiveUpdates } from '@/lib/polling'
 import { hasActiveLiveExposure, subscribeLiveAccountEvents } from '@/lib/live-events'
 import { useLiveExecution } from './useLiveExecution'
 import { usePageVisibility } from './usePageVisibility'
+import { liveAccountsQuery } from '@/lib/live-bindings'
 
 interface VenueBalance {
   venue: string
@@ -71,9 +72,9 @@ export function useLiveBalances(
     await runSingleFlight(polling.current, async () => {
       const request = ++requestSequence.current
       try {
-        const query = new URLSearchParams({
-          account_pacifica: accountPacifica,
-          account_hyperliquid: accountHyperliquid,
+        const query = liveAccountsQuery({
+          pacifica: accountPacifica,
+          hyperliquid: accountHyperliquid,
         })
         const resp = await apiFetch(`/api/v1/live/balances?${query}`, { signal })
         if (!resp.ok) return
@@ -89,7 +90,10 @@ export function useLiveBalances(
   useEffect(() => {
     streamConnected.current = false
     if (!shouldMonitor || !pair || !accountPacifica || !accountHyperliquid) return
-    return subscribeLiveAccountEvents(accountPacifica, accountHyperliquid, (event) => {
+    return subscribeLiveAccountEvents({
+      pacifica: accountPacifica,
+      hyperliquid: accountHyperliquid,
+    }, (event) => {
       if (event.type === 'connected') streamConnected.current = true
       else if (event.type === 'disconnected') streamConnected.current = false
       else if (event.type === 'balances') {

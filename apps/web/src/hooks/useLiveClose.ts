@@ -4,6 +4,7 @@ import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
 import { waitForClosedPosition } from '@/lib/live-close'
+import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
 
 export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
 
@@ -41,10 +42,10 @@ const closeConfirmationAttempts = 12
 const closeConfirmationPollMs = 2_000
 
 async function waitForClose(positionId: string, pacificaAccount: string, hyperliquidAccount: string): Promise<void> {
-	const query = new URLSearchParams({
-		account_pacifica: pacificaAccount,
-		account_hyperliquid: hyperliquidAccount,
-	})
+  const query = liveAccountsQuery({
+    pacifica: pacificaAccount,
+    hyperliquid: hyperliquidAccount,
+  })
   await waitForClosedPosition({
     getPositionState: async () => {
       const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
@@ -76,12 +77,13 @@ export function useLiveClose() {
       const resp = await apiFetch(`/api/v1/live/close/${positionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account_pacifica: pacificaAddress,
-          account_hyperliquid: hyperliquidAddress,
-          agent_pacifica: tradingAgents.pacifica.agentAddress,
-          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
-        }),
+        body: JSON.stringify(liveVenueBindingsBody(
+          { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress },
+          {
+            pacifica: tradingAgents.pacifica.agentAddress ?? '',
+            hyperliquid: tradingAgents.hyperliquid.agentAddress ?? '',
+          },
+        )),
       })
       if (!resp.ok) {
         const b = await resp.json().catch(() => ({}))

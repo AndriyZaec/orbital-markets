@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
+import { liveAccountsQuery } from '@/lib/live-bindings'
 
 export interface LiveFillDetail {
   id: number
@@ -55,9 +56,9 @@ export function useLivePositionDetail(positionId: string | null) {
     }
     setLoading(true)
     try {
-      const query = new URLSearchParams({
-        account_pacifica: pacificaAddress,
-        account_hyperliquid: hyperliquidAddress,
+      const query = liveAccountsQuery({
+        pacifica: pacificaAddress,
+        hyperliquid: hyperliquidAddress,
       })
       const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`, { signal })
       if (!resp.ok) throw await apiResponseError(resp, 'This position is no longer available.')

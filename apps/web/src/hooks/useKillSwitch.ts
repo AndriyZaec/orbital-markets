@@ -4,6 +4,7 @@ import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
 import { summarizeKillPreparation } from '@/lib/kill-switch'
+import { liveVenueBindingsBody } from '@/lib/live-bindings'
 
 export type KillPhase =
   | 'idle'
@@ -98,12 +99,13 @@ export function useKillSwitch() {
       const resp = await apiFetch('/api/v1/live/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account_pacifica: pacificaAddress,
-          account_hyperliquid: hyperliquidAddress,
-          agent_pacifica: tradingAgents.pacifica.agentAddress,
-          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
-        }),
+        body: JSON.stringify(liveVenueBindingsBody(
+          { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress },
+          {
+            pacifica: tradingAgents.pacifica.agentAddress,
+            hyperliquid: tradingAgents.hyperliquid.agentAddress,
+          },
+        )),
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))

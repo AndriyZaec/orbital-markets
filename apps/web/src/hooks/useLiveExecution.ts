@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { apiError, apiFetch } from '@/lib/api'
 import { subscribeLiveSessionEvents } from '@/lib/live-events'
+import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
@@ -143,10 +144,11 @@ function useLiveExecutionState() {
     let fallbackTimer = 0
     let deadlineTimer = 0
     const sessionId = state.sessionId
-    const query = new URLSearchParams({
-      account_pacifica: state.accountPacifica,
-      account_hyperliquid: state.accountHyperliquid,
-    })
+    const accounts = {
+      pacifica: state.accountPacifica,
+      hyperliquid: state.accountHyperliquid,
+    }
+    const query = liveAccountsQuery(accounts)
     const apply = (result: AdvanceResp) => {
       if (cancelled || result.status === 'recovering') return false
       setState((current) => ({
@@ -165,8 +167,7 @@ function useLiveExecutionState() {
     }
 
     const closeStream = subscribeLiveSessionEvents(
-      state.accountPacifica,
-      state.accountHyperliquid,
+      accounts,
       sessionId,
       (connected) => { streamConnected = connected },
       (data) => { if (apply(data as AdvanceResp)) closeStream() },
@@ -251,10 +252,13 @@ function useLiveExecutionState() {
           ...(typeof requestedNotional === 'number' && requestedNotional > 0
             ? { requested_notional: requestedNotional }
             : {}),
-          account_pacifica: pacificaAddress,
-          account_hyperliquid: hyperliquidAddress,
-          agent_pacifica: tradingAgents.pacifica.agentAddress,
-          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
+          ...liveVenueBindingsBody(
+            { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress },
+            {
+              pacifica: tradingAgents.pacifica.agentAddress,
+              hyperliquid: tradingAgents.hyperliquid.agentAddress,
+            },
+          ),
         }),
       })
       if (!prepResp.ok) {

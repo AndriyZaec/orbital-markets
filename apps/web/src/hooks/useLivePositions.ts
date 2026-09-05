@@ -8,6 +8,7 @@ import {
 import { hasActiveLiveExposure, subscribeLiveAccountEvents } from '@/lib/live-events'
 import { useVenueAuthority } from './useVenueAuthority'
 import { usePageVisibility } from './usePageVisibility'
+import { liveAccountsQuery } from '@/lib/live-bindings'
 
 export interface LivePosition {
   id: string
@@ -79,9 +80,9 @@ export function useLivePositions(pollInterval = 5_000) {
     await runSingleFlight(polling.current, async () => {
       const request = ++requestSequence.current
       try {
-        const query = new URLSearchParams({
-          account_pacifica: pacificaAddress,
-          account_hyperliquid: hyperliquidAddress,
+        const query = liveAccountsQuery({
+          pacifica: pacificaAddress,
+          hyperliquid: hyperliquidAddress,
         })
         const resp = await apiFetch(`/api/v1/live/positions?${query}`, { signal })
         if (!resp.ok) throw await apiResponseError(resp, 'Unable to load live positions. Please try again.')
@@ -109,7 +110,10 @@ export function useLivePositions(pollInterval = 5_000) {
     streamConnected.current = false
     hasActivePositions.current = null
     if (!shouldMonitor || !pacificaAddress || !hyperliquidAddress) return
-    return subscribeLiveAccountEvents(pacificaAddress, hyperliquidAddress, (event) => {
+    return subscribeLiveAccountEvents({
+      pacifica: pacificaAddress,
+      hyperliquid: hyperliquidAddress,
+    }, (event) => {
       if (event.type === 'connected') streamConnected.current = true
       else if (event.type === 'disconnected') streamConnected.current = false
       else if (event.type === 'positions') {
