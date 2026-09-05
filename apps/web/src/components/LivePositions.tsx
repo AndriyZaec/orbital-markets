@@ -221,16 +221,13 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                   Submitting order {kill.state.submitted + 1} of {kill.state.totalRequests}...
                 </p>
               )}
-              {kill.state.phase === 'done' && kill.state.failed === 0 && kill.state.uncertain === 0 && (
-                <p className="text-green-400 text-[11px]">All close orders submitted successfully.</p>
-              )}
-              {kill.state.phase === 'done' && kill.state.uncertain > 0 && (
-                <p className="text-yellow-400 text-[11px]">Some submission responses were uncertain. Position states are being reconciled before retry is safe.</p>
-              )}
-              {kill.state.phase === 'done' && kill.state.failed > 0 && (
+              {kill.state.phase === 'confirming' && (
                 <p className="text-yellow-400 text-[11px]">
-                  Completed with {kill.state.failed} failure{kill.state.failed !== 1 ? 's' : ''}.
+                  Confirming every position is closed on the venues...
                 </p>
+              )}
+              {kill.state.phase === 'done' && (
+                <p className="text-green-400 text-[11px]">All targeted positions are confirmed closed.</p>
               )}
 
               {/* Per-position info */}
@@ -276,9 +273,10 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                 </Button>
               </>
             )}
-            {(kill.state.phase === 'preparing' || kill.state.phase === 'signing' || kill.state.phase === 'submitting') && (
+            {(kill.state.phase === 'preparing' || kill.state.phase === 'signing' || kill.state.phase === 'submitting' || kill.state.phase === 'confirming') && (
               <Button variant="outline" size="sm" disabled>
-                {kill.state.phase === 'preparing' ? 'Preparing...' : 'Closing positions...'}
+                {kill.state.phase === 'preparing' ? 'Preparing...' :
+                  kill.state.phase === 'confirming' ? 'Confirming close...' : 'Closing positions...'}
               </Button>
             )}
             {(kill.state.phase === 'done' || kill.state.phase === 'error') && (

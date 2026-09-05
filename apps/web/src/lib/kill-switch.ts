@@ -1,7 +1,32 @@
+import { waitForClosedPosition } from './live-close.ts'
+
 export interface KillPreparationPosition {
   id: string
   legs_to_close: number
   error?: string
+}
+
+export interface WaitForKilledPositionsOptions {
+  positionIds: string[]
+  getPositionState: (positionId: string) => Promise<string>
+  delay: (ms: number) => Promise<void>
+  attempts: number
+  pollMs: number
+}
+
+export async function waitForKilledPositions({
+  positionIds,
+  getPositionState,
+  delay,
+  attempts,
+  pollMs,
+}: WaitForKilledPositionsOptions): Promise<void> {
+  await Promise.all(positionIds.map(positionId => waitForClosedPosition({
+    getPositionState: () => getPositionState(positionId),
+    delay,
+    attempts,
+    pollMs,
+  })))
 }
 
 export function summarizeKillPreparation(

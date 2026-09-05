@@ -1,16 +1,17 @@
 import { useState, useCallback } from 'react'
-import { apiError, apiFetch } from '@/lib/api'
+import { apiError, apiFetch, apiResponseError } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
-import { summarizeKillPreparation } from '@/lib/kill-switch'
-import { liveVenueBindingsBody } from '@/lib/live-bindings'
+import { summarizeKillPreparation, waitForKilledPositions } from '@/lib/kill-switch'
+import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
 
 export type KillPhase =
   | 'idle'
   | 'preparing'
   | 'signing'
   | 'submitting'
+  | 'confirming'
   | 'done'
   | 'error'
 
@@ -54,6 +55,10 @@ const INITIAL: KillState = {
   positions: [],
   errors: [],
 }
+
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+const killConfirmationAttempts = 12
+const killConfirmationPollMs = 2_000
 
 export function useKillSwitch() {
   const [state, setState] = useState<KillState>(INITIAL)
@@ -125,6 +130,18 @@ export function useKillSwitch() {
 
       const requests = data.signing_requests || []
       const preparation = summarizeKillPreparation(data.targeted, requests.length, data.positions)
+      const positionIds = [...new Set(data.positions.map(position => position.id).filter(Boolean))]
+      if (positionIds.length !== data.targeted) {
+        setState(s => ({
+          ...s,
+          phase: 'error',
+          targeted: data.targeted,
+          positions: data.positions,
+          failed: data.targeted,
+          errors: ['Emergency close confirmation targets were incomplete'],
+        }))
+        return
+      }
       if (requests.length === 0) {
         setState(s => ({
           ...s,
@@ -180,6 +197,28 @@ export function useKillSwitch() {
         }
       }
 
+      if (failed > 0) {
+        setState(s => ({ ...s, phase: 'error', succeeded, failed, uncertain, errors: [...errors] }))
+        return
+      }
+
+      setState(s => ({ ...s, phase: 'confirming', succeeded, failed, uncertain, errors: [...errors] }))
+      const accounts = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress }
+      const query = liveAccountsQuery(accounts)
+      await waitForKilledPositions({
+        positionIds,
+        getPositionState: async (positionId) => {
+          const positionResp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
+          if (!positionResp.ok) {
+            throw await apiResponseError(positionResp, 'Unable to confirm emergency close. Check all venue positions.')
+          }
+          const positionData: { position: { state: string } } = await positionResp.json()
+          return positionData.position.state
+        },
+        delay,
+        attempts: killConfirmationAttempts,
+        pollMs: killConfirmationPollMs,
+      })
       setState(s => ({ ...s, phase: 'done', succeeded, failed, uncertain, errors: [...errors] }))
     } catch (e) {
       setState(s => ({
