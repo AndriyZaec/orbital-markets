@@ -206,7 +206,8 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     (order?.expiry_window ?? 0) > 0 &&
     (order?.expiry_window ?? 0) <= maxOrderExpiryWindow &&
     order?.symbol === request.symbol &&
-    (order?.side === 'bid' || order?.side === 'ask') &&
+    ((request.side === 'buy' && order?.side === 'bid') ||
+      (request.side === 'sell' && order?.side === 'ask')) &&
     Number.isFinite(amount) &&
     amount > 0 &&
     Math.abs(amount - request.amount) < 1e-12 &&

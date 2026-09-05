@@ -149,6 +149,12 @@ test('a local Pacifica agent rejects an altered builder code', async () => {
   await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
 })
 
+test('a local Pacifica agent rejects a payload side that differs from the request', async () => {
+  const request = pacificaSigningRequest()
+  request.unsigned_payload = { ...(request.unsigned_payload as object), side: 'ask' }
+  await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
+})
+
 test('a local Pacifica agent signs fee-free recovery but rejects fee-free normal close', async () => {
   const request = pacificaSigningRequest()
   const order = request.unsigned_payload as Record<string, unknown>
