@@ -563,7 +563,7 @@ func TestLiveSessionStatusReturnsTerminalRecoveryOutcome(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	now := time.Now()
 	payload, err := marshalLiveSession(&LiveSession{
-		ID: "session-recovered", Plan: &domain.ExecutionPlan{ID: "position-residual"},
+		ID: "session-recovered", Plan: &domain.ExecutionPlan{ID: "position-residual", Asset: "SOL"},
 		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
 		CreatedAt: now, UpdatedAt: now,
 	})
@@ -614,7 +614,7 @@ func TestLiveSessionStatusRejectsAnotherAccountPair(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	now := time.Now()
 	payload, err := marshalLiveSession(&LiveSession{
-		ID: "session-private", Plan: &domain.ExecutionPlan{ID: "position-residual"},
+		ID: "session-private", Plan: &domain.ExecutionPlan{ID: "position-residual", Asset: "SOL"},
 		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
 		CreatedAt: now, UpdatedAt: now,
 	})

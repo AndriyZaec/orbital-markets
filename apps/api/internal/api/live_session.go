@@ -152,10 +152,21 @@ func (m *SessionManager) remove(id string) {
 }
 
 func (m *SessionManager) claim(id string) (*LiveSession, bool, bool) {
+	return m.claimMatching(id, nil)
+}
+
+func (m *SessionManager) claimForAccounts(id, pacificaAccount, hyperliquidAccount string) (*LiveSession, bool, bool) {
+	return m.claimMatching(id, func(session *LiveSession) bool {
+		return sameVenueBinding("pacifica", session.AccountPacifica, pacificaAccount) &&
+			sameVenueBinding("hyperliquid", session.AccountHyperliquid, hyperliquidAccount)
+	})
+}
+
+func (m *SessionManager) claimMatching(id string, matches func(*LiveSession) bool) (*LiveSession, bool, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, found := m.sessions[id]
-	if !found {
+	if !found || (matches != nil && !matches(session)) {
 		return nil, false, false
 	}
 	if m.inFlight[id] {

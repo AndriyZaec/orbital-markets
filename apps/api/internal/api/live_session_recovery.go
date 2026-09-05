@@ -246,15 +246,43 @@ func (s *Server) restoreLiveSessions() {
 			}
 			continue
 		}
-		if _, err := s.liveStore.GetPosition(s.ctx, session.Plan.ID); err == nil {
-			claimed, claimErr := s.liveStore.ClaimDurableSession(s.ctx, session.ID, s.recoveryOwner, sessionRecoveryLease)
+		if err := validateDurableSessionOwnership(record, session); err != nil {
+			s.logger.Error("live recovery: session ownership mismatch", "err", err, "session_id", record.ID)
+			if record.HasExposure {
+				detail := "invalid exposed session ownership: " + err.Error()
+				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
+				_ = s.liveStore.UpsertRecoveryBlockedPosition(
+					s.ctx, record.ID, record.Asset,
+					record.AccountPacifica, record.AccountHyperliquid, detail,
+				)
+			} else {
+				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", err.Error())
+			}
+			continue
+		}
+		if _, err := s.liveStore.GetPositionForAccounts(
+			s.ctx, session.Plan.ID, record.AccountPacifica, record.AccountHyperliquid,
+		); err == nil {
+			claimed, claimErr := s.liveStore.ClaimDurableSession(s.ctx, record.ID, s.recoveryOwner, sessionRecoveryLease)
 			if claimErr == nil && claimed {
 				_ = s.liveStore.FinishDurableSessionOwned(
-					s.ctx, session.ID, s.recoveryOwner, "already_persisted", "position already persisted")
+					s.ctx, record.ID, s.recoveryOwner, "already_persisted", "position already persisted")
 			}
 			continue
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.Error("live recovery: check position", "err", err, "session_id", session.ID)
+			s.logger.Error("live recovery: check position", "err", err, "session_id", record.ID)
+			continue
+		}
+		if _, err := s.liveStore.GetPosition(s.ctx, session.Plan.ID); err == nil {
+			detail := "position ID already belongs to another account pair"
+			_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
+			_ = s.liveStore.UpsertRecoveryBlockedPosition(
+				s.ctx, record.ID, record.Asset,
+				record.AccountPacifica, record.AccountHyperliquid, detail,
+			)
+			continue
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Error("live recovery: check conflicting position", "err", err, "session_id", record.ID)
 			continue
 		}
 

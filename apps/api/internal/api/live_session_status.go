@@ -53,11 +53,11 @@ func (s *Server) liveSessionStatusSnapshot(
 	}
 
 	session, err := unmarshalLiveSession(record.Payload)
-	if err != nil || session.Plan == nil {
+	if err != nil || validateDurableSessionOwnership(record, session) != nil {
 		return response, nil
 	}
 	position, err := s.liveStore.GetPositionForAccounts(
-		ctx, session.Plan.ID, session.AccountPacifica, session.AccountHyperliquid,
+		ctx, session.Plan.ID, record.AccountPacifica, record.AccountHyperliquid,
 	)
 	if err != nil {
 		return response, nil

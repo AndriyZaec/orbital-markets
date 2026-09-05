@@ -122,6 +122,44 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 	return session, nil
 }
 
+func validateDurableSessionOwnership(record executor.DurableSessionRecord, session *LiveSession) error {
+	if session == nil {
+		return fmt.Errorf("session payload missing")
+	}
+	if record.ID != session.ID {
+		return fmt.Errorf("session ID does not match durable envelope")
+	}
+	if !sameVenueBinding("pacifica", record.AccountPacifica, session.AccountPacifica) ||
+		!sameVenueBinding("hyperliquid", record.AccountHyperliquid, session.AccountHyperliquid) {
+		return fmt.Errorf("session accounts do not match durable envelope")
+	}
+	if session.Plan == nil {
+		return fmt.Errorf("session plan missing")
+	}
+	if record.Asset != session.Plan.Asset {
+		return fmt.Errorf("session asset does not match durable envelope")
+	}
+
+	requests := []*domain.SigningRequest{
+		session.Leg1OpenReq, session.Leg1UnwindReq,
+		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
+		session.Leg2OpenReq, session.Leg2RetryReq, session.ArmedUnwindReq,
+	}
+	for _, request := range requests {
+		if request == nil {
+			continue
+		}
+		expected := accountForVenue(request.Venue, record.AccountPacifica, record.AccountHyperliquid)
+		if expected == "" || !sameVenueBinding(request.Venue, expected, request.Account) {
+			return fmt.Errorf("%s signing request account does not match durable envelope", request.Venue)
+		}
+	}
+
+	session.AccountPacifica = strings.TrimSpace(record.AccountPacifica)
+	session.AccountHyperliquid = strings.ToLower(strings.TrimSpace(record.AccountHyperliquid))
+	return nil
+}
+
 // Persisted sessions created before account-scoped feeds did not store the
 // request account. Backfill it so an armed unwind remains usable after deploy.
 func backfillSigningRequestAccounts(session *LiveSession) {

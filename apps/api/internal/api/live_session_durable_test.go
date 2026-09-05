@@ -2,6 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,5 +150,62 @@ func TestSessionManagerAllowsOnlyOneInFlightAction(t *testing.T) {
 	manager.release("session-1")
 	if _, found, claimed := manager.claim("session-1"); !found || !claimed {
 		t.Fatal("session was not claimable after release")
+	}
+}
+
+func TestLiveAdvanceRejectsAnotherAccountPairBeforeClaim(t *testing.T) {
+	manager := NewSessionManager()
+	manager.put(&LiveSession{
+		ID: "session-1", AccountPacifica: "sol-owner", AccountHyperliquid: "0xAbC",
+		CreatedAt: time.Now(),
+	})
+	server := &Server{live: &LiveDeps{sessions: manager}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/live/advance", strings.NewReader(
+		`{"session_id":"session-1","accounts":{"pacifica":"other-owner","hyperliquid":"0xdef"}}`,
+	))
+	response := httptest.NewRecorder()
+
+	server.handleLiveAdvance(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if _, found, claimed := manager.claimForAccounts("session-1", "sol-owner", "0xabc"); !found || !claimed {
+		t.Fatal("another account pair claimed or blocked the live session")
+	}
+}
+
+func TestDurableSessionOwnershipRequiresMatchingEnvelopeAndSigningAccounts(t *testing.T) {
+	record := executor.DurableSessionRecord{
+		ID: "session-1", AccountPacifica: "sol-owner", AccountHyperliquid: "0xabc", Asset: "SOL",
+	}
+	newSession := func() *LiveSession {
+		return &LiveSession{
+			ID: "session-1", Plan: &domain.ExecutionPlan{ID: "plan-1", Asset: "SOL"},
+			AccountPacifica: "sol-owner", AccountHyperliquid: "0xAbC",
+			Leg1OpenReq: &domain.SigningRequest{Venue: "pacifica", Account: "sol-owner"},
+			Leg2OpenReq: &domain.SigningRequest{Venue: "hyperliquid", Account: "0xABC"},
+		}
+	}
+	if err := validateDurableSessionOwnership(record, newSession()); err != nil {
+		t.Fatalf("matching durable ownership rejected: %v", err)
+	}
+
+	tests := map[string]func(*LiveSession){
+		"session ID": func(session *LiveSession) { session.ID = "other-session" },
+		"account":    func(session *LiveSession) { session.AccountPacifica = "other-owner" },
+		"asset":      func(session *LiveSession) { session.Plan.Asset = "BTC" },
+		"request account": func(session *LiveSession) {
+			session.Leg2OpenReq.Account = "0xdef"
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			session := newSession()
+			mutate(session)
+			if err := validateDurableSessionOwnership(record, session); err == nil {
+				t.Fatal("expected durable ownership mismatch")
+			}
+		})
 	}
 }

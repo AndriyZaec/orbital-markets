@@ -48,6 +48,7 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		liveVenueBindingsRequest
 		SessionID     string                `json:"session_id"`
 		SignedActions []domain.SignedAction `json:"signed_actions"`
 		Abort         bool                  `json:"abort"`
@@ -60,8 +61,19 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session_id required"})
 		return
 	}
+	bindings, err := req.liveVenueBindingsRequest.resolve()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := bindings.requireAccounts(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-	sess, found, claimed := s.live.sessions.claim(req.SessionID)
+	sess, found, claimed := s.live.sessions.claimForAccounts(
+		req.SessionID, bindings.Accounts["pacifica"], bindings.Accounts["hyperliquid"],
+	)
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found or expired"})
 		return
