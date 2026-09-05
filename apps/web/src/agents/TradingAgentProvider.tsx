@@ -18,7 +18,7 @@ import {
   type PacificaApproveBuilderCodeRequest,
   type PacificaBindAgentRequest,
 } from './pacifica-agent.ts'
-import { signWithStoredTradingAgent } from './signing.ts'
+import { assertSupportedSigningVenue, signWithStoredTradingAgent } from './signing.ts'
 import {
   clearStoredTradingAgent,
   loadAfterOwnerChange,
@@ -186,6 +186,7 @@ function TradingAgentSession({
   }
 
   const sign = async (request: SigningRequest) => {
+    assertSupportedSigningVenue(request.venue)
     const currentOwner = request.venue === 'pacifica' ? pacificaOwner : hyperliquidOwner
     const matches = request.venue === 'hyperliquid'
       ? currentOwner?.toLowerCase() === request.account.toLowerCase()

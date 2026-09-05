@@ -7,10 +7,19 @@ export async function signWithStoredTradingAgent(
   storage: StorageLike,
   request: SigningRequest,
 ): Promise<SignedAction> {
+  assertSupportedSigningVenue(request.venue)
   const agent = loadStoredTradingAgent(storage, request.venue, request.account)
   if (!agent) throw new Error(`${venueName(request.venue)} authorization is not ready`)
   if (request.venue === 'pacifica') return signPacificaAgentRequest(request, agent)
   return signHyperliquidAgentRequest(request, agent)
+}
+
+export function assertSupportedSigningVenue(
+  venue: unknown,
+): asserts venue is SigningRequest['venue'] {
+  if (venue !== 'pacifica' && venue !== 'hyperliquid') {
+    throw new Error(`Unsupported signing venue: ${String(venue)}`)
+  }
 }
 
 function venueName(venue: SigningRequest['venue']): string {

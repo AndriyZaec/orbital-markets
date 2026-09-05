@@ -56,6 +56,14 @@ test('a local Pacifica agent signs the configured builder code', async () => {
   assert.equal(JSON.stringify(signed).includes(pacificaAgent().privateKey), false)
 })
 
+test('the signing dispatcher rejects an unsupported venue before loading an agent', async () => {
+  const request = { ...pacificaSigningRequest(), venue: 'aster' } as unknown as SigningRequest
+  await assert.rejects(
+    signWithStoredTradingAgent(new TestStorage(), request),
+    /Unsupported signing venue: aster/,
+  )
+})
+
 test('a local Pacifica agent signs only the prepared leverage update', async () => {
   const request = pacificaSigningRequest()
   request.id = 'leverage-1'
