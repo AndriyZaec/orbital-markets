@@ -28,6 +28,10 @@ const (
 	livePreparePreTradeBlocked       = "PRETRADE_BLOCKED"
 )
 
+func newLivePlanID() string {
+	return "plan-" + uuid.NewString()
+}
+
 // handleLivePrepare builds unsigned signing requests for a live trade.
 //
 // POST /api/v1/live/prepare
@@ -104,6 +108,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writePlanError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
+	plan.ID = newLivePlanID()
 	if !plan.Executable {
 		s.logger.Warn("live prepare: plan not executable",
 			"opportunity_id", req.OpportunityID,
