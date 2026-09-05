@@ -98,6 +98,15 @@ func TestParseRESTPositionsRejectsMissingData(t *testing.T) {
 	}
 }
 
+func TestRESTAccountParsersRejectMalformedAndNonFiniteNumbers(t *testing.T) {
+	if _, err := parseRESTPositions([]byte(`{"success":true,"data":[{"symbol":"BTC","side":"bid","amount":"wat","entry_price":"1","margin":"1"}]}`)); err == nil {
+		t.Fatal("expected malformed position amount error")
+	}
+	if _, err := parseRESTAccountInfo([]byte(`{"success":true,"data":{"account_equity":"NaN","available_to_spend":"1","available_to_withdraw":"1","total_margin_used":"0","cross_mmr":"0"}}`)); err == nil {
+		t.Fatal("expected non-finite account equity error")
+	}
+}
+
 func TestHandleLeverageAcceptsNumberAndString(t *testing.T) {
 	for name, payload := range map[string]string{
 		"number": `{"s":"VIRTUAL","l":2}`,

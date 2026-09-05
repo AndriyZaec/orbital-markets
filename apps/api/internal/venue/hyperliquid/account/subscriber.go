@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -200,10 +201,19 @@ func parseAccountState(perpRaw, spotRaw []byte) (MarginSummary, []AssetPosition,
 		return MarginSummary{}, nil, fmt.Errorf("unmarshal spotClearinghouseState: %w", err)
 	}
 
-	accountEquity := parseFloat(perp.MarginSummary.AccountValue)
-	totalMarginUsed := parseFloat(perp.MarginSummary.TotalMarginUsed)
+	accountEquity, err := parseFiniteFloat("account equity", perp.MarginSummary.AccountValue)
+	if err != nil {
+		return MarginSummary{}, nil, err
+	}
+	totalMarginUsed, err := parseFiniteFloat("total margin used", perp.MarginSummary.TotalMarginUsed)
+	if err != nil {
+		return MarginSummary{}, nil, err
+	}
 	availableBalance := accountEquity - totalMarginUsed
-	withdrawable := parseFloat(perp.Withdrawable)
+	withdrawable, err := parseFiniteFloat("withdrawable", perp.Withdrawable)
+	if err != nil {
+		return MarginSummary{}, nil, err
+	}
 
 	// Hyperliquid unified accounts keep trading USDC in spot state. The API
 	// documents spotClearinghouseState as the source of truth across spot and
@@ -212,8 +222,15 @@ func parseAccountState(perpRaw, spotRaw []byte) (MarginSummary, []AssetPosition,
 		if balance.Token != 0 && balance.Coin != "USDC" {
 			continue
 		}
-		accountEquity = parseFloat(balance.Total)
-		availableBalance = accountEquity - parseFloat(balance.Hold)
+		accountEquity, err = parseFiniteFloat("spot USDC total", balance.Total)
+		if err != nil {
+			return MarginSummary{}, nil, err
+		}
+		hold, parseErr := parseFiniteFloat("spot USDC hold", balance.Hold)
+		if parseErr != nil {
+			return MarginSummary{}, nil, parseErr
+		}
+		availableBalance = accountEquity - hold
 		break
 	}
 	for _, entry := range spot.TokenToAvailableAfterMaintenance {
@@ -223,7 +240,10 @@ func parseAccountState(perpRaw, spotRaw []byte) (MarginSummary, []AssetPosition,
 		var token int
 		var available string
 		if json.Unmarshal(entry[0], &token) == nil && token == 0 && json.Unmarshal(entry[1], &available) == nil {
-			availableBalance = parseFloat(available)
+			availableBalance, err = parseFiniteFloat("available after maintenance", available)
+			if err != nil {
+				return MarginSummary{}, nil, err
+			}
 			break
 		}
 	}
@@ -247,7 +267,10 @@ func parseAccountState(perpRaw, spotRaw []byte) (MarginSummary, []AssetPosition,
 	var positions []AssetPosition
 	for _, ap := range perp.AssetPositions {
 		p := ap.Position
-		szi := parseFloat(p.Szi)
+		szi, err := parseFiniteFloat("position size", p.Szi)
+		if err != nil {
+			return MarginSummary{}, nil, err
+		}
 		if szi == 0 {
 			continue // skip empty positions
 		}
@@ -261,15 +284,35 @@ func parseAccountState(perpRaw, spotRaw []byte) (MarginSummary, []AssetPosition,
 
 		leverage := parseLeverage(p.Leverage)
 
+		entryPrice, err := parseFiniteFloat("position entry price", p.EntryPx)
+		if err != nil {
+			return MarginSummary{}, nil, err
+		}
+		unrealizedPnL, err := parseFiniteFloat("position unrealized PnL", p.UnrealizedPnl)
+		if err != nil {
+			return MarginSummary{}, nil, err
+		}
+		marginUsed, err := parseFiniteFloat("position margin used", p.MarginUsed)
+		if err != nil {
+			return MarginSummary{}, nil, err
+		}
+		var liquidationPrice float64
+		if p.LiquidationPx != "" {
+			liquidationPrice, err = parseFiniteFloat("position liquidation price", p.LiquidationPx)
+			if err != nil {
+				return MarginSummary{}, nil, err
+			}
+		}
+
 		positions = append(positions, AssetPosition{
 			Coin:          p.Coin,
 			Side:          side,
 			Size:          size,
-			EntryPx:       parseFloat(p.EntryPx),
-			UnrealizedPnL: parseFloat(p.UnrealizedPnl),
+			EntryPx:       entryPrice,
+			UnrealizedPnL: unrealizedPnL,
 			Leverage:      leverage,
-			LiquidationPx: parseFloat(p.LiquidationPx),
-			MarginUsed:    parseFloat(p.MarginUsed),
+			LiquidationPx: liquidationPrice,
+			MarginUsed:    marginUsed,
 		})
 	}
 
@@ -294,7 +337,10 @@ func parseLeverage(raw json.RawMessage) float64 {
 	return lev.Value
 }
 
-func parseFloat(s string) float64 {
-	f, _ := strconv.ParseFloat(s, 64)
-	return f
+func parseFiniteFloat(field, value string) (float64, error) {
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("parse %s: invalid number %q", field, value)
+	}
+	return f, nil
 }

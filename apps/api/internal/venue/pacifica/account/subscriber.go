@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -236,24 +237,41 @@ func parseRESTPositions(raw []byte) ([]AccountPosition, error) {
 
 	positions := make([]AccountPosition, 0, len(resp.Data))
 	for _, p := range resp.Data {
-		amount := parseFloat(p.Amount)
+		amount, err := parseFiniteFloat("position amount", p.Amount)
+		if err != nil {
+			return nil, err
+		}
 		if amount == 0 {
 			continue
+		}
+		if p.Side != "bid" && p.Side != "ask" {
+			return nil, fmt.Errorf("invalid position side %q", p.Side)
 		}
 		side := "long"
 		if p.Side == "ask" {
 			side = "short"
 		}
+		entryPrice, err := parseFiniteFloat("position entry price", p.EntryPrice)
+		if err != nil {
+			return nil, err
+		}
+		marginUsed, err := parseFiniteFloat("position margin", p.Margin)
+		if err != nil {
+			return nil, err
+		}
 		var liquidationPrice float64
 		if p.LiquidationPrice != nil {
-			liquidationPrice = parseFloat(*p.LiquidationPrice)
+			liquidationPrice, err = parseFiniteFloat("position liquidation price", *p.LiquidationPrice)
+			if err != nil {
+				return nil, err
+			}
 		}
 		positions = append(positions, AccountPosition{
 			Symbol:     p.Symbol,
 			Side:       side,
 			Size:       amount,
-			EntryPrice: parseFloat(p.EntryPrice),
-			MarginUsed: parseFloat(p.Margin),
+			EntryPrice: entryPrice,
+			MarginUsed: marginUsed,
 			LiqPrice:   liquidationPrice,
 		})
 	}
@@ -281,12 +299,27 @@ func parseRESTAccountInfo(raw []byte) (accountInfo, error) {
 		}
 		return accountInfo{}, fmt.Errorf("fetch account: %s", resp.Error)
 	}
+	values := []struct {
+		name  string
+		value string
+	}{
+		{"account equity", resp.Data.AccountEquity},
+		{"available to spend", resp.Data.AvailableToSpend},
+		{"available to withdraw", resp.Data.AvailableToWithdraw},
+		{"total margin used", resp.Data.TotalMarginUsed},
+		{"maintenance margin", resp.Data.CrossMMR},
+	}
+	parsed := make([]float64, len(values))
+	for i, value := range values {
+		var err error
+		parsed[i], err = parseFiniteFloat(value.name, value.value)
+		if err != nil {
+			return accountInfo{}, err
+		}
+	}
 	return accountInfo{
-		Equity:              parseFloat(resp.Data.AccountEquity),
-		AvailableToSpend:    parseFloat(resp.Data.AvailableToSpend),
-		AvailableToWithdraw: parseFloat(resp.Data.AvailableToWithdraw),
-		TotalMarginUsed:     parseFloat(resp.Data.TotalMarginUsed),
-		MaintenanceMargin:   parseFloat(resp.Data.CrossMMR),
+		Equity: parsed[0], AvailableToSpend: parsed[1], AvailableToWithdraw: parsed[2],
+		TotalMarginUsed: parsed[3], MaintenanceMargin: parsed[4],
 	}, nil
 }
 
@@ -409,13 +442,21 @@ func (s *Subscriber) handleAccountInfo(data json.RawMessage) {
 		return
 	}
 
-	equity := parseFloat(info.AE)
-	available := parseFloat(info.AS)
-	withdrawable := parseFloat(info.AW)
-	marginUsed := parseFloat(info.MU)
-	maintenance := parseFloat(info.CM)
+	values := []struct {
+		name  string
+		value string
+	}{{"account equity", info.AE}, {"available to spend", info.AS}, {"available to withdraw", info.AW}, {"margin used", info.MU}, {"maintenance margin", info.CM}}
+	parsed := make([]float64, len(values))
+	for i, value := range values {
+		var err error
+		parsed[i], err = parseFiniteFloat(value.name, value.value)
+		if err != nil {
+			s.logger.Warn("pacifica: parse account_info value", "err", err)
+			return
+		}
+	}
 
-	s.state.UpdateEquityForAccount(s.account, equity, available, withdrawable, marginUsed, maintenance)
+	s.state.UpdateEquityForAccount(s.account, parsed[0], parsed[1], parsed[2], parsed[3], parsed[4])
 }
 
 // handleMarginMode processes per-symbol margin mode changes (isolated/cross).
@@ -493,9 +534,17 @@ func (s *Subscriber) handlePositions(data json.RawMessage) {
 
 	var parsed []AccountPosition
 	for _, p := range positions {
-		amount := parseFloat(p.A)
+		amount, err := parseFiniteFloat("position amount", p.A)
+		if err != nil {
+			s.logger.Warn("pacifica: parse account_positions value", "err", err)
+			return
+		}
 		if amount == 0 {
 			continue
+		}
+		if p.D != "bid" && p.D != "ask" {
+			s.logger.Warn("pacifica: invalid account_positions side", "side", p.D)
+			return
 		}
 
 		// Pacifica uses "bid" for long, "ask" for short
@@ -506,18 +555,32 @@ func (s *Subscriber) handlePositions(data json.RawMessage) {
 
 		var liqPrice float64
 		if p.L != nil {
-			liqPrice = parseFloat(*p.L)
+			liqPrice, err = parseFiniteFloat("position liquidation price", *p.L)
+			if err != nil {
+				s.logger.Warn("pacifica: parse account_positions value", "err", err)
+				return
+			}
+		}
+		entryPrice, err := parseFiniteFloat("position entry price", p.P)
+		if err != nil {
+			s.logger.Warn("pacifica: parse account_positions value", "err", err)
+			return
+		}
+		marginUsed, err := parseFiniteFloat("position margin", p.M)
+		if err != nil {
+			s.logger.Warn("pacifica: parse account_positions value", "err", err)
+			return
 		}
 
 		parsed = append(parsed, AccountPosition{
 			Symbol:        p.S,
 			Side:          side,
 			Size:          amount,
-			EntryPrice:    parseFloat(p.P),
+			EntryPrice:    entryPrice,
 			MarkPrice:     0, // not in position updates — comes from market data
 			UnrealizedPnL: 0, // not directly in this message
 			Leverage:      0, // comes from account_leverage channel
-			MarginUsed:    parseFloat(p.M),
+			MarginUsed:    marginUsed,
 			LiqPrice:      liqPrice,
 		})
 	}
@@ -552,7 +615,16 @@ func (s *Subscriber) handleLeverage(data json.RawMessage) {
 			s.logger.Warn("pacifica: parse account_leverage value", "err", err)
 			return
 		}
-		lev = parseFloat(text)
+		var parseErr error
+		lev, parseErr = parseFiniteFloat("leverage", text)
+		if parseErr != nil {
+			s.logger.Warn("pacifica: parse account_leverage value", "err", parseErr)
+			return
+		}
+	}
+	if math.IsNaN(lev) || math.IsInf(lev, 0) {
+		s.logger.Warn("pacifica: parse account_leverage value", "value", lev)
+		return
 	}
 	if lev <= 0 {
 		lev = 1
@@ -572,7 +644,10 @@ func (s *Subscriber) handleLeverage(data json.RawMessage) {
 	})
 }
 
-func parseFloat(s string) float64 {
-	f, _ := strconv.ParseFloat(s, 64)
-	return f
+func parseFiniteFloat(field, value string) (float64, error) {
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("parse %s: invalid number %q", field, value)
+	}
+	return f, nil
 }
