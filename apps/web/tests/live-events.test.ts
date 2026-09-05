@@ -5,6 +5,7 @@ import { hasActiveLiveExposure, subscribeLiveAccountEvents } from '../src/lib/li
 
 test('detects persisted live exposure that requires background monitoring', () => {
   assert.equal(hasActiveLiveExposure([{ state: 'closed' }]), false)
+  assert.equal(hasActiveLiveExposure([{ state: 'pending' }]), true)
   assert.equal(hasActiveLiveExposure([{ state: 'open' }]), true)
   assert.equal(hasActiveLiveExposure([{ state: 'degraded' }]), true)
   assert.equal(hasActiveLiveExposure([{ state: 'closing' }]), true)

@@ -15,7 +15,7 @@ const accountChannels = new Map<string, AccountChannel>()
 export function hasActiveLiveExposure(data: unknown): boolean {
   return Array.isArray(data) && data.some((position) => {
     if (!position || typeof position !== 'object' || !('state' in position)) return false
-    return position.state === 'open' || position.state === 'degraded' || position.state === 'closing'
+    return position.state === 'pending' || position.state === 'open' || position.state === 'degraded' || position.state === 'closing'
   })
 }
 
