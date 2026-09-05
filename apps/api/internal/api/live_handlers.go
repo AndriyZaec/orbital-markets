@@ -52,42 +52,42 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	s.cleanupExpiredLiveSessions()
 
 	var req struct {
-		OpportunityID      string   `json:"opportunity_id"`
-		Leverage           float64  `json:"leverage"`
-		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
-		AccountPacifica    string   `json:"account_pacifica"`
-		AccountHyperliquid string   `json:"account_hyperliquid"`
-		AgentPacifica      string   `json:"agent_pacifica"`
-		AgentHyperliquid   string   `json:"agent_hyperliquid"`
+		liveVenueBindingsRequest
+		OpportunityID     string   `json:"opportunity_id"`
+		Leverage          float64  `json:"leverage"`
+		RequestedNotional *float64 `json:"requested_notional,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+	bindings, err := req.liveVenueBindingsRequest.resolve()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := bindings.requireAccounts(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := bindings.requireAgents(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	req.AccountPacifica = bindings.Accounts["pacifica"]
+	req.AccountHyperliquid = bindings.Accounts["hyperliquid"]
+	req.AgentPacifica = bindings.Agents["pacifica"]
+	req.AgentHyperliquid = bindings.Agents["hyperliquid"]
 
 	if req.OpportunityID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "opportunity_id required"})
 		return
 	}
-	if req.AccountPacifica == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_pacifica required"})
-		return
-	}
-	if req.AccountHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_hyperliquid required"})
-		return
-	}
-	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
-		return
-	}
-	if err := s.live.validateAgentIdentity("pacifica", req.AccountPacifica, req.AgentPacifica); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := s.live.validateAgentIdentity("hyperliquid", req.AccountHyperliquid, req.AgentHyperliquid); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
+	for _, venue := range currentLiveVenues {
+		if err := s.live.validateAgentIdentity(venue, bindings.Accounts[venue], bindings.Agents[venue]); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
@@ -124,7 +124,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Acquire account-scoped feeds. Different wallet pairs can prepare in
 	// parallel, while the same accounts remain serialized through this flow.
-	accounts, err := s.live.acquireAccounts(req.AccountPacifica, req.AccountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(bindings.Accounts, false)
 	if err != nil {
 		s.logger.Warn("live prepare: account feeds unavailable", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
@@ -135,9 +135,9 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	defer unlockAccounts()
 	req.AccountPacifica = accountSnapshot(accounts, "pacifica").Account
 	req.AccountHyperliquid = accountSnapshot(accounts, "hyperliquid").Account
-	authorized, err := s.live.agentPairAuthorizationMatches(
-		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
-	)
+	bindings.Accounts["pacifica"] = req.AccountPacifica
+	bindings.Accounts["hyperliquid"] = req.AccountHyperliquid
+	authorized, err := s.live.agentAuthorizationsMatch(r.Context(), bindings.Accounts, bindings.Agents)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
 		return
@@ -769,9 +769,14 @@ func accountSnapshot(accounts *liveAccountContext, venue string) liveAccountSnap
 //
 // GET /api/v1/live/balances?account_pacifica=...&account_hyperliquid=...
 func (s *Server) handleLiveBalances(w http.ResponseWriter, r *http.Request) {
+	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	pac, hl := s.liveAccountStatusesFor(
-		r.URL.Query().Get("account_pacifica"),
-		r.URL.Query().Get("account_hyperliquid"),
+		bindings.Accounts["pacifica"],
+		bindings.Accounts["hyperliquid"],
 		displayFreshness,
 	)
 	writeJSON(w, http.StatusOK, map[string]venueAccountStatus{
@@ -834,24 +839,22 @@ func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	var req struct {
-		AccountPacifica    string `json:"account_pacifica"`
-		AccountHyperliquid string `json:"account_hyperliquid"`
-	}
+	var req liveVenueBindingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.AccountPacifica == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_pacifica required"})
+	bindings, err := req.resolve()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if req.AccountHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_hyperliquid required"})
+	if err := bindings.requireAccounts(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	accounts, err := s.live.acquireAccounts(req.AccountPacifica, req.AccountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(bindings.Accounts, false)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 		return
@@ -935,15 +938,16 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 }
 
 func liveAccountsFromQuery(w http.ResponseWriter, r *http.Request) (string, string, bool) {
-	pacificaAccount := strings.TrimSpace(r.URL.Query().Get("account_pacifica"))
-	hyperliquidAccount := strings.TrimSpace(r.URL.Query().Get("account_hyperliquid"))
-	if pacificaAccount == "" || hyperliquidAccount == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "account_pacifica and account_hyperliquid required",
-		})
+	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return "", "", false
 	}
-	return pacificaAccount, hyperliquidAccount, true
+	if err := bindings.requireAccounts(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return "", "", false
+	}
+	return bindings.Accounts["pacifica"], bindings.Accounts["hyperliquid"], true
 }
 
 // handleLiveClose prepares close signing requests for a single live position.
@@ -968,22 +972,24 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		AccountPacifica    string `json:"account_pacifica"`
-		AccountHyperliquid string `json:"account_hyperliquid"`
-		AgentPacifica      string `json:"agent_pacifica"`
-		AgentHyperliquid   string `json:"agent_hyperliquid"`
-	}
+	var req liveVenueBindingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.AccountPacifica == "" || req.AccountHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "account_pacifica and account_hyperliquid required",
-		})
+	bindings, err := req.resolve()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := bindings.requireAccounts(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	req.AccountPacifica = bindings.Accounts["pacifica"]
+	req.AccountHyperliquid = bindings.Accounts["hyperliquid"]
+	req.AgentPacifica = bindings.Agents["pacifica"]
+	req.AgentHyperliquid = bindings.Agents["hyperliquid"]
 	pos, err := s.liveStore.GetPositionForAccounts(
 		r.Context(), id, req.AccountPacifica, req.AccountHyperliquid,
 	)
@@ -1028,13 +1034,11 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required when venue exposure remains"})
+	if err := bindings.requireAgents(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error() + " when venue exposure remains"})
 		return
 	}
-	authorized, err := s.live.agentPairAuthorizationMatches(
-		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
-	)
+	authorized, err := s.live.agentAuthorizationsMatch(r.Context(), bindings.Accounts, bindings.Agents)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
 		return
@@ -1345,29 +1349,29 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		AccountPacifica    string `json:"account_pacifica"`
-		AccountHyperliquid string `json:"account_hyperliquid"`
-		AgentPacifica      string `json:"agent_pacifica"`
-		AgentHyperliquid   string `json:"agent_hyperliquid"`
-	}
+	var req liveVenueBindingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.AccountPacifica == "" || req.AccountHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "account_pacifica and account_hyperliquid required",
-		})
+	bindings, err := req.resolve()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if req.AgentPacifica == "" || req.AgentHyperliquid == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_pacifica and agent_hyperliquid required"})
+	if err := bindings.requireAccounts(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	authorized, err := s.live.agentPairAuthorizationMatches(
-		r.Context(), req.AccountPacifica, req.AccountHyperliquid, req.AgentPacifica, req.AgentHyperliquid,
-	)
+	if err := bindings.requireAgents(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	req.AccountPacifica = bindings.Accounts["pacifica"]
+	req.AccountHyperliquid = bindings.Accounts["hyperliquid"]
+	req.AgentPacifica = bindings.Agents["pacifica"]
+	req.AgentHyperliquid = bindings.Agents["hyperliquid"]
+	authorized, err := s.live.agentAuthorizationsMatch(r.Context(), bindings.Accounts, bindings.Agents)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
 		return

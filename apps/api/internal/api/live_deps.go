@@ -134,11 +134,29 @@ func (d *LiveDeps) agentPairAuthorizationMatches(
 	ctx context.Context,
 	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
 ) (bool, error) {
-	pacificaMatches, err := d.agentAuthorizationMatches(ctx, "pacifica", accountPacifica, agentPacifica)
-	if err != nil || !pacificaMatches {
-		return pacificaMatches, err
+	return d.agentAuthorizationsMatch(ctx, map[string]string{
+		"pacifica": accountPacifica, "hyperliquid": accountHyperliquid,
+	}, map[string]string{
+		"pacifica": agentPacifica, "hyperliquid": agentHyperliquid,
+	})
+}
+
+func (d *LiveDeps) agentAuthorizationsMatch(
+	ctx context.Context,
+	accounts, agents map[string]string,
+) (bool, error) {
+	venues := make([]string, 0, len(accounts))
+	for venue := range accounts {
+		venues = append(venues, venue)
 	}
-	return d.agentAuthorizationMatches(ctx, "hyperliquid", accountHyperliquid, agentHyperliquid)
+	sort.Strings(venues)
+	for _, venue := range venues {
+		matches, err := d.agentAuthorizationMatches(ctx, venue, accounts[venue], agents[venue])
+		if err != nil || !matches {
+			return matches, err
+		}
+	}
+	return true, nil
 }
 
 type liveAccountContext struct {

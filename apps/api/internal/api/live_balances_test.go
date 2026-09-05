@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +79,41 @@ func TestLiveBalancesReturnEachMatchingWalletPair(t *testing.T) {
 
 	assertBalancePair(t, server, "pacifica-a", "0xAaA", 46.16, 99.60)
 	assertBalancePair(t, server, "pacifica-b", "0xBbB", 21, 55)
+}
+
+func TestLiveAccountHandlersAcceptVenueMaps(t *testing.T) {
+	server := newAccountScopedBalanceServer(t, map[string]liveAccountSnapshot{
+		"pacifica-a": connectedSnapshot("pacifica", "pacifica-a", 46.16, 40),
+	}, map[string]liveAccountSnapshot{
+		"0xaaa": connectedSnapshot("hyperliquid", "0xaaa", 99.60, 99.60),
+	})
+
+	ensure := httptest.NewRequest(http.MethodPost, "/api/v1/live/accounts/ensure", strings.NewReader(
+		`{"accounts":{"pacifica":"pacifica-a","hyperliquid":"0xAaA"}}`,
+	))
+	ensureResponse := httptest.NewRecorder()
+	server.handleLiveAccountsEnsure(ensureResponse, ensure)
+	if ensureResponse.Code != http.StatusOK {
+		t.Fatalf("ensure status = %d body = %s", ensureResponse.Code, ensureResponse.Body.String())
+	}
+
+	query := url.Values{
+		"accounts[pacifica]":    {"pacifica-a"},
+		"accounts[hyperliquid]": {"0xAaA"},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?"+query.Encode(), nil)
+	response := httptest.NewRecorder()
+	server.handleLiveBalances(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("balances status = %d body = %s", response.Code, response.Body.String())
+	}
+	var balances map[string]venueAccountStatus
+	if err := json.Unmarshal(response.Body.Bytes(), &balances); err != nil {
+		t.Fatal(err)
+	}
+	if balances["pacifica"].Equity != 46.16 || balances["hyperliquid"].Equity != 99.60 {
+		t.Fatalf("unexpected map-bound balances: %+v", balances)
+	}
 }
 
 func assertBalancePair(t *testing.T, server *Server, pacifica, hyperliquid string, pacEquity, hlEquity float64) {
