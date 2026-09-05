@@ -3,6 +3,7 @@ import { apiError, apiFetch } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
+import { summarizeKillPreparation } from '@/lib/kill-switch'
 
 export type KillPhase =
   | 'idle'
@@ -121,18 +122,32 @@ export function useKillSwitch() {
       }
 
       const requests = data.signing_requests || []
+      const preparation = summarizeKillPreparation(data.targeted, requests.length, data.positions)
+      if (requests.length === 0) {
+        setState(s => ({
+          ...s,
+          phase: 'error',
+          targeted: data.targeted,
+          positions: data.positions,
+          failed: preparation.failed,
+          errors: preparation.errors,
+        }))
+        return
+      }
       setState(s => ({
         ...s,
         phase: 'signing',
         targeted: data.targeted,
         totalRequests: requests.length,
         positions: data.positions,
+        failed: preparation.failed,
+        errors: preparation.errors,
       }))
 
       // Sign every reduce-only action before submitting any venue order.
-      const errors: string[] = []
+      const errors: string[] = [...preparation.errors]
       let succeeded = 0
-      let failed = 0
+      let failed = preparation.failed
       let uncertain = 0
       const signedActions: Array<{ request: SigningRequest; signed: SignedAction }> = []
       for (let i = 0; i < requests.length; i++) {

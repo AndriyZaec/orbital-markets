@@ -413,6 +413,43 @@ func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	}
 }
 
+func TestKillSwitchUsesFreshVenueExposureForDegradedPosition(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	registryCtx, cancelRegistry := context.WithCancel(context.Background())
+	t.Cleanup(cancelRegistry)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {
+				Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt,
+				Positions: []liveAccountPosition{{Symbol: "SOL", Side: "long", Size: 1}},
+			},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
+	}))
+	response := httptest.NewRecorder()
+
+	server.handleLiveKill(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		SigningRequests []domain.SigningRequest `json:"signing_requests"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.SigningRequests) != 1 || body.SigningRequests[0].Amount != 1 {
+		t.Fatalf("signing requests = %+v, want fresh residual amount 1", body.SigningRequests)
+	}
+}
+
 func TestKillSwitchTargetsResolvedClosingPosition(t *testing.T) {
 	server, database := newResidualExposureServer(t)
 	if _, err := database.Exec(`

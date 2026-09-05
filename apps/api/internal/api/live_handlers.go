@@ -1454,9 +1454,23 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		closeFills := fills
+		venueDerived := false
+		if (pos.State == string(executor.ExecStateDegraded) || pos.State == string(executor.ExecStateClosing)) && s.live.accounts != nil {
+			closeFills, err = s.freshVenueExposureFills(
+				ctx, &pos, req.AccountPacifica, req.AccountHyperliquid,
+			)
+			if err != nil {
+				pc.Error = err.Error()
+				posResults = append(posResults, pc)
+				continue
+			}
+			venueDerived = true
+		}
+
 		legsClosed := 0
-		for _, fill := range fills {
-			if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
+		for _, fill := range closeFills {
+			if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
 				continue
 			}
 			pc.Exposure = append(pc.Exposure, struct {
