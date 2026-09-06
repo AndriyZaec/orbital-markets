@@ -108,7 +108,7 @@ func TestBuildOpenPayloadRejectsOrdersBelowMinimumNotional(t *testing.T) {
 	_, err := BuildOpenPayload(
 		payloadTestRules, testUser, testSigner, "BTCUSDT", domain.SideLong,
 		0.0019, 100, "client-order",
-		BuilderConfig{Address: testBuilder, FeeRate: "0.0002"},
+		&BuilderConfig{Address: testBuilder, FeeRate: "0.0002"},
 	)
 	if err == nil || !strings.Contains(err.Error(), "below minimum") {
 		t.Fatalf("error = %v, want minimum-notional rejection", err)
@@ -119,10 +119,27 @@ func TestBuildOpenPayloadRejectsUnsafeBuilderFee(t *testing.T) {
 	_, err := BuildOpenPayload(
 		payloadTestRules, testUser, testSigner, "BTCUSDT", domain.SideLong,
 		1, 100, "client-order",
-		BuilderConfig{Address: testBuilder, FeeRate: "0.0011"},
+		&BuilderConfig{Address: testBuilder, FeeRate: "0.0011"},
 	)
 	if err == nil || !strings.Contains(err.Error(), "builder fee rate") {
 		t.Fatalf("error = %v, want builder-fee rejection", err)
+	}
+}
+
+func TestBuildOpenPayloadAllowsDeferredBuilderAttribution(t *testing.T) {
+	request, err := BuildOpenPayload(
+		payloadTestRules, testUser, testSigner, "BTCUSDT", domain.SideLong,
+		1, 100, "client-order", nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unsigned AsterUnsignedOrder
+	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(unsigned.Message.Msg, "builder=") || strings.Contains(unsigned.Message.Msg, "feeRate=") {
+		t.Fatalf("query contains deferred builder attribution: %s", unsigned.Message.Msg)
 	}
 }
 

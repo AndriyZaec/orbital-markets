@@ -81,14 +81,16 @@ func BuildOpenPayload(
 	side domain.Side,
 	amount, price float64,
 	clientOrderID string,
-	builder BuilderConfig,
+	builder *BuilderConfig,
 ) (*domain.SigningRequest, error) {
-	if err := validateBuilder(builder); err != nil {
-		return nil, err
+	if builder != nil {
+		if err := validateBuilder(*builder); err != nil {
+			return nil, err
+		}
 	}
 	return buildPayload(
 		rules, user, signer, symbol, side, amount, price, clientOrderID,
-		false, "open", openSlippageBPS, &builder, time.Now(), nextAsterNonce(),
+		false, "open", openSlippageBPS, builder, time.Now(), nextAsterNonce(),
 	)
 }
 
