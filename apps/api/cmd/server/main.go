@@ -13,6 +13,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
@@ -44,8 +45,9 @@ func main() {
 
 	pac := pacifica.New(logger)
 	hl := hyperliquid.New(logger)
+	ast := aster.New(logger)
 
-	sc := scanner.New(logger, pac, hl)
+	sc := scanner.New(logger, pac, hl, ast)
 
 	// Snapshot recorder + retention janitor + rollup aggregator
 	recorder := db.NewRecorder(database, sc, logger)
@@ -65,6 +67,7 @@ func main() {
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
+	go ast.Run(ctx)
 	go sc.Run(ctx, 60*time.Second)
 	go recorder.Run(ctx)
 	go janitor.Run(ctx)
