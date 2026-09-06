@@ -38,6 +38,12 @@ const hyperliquidAgent: StoredTradingAgent = {
   authorizedAt: '2026-08-10T12:00:00.000Z',
 }
 
+const asterAgent: StoredTradingAgent = {
+  ...hyperliquidAgent,
+  venue: 'aster',
+  expiresAt: '2099-08-10T12:00:00.000Z',
+}
+
 test('stored trading agents round trip under a normalized owner key', () => {
   const storage = new MemoryStorage()
   saveStoredTradingAgent(storage, hyperliquidAgent)
@@ -50,6 +56,19 @@ test('stored trading agents round trip under a normalized owner key', () => {
     loadStoredTradingAgent(storage, 'hyperliquid', hyperliquidAgent.ownerAddress.toUpperCase()),
     { ...hyperliquidAgent, ownerAddress: hyperliquidAgent.ownerAddress.toLowerCase() },
   )
+})
+
+test('Aster agents use normalized EVM ownership and require a live expiry', () => {
+  const storage = new MemoryStorage()
+  saveStoredTradingAgent(storage, asterAgent)
+
+  assert.deepEqual(
+    loadStoredTradingAgent(storage, 'aster', asterAgent.ownerAddress.toUpperCase()),
+    { ...asterAgent, ownerAddress: asterAgent.ownerAddress.toLowerCase() },
+  )
+
+  saveStoredTradingAgent(storage, { ...asterAgent, expiresAt: '2020-01-01T00:00:00.000Z' })
+  assert.equal(loadStoredTradingAgent(storage, 'aster', asterAgent.ownerAddress), null)
 })
 
 test('malformed and key-mismatched records are deleted', () => {

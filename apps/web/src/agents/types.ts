@@ -1,6 +1,6 @@
 import type { SignedAction, SigningRequest } from '@/types/signing'
 
-export type Venue = 'hyperliquid' | 'pacifica'
+export type Venue = 'hyperliquid' | 'pacifica' | 'aster'
 
 export interface StoredTradingAgent {
   version: 1
@@ -9,6 +9,7 @@ export interface StoredTradingAgent {
   agentAddress: string
   privateKey: string
   authorizedAt: string
+  expiresAt?: string
   builderAddress?: string
   builderCode?: string
 }
@@ -24,6 +25,7 @@ export interface TradingAgentState {
 export interface TradingAgentManager {
   hyperliquid: TradingAgentState
   pacifica: TradingAgentState
+  aster: TradingAgentState
   authorize(venue: Venue): Promise<void>
   sign(request: SigningRequest): Promise<SignedAction>
   clear(venue: Venue): void

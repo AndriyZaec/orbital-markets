@@ -37,6 +37,6 @@ export function liveAccountsQuery(
 
 export function liveAccountsKey(accounts: VenueAddressMap): string {
   return JSON.stringify(Object.entries(accounts)
-    .map(([venue, account]) => [venue, venue === 'hyperliquid' ? account.toLowerCase() : account] as const)
+    .map(([venue, account]) => [venue, venue === 'hyperliquid' || venue === 'aster' ? account.toLowerCase() : account] as const)
     .sort(([left], [right]) => left.localeCompare(right)))
 }

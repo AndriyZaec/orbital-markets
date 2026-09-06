@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useAccount, useSignTypedData, useSwitchChain } from 'wagmi'
-import { mainnet } from 'wagmi/chains'
+import { bsc, mainnet } from 'wagmi/chains'
 
 import { apiError, apiFetch } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
+import {
+  authorizeAsterAgent,
+  type AsterApproveAgentRequest,
+} from './aster-agent.ts'
 import {
   approveHyperliquidBuilderFee,
   authorizeHyperliquidAgent,
@@ -43,9 +47,11 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
   const { switchChainAsync } = useSwitchChain()
   const pacificaOwner = solana.connected && solana.publicKey ? solana.publicKey.toBase58() : null
   const hyperliquidOwner = evm.isConnected && evm.address ? evm.address : null
-  const previousOwners = useRef<{ pacifica: string | null; hyperliquid: string | null }>({
+  const asterOwner = hyperliquidOwner
+  const previousOwners = useRef<{ pacifica: string | null; hyperliquid: string | null; aster: string | null }>({
     pacifica: null,
     hyperliquid: null,
+    aster: null,
   })
   useEffect(() => {
     loadAfterOwnerChange(browserStorage(), 'pacifica', previousOwners.current.pacifica, pacificaOwner)
@@ -57,12 +63,18 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
     previousOwners.current.hyperliquid = hyperliquidOwner
   }, [hyperliquidOwner])
 
+  useEffect(() => {
+    loadAfterOwnerChange(browserStorage(), 'aster', previousOwners.current.aster, asterOwner)
+    previousOwners.current.aster = asterOwner
+  }, [asterOwner])
+
   return (
     <TradingAgentSession
       pacificaOwner={pacificaOwner}
       hyperliquidOwner={hyperliquidOwner}
+      asterOwner={asterOwner}
       chainId={evm.chainId}
-      switchToAuthorizationChain={() => switchChainAsync({ chainId: mainnet.id })}
+      switchToAuthorizationChain={(targetChainId) => switchChainAsync({ chainId: targetChainId })}
       solanaSignMessage={solana.signMessage}
       signTypedData={signTypedDataAsync}
     >
@@ -75,6 +87,7 @@ function TradingAgentSession({
   children,
   pacificaOwner,
   hyperliquidOwner,
+  asterOwner,
   chainId,
   switchToAuthorizationChain,
   solanaSignMessage,
@@ -83,32 +96,39 @@ function TradingAgentSession({
   children: ReactNode
   pacificaOwner: string | null
   hyperliquidOwner: string | null
+  asterOwner: string | null
   chainId?: number
-  switchToAuthorizationChain: () => Promise<unknown>
+  switchToAuthorizationChain: (chainId: typeof mainnet.id | typeof bsc.id) => Promise<unknown>
   solanaSignMessage?: (message: Uint8Array) => Promise<Uint8Array>
   signTypedData: ReturnType<typeof useSignTypedData>['signTypedDataAsync']
 }) {
   const [pacifica, setPacifica] = useState(() => initialState('pacifica', pacificaOwner))
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
-  const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner })
+  const [aster, setAster] = useState(() => initialState('aster', asterOwner))
+  const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
-  owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner }
+  owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
   if (pacifica.ownerAddress !== pacificaOwner) {
     setPacifica(initialState('pacifica', pacificaOwner))
   }
   if (hyperliquid.ownerAddress?.toLowerCase() !== hyperliquidOwner?.toLowerCase()) {
     setHyperliquid(initialState('hyperliquid', hyperliquidOwner))
   }
+  if (aster.ownerAddress?.toLowerCase() !== asterOwner?.toLowerCase()) {
+    setAster(initialState('aster', asterOwner))
+  }
 
   const authorize = async (venue: Venue) => {
-    const setState = venue === 'pacifica' ? setPacifica : setHyperliquid
-    const ownerAddress = venue === 'pacifica' ? pacificaOwner : hyperliquidOwner
+    const setState = venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
+    const ownerAddress = venue === 'pacifica' ? pacificaOwner : venue === 'aster' ? asterOwner : hyperliquidOwner
     if (!ownerAddress) throw new Error(`Connect the ${venue} owner wallet first`)
     setState({ venue, ownerAddress, agentAddress: null, status: 'authorizing', error: null })
     try {
       const agent = venue === 'pacifica'
         ? await authorizePacifica(ownerAddress)
-        : await authorizeHyperliquid(ownerAddress)
+        : venue === 'aster'
+          ? await authorizeAster(ownerAddress)
+          : await authorizeHyperliquid(ownerAddress)
       if (!ownerStillCurrent(venue, ownerAddress, owners.current)) {
         clearStoredTradingAgent(browserStorage(), venue, ownerAddress)
         throw new Error(`${venue} owner changed during agent authorization`)
@@ -136,7 +156,7 @@ function TradingAgentSession({
   }
 
   const authorizeHyperliquid = async (ownerAddress: string) => {
-    if (chainId !== mainnet.id) await switchToAuthorizationChain()
+    if (chainId !== mainnet.id) await switchToAuthorizationChain(mainnet.id)
     return authorizeHyperliquidAgent({
       storage: browserStorage(),
       ownerAddress,
@@ -146,6 +166,20 @@ function TradingAgentSession({
       signBuilderTypedData: (typedData) => signTypedData(typedData),
       relay: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve', request),
       relayBuilderApproval: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve-builder-fee', request),
+    })
+  }
+
+  const authorizeAster = async (ownerAddress: string) => {
+    if (chainId !== bsc.id) await switchToAuthorizationChain(bsc.id)
+    if (!ownerStillCurrent('aster', ownerAddress, owners.current)) {
+      throw new Error('Aster owner changed during agent authorization')
+    }
+    return authorizeAsterAgent({
+      storage: browserStorage(),
+      ownerAddress,
+      signTypedData: (typedData) => signTypedData(typedData),
+      relay: (request) => relayAuthorization('/api/v1/live/agents/aster/approve', request),
+      ownerStillCurrent: () => ownerStillCurrent('aster', ownerAddress, owners.current),
     })
   }
 
@@ -165,7 +199,7 @@ function TradingAgentSession({
       if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
         throw new Error('Hyperliquid owner changed during builder approval')
       }
-      if (chainId !== mainnet.id) await switchToAuthorizationChain()
+      if (chainId !== mainnet.id) await switchToAuthorizationChain(mainnet.id)
       if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
         throw new Error('Hyperliquid owner changed during builder approval')
       }
@@ -187,10 +221,12 @@ function TradingAgentSession({
 
   const sign = async (request: SigningRequest) => {
     assertSupportedSigningVenue(request.venue)
-    const currentOwner = request.venue === 'pacifica' ? pacificaOwner : hyperliquidOwner
-    const matches = request.venue === 'hyperliquid'
-      ? currentOwner?.toLowerCase() === request.account.toLowerCase()
-      : currentOwner === request.account
+    const currentOwner = request.venue === 'pacifica'
+      ? pacificaOwner
+      : request.venue === 'aster' ? asterOwner : hyperliquidOwner
+    const matches = request.venue === 'pacifica'
+      ? currentOwner === request.account
+      : currentOwner?.toLowerCase() === request.account.toLowerCase()
     if (!matches) throw new Error(`${request.venue} owner changed during execution`)
     if (request.venue === 'hyperliquid' && (request.action === 'open' || request.action === 'close')) {
       await ensureHyperliquidBuilderFee(request.account)
@@ -202,14 +238,14 @@ function TradingAgentSession({
   }
 
   const clear = (venue: Venue) => {
-    const ownerAddress = venue === 'pacifica' ? pacificaOwner : hyperliquidOwner
+    const ownerAddress = venue === 'pacifica' ? pacificaOwner : venue === 'aster' ? asterOwner : hyperliquidOwner
     if (ownerAddress) clearStoredTradingAgent(browserStorage(), venue, ownerAddress)
-    const setState = venue === 'pacifica' ? setPacifica : setHyperliquid
+    const setState = venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
     setState(missingState(venue, ownerAddress))
   }
 
   return (
-    <TradingAgentContext.Provider value={{ pacifica, hyperliquid, authorize, sign, clear }}>
+    <TradingAgentContext.Provider value={{ pacifica, hyperliquid, aster, authorize, sign, clear }}>
       {children}
     </TradingAgentContext.Provider>
   )
@@ -218,12 +254,12 @@ function TradingAgentSession({
 function ownerStillCurrent(
   venue: Venue,
   expectedOwner: string,
-  owners: { pacifica: string | null; hyperliquid: string | null },
+  owners: { pacifica: string | null; hyperliquid: string | null; aster: string | null },
 ): boolean {
-  const current = venue === 'pacifica' ? owners.pacifica : owners.hyperliquid
-  return venue === 'hyperliquid'
-    ? current?.toLowerCase() === expectedOwner.toLowerCase()
-    : current === expectedOwner
+  const current = venue === 'pacifica' ? owners.pacifica : venue === 'aster' ? owners.aster : owners.hyperliquid
+  return venue === 'pacifica'
+    ? current === expectedOwner
+    : current?.toLowerCase() === expectedOwner.toLowerCase()
 }
 
 function initialState(venue: Venue, ownerAddress: string | null): TradingAgentState {
@@ -244,7 +280,7 @@ function initialState(venue: Venue, ownerAddress: string | null): TradingAgentSt
 
 async function relayAuthorization(
   path: string,
-  request: PacificaBindAgentRequest | PacificaApproveBuilderCodeRequest | HyperliquidApproveAgentRequest | HyperliquidApproveBuilderFeeRequest,
+  request: AsterApproveAgentRequest | PacificaBindAgentRequest | PacificaApproveBuilderCodeRequest | HyperliquidApproveAgentRequest | HyperliquidApproveBuilderFeeRequest,
 ): Promise<void> {
   const response = await apiFetch(path, {
     method: 'POST',

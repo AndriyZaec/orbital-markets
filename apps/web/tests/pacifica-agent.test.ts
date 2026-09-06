@@ -57,10 +57,10 @@ test('a local Pacifica agent signs the configured builder code', async () => {
 })
 
 test('the signing dispatcher rejects an unsupported venue before loading an agent', async () => {
-  const request = { ...pacificaSigningRequest(), venue: 'aster' } as unknown as SigningRequest
+  const request = { ...pacificaSigningRequest(), venue: 'dydx' } as unknown as SigningRequest
   await assert.rejects(
     signWithStoredTradingAgent(new TestStorage(), request),
-    /Unsupported signing venue: aster/,
+    /Unsupported signing venue: dydx/,
   )
 })
 

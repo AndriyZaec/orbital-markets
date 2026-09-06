@@ -12,12 +12,16 @@ export interface StorageLike {
 }
 
 function normalizeOwner(venue: Venue, ownerAddress: string): string {
-  return venue === 'hyperliquid' ? ownerAddress.toLowerCase() : ownerAddress
+  return isEVMVenue(venue) ? ownerAddress.toLowerCase() : ownerAddress
+}
+
+function isEVMVenue(venue: Venue): boolean {
+  return venue === 'hyperliquid' || venue === 'aster'
 }
 
 function keyPairMatches(agent: StoredTradingAgent): boolean {
   try {
-    if (agent.venue === 'hyperliquid') {
+    if (isEVMVenue(agent.venue)) {
       if (!/^0x[0-9a-fA-F]{64}$/.test(agent.privateKey)) return false
       return privateKeyToAccount(agent.privateKey as Hex).address.toLowerCase() === agent.agentAddress.toLowerCase()
     }
@@ -40,7 +44,7 @@ function isStoredTradingAgent(value: unknown): value is StoredTradingAgent {
   const agent = value as Partial<StoredTradingAgent>
   return (
     agent.version === 1 &&
-    (agent.venue === 'hyperliquid' || agent.venue === 'pacifica') &&
+    (agent.venue === 'hyperliquid' || agent.venue === 'pacifica' || agent.venue === 'aster') &&
     typeof agent.ownerAddress === 'string' &&
     agent.ownerAddress.length > 0 &&
     typeof agent.agentAddress === 'string' &&
@@ -50,7 +54,8 @@ function isStoredTradingAgent(value: unknown): value is StoredTradingAgent {
     (agent.builderAddress === undefined || /^0x[0-9a-fA-F]{40}$/.test(agent.builderAddress)) &&
     (agent.builderCode === undefined || /^[A-Za-z0-9]{3,16}$/.test(agent.builderCode)) &&
     typeof agent.authorizedAt === 'string' &&
-    Number.isFinite(Date.parse(agent.authorizedAt))
+    Number.isFinite(Date.parse(agent.authorizedAt)) &&
+    (agent.expiresAt === undefined || Number.isFinite(Date.parse(agent.expiresAt)))
   )
 }
 
@@ -77,6 +82,7 @@ export function loadStoredTradingAgent(
       !isStoredTradingAgent(agent) ||
       agent.venue !== venue ||
       normalizeOwner(venue, agent.ownerAddress) !== normalizeOwner(venue, ownerAddress) ||
+      (venue === 'aster' && (!agent.expiresAt || Date.parse(agent.expiresAt) <= Date.now())) ||
       !keyPairMatches(agent)
     ) {
       storage.removeItem(key)

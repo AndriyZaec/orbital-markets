@@ -3,7 +3,7 @@ export interface SigningRequest {
   client_order_id: string
   position_id?: string
   leg?: number
-  venue: 'pacifica' | 'hyperliquid'
+  venue: 'pacifica' | 'hyperliquid' | 'aster'
   action: 'open' | 'close' | 'unwind' | 'emergency_close' | 'update_leverage'
   account: string
   signer?: string
