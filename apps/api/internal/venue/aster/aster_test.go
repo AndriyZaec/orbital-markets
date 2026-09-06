@@ -38,6 +38,9 @@ func TestRefreshBuildsHourlyUSDTPerpetualSnapshots(t *testing.T) {
 	if snapshot.BidSize != 200 || snapshot.AskSize != 303 {
 		t.Fatalf("BBO notionals = %v/%v, want 200/303", snapshot.BidSize, snapshot.AskSize)
 	}
+	if snapshot.OpenInterest != 6013.199 {
+		t.Fatalf("open interest = %v, want 6013.199", snapshot.OpenInterest)
+	}
 	rules, ok := adapter.OrderRules("BTCUSDT")
 	if !ok {
 		t.Fatal("BTCUSDT order rules unavailable")
@@ -96,7 +99,7 @@ func TestStreamUpdatesPreserveIndependentFreshnessAndOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	timestamp := time.Now().UnixMilli()
-	mark := fmt.Sprintf(`{"stream":"!markPrice@arr@1s","data":[{"E":%d,"s":"BTCUSDT","p":"110","i":"109","r":"0.0016"}]}`, timestamp)
+	mark := fmt.Sprintf(`{"stream":"!markPrice@arr@1s","data":[{"e":"markPriceUpdate","E":%d,"s":"BTCUSDT","p":"110","i":"109","r":"0.0016"}]}`, timestamp)
 	book := fmt.Sprintf(`{"stream":"!bookTicker","data":{"u":11,"E":%d,"T":%d,"s":"BTCUSDT","b":"109","B":"4","a":"110","A":"5"}}`, timestamp+2, timestamp+1)
 	if err := adapter.applyStreamMessage([]byte(mark)); err != nil {
 		t.Fatal(err)
@@ -136,6 +139,23 @@ func TestStreamUpdatesPreserveIndependentFreshnessAndOrder(t *testing.T) {
 	}
 }
 
+func TestBookTickerStreamSeparatesEventTypeFromEventTime(t *testing.T) {
+	adapter := newTestAdapter("http://unused")
+	adapter.markets["BTCUSDT"] = marketState{
+		marketMetadata: marketMetadata{asset: "BTC", fundingIntervalHours: 8},
+	}
+	const timestamp int64 = 1788727432100
+	message := `{"stream":"!bookTicker","data":{"e":"bookTicker","u":530721740845,"s":"BTCUSDT","b":"109","B":"4","a":"110","A":"5","T":1788727432100,"E":1788727432119}}`
+
+	if err := adapter.applyStreamMessage([]byte(message)); err != nil {
+		t.Fatalf("Aster book ticker rejected: %v", err)
+	}
+	state := adapter.markets["BTCUSDT"]
+	if state.bookUpdateID != 530721740845 || !state.bookUpdatedAt.Equal(time.UnixMilli(timestamp)) {
+		t.Fatalf("book sequence/time = %d/%s", state.bookUpdateID, state.bookUpdatedAt)
+	}
+}
+
 func TestFundingParserAcceptsZeroAndRejectsNonFiniteValues(t *testing.T) {
 	if value, ok := finiteDecimal("0"); !ok || value != 0 {
 		t.Fatalf("zero funding parsed as %v, valid=%t", value, ok)
@@ -170,6 +190,11 @@ func newMarketServer(t *testing.T) (*httptest.Server, int64) {
 			_, _ = fmt.Fprintf(response, `[{"lastUpdateId":10,"symbol":"BTCUSDT","bidPrice":"100","bidQty":"2","askPrice":"101","askQty":"3","time":%d}]`, timestamp)
 		case "/fapi/v3/fundingInfo":
 			_, _ = response.Write([]byte(`[{"symbol":"BTCUSDT","fundingIntervalHours":8}]`))
+		case "/fapi/v3/openInterest":
+			if request.URL.Query().Get("symbol") != "BTCUSDT" {
+				t.Fatalf("open interest symbol = %q", request.URL.Query().Get("symbol"))
+			}
+			_, _ = response.Write([]byte(`{"symbol":"BTCUSDT","openInterest":"6013.199","time":1788728114624}`))
 		default:
 			http.NotFound(response, request)
 		}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"sync"
@@ -27,6 +28,7 @@ const (
 	maxResponseBytes       = 8 << 20
 	maxSnapshotAge         = 30 * time.Second
 	maxClockSkew           = 5 * time.Second
+	openInterestWorkers    = 8
 )
 
 type exchangeFilter struct {
@@ -74,12 +76,18 @@ type fundingInfo struct {
 	FundingIntervalHours int    `json:"fundingIntervalHours"`
 }
 
+type openInterestResponse struct {
+	Symbol       string `json:"symbol"`
+	OpenInterest string `json:"openInterest"`
+}
+
 type streamEnvelope struct {
 	Stream string          `json:"stream"`
 	Data   json.RawMessage `json:"data"`
 }
 
 type markPriceUpdate struct {
+	EventType   string `json:"e"`
 	EventTime   int64  `json:"E"`
 	Symbol      string `json:"s"`
 	MarkPrice   string `json:"p"`
@@ -88,6 +96,7 @@ type markPriceUpdate struct {
 }
 
 type bookTickerUpdate struct {
+	EventType       string `json:"e"`
 	UpdateID        int64  `json:"u"`
 	EventTime       int64  `json:"E"`
 	TransactionTime int64  `json:"T"`
@@ -127,6 +136,8 @@ type marketState struct {
 	markUpdatedAt     time.Time
 	bookUpdatedAt     time.Time
 	bookUpdateID      int64
+	openInterest      float64
+	openInterestKnown bool
 }
 
 // Adapter combines an atomic Futures V3 REST bootstrap with all-market
@@ -183,7 +194,8 @@ func (a *Adapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 			FundingRate: state.nativeFundingRate / float64(state.fundingIntervalHours),
 			BidPrice:    state.bidPrice, BidSize: state.bidSize,
 			AskPrice: state.askPrice, AskSize: state.askSize,
-			Timestamp: olderTime(state.markUpdatedAt, state.bookUpdatedAt),
+			OpenInterest: state.openInterest,
+			Timestamp:    olderTime(state.markUpdatedAt, state.bookUpdatedAt),
 		})
 	}
 	return out, nil
@@ -220,6 +232,10 @@ func (a *Adapter) Refresh(ctx context.Context) error {
 			state.askSize = previous.askSize
 			state.bookUpdatedAt = previous.bookUpdatedAt
 			state.bookUpdateID = previous.bookUpdateID
+		}
+		if !state.openInterestKnown && previous.openInterestKnown {
+			state.openInterest = previous.openInterest
+			state.openInterestKnown = true
 		}
 		markets[symbol] = state
 	}
@@ -493,7 +509,62 @@ func (a *Adapter) fetchRESTMarkets(
 	if len(markets) == 0 {
 		return nil, fmt.Errorf("Aster market data contains no complete USDT perpetual snapshots")
 	}
+	a.fetchOpenInterest(ctx, markets)
 	return markets, nil
+}
+
+func (a *Adapter) fetchOpenInterest(ctx context.Context, markets map[string]marketState) {
+	type result struct {
+		symbol string
+		value  float64
+		err    error
+	}
+	jobs := make(chan string)
+	results := make(chan result)
+	workers := min(openInterestWorkers, len(markets))
+	symbols := make([]string, 0, len(markets))
+	for symbol := range markets {
+		symbols = append(symbols, symbol)
+	}
+	var group sync.WaitGroup
+	group.Add(workers)
+	for range workers {
+		go func() {
+			defer group.Done()
+			for symbol := range jobs {
+				var response openInterestResponse
+				err := a.getJSON(ctx, "/fapi/v3/openInterest?symbol="+url.QueryEscape(symbol), &response)
+				value, valid := finiteDecimal(response.OpenInterest)
+				if err == nil && (response.Symbol != symbol || !valid || value < 0) {
+					err = fmt.Errorf("invalid Aster open interest for %s", symbol)
+				}
+				results <- result{symbol: symbol, value: value, err: err}
+			}
+		}()
+	}
+	go func() {
+		for _, symbol := range symbols {
+			jobs <- symbol
+		}
+		close(jobs)
+		group.Wait()
+		close(results)
+	}()
+
+	failures := 0
+	for result := range results {
+		if result.err != nil {
+			failures++
+			continue
+		}
+		state := markets[result.symbol]
+		state.openInterest = result.value
+		state.openInterestKnown = true
+		markets[result.symbol] = state
+	}
+	if failures > 0 {
+		a.logger.Warn("aster open interest refresh incomplete", "failed", failures, "symbols", len(markets))
+	}
 }
 
 func (a *Adapter) getJSON(ctx context.Context, path string, target any) error {
