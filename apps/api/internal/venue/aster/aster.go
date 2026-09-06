@@ -13,15 +13,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 const (
-	venueName        = "aster"
-	defaultRESTURL   = "https://fapi.asterdex.com"
-	maxResponseBytes = 8 << 20
-	maxSnapshotAge   = 30 * time.Second
-	maxClockSkew     = 5 * time.Second
+	venueName              = "aster"
+	defaultRESTURL         = "https://fapi.asterdex.com"
+	defaultWSURL           = "wss://fstream.asterdex.com/stream?streams=!markPrice@arr@1s/!bookTicker"
+	fullRESTRefreshPeriod  = 15 * time.Minute
+	websocketReconnectWait = 5 * time.Second
+	maxResponseBytes       = 8 << 20
+	maxSnapshotAge         = 30 * time.Second
+	maxClockSkew           = 5 * time.Second
 )
 
 type exchangeInfoResponse struct {
@@ -43,6 +48,7 @@ type premiumIndex struct {
 }
 
 type bookTicker struct {
+	UpdateID int64  `json:"lastUpdateId"`
 	Symbol   string `json:"symbol"`
 	BidPrice string `json:"bidPrice"`
 	BidQty   string `json:"bidQty"`
@@ -56,22 +62,69 @@ type fundingInfo struct {
 	FundingIntervalHours int    `json:"fundingIntervalHours"`
 }
 
-// Adapter polls Aster's public Futures V3 REST API and atomically publishes
-// normalized market snapshots. Execution wiring is intentionally separate.
+type streamEnvelope struct {
+	Stream string          `json:"stream"`
+	Data   json.RawMessage `json:"data"`
+}
+
+type markPriceUpdate struct {
+	EventTime   int64  `json:"E"`
+	Symbol      string `json:"s"`
+	MarkPrice   string `json:"p"`
+	IndexPrice  string `json:"i"`
+	FundingRate string `json:"r"`
+}
+
+type bookTickerUpdate struct {
+	UpdateID        int64  `json:"u"`
+	EventTime       int64  `json:"E"`
+	TransactionTime int64  `json:"T"`
+	Symbol          string `json:"s"`
+	BidPrice        string `json:"b"`
+	BidQty          string `json:"B"`
+	AskPrice        string `json:"a"`
+	AskQty          string `json:"A"`
+}
+
+type marketMetadata struct {
+	asset                string
+	fundingIntervalHours int
+}
+
+type marketState struct {
+	marketMetadata
+	markPrice         float64
+	indexPrice        float64
+	nativeFundingRate float64
+	bidPrice          float64
+	bidSize           float64
+	askPrice          float64
+	askSize           float64
+	markUpdatedAt     time.Time
+	bookUpdatedAt     time.Time
+	bookUpdateID      int64
+}
+
+// Adapter combines an atomic Futures V3 REST bootstrap with all-market
+// WebSocket updates. Execution wiring is intentionally separate.
 type Adapter struct {
-	mu        sync.RWMutex
-	snapshots map[string]venue.MarketData
-	logger    *slog.Logger
-	client    *http.Client
-	restURL   string
+	mu       sync.RWMutex
+	markets  map[string]marketState
+	logger   *slog.Logger
+	client   *http.Client
+	restURL  string
+	wsURL    string
+	wsDialer *websocket.Dialer
 }
 
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
-		snapshots: make(map[string]venue.MarketData),
-		logger:    logger,
-		client:    &http.Client{Timeout: 10 * time.Second},
-		restURL:   defaultRESTURL,
+		markets:  make(map[string]marketState),
+		logger:   logger,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		restURL:  defaultRESTURL,
+		wsURL:    defaultWSURL,
+		wsDialer: websocket.DefaultDialer,
 	}
 }
 
@@ -81,67 +134,257 @@ func (a *Adapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	symbols := make([]string, 0, len(a.snapshots))
-	for symbol := range a.snapshots {
+	symbols := make([]string, 0, len(a.markets))
+	for symbol := range a.markets {
 		symbols = append(symbols, symbol)
 	}
 	sort.Strings(symbols)
 	out := make([]venue.MarketData, 0, len(symbols))
 	now := time.Now()
 	for _, symbol := range symbols {
-		snapshot := a.snapshots[symbol]
-		if snapshot.Timestamp.IsZero() || now.Sub(snapshot.Timestamp) > maxSnapshotAge || snapshot.Timestamp.After(now.Add(maxClockSkew)) {
+		state := a.markets[symbol]
+		if !snapshotTimeFresh(state.markUpdatedAt, now) || !snapshotTimeFresh(state.bookUpdatedAt, now) {
 			continue
 		}
-		out = append(out, snapshot)
+		out = append(out, venue.MarketData{
+			Venue: venueName, Asset: state.asset, MarketKey: symbol,
+			MarkPrice: state.markPrice, IndexPrice: state.indexPrice,
+			FundingRate: state.nativeFundingRate / float64(state.fundingIntervalHours),
+			BidPrice:    state.bidPrice, BidSize: state.bidSize,
+			AskPrice: state.askPrice, AskSize: state.askSize,
+			Timestamp: olderTime(state.markUpdatedAt, state.bookUpdatedAt),
+		})
 	}
 	return out, nil
 }
 
-// Refresh fetches one complete REST snapshot. Callers own scheduling; startup
-// wiring can choose an appropriate REST/stream strategy without hidden polling.
+// Refresh atomically replaces metadata and prices from one complete REST
+// snapshot. It is the bootstrap and an explicit operator fallback.
 func (a *Adapter) Refresh(ctx context.Context) error {
-	snapshots, err := a.fetchSnapshots(ctx)
+	metadata, err := a.fetchMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	markets, err := a.fetchRESTMarkets(ctx, metadata)
 	if err != nil {
 		return err
 	}
 	a.mu.Lock()
-	a.snapshots = snapshots
+	for symbol, state := range markets {
+		previous, ok := a.markets[symbol]
+		if !ok {
+			continue
+		}
+		if previous.markUpdatedAt.After(state.markUpdatedAt) {
+			state.markPrice = previous.markPrice
+			state.indexPrice = previous.indexPrice
+			state.nativeFundingRate = previous.nativeFundingRate
+			state.markUpdatedAt = previous.markUpdatedAt
+		}
+		if previous.bookUpdateID > state.bookUpdateID ||
+			(previous.bookUpdateID == state.bookUpdateID && previous.bookUpdatedAt.After(state.bookUpdatedAt)) {
+			state.bidPrice = previous.bidPrice
+			state.bidSize = previous.bidSize
+			state.askPrice = previous.askPrice
+			state.askSize = previous.askSize
+			state.bookUpdatedAt = previous.bookUpdatedAt
+			state.bookUpdateID = previous.bookUpdateID
+		}
+		markets[symbol] = state
+	}
+	a.markets = markets
 	a.mu.Unlock()
-	a.logger.Debug("aster market data updated", "symbols", len(snapshots))
+	a.logger.Debug("aster REST market data updated", "symbols", len(markets))
 	return nil
 }
 
-func (a *Adapter) fetchSnapshots(ctx context.Context) (map[string]venue.MarketData, error) {
-	var exchange exchangeInfoResponse
-	var premiums []premiumIndex
-	var books []bookTicker
-	var funding []fundingInfo
-	for _, request := range []struct {
-		path   string
-		target any
-	}{
-		{path: "/fapi/v3/exchangeInfo", target: &exchange},
-		{path: "/fapi/v3/premiumIndex", target: &premiums},
-		{path: "/fapi/v3/ticker/bookTicker", target: &books},
-		{path: "/fapi/v3/fundingInfo", target: &funding},
-	} {
-		if err := a.getJSON(ctx, request.path, request.target); err != nil {
-			return nil, err
+// Run bootstraps from REST, maintains metadata at low frequency, and reconnects
+// the two all-market streams until the context is cancelled.
+func (a *Adapter) Run(ctx context.Context) {
+	for {
+		if err := a.Refresh(ctx); err == nil {
+			break
+		} else {
+			a.logger.Error("aster initial REST refresh", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(websocketReconnectWait):
 		}
 	}
-
-	assets := make(map[string]string)
-	for _, symbol := range exchange.Symbols {
-		if symbol.Status == "TRADING" && symbol.ContractType == "PERPETUAL" && symbol.QuoteAsset == "USDT" {
-			assets[symbol.Symbol] = symbol.BaseAsset
+	go a.restRefreshLoop(ctx)
+	for {
+		err := a.connectAndListen(ctx)
+		if ctx.Err() != nil {
+			return
 		}
+		a.logger.Error("aster websocket disconnected, reconnecting", "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(websocketReconnectWait):
+		}
+	}
+}
+
+func (a *Adapter) restRefreshLoop(ctx context.Context) {
+	ticker := time.NewTicker(fullRESTRefreshPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := a.Refresh(ctx); err != nil {
+				a.logger.Error("aster periodic REST refresh", "err", err)
+			}
+		}
+	}
+}
+
+func (a *Adapter) connectAndListen(ctx context.Context) error {
+	connection, _, err := a.wsDialer.DialContext(ctx, a.wsURL, nil)
+	if err != nil {
+		return fmt.Errorf("dial Aster market websocket: %w", err)
+	}
+	defer connection.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = connection.Close()
+		case <-done:
+		}
+	}()
+	a.logger.Info("aster market websocket connected")
+
+	for {
+		_, raw, err := connection.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("read Aster market websocket: %w", err)
+		}
+		if err := a.applyStreamMessage(raw); err != nil {
+			a.logger.Warn("aster websocket message rejected", "err", err)
+		}
+	}
+}
+
+func (a *Adapter) applyStreamMessage(raw []byte) error {
+	var envelope streamEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode stream envelope: %w", err)
+	}
+	switch envelope.Stream {
+	case "!markPrice@arr@1s":
+		var updates []markPriceUpdate
+		if err := json.Unmarshal(envelope.Data, &updates); err != nil {
+			return fmt.Errorf("decode mark price updates: %w", err)
+		}
+		a.applyMarkPriceUpdates(updates)
+	case "!bookTicker":
+		var update bookTickerUpdate
+		if err := json.Unmarshal(envelope.Data, &update); err != nil {
+			return fmt.Errorf("decode book ticker update: %w", err)
+		}
+		a.applyBookTickerUpdate(update)
+	}
+	return nil
+}
+
+func (a *Adapter) applyMarkPriceUpdates(updates []markPriceUpdate) {
+	for _, update := range updates {
+		mark, markOK := positiveDecimal(update.MarkPrice)
+		index, indexOK := positiveDecimal(update.IndexPrice)
+		fundingRate, fundingOK := finiteDecimal(update.FundingRate)
+		if !markOK || !indexOK || !fundingOK || update.EventTime <= 0 {
+			continue
+		}
+		updatedAt := time.UnixMilli(update.EventTime).UTC()
+		a.mu.Lock()
+		state, ok := a.markets[update.Symbol]
+		if ok && updatedAt.After(state.markUpdatedAt) {
+			state.markPrice = mark
+			state.indexPrice = index
+			state.nativeFundingRate = fundingRate
+			state.markUpdatedAt = updatedAt
+			a.markets[update.Symbol] = state
+		}
+		a.mu.Unlock()
+	}
+}
+
+func (a *Adapter) applyBookTickerUpdate(update bookTickerUpdate) {
+	bid, bidOK := positiveDecimal(update.BidPrice)
+	bidQty, bidQtyOK := positiveDecimal(update.BidQty)
+	ask, askOK := positiveDecimal(update.AskPrice)
+	askQty, askQtyOK := positiveDecimal(update.AskQty)
+	timestamp := update.TransactionTime
+	if timestamp <= 0 {
+		timestamp = update.EventTime
+	}
+	if !bidOK || !bidQtyOK || !askOK || !askQtyOK || ask < bid || timestamp <= 0 {
+		return
+	}
+	updatedAt := time.UnixMilli(timestamp).UTC()
+	a.mu.Lock()
+	state, ok := a.markets[update.Symbol]
+	newer := update.UpdateID > state.bookUpdateID ||
+		(update.UpdateID == 0 && state.bookUpdateID == 0 && updatedAt.After(state.bookUpdatedAt))
+	if ok && newer {
+		state.bidPrice = bid
+		state.bidSize = bid * bidQty
+		state.askPrice = ask
+		state.askSize = ask * askQty
+		state.bookUpdatedAt = updatedAt
+		state.bookUpdateID = update.UpdateID
+		a.markets[update.Symbol] = state
+	}
+	a.mu.Unlock()
+}
+
+func (a *Adapter) fetchMetadata(ctx context.Context) (map[string]marketMetadata, error) {
+	var exchange exchangeInfoResponse
+	var funding []fundingInfo
+	if err := a.getJSON(ctx, "/fapi/v3/exchangeInfo", &exchange); err != nil {
+		return nil, err
+	}
+	if err := a.getJSON(ctx, "/fapi/v3/fundingInfo", &funding); err != nil {
+		return nil, err
 	}
 	intervals := make(map[string]int, len(funding))
 	for _, item := range funding {
 		if item.FundingIntervalHours > 0 {
 			intervals[item.Symbol] = item.FundingIntervalHours
 		}
+	}
+	metadata := make(map[string]marketMetadata)
+	for _, symbol := range exchange.Symbols {
+		interval := intervals[symbol.Symbol]
+		if symbol.Status == "TRADING" && symbol.ContractType == "PERPETUAL" &&
+			symbol.QuoteAsset == "USDT" && interval > 0 {
+			metadata[symbol.Symbol] = marketMetadata{
+				asset: symbol.BaseAsset, fundingIntervalHours: interval,
+			}
+		}
+	}
+	if len(metadata) == 0 {
+		return nil, fmt.Errorf("Aster metadata contains no active USDT perpetuals with funding intervals")
+	}
+	return metadata, nil
+}
+
+func (a *Adapter) fetchRESTMarkets(
+	ctx context.Context, metadata map[string]marketMetadata,
+) (map[string]marketState, error) {
+	var premiums []premiumIndex
+	var books []bookTicker
+	if err := a.getJSON(ctx, "/fapi/v3/premiumIndex", &premiums); err != nil {
+		return nil, err
+	}
+	if err := a.getJSON(ctx, "/fapi/v3/ticker/bookTicker", &books); err != nil {
+		return nil, err
 	}
 	premiumBySymbol := make(map[string]premiumIndex, len(premiums))
 	for _, item := range premiums {
@@ -152,12 +395,11 @@ func (a *Adapter) fetchSnapshots(ctx context.Context) (map[string]venue.MarketDa
 		bookBySymbol[item.Symbol] = item
 	}
 
-	snapshots := make(map[string]venue.MarketData)
-	for symbol, asset := range assets {
+	markets := make(map[string]marketState)
+	for symbol, item := range metadata {
 		premium, premiumOK := premiumBySymbol[symbol]
 		book, bookOK := bookBySymbol[symbol]
-		interval := intervals[symbol]
-		if !premiumOK || !bookOK || interval <= 0 {
+		if !premiumOK || !bookOK {
 			continue
 		}
 		mark, markOK := positiveDecimal(premium.MarkPrice)
@@ -167,24 +409,23 @@ func (a *Adapter) fetchSnapshots(ctx context.Context) (map[string]venue.MarketDa
 		bidQty, bidQtyOK := positiveDecimal(book.BidQty)
 		ask, askOK := positiveDecimal(book.AskPrice)
 		askQty, askQtyOK := positiveDecimal(book.AskQty)
-		if !markOK || !indexOK || !fundingOK || !bidOK || !bidQtyOK || !askOK || !askQtyOK || ask < bid {
+		if !markOK || !indexOK || !fundingOK || !bidOK || !bidQtyOK || !askOK || !askQtyOK || ask < bid ||
+			premium.Time <= 0 || book.Time <= 0 {
 			continue
 		}
-		timestamp := minPositiveTimestamp(premium.Time, book.Time)
-		if timestamp == 0 {
-			continue
-		}
-		snapshots[symbol] = venue.MarketData{
-			Venue: venueName, Asset: asset, MarketKey: symbol,
-			MarkPrice: mark, IndexPrice: index, FundingRate: fundingRate / float64(interval),
-			BidPrice: bid, BidSize: bid * bidQty, AskPrice: ask, AskSize: ask * askQty,
-			Timestamp: time.UnixMilli(timestamp).UTC(),
+		markets[symbol] = marketState{
+			marketMetadata: item,
+			markPrice:      mark, indexPrice: index, nativeFundingRate: fundingRate,
+			bidPrice: bid, bidSize: bid * bidQty, askPrice: ask, askSize: ask * askQty,
+			markUpdatedAt: time.UnixMilli(premium.Time).UTC(),
+			bookUpdatedAt: time.UnixMilli(book.Time).UTC(),
+			bookUpdateID:  book.UpdateID,
 		}
 	}
-	if len(snapshots) == 0 {
+	if len(markets) == 0 {
 		return nil, fmt.Errorf("Aster market data contains no complete USDT perpetual snapshots")
 	}
-	return snapshots, nil
+	return markets, nil
 }
 
 func (a *Adapter) getJSON(ctx context.Context, path string, target any) error {
@@ -217,11 +458,12 @@ func positiveDecimal(value string) (float64, bool) {
 	return parsed, ok && parsed > 0
 }
 
-func minPositiveTimestamp(left, right int64) int64 {
-	if left <= 0 || right <= 0 {
-		return 0
-	}
-	if left < right {
+func snapshotTimeFresh(timestamp, now time.Time) bool {
+	return !timestamp.IsZero() && now.Sub(timestamp) <= maxSnapshotAge && !timestamp.After(now.Add(maxClockSkew))
+}
+
+func olderTime(left, right time.Time) time.Time {
+	if left.Before(right) {
 		return left
 	}
 	return right
