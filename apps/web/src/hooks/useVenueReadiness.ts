@@ -7,14 +7,14 @@ import type { TradingAgentState } from '@/agents/types'
 import { trackAnalytics } from '@/lib/analytics'
 import { liveVenueBindingsBody } from '@/lib/live-bindings'
 
-// Single typed readiness layer for Pacifica + Hyperliquid. Composes the
+// Single typed readiness layer for supported venues. Composes the
 // existing wallet-authority hook and the live-balances hook so the rest of
 // the app has one shape to reason about. This hook is purely derivational —
 // it does NOT open new connections, subscribe to new endpoints, or duplicate
 // wallet logic. Freshness/staleness of balances is intentionally out of
 // scope; a later backend step can add it via the same shape.
 
-export type VenueId = 'pacifica' | 'hyperliquid'
+export type VenueId = 'pacifica' | 'hyperliquid' | 'aster'
 
 export type VenueStatus =
   | 'disconnected'       // no wallet
@@ -24,6 +24,7 @@ export type VenueStatus =
   | 'agent_authorizing'  // owner authorization is in progress
   | 'balance_pending'    // signer OK; waiting on first account snapshot
   | 'account_stale'      // snapshot present but too old
+  | 'unavailable'        // authorization may be tested, but live execution is not enabled
   | 'ready'              // wallet + signer + fresh account state
   | 'error'              // authority reports an error
 
@@ -67,6 +68,7 @@ export type EnsureStatus = 'idle' | 'starting' | 'ready' | 'error'
 export interface UseVenueReadinessResult {
   pacifica: VenueReadiness
   hyperliquid: VenueReadiness
+  aster: VenueReadiness
   venues: VenueReadiness[]
   aggregate: AggregateReadiness
   ensureStatus: EnsureStatus
@@ -84,6 +86,7 @@ const VenueReadinessContext = createContext<UseVenueReadinessResult | null>(null
 const LABELS: Record<VenueId, string> = {
   pacifica: 'Pacifica',
   hyperliquid: 'Hyperliquid',
+  aster: 'Aster',
 }
 
 function shorten(addr: string | null): string | null {
@@ -127,10 +130,11 @@ function buildReadiness(args: {
     last_updated?: string
     reason?: string
   }
+  unavailableReason?: string
 }): VenueReadiness {
-  const { venue, address, authorityReadiness, agent, balance } = args
+  const { venue, address, authorityReadiness, agent, balance, unavailableReason } = args
   const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
-  const ownerMatches = venue === 'hyperliquid'
+  const ownerMatches = venue === 'hyperliquid' || venue === 'aster'
     ? agent.ownerAddress?.toLowerCase() === address?.toLowerCase()
     : agent.ownerAddress === address
   const agentReady = agent.status === 'ready' && ownerMatches && !!agent.agentAddress
@@ -149,6 +153,7 @@ function buildReadiness(args: {
   else if (agent.status === 'authorizing') blockingReasons.push('Authorization in progress')
   else if (agent.status === 'error') blockingReasons.push(agent.error || 'Authorization failed')
   else if (!agentReady) blockingReasons.push('Authorization required')
+  else if (unavailableReason) blockingReasons.push(unavailableReason)
   else if (!streamReady) blockingReasons.push(balance.reason || 'Waiting on account data stream')
   else if (!accountFresh) blockingReasons.push(balance.reason || 'Account data stale — refreshing')
 
@@ -158,6 +163,7 @@ function buildReadiness(args: {
   else if (!signerReady) status = 'signer_missing'
   else if (agent.status === 'authorizing') status = 'agent_authorizing'
   else if (!agentReady) status = agent.status === 'error' ? 'error' : 'agent_missing'
+  else if (unavailableReason) status = 'unavailable'
   else if (!streamReady) status = 'balance_pending'
   else if (!accountFresh) status = 'account_stale'
   else status = 'ready'
@@ -268,25 +274,42 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       agent: tradingAgents.hyperliquid,
       balance: balances.hyperliquid,
     })
-    const venues = [pacifica, hyperliquid]
-    const readyCount = venues.filter((v) => v.status === 'ready').length
-    const totalCount = venues.length
+    const aster = buildReadiness({
+      venue: 'aster',
+      address: authority.aster.address,
+      authorityReadiness: authority.aster.readiness,
+      agent: tradingAgents.aster,
+      balance: {
+        connected: false,
+        equity: 0,
+        available: 0,
+        stream_ready: false,
+        fresh: false,
+        reason: 'Browser-assisted Aster account connection is not enabled yet',
+      },
+      unavailableReason: 'Browser-assisted Aster account connection is not enabled yet',
+    })
+    const venues = [pacifica, hyperliquid, aster]
+    const activeVenues = [pacifica, hyperliquid]
+    const readyCount = activeVenues.filter((v) => v.status === 'ready').length
+    const totalCount = activeVenues.length
     const allReady = readyCount === totalCount
 
     // Aggregate blocking reasons are prefixed with the venue label so the UI
     // can render a flat list without losing context.
-    const blockingReasons = venues.flatMap((v) =>
+    const blockingReasons = activeVenues.flatMap((v) =>
       v.blockingReasons.map((r) => `${v.label}: ${r}`),
     )
 
     let statusLabel: AggregateReadiness['statusLabel']
     if (allReady) statusLabel = 'Ready'
-    else if (venues.every((v) => v.status === 'disconnected')) statusLabel = 'Not connected'
+    else if (activeVenues.every((v) => v.status === 'disconnected')) statusLabel = 'Not connected'
     else statusLabel = 'Needs attention'
 
     return {
       pacifica,
       hyperliquid,
+      aster,
       venues,
       ensureStatus,
       ensureError,
@@ -300,7 +323,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
         statusLabel,
       },
     }
-  }, [authority.pacifica, authority.hyperliquid, tradingAgents.pacifica, tradingAgents.hyperliquid, balances, ensureStatus, ensureError, ensureAccounts])
+  }, [authority.pacifica, authority.hyperliquid, authority.aster, tradingAgents.pacifica, tradingAgents.hyperliquid, tradingAgents.aster, balances, ensureStatus, ensureError, ensureAccounts])
 
   useEffect(() => {
     if (!value.aggregate.allReady || !pacAddr || !hlAddr) return

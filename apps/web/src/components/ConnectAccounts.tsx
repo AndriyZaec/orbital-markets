@@ -15,16 +15,18 @@ import telegramLogo from '@/assets/telegram-logo.svg'
 // readiness comes from useVenueReadiness — the single typed layer that
 // composes wallet + signer + balance state.
 interface VenueDef {
-  id: string
+  id: VenueId
   name: string
   logo: string | null
   description: string
   chain: string
+  preview?: boolean
 }
 
 const VENUES: VenueDef[] = [
   { id: 'pacifica', name: 'Pacifica', logo: pacificaLogo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana' },
   { id: 'hyperliquid', name: 'Hyperliquid', logo: hlLogo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1' },
+  { id: 'aster', name: 'Aster', logo: null, description: 'Preview browser-agent authorization; live execution is not enabled', chain: 'BNB Chain', preview: true },
 ]
 
 interface Props {
@@ -95,6 +97,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const {
     pacifica,
     hyperliquid,
+    aster,
     aggregate,
     ensureStatus,
     ensureError,
@@ -121,16 +124,18 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   // Which venue's wallet picker modal is open. Overlay-style — matches how
   // the Solana wallet-adapter modal renders and keeps the venue card tidy.
-  const [pickerOpen, setPickerOpen] = useState<string | null>(null)
+  const [pickerOpen, setPickerOpen] = useState<VenueId | null>(null)
   const previousWalletConnectedRef = useRef<Record<VenueId, boolean>>({
     pacifica: false,
     hyperliquid: false,
+    aster: false,
   })
   // Wallet providers restore persisted sessions on mount; only count a
   // transition that follows an explicit connect action.
   const manualConnectRequestedRef = useRef<Record<VenueId, boolean>>({
     pacifica: false,
     hyperliquid: false,
+    aster: false,
   })
 
   function requestManualConnect(venue: VenueId) {
@@ -146,8 +151,9 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     const current: Record<VenueId, boolean> = {
       pacifica: pacifica.walletConnected,
       hyperliquid: hyperliquid.walletConnected,
+      aster: aster.walletConnected,
     }
-    for (const venue of ['pacifica', 'hyperliquid'] as const) {
+    for (const venue of ['pacifica', 'hyperliquid', 'aster'] as const) {
       if (
         current[venue]
         && !previousWalletConnectedRef.current[venue]
@@ -158,7 +164,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       }
     }
     previousWalletConnectedRef.current = current
-  }, [pacifica.walletConnected, hyperliquid.walletConnected])
+  }, [pacifica.walletConnected, hyperliquid.walletConnected, aster.walletConnected])
 
   const handleConnect = (venueId: string) => {
     if (venueId === 'pacifica') {
@@ -167,16 +173,20 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       setSolModalVisible(true)
       return
     }
-    if (venueId === 'hyperliquid') {
+    if (venueId === 'hyperliquid' || venueId === 'aster') {
+      requestManualConnect('hyperliquid')
+      requestManualConnect('aster')
+      window.setTimeout(() => {
+        manualConnectRequestedRef.current.hyperliquid = false
+        manualConnectRequestedRef.current.aster = false
+      }, 30_000)
       // If exactly one EVM connector is installed, skip the picker; else open
       // the inline picker so the user chooses which wallet to connect.
       if (evmConnectors.length === 1) {
-        requestManualConnect('hyperliquid')
-        window.setTimeout(() => { manualConnectRequestedRef.current.hyperliquid = false }, 30_000)
         evmConnect({ connector: evmConnectors[0] })
         return
       }
-      setPickerOpen((v) => (v === 'hyperliquid' ? null : 'hyperliquid'))
+      setPickerOpen((v) => (v === venueId ? null : venueId))
     }
   }
 
@@ -184,7 +194,11 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     const c = evmConnectors.find((x) => x.uid === connectorUid)
     if (!c) return
     requestManualConnect('hyperliquid')
-    window.setTimeout(() => { manualConnectRequestedRef.current.hyperliquid = false }, 30_000)
+    requestManualConnect('aster')
+    window.setTimeout(() => {
+      manualConnectRequestedRef.current.hyperliquid = false
+      manualConnectRequestedRef.current.aster = false
+    }, 30_000)
     evmConnect({ connector: c })
     setPickerOpen(null)
   }
@@ -192,7 +206,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const handleDisconnect = (venueId: string) => {
     if (venueId === 'pacifica') {
       solWallet.disconnect()
-    } else if (venueId === 'hyperliquid') {
+    } else if (venueId === 'hyperliquid' || venueId === 'aster') {
       evmDisconnect()
     }
   }
@@ -209,6 +223,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const getReadiness = (venueId: string): VenueReadiness | null => {
     if (venueId === 'pacifica') return pacifica
     if (venueId === 'hyperliquid') return hyperliquid
+    if (venueId === 'aster') return aster
     return null
   }
 
@@ -233,7 +248,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
         <div>
           <h2 className="text-sm font-semibold text-foreground">Connect Accounts</h2>
           <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-            {aggregate.readyCount}/{aggregate.totalCount} venues ready
+            {aggregate.readyCount}/{aggregate.totalCount} active venues ready
           </p>
         </div>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
@@ -297,6 +312,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-semibold text-foreground">{venue.name}</span>
                       <span className="text-[9px] px-1 py-px rounded bg-white/[0.06] text-muted-foreground/70 font-medium">{venue.chain}</span>
+                      {venue.preview && <span className="text-[9px] px-1 py-px rounded bg-amber-500/10 text-amber-300/80 font-medium">Preview</span>}
                     </div>
                     {readiness?.shortAddress ? (
                       <p className="text-[10px] text-muted-foreground/70 font-mono leading-snug mt-0.5 truncate">{readiness.shortAddress}</p>
@@ -312,8 +328,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     <DiagRow label="Wallet" pill={walletPill(readiness)} />
                     <DiagRow label="Owner signer" pill={signerPill(readiness)} />
                     <DiagRow label="Authorization" pill={agentPill(readiness)} />
-                    <DiagRow label="Balance" pill={balancePill(readiness)} />
-                    {readiness.walletConnected && (
+                    {venue.preview ? (
+                      <DiagRow label="Live execution" pill={{ label: 'Not enabled', tone: 'off' }} />
+                    ) : (
+                      <DiagRow label="Balance" pill={balancePill(readiness)} />
+                    )}
+                    {readiness.walletConnected && !venue.preview && (
                       <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
                         <span className="text-muted-foreground">Equity / Available</span>
                         <span className="font-mono text-foreground">
@@ -366,9 +386,10 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       )}
                       <button
                         onClick={() => handleDisconnect(venue.id)}
+                        disabled={agentChangeBlocked}
                         className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
                       >
-                        Disconnect
+                        {venue.id === 'pacifica' ? 'Disconnect' : 'Disconnect EVM Wallet'}
                       </button>
                     </div>
                   ) : (
@@ -425,8 +446,9 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
         </div>
       </div>
 
-      {pickerOpen === 'hyperliquid' && (
+      {pickerOpen && pickerOpen !== 'pacifica' && (
         <EvmWalletPicker
+          venueName={pickerOpen === 'aster' ? 'Aster' : 'Hyperliquid'}
           connectors={evmConnectors}
           onPick={handlePickEvmConnector}
           onClose={() => setPickerOpen(null)}
@@ -448,10 +470,12 @@ const SUGGESTED_EVM_WALLETS: { name: string; url: string; blurb: string }[] = [
 ]
 
 function EvmWalletPicker({
+  venueName,
   connectors,
   onPick,
   onClose,
 }: {
+  venueName: string
   connectors: readonly { uid: string; name: string; icon?: string }[]
   onPick: (uid: string) => void
   onClose: () => void
@@ -470,7 +494,7 @@ function EvmWalletPicker({
         {/* Header */}
         <div className="flex items-start justify-between px-4 py-3 border-b border-border">
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-foreground">Connect Hyperliquid</h3>
+            <h3 className="text-sm font-semibold text-foreground">Connect {venueName}</h3>
             <p className="text-[11px] text-muted-foreground/80 mt-0.5">
               Pick an EVM wallet installed in your browser.
             </p>
@@ -519,8 +543,8 @@ function EvmWalletPicker({
               <div className="rounded border border-yellow-500/20 bg-yellow-500/[0.04] px-3 py-2">
                 <p className="text-[11px] text-yellow-200/80 font-medium">No EVM wallet detected</p>
                 <p className="text-[10px] text-muted-foreground/70 mt-1 leading-relaxed">
-                  Install an EVM browser wallet, then refresh this page. Solana wallets
-                  (Phantom, Backpack Solana) don't work here — Hyperliquid runs on an EVM chain.
+                   Install an EVM browser wallet, then refresh this page. Solana-only wallets
+                   cannot connect to {venueName}.
                 </p>
               </div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 px-1">
@@ -550,8 +574,8 @@ function EvmWalletPicker({
         {/* Footer explainer */}
         <div className="px-4 py-2.5 border-t border-border">
           <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
-            You'll approve the connection in your wallet. Orbital never sees your seed phrase
-            or private keys — every action is signed by the wallet itself.
+            Your wallet approves the connection and venue authorization. Trading agent keys stay
+            in this browser session; Orbital never sees your seed phrase.
           </p>
         </div>
       </div>

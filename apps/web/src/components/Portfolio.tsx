@@ -754,10 +754,11 @@ const STATUS_VIEW: Record<
   agent_authorizing: { label: 'Authorizing',     color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   balance_pending:   { label: 'Pending',         color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   account_stale:     { label: 'Data stale',      color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  unavailable:       { label: 'Not enabled',     color: 'text-muted-foreground', dot: 'bg-muted-foreground' },
   error:             { label: 'Error',           color: 'text-red-400',          dot: 'bg-red-400' },
 }
 
-const VENUE_LOGOS: Record<VenueReadiness['venue'], string> = {
+const VENUE_LOGOS: Partial<Record<VenueReadiness['venue'], string>> = {
   pacifica: pacificaLogo,
   hyperliquid: hlLogo,
 }
@@ -765,10 +766,12 @@ const VENUE_LOGOS: Record<VenueReadiness['venue'], string> = {
 const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
   pacifica: 'bg-[radial-gradient(circle_at_8%_0%,rgba(34,211,238,0.055),transparent_52%)]',
   hyperliquid: 'bg-[radial-gradient(circle_at_8%_0%,rgba(139,92,246,0.055),transparent_52%)]',
+  aster: 'bg-[radial-gradient(circle_at_8%_0%,rgba(245,158,11,0.055),transparent_52%)]',
 }
 
 function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; maskAmounts: boolean }) {
   const view = STATUS_VIEW[readiness.status]
+  const logo = VENUE_LOGOS[readiness.venue]
   // Show a real number only when we actually have one from the backend.
   // On disconnect (or before the first snapshot) equity/available are null;
   // render "--" rather than an ambiguous $0.00.
@@ -777,7 +780,7 @@ function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; mask
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="flex size-7 items-center justify-center rounded-md border border-border bg-white/[0.035]">
-            <img src={VENUE_LOGOS[readiness.venue]} alt="" className="size-5 object-contain" />
+            {logo ? <img src={logo} alt="" className="size-5 object-contain" /> : readiness.label[0]}
           </span>
           <span className="text-sm font-medium text-foreground">{readiness.label}</span>
         </div>
