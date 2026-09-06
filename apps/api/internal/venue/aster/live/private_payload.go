@@ -36,6 +36,11 @@ type PrivateRequestParams struct {
 	Leverage      int
 }
 
+type AccountSnapshotPayloads struct {
+	SnapshotID string                   `json:"snapshot_id"`
+	Requests   []*domain.SigningRequest `json:"requests"`
+}
+
 type AsterPrivateSubmitMeta struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
@@ -57,6 +62,15 @@ func BuildPrivatePayload(params PrivateRequestParams) (*domain.SigningRequest, e
 }
 
 func buildPrivatePayload(params PrivateRequestParams, now time.Time, nonce int64) (*domain.SigningRequest, error) {
+	return buildPrivatePayloadForSnapshot(params, now, nonce, "")
+}
+
+func buildPrivatePayloadForSnapshot(
+	params PrivateRequestParams,
+	now time.Time,
+	nonce int64,
+	snapshotID string,
+) (*domain.SigningRequest, error) {
 	if !addressPattern.MatchString(params.User) || !addressPattern.MatchString(params.Signer) {
 		return nil, fmt.Errorf("invalid Aster private-request account")
 	}
@@ -80,12 +94,30 @@ func buildPrivatePayload(params PrivateRequestParams, now time.Time, nonce int64
 		return nil, fmt.Errorf("marshal Aster private metadata: %w", err)
 	}
 	return &domain.SigningRequest{
-		ID: fmt.Sprintf("aster-%s-%d", params.Operation, nonce), ClientOrderID: params.ClientOrderID,
-		Venue: "aster", Action: string(params.Operation), Account: params.User, Signer: params.Signer,
+		ID: fmt.Sprintf("aster-%s-%d", params.Operation, nonce), SnapshotID: snapshotID,
+		ClientOrderID: params.ClientOrderID,
+		Venue:         "aster", Action: string(params.Operation), Account: params.User, Signer: params.Signer,
 		Symbol: params.Symbol, Leverage: params.Leverage,
 		UnsignedPayload: unsignedBytes, VenueMetadata: metadataBytes,
 		CreatedAt: now, ExpiresAt: now.Add(signingRequestTTL),
 	}, nil
+}
+
+func BuildAccountSnapshotPayloads(user, signer string) (*AccountSnapshotPayloads, error) {
+	now := time.Now()
+	snapshotID := fmt.Sprintf("aster-account-%d", nextAsterNonce())
+	operations := []PrivateOperation{GetPositionMode, GetAccount, GetPositions}
+	requests := make([]*domain.SigningRequest, 0, len(operations))
+	for _, operation := range operations {
+		request, err := buildPrivatePayloadForSnapshot(PrivateRequestParams{
+			Operation: operation, User: user, Signer: signer,
+		}, now, nextAsterNonce(), snapshotID)
+		if err != nil {
+			return nil, err
+		}
+		requests = append(requests, request)
+	}
+	return &AccountSnapshotPayloads{SnapshotID: snapshotID, Requests: requests}, nil
 }
 
 func privateOperationSpec(params PrivateRequestParams) (string, string, []queryParameter, error) {

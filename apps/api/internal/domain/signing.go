@@ -13,8 +13,9 @@ import (
 // and returns a SignedAction.
 type SigningRequest struct {
 	// Correlation
-	ID            string `json:"id"`              // unique request ID
-	ClientOrderID string `json:"client_order_id"` // venue-facing order correlation
+	ID            string `json:"id"`                    // unique request ID
+	SnapshotID    string `json:"snapshot_id,omitempty"` // groups coherent account snapshot parts
+	ClientOrderID string `json:"client_order_id"`       // venue-facing order correlation
 	PositionID    string `json:"position_id,omitempty"`
 	Leg           int    `json:"leg,omitempty"`
 

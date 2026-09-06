@@ -66,3 +66,20 @@ func TestBuildPrivatePayloadRejectsParametersOutsideOperationPolicy(t *testing.T
 		t.Fatal("unsafe leverage was accepted")
 	}
 }
+
+func TestBuildAccountSnapshotPayloadsSharesOneGeneration(t *testing.T) {
+	payloads, err := BuildAccountSnapshotPayloads(testUser, testSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payloads.SnapshotID == "" || len(payloads.Requests) != 3 {
+		t.Fatalf("payloads = %+v", payloads)
+	}
+	wantActions := []string{"get_position_mode", "get_account", "get_positions"}
+	createdAt := payloads.Requests[0].CreatedAt
+	for i, request := range payloads.Requests {
+		if request.SnapshotID != payloads.SnapshotID || request.Action != wantActions[i] || !request.CreatedAt.Equal(createdAt) {
+			t.Fatalf("request %d = %+v", i, request)
+		}
+	}
+}

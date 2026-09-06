@@ -59,6 +59,7 @@ func NewLiveDeps(
 	pacificaLotSizes pacificlive.LotSizeMap,
 ) *LiveDeps {
 	factories := map[string]accountFeedFactory{
+		"aster":       &asterAccountFeedFactory{},
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
 		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
 	}
@@ -88,6 +89,28 @@ func NewLiveDeps(
 			RecoveryReserve: defaultRecoveryAccountFeedReserve,
 		}),
 	}
+}
+
+func (d *LiveDeps) applyAsterPrivateResult(
+	request *domain.SigningRequest,
+	result *asterlive.PrivateResult,
+) (bool, error) {
+	if result == nil || result.AccountUpdate == nil {
+		return false, nil
+	}
+	if d == nil || d.accounts == nil {
+		return false, fmt.Errorf("Aster account registry unavailable")
+	}
+	lease, found := d.accounts.Lookup("aster", request.Account)
+	if !found {
+		return false, fmt.Errorf("Aster account feed unavailable")
+	}
+	defer lease.Release()
+	feed, ok := lease.Feed().(*asterAccountFeed)
+	if !ok {
+		return false, fmt.Errorf("invalid Aster account feed")
+	}
+	return feed.ApplyPrivateResult(request, result)
 }
 
 type agentAuthorizationRegistry struct {

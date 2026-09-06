@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 )
 
 type fakeAsterPrivateSubmitter struct {
 	request *domain.SigningRequest
 	err     error
+	data    map[string]json.RawMessage
 }
 
 func (f *fakeAsterPrivateSubmitter) SubmitSignedPrivate(
@@ -31,8 +33,20 @@ func (f *fakeAsterPrivateSubmitter) SubmitSignedPrivate(
 	if f.err != nil {
 		return nil, f.err
 	}
+	operation := asterlive.GetPositionMode
+	data := json.RawMessage(`{"dualSidePosition":false}`)
+	var update *asteraccount.Update
+	if f.data != nil {
+		operation, _ = asterlive.ParsePrivateOperation(request.Action)
+		data = f.data[request.Action]
+		part, err := asteraccount.ParseSnapshotPart(request.Action, data)
+		if err != nil {
+			return nil, err
+		}
+		update = &asteraccount.Update{SnapshotPart: &part}
+	}
 	return &asterlive.PrivateResult{
-		Operation: asterlive.GetPositionMode, Data: json.RawMessage(`{"dualSidePosition":false}`),
+		Operation: operation, Data: data, AccountUpdate: update,
 		SubmittedAt: time.Now(), RespondedAt: time.Now(),
 	}, nil
 }
@@ -169,5 +183,61 @@ func TestAsterPrivatePrepareRejectsUnknownOperation(t *testing.T) {
 	))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAsterAccountSnapshotAppliesOnlyAfterCompleteBatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	submitter := &fakeAsterPrivateSubmitter{data: map[string]json.RawMessage{
+		"get_position_mode": json.RawMessage(`{"dualSidePosition":false}`),
+		"get_account":       json.RawMessage(`{"canTrade":true,"totalMarginBalance":"100","availableBalance":"90","positions":[]}`),
+		"get_positions":     json.RawMessage(`[{"symbol":"BTCUSDT","positionSide":"BOTH","positionAmt":"1","entryPrice":"100","unRealizedProfit":"2","leverage":"5","liquidationPrice":"50","isolatedMargin":"10"}]`),
+	}}
+	server := &Server{live: &LiveDeps{
+		signingStore: domain.NewSigningRequestStore(), asterPrivate: submitter,
+		accounts: newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+			"aster": &asterAccountFeedFactory{},
+		}, accountFeedRegistryConfig{}),
+	}}
+	prepare := httptest.NewRecorder()
+	server.handleAsterAccountPrepare(prepare, httptest.NewRequest(
+		http.MethodPost, "/api/v1/live/aster/account/prepare",
+		strings.NewReader(`{"account":"0x1111111111111111111111111111111111111111","agent":"0x2222222222222222222222222222222222222222"}`),
+	))
+	if prepare.Code != http.StatusOK {
+		t.Fatalf("prepare status = %d, body = %s", prepare.Code, prepare.Body.String())
+	}
+	var batch asterlive.AccountSnapshotPayloads
+	if err := json.Unmarshal(prepare.Body.Bytes(), &batch); err != nil {
+		t.Fatal(err)
+	}
+	for i, request := range batch.Requests {
+		signedBody, err := json.Marshal(domain.SignedAction{
+			RequestID: request.ID, ClientOrderID: request.ClientOrderID, Venue: "aster",
+			SignerAddress: request.Signer, Signature: "0x" + strings.Repeat("1", 128) + "1b",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		server.handleAsterPrivateSubmit(response, httptest.NewRequest(
+			http.MethodPost, "/api/v1/live/aster/private/submit", bytes.NewReader(signedBody),
+		))
+		if response.Code != http.StatusOK {
+			t.Fatalf("submit %d status = %d, body = %s", i, response.Code, response.Body.String())
+		}
+		lease, found := server.live.accounts.Lookup("aster", request.Account)
+		if !found {
+			t.Fatal("Aster account feed not found")
+		}
+		snapshot := lease.Feed().Snapshot()
+		lease.Release()
+		if i < len(batch.Requests)-1 && snapshot.Connected {
+			t.Fatalf("partial batch %d marked connected", i)
+		}
+		if i == len(batch.Requests)-1 && (!snapshot.Connected || snapshot.Equity != 100 || len(snapshot.Positions) != 1) {
+			t.Fatalf("complete snapshot = %+v", snapshot)
+		}
 	}
 }

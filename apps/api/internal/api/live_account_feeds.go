@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,11 +12,96 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
 	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
+
+type asterAccountFeedFactory struct{}
+
+func (f *asterAccountFeedFactory) Normalize(account string) (string, error) {
+	account = strings.ToLower(strings.TrimSpace(account))
+	if len(account) != 42 || !strings.HasPrefix(account, "0x") {
+		return "", fmt.Errorf("invalid Aster account address")
+	}
+	if _, err := hex.DecodeString(account[2:]); err != nil {
+		return "", fmt.Errorf("invalid Aster account address")
+	}
+	return account, nil
+}
+
+func (f *asterAccountFeedFactory) Start(_ context.Context, account string) (liveAccountFeed, error) {
+	return &asterAccountFeed{state: asteraccount.NewAccountState(account)}, nil
+}
+
+type asterAccountFeed struct {
+	state *asteraccount.AccountState
+}
+
+func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, result *asterlive.PrivateResult) (bool, error) {
+	if result == nil || result.AccountUpdate == nil {
+		return false, nil
+	}
+	update := result.AccountUpdate
+	if update.SnapshotPart != nil {
+		if request.SnapshotID == "" {
+			return false, nil
+		}
+		if err := f.state.ApplySnapshotPart(
+			request.Account, request.Signer, request.SnapshotID,
+			request.CreatedAt, result.RespondedAt, *update.SnapshotPart,
+		); err != nil {
+			return false, err
+		}
+	}
+	if update.Leverage != nil {
+		f.state.ApplyLeverage(*update.Leverage)
+	}
+	if update.LeverageBrackets != nil {
+		f.state.ApplyLeverageBrackets(update.LeverageBrackets)
+	}
+	return true, nil
+}
+
+func (f *asterAccountFeed) Snapshot() liveAccountSnapshot {
+	snapshot := f.state.Snapshot()
+	positions := make([]liveAccountPosition, 0, len(snapshot.Positions))
+	for _, position := range snapshot.Positions {
+		positions = append(positions, liveAccountPosition{
+			Symbol: position.Symbol, Side: position.Side, Size: position.Size,
+			EntryPrice: position.EntryPrice, LiqPrice: position.LiquidationPrice,
+		})
+	}
+	return liveAccountSnapshot{
+		Venue: "aster", Account: snapshot.Account, Connected: snapshot.Connected,
+		LastUpdated: snapshot.LastUpdated, PositionsUpdatedAt: snapshot.PositionsUpdatedAt,
+		Equity: snapshot.Equity, Available: snapshot.Available,
+		Positions: positions, LeverageBySymbol: snapshot.LeverageBySymbol,
+	}
+}
+
+func (f *asterAccountFeed) PreTradeBlockers(leg domain.Leg) []string {
+	return asteraccount.ValidatePreTrade(f.state.Snapshot(), leg.MarketKey, leg.MarginRequired, leg.Leverage)
+}
+
+func (f *asterAccountFeed) RefreshPositions(context.Context) error {
+	return fmt.Errorf("Aster position refresh requires an online browser signature")
+}
+
+func (f *asterAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error) {
+	return nil, fmt.Errorf("Aster live execution is not enabled")
+}
+
+func (f *asterAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error) {
+	return nil, fmt.Errorf("Aster live execution is not enabled")
+}
+
+func (f *asterAccountFeed) WaitForLeverage(context.Context, string, float64) error {
+	return fmt.Errorf("Aster live execution is not enabled")
+}
 
 type pacificaAccountFeedFactory struct {
 	logger *slog.Logger

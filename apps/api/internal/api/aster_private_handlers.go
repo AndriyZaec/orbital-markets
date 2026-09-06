@@ -15,6 +15,52 @@ type asterPrivateSubmitter interface {
 	SubmitSignedPrivate(context.Context, domain.SignedAction, *domain.SigningRequest) (*asterlive.PrivateResult, error)
 }
 
+func (s *Server) handleAsterAccountPrepare(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil || s.live.signingStore == nil || s.live.asterPrivate == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Aster account snapshots unavailable"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAgentAuthorizationBody)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input struct {
+		Account string `json:"account"`
+		Agent   string `json:"agent"`
+	}
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	payloads, err := asterlive.BuildAccountSnapshotPayloads(input.Account, input.Agent)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	unlockOwner, err := s.live.lockAgentOwner("aster", input.Account)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Aster owner is busy; retry request"})
+		return
+	}
+	defer unlockOwner()
+	authorized, err := s.live.agentAuthorizationMatches(r.Context(), "aster", input.Account, input.Agent)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify Aster authorization"})
+		return
+	}
+	if !authorized {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Aster agent is not authorized for this owner"})
+		return
+	}
+	for _, request := range payloads.Requests {
+		s.live.signingStore.Store(request)
+	}
+	writeJSON(w, http.StatusOK, payloads)
+}
+
 func (s *Server) handleAsterPrivatePrepare(w http.ResponseWriter, r *http.Request) {
 	if s.live == nil || s.live.signingStore == nil || s.live.asterPrivate == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Aster private requests unavailable"})
@@ -129,8 +175,13 @@ func (s *Server) handleAsterPrivateSubmit(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	stateApplied, applyErr := s.live.applyAsterPrivateResult(request, result)
+	if applyErr != nil && s.logger != nil {
+		s.logger.Error("apply Aster private result", "operation", operation, "account", request.Account, "err", applyErr)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"request_id": signed.RequestID, "operation": operation, "data": result.Data,
-		"submitted_at": result.SubmittedAt, "responded_at": result.RespondedAt,
+		"state_applied": stateApplied,
+		"submitted_at":  result.SubmittedAt, "responded_at": result.RespondedAt,
 	})
 }
