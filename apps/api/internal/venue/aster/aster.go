@@ -29,13 +29,25 @@ const (
 	maxClockSkew           = 5 * time.Second
 )
 
+type exchangeFilter struct {
+	FilterType string `json:"filterType"`
+	MinPrice   string `json:"minPrice"`
+	MaxPrice   string `json:"maxPrice"`
+	TickSize   string `json:"tickSize"`
+	MinQty     string `json:"minQty"`
+	MaxQty     string `json:"maxQty"`
+	StepSize   string `json:"stepSize"`
+	Notional   string `json:"notional"`
+}
+
 type exchangeInfoResponse struct {
 	Symbols []struct {
-		Symbol       string `json:"symbol"`
-		ContractType string `json:"contractType"`
-		Status       string `json:"status"`
-		BaseAsset    string `json:"baseAsset"`
-		QuoteAsset   string `json:"quoteAsset"`
+		Symbol       string           `json:"symbol"`
+		ContractType string           `json:"contractType"`
+		Status       string           `json:"status"`
+		BaseAsset    string           `json:"baseAsset"`
+		QuoteAsset   string           `json:"quoteAsset"`
+		Filters      []exchangeFilter `json:"filters"`
 	} `json:"symbols"`
 }
 
@@ -89,6 +101,18 @@ type bookTickerUpdate struct {
 type marketMetadata struct {
 	asset                string
 	fundingIntervalHours int
+	orderRules           OrderRules
+}
+
+// OrderRules are the exchange filters consumed by Aster LIMIT IOC orders.
+type OrderRules struct {
+	MinPrice     string
+	MaxPrice     string
+	TickSize     string
+	MinQuantity  string
+	MaxQuantity  string
+	QuantityStep string
+	MinNotional  string
 }
 
 type marketState struct {
@@ -129,6 +153,13 @@ func New(logger *slog.Logger) *Adapter {
 }
 
 func (a *Adapter) Name() string { return venueName }
+
+func (a *Adapter) OrderRules(symbol string) (OrderRules, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	state, ok := a.markets[symbol]
+	return state.orderRules, ok && state.orderRules.valid()
+}
 
 func (a *Adapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 	a.mu.RLock()
@@ -362,10 +393,11 @@ func (a *Adapter) fetchMetadata(ctx context.Context) (map[string]marketMetadata,
 	metadata := make(map[string]marketMetadata)
 	for _, symbol := range exchange.Symbols {
 		interval := intervals[symbol.Symbol]
+		rules := parseOrderRules(symbol.Filters)
 		if symbol.Status == "TRADING" && symbol.ContractType == "PERPETUAL" &&
 			symbol.QuoteAsset == "USDT" && interval > 0 {
 			metadata[symbol.Symbol] = marketMetadata{
-				asset: symbol.BaseAsset, fundingIntervalHours: interval,
+				asset: symbol.BaseAsset, fundingIntervalHours: interval, orderRules: rules,
 			}
 		}
 	}
@@ -373,6 +405,42 @@ func (a *Adapter) fetchMetadata(ctx context.Context) (map[string]marketMetadata,
 		return nil, fmt.Errorf("Aster metadata contains no active USDT perpetuals with funding intervals")
 	}
 	return metadata, nil
+}
+
+func parseOrderRules(filters []exchangeFilter) OrderRules {
+	var rules OrderRules
+	for _, filter := range filters {
+		switch filter.FilterType {
+		case "PRICE_FILTER":
+			rules.MinPrice = filter.MinPrice
+			rules.MaxPrice = filter.MaxPrice
+			rules.TickSize = filter.TickSize
+		case "LOT_SIZE":
+			rules.MinQuantity = filter.MinQty
+			rules.MaxQuantity = filter.MaxQty
+			rules.QuantityStep = filter.StepSize
+		case "MIN_NOTIONAL":
+			rules.MinNotional = filter.Notional
+		}
+	}
+	return rules
+}
+
+func (r OrderRules) valid() bool {
+	values := []string{
+		r.MinPrice, r.MaxPrice, r.TickSize,
+		r.MinQuantity, r.MaxQuantity, r.QuantityStep, r.MinNotional,
+	}
+	for _, value := range values {
+		if _, ok := positiveDecimal(value); !ok {
+			return false
+		}
+	}
+	minPrice, _ := strconv.ParseFloat(r.MinPrice, 64)
+	maxPrice, _ := strconv.ParseFloat(r.MaxPrice, 64)
+	minQuantity, _ := strconv.ParseFloat(r.MinQuantity, 64)
+	maxQuantity, _ := strconv.ParseFloat(r.MaxQuantity, 64)
+	return minPrice <= maxPrice && minQuantity <= maxQuantity
 }
 
 func (a *Adapter) fetchRESTMarkets(

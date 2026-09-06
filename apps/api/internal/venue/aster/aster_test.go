@@ -38,6 +38,13 @@ func TestRefreshBuildsHourlyUSDTPerpetualSnapshots(t *testing.T) {
 	if snapshot.BidSize != 200 || snapshot.AskSize != 303 {
 		t.Fatalf("BBO notionals = %v/%v, want 200/303", snapshot.BidSize, snapshot.AskSize)
 	}
+	rules, ok := adapter.OrderRules("BTCUSDT")
+	if !ok {
+		t.Fatal("BTCUSDT order rules unavailable")
+	}
+	if rules.TickSize != "0.10" || rules.QuantityStep != "0.001" || rules.MinNotional != "5" {
+		t.Fatalf("order rules = %+v", rules)
+	}
 	wantTime := time.UnixMilli(timestamp).UTC()
 	if !snapshot.Timestamp.Equal(wantTime) {
 		t.Fatalf("timestamp = %s, want %s", snapshot.Timestamp, wantTime)
@@ -156,7 +163,7 @@ func newMarketServer(t *testing.T) (*httptest.Server, int64) {
 		response.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/fapi/v3/exchangeInfo":
-			_, _ = response.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT"},{"symbol":"ETHUSDC","contractType":"PERPETUAL","status":"TRADING","baseAsset":"ETH","quoteAsset":"USDC"}]}`))
+			_, _ = response.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","filters":[{"filterType":"PRICE_FILTER","minPrice":"0.10","maxPrice":"1000000","tickSize":"0.10"},{"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},{"filterType":"MARKET_LOT_SIZE","minQty":"0.01","maxQty":"100","stepSize":"0.01"},{"filterType":"MIN_NOTIONAL","notional":"5"}]},{"symbol":"ETHUSDC","contractType":"PERPETUAL","status":"TRADING","baseAsset":"ETH","quoteAsset":"USDC"}]}`))
 		case "/fapi/v3/premiumIndex":
 			_, _ = fmt.Fprintf(response, `[{"symbol":"BTCUSDT","markPrice":"100","indexPrice":"100","lastFundingRate":"0.0008","time":%d}]`, timestamp+1)
 		case "/fapi/v3/ticker/bookTicker":
