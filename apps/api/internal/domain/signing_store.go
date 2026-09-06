@@ -87,7 +87,7 @@ func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningR
 func signingAccountMatches(venue, expected, actual string) bool {
 	expected = strings.TrimSpace(expected)
 	actual = strings.TrimSpace(actual)
-	if venue == "hyperliquid" {
+	if venue == "hyperliquid" || venue == "aster" {
 		return strings.EqualFold(expected, actual)
 	}
 	return expected == actual

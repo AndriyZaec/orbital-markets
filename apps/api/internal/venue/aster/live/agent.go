@@ -60,12 +60,19 @@ func (r ApproveAgentRequest) Validate(now time.Time) error {
 	if !expiresAt.After(now) || expiresAt.After(now.Add(maxAgentLifetime)) {
 		return fmt.Errorf("invalid Aster agent approval expiry")
 	}
-	if !ethereumSignaturePattern.MatchString(r.Signature) {
-		return fmt.Errorf("invalid Aster owner signature")
+	if err := validateEthereumSignature(r.Signature); err != nil {
+		return fmt.Errorf("invalid Aster owner signature: %w", err)
 	}
-	recovery, err := strconv.ParseUint(r.Signature[len(r.Signature)-2:], 16, 8)
+	return nil
+}
+
+func validateEthereumSignature(signature string) error {
+	if !ethereumSignaturePattern.MatchString(signature) {
+		return fmt.Errorf("invalid Ethereum signature")
+	}
+	recovery, err := strconv.ParseUint(signature[len(signature)-2:], 16, 8)
 	if err != nil || (recovery != 0 && recovery != 1 && recovery != 27 && recovery != 28) {
-		return fmt.Errorf("invalid Aster owner signature recovery value")
+		return fmt.Errorf("invalid Ethereum signature recovery value")
 	}
 	return nil
 }
