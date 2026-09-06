@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -21,6 +23,51 @@ import (
 
 type fakeHyperliquidAgentApprover struct {
 	request hllive.ApproveAgentRequest
+}
+
+type fakeAsterAgentApprover struct {
+	request asterlive.ApproveAgentRequest
+}
+
+func (f *fakeAsterAgentApprover) ApproveAgent(_ context.Context, request asterlive.ApproveAgentRequest) error {
+	f.request = request
+	return nil
+}
+
+func TestHandleAsterAgentApproveValidatesAndRelays(t *testing.T) {
+	now := time.Now()
+	approver := &fakeAsterAgentApprover{}
+	server := &Server{live: &LiveDeps{asterAgentApprover: approver}}
+	request := asterlive.ApproveAgentRequest{
+		User: "0x1111111111111111111111111111111111111111", Nonce: now.UnixMicro(),
+		Signature: "0x" + strings.Repeat("1", 128) + "1b",
+		AgentName: "Orbital Markets", AgentAddress: "0x2222222222222222222222222222222222222222",
+		Expired: now.Add(7 * 24 * time.Hour).UnixMilli(), CanPerpTrade: true,
+		AsterChain: "Mainnet", SignatureChainID: 56,
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.handleAsterAgentApprove(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/live/agents/aster/approve", bytes.NewReader(body),
+	))
+	if response.Code != http.StatusNoContent || approver.request.AgentAddress != request.AgentAddress {
+		t.Fatalf("status = %d, relayed = %+v, body = %s", response.Code, approver.request, response.Body.String())
+	}
+}
+
+func TestHandleAsterAgentApproveRejectsPrivateKeyFields(t *testing.T) {
+	server := &Server{live: &LiveDeps{asterAgentApprover: &fakeAsterAgentApprover{}}}
+	response := httptest.NewRecorder()
+	server.handleAsterAgentApprove(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/live/agents/aster/approve",
+		bytes.NewBufferString(`{"privateKey":"secret"}`),
+	))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", response.Code)
+	}
 }
 
 type fakeHyperliquidBuilderApprover struct {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
@@ -35,6 +36,7 @@ type LiveDeps struct {
 	hlAssetMap                    hllive.AssetMap
 	hlBuilder                     *hllive.BuilderCode
 	pacificaLotSizes              pacificlive.LotSizeMap
+	asterAgentApprover            asterAgentApprover
 	hlAgentApprover               hyperliquidAgentApprover
 	hlBuilderApprover             hyperliquidBuilderApprover
 	pacificaAgentBinder           pacificaAgentBinder
@@ -65,6 +67,7 @@ func NewLiveDeps(
 		hlAssetMap:                    hlAssetMap,
 		hlBuilder:                     hllive.OrbitalBuilderCode(),
 		pacificaLotSizes:              pacificaLotSizes,
+		asterAgentApprover:            asterlive.NewDefaultAgentApprover(),
 		hlAgentApprover:               hlApprover,
 		hlBuilderApprover:             hlApprover,
 		pacificaAgentBinder:           pacificlive.NewDefaultAgentBinder(),
@@ -92,7 +95,7 @@ func newAgentAuthorizationRegistry(store *executor.Store) *agentAuthorizationReg
 
 func normalizeAgentAuthorization(venue, value string) string {
 	value = strings.TrimSpace(value)
-	if venue == "hyperliquid" {
+	if venue == "hyperliquid" || venue == "aster" {
 		value = strings.ToLower(value)
 	}
 	return value
