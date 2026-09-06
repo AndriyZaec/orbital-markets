@@ -151,6 +151,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
 	s.mux.HandleFunc("POST /api/v1/live/kill", s.handleLiveKill)
 	s.mux.HandleFunc("POST /api/v1/live/agents/aster/approve", s.handleAsterAgentApprove)
+	s.mux.HandleFunc("POST /api/v1/live/aster/private/prepare", s.handleAsterPrivatePrepare)
+	s.mux.HandleFunc("POST /api/v1/live/aster/private/submit", s.handleAsterPrivateSubmit)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve", s.handleHyperliquidAgentApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve-builder-fee", s.handleHyperliquidBuilderFeeApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/bind", s.handlePacificaAgentBind)

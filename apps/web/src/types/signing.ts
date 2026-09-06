@@ -4,11 +4,14 @@ export interface SigningRequest {
   position_id?: string
   leg?: number
   venue: 'pacifica' | 'hyperliquid' | 'aster'
-  action: 'open' | 'close' | 'unwind' | 'emergency_close' | 'update_leverage'
+  action:
+    | 'open' | 'close' | 'unwind' | 'emergency_close' | 'update_leverage'
+    | 'get_position_mode' | 'get_account' | 'get_positions' | 'get_leverage_brackets'
+    | 'query_order' | 'start_user_stream' | 'keepalive_user_stream' | 'close_user_stream'
   account: string
   signer?: string
   symbol: string
-  side: 'buy' | 'sell'
+  side: 'buy' | 'sell' | ''
   amount: number
   price: number
   reduce_only: boolean

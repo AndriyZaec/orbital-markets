@@ -607,8 +607,8 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Validate against stored signing request (atomic — prevents double-submit)
-	sigReq, err := s.live.signingStore.ValidateAndConsume(signed)
+	// 1. Validate without consuming so requests sent to the wrong endpoint remain usable.
+	sigReq, err := s.live.signingStore.Validate(signed)
 	if err != nil {
 		s.logger.Warn("live submit: validation failed",
 			"request_id", signed.RequestID,
@@ -631,6 +631,11 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "live opens must use /api/v1/live/prepare and /api/v1/live/advance",
 		})
+		return
+	}
+	sigReq, err = s.live.signingStore.ValidateAndConsume(signed)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "signing request was already consumed"})
 		return
 	}
 

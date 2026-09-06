@@ -100,6 +100,24 @@ test('Aster signing rejects builder fields until attribution is enabled', async 
   await assert.rejects(signAsterAgentRequest(request, asterAgent()), /not an allowed IOC order/)
 })
 
+test('Aster agent signs only allowlisted private account requests', async () => {
+  const operations: SigningRequest['action'][] = [
+    'get_position_mode', 'get_account', 'get_positions', 'get_leverage_brackets',
+    'query_order', 'update_leverage', 'start_user_stream', 'keepalive_user_stream', 'close_user_stream',
+  ]
+  for (const operation of operations) {
+    const signed = await signAsterAgentRequest(asterPrivateSigningRequest(operation), asterAgent())
+    assert.match(signed.signature, /^0x[0-9a-f]{130}$/)
+  }
+})
+
+test('Aster agent rejects private request fields outside the operation policy', async () => {
+  const request = asterPrivateSigningRequest('get_account')
+  const payload = request.unsigned_payload as { message: { msg: string } }
+  payload.message.msg = `withdraw=true&${payload.message.msg}`
+  await assert.rejects(signAsterAgentRequest(request, asterAgent()), /not an allowed private request/)
+})
+
 function asterAgent(): StoredTradingAgent {
   assert.equal(privateKeyToAccount(privateKey).address.toLowerCase(), agentAddress.toLowerCase())
   return {
@@ -162,6 +180,58 @@ function asterSigningRequest(): SigningRequest {
     expires_at: '2099-08-10T12:00:00.000Z',
     created_at: '2026-08-10T12:00:00.000Z',
   }
+}
+
+function asterPrivateSigningRequest(action: SigningRequest['action']): SigningRequest {
+  const request = asterSigningRequest()
+  const routes: Partial<Record<SigningRequest['action'], { method: string; path: string }>> = {
+    get_position_mode: { method: 'GET', path: '/fapi/v3/positionSide/dual' },
+    get_account: { method: 'GET', path: '/fapi/v3/accountWithJoinMargin' },
+    get_positions: { method: 'GET', path: '/fapi/v3/positionRisk' },
+    get_leverage_brackets: { method: 'GET', path: '/fapi/v3/leverageBracket' },
+    query_order: { method: 'GET', path: '/fapi/v3/order' },
+    update_leverage: { method: 'POST', path: '/fapi/v3/leverage' },
+    start_user_stream: { method: 'POST', path: '/fapi/v3/listenKey' },
+    keepalive_user_stream: { method: 'PUT', path: '/fapi/v3/listenKey' },
+    close_user_stream: { method: 'DELETE', path: '/fapi/v3/listenKey' },
+  }
+  let symbol = ''
+  let clientOrderID = ''
+  let leverage: number | undefined
+  let operationQuery = ''
+  if (action === 'get_positions' || action === 'get_leverage_brackets') {
+    symbol = 'BTCUSDT'
+    operationQuery = `symbol=${symbol}&`
+  } else if (action === 'query_order') {
+    symbol = 'BTCUSDT'
+    clientOrderID = 'client-order'
+    operationQuery = `symbol=${symbol}&origClientOrderId=${clientOrderID}&`
+  } else if (action === 'update_leverage') {
+    symbol = 'BTCUSDT'
+    leverage = 5
+    operationQuery = `symbol=${symbol}&leverage=${leverage}&`
+  }
+  return {
+    ...request,
+    id: `aster-${action}-1`,
+    client_order_id: clientOrderID,
+    action,
+    symbol,
+    side: '',
+    amount: 0,
+    price: 0,
+    reduce_only: false,
+    leverage,
+    unsigned_payload: {
+      ...(request.unsigned_payload as object),
+      message: { msg: operationQuery + privateAuthQuery() },
+    },
+    venue_metadata: routes[action],
+  }
+}
+
+function privateAuthQuery(): string {
+  return `asterChain=Mainnet&user=${ownerAddress}&signer=${agentAddress}&nonce=1786363200000000`
 }
 
 class TestStorage implements StorageLike {

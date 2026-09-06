@@ -38,6 +38,7 @@ type LiveDeps struct {
 	hlAssetMap                    hllive.AssetMap
 	hlBuilder                     *hllive.BuilderCode
 	pacificaLotSizes              pacificlive.LotSizeMap
+	asterPrivate                  asterPrivateSubmitter
 	asterAgentApprover            asterAgentApprover
 	hlAgentApprover               hyperliquidAgentApprover
 	hlBuilderApprover             hyperliquidBuilderApprover
@@ -70,6 +71,7 @@ func NewLiveDeps(
 		hlAssetMap:                    hlAssetMap,
 		hlBuilder:                     hllive.OrbitalBuilderCode(),
 		pacificaLotSizes:              pacificaLotSizes,
+		asterPrivate:                  asterlive.NewDefaultClient(logger),
 		asterAgentApprover:            asterlive.NewDefaultAgentApprover(),
 		hlAgentApprover:               hlApprover,
 		hlBuilderApprover:             hlApprover,

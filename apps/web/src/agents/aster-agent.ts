@@ -126,7 +126,7 @@ export async function signAsterAgentRequest(
   request: SigningRequest,
   agent: StoredTradingAgent,
 ): Promise<SignedAction> {
-  const payload = allowedAsterOrder(request, agent)
+  const payload = allowedAsterRequest(request, agent)
   const account = privateKeyToAccount(agent.privateKey as Hex)
   if (account.address.toLowerCase() !== agent.agentAddress.toLowerCase()) {
     throw new Error('Aster agent key does not match its address')
@@ -156,21 +156,21 @@ interface AsterOrderPayload {
   message: { msg: string }
 }
 
-function allowedAsterOrder(request: SigningRequest, agent: StoredTradingAgent): AsterOrderPayload {
+function allowedAsterRequest(request: SigningRequest, agent: StoredTradingAgent): AsterOrderPayload {
   const payload = request.unsigned_payload as Record<string, unknown> | null
   const domain = payload?.domain as Record<string, unknown> | undefined
   const types = payload?.types as Record<string, unknown> | undefined
   const message = payload?.message as Record<string, unknown> | undefined
   const msg = message?.msg
-  const actionAllowed = request.action === 'open' || request.action === 'close' ||
+  const orderAction = request.action === 'open' || request.action === 'close' ||
     request.action === 'unwind' || request.action === 'emergency_close'
+  const privateAction = isAsterPrivateAction(request.action)
   const allowed =
     request.venue === 'aster' && agent.venue === 'aster' &&
     request.account.toLowerCase() === agent.ownerAddress.toLowerCase() &&
     request.signer?.toLowerCase() === agent.agentAddress.toLowerCase() &&
     !!agent.expiresAt && Date.parse(agent.expiresAt) > Date.now() &&
-    Date.parse(request.expires_at) > Date.now() && actionAllowed &&
-    (request.action === 'open' ? !request.reduce_only : request.reduce_only) &&
+    Date.parse(request.expires_at) > Date.now() && (orderAction || privateAction) &&
     hasOnlyKeys(payload, ['domain', 'types', 'primaryType', 'message']) &&
     payload?.primaryType === 'Message' &&
     hasOnlyKeys(domain, ['name', 'version', 'chainId', 'verifyingContract']) &&
@@ -179,9 +179,22 @@ function allowedAsterOrder(request: SigningRequest, agent: StoredTradingAgent): 
     hasOnlyKeys(types, ['EIP712Domain', 'Message']) &&
     isAsterDomainType(types?.EIP712Domain) && isAsterMessageType(types?.Message) &&
     hasOnlyKeys(message, ['msg']) && typeof msg === 'string'
-  if (!allowed) throw new Error('Aster payload is not an allowed IOC order')
+  if (!allowed) throw new Error(orderAction ? 'Aster payload is not an allowed IOC order' : 'Aster payload is not an allowed private request')
 
   const query = parseUniqueQuery(msg)
+  if (privateAction) {
+    validateAsterPrivateQuery(request, agent, query)
+    return {
+      domain: {
+        name: 'AsterSignTransaction', version: '1', chainId: orderChainId,
+        verifyingContract: zeroAddress,
+      },
+      message: { msg },
+    }
+  }
+  if (request.action === 'open' ? request.reduce_only : !request.reduce_only) {
+    throw new Error('Aster payload is not an allowed IOC order')
+  }
   const expectedKeys = [
     'symbol', 'type', 'side', 'quantity', 'price', 'timeInForce',
     'newClientOrderId', 'newOrderRespType', 'reduceOnly', 'positionSide',
@@ -213,6 +226,74 @@ function allowedAsterOrder(request: SigningRequest, agent: StoredTradingAgent): 
     },
     message: { msg },
   }
+}
+
+function isAsterPrivateAction(action: SigningRequest['action']): boolean {
+  return action === 'get_position_mode' || action === 'get_account' || action === 'get_positions' ||
+    action === 'get_leverage_brackets' || action === 'query_order' || action === 'update_leverage' ||
+    action === 'start_user_stream' || action === 'keepalive_user_stream' || action === 'close_user_stream'
+}
+
+function validateAsterPrivateQuery(
+  request: SigningRequest,
+  agent: StoredTradingAgent,
+  query: Map<string, string>,
+): void {
+  const routes: Partial<Record<SigningRequest['action'], { method: string; path: string }>> = {
+    get_position_mode: { method: 'GET', path: '/fapi/v3/positionSide/dual' },
+    get_account: { method: 'GET', path: '/fapi/v3/accountWithJoinMargin' },
+    get_positions: { method: 'GET', path: '/fapi/v3/positionRisk' },
+    get_leverage_brackets: { method: 'GET', path: '/fapi/v3/leverageBracket' },
+    query_order: { method: 'GET', path: '/fapi/v3/order' },
+    update_leverage: { method: 'POST', path: '/fapi/v3/leverage' },
+    start_user_stream: { method: 'POST', path: '/fapi/v3/listenKey' },
+    keepalive_user_stream: { method: 'PUT', path: '/fapi/v3/listenKey' },
+    close_user_stream: { method: 'DELETE', path: '/fapi/v3/listenKey' },
+  }
+  const route = routes[request.action]
+  const metadata = request.venue_metadata as Record<string, unknown> | undefined
+  let operationKeys: string[] = []
+  if (request.action === 'get_positions' || request.action === 'get_leverage_brackets') {
+    operationKeys = request.symbol ? ['symbol'] : []
+  } else if (request.action === 'query_order') {
+    operationKeys = ['symbol', 'origClientOrderId']
+  } else if (request.action === 'update_leverage') {
+    operationKeys = ['symbol', 'leverage']
+  }
+  const expectedKeys = [...operationKeys, 'asterChain', 'user', 'signer', 'nonce']
+  const summaryEmpty = request.side === '' && request.amount === 0 && request.price === 0 && !request.reduce_only
+  const noOperationParams = request.symbol === '' && request.client_order_id === '' && (request.leverage === undefined || request.leverage === 0)
+  const operationSummaryValid = request.action === 'get_positions' || request.action === 'get_leverage_brackets'
+    ? request.client_order_id === '' && (request.leverage === undefined || request.leverage === 0)
+    : request.action === 'query_order'
+      ? !!request.symbol && !!request.client_order_id && (request.leverage === undefined || request.leverage === 0)
+      : request.action === 'update_leverage'
+        ? !!request.symbol && request.client_order_id === ''
+        : noOperationParams
+  const valid =
+    summaryEmpty && operationSummaryValid && !!route &&
+    hasOnlyKeys(metadata, ['method', 'path']) && metadata?.method === route?.method && metadata.path === route.path &&
+    query.size === expectedKeys.length && expectedKeys.every((key) => query.has(key)) &&
+    query.get('asterChain') === 'Mainnet' &&
+    query.get('user')?.toLowerCase() === request.account.toLowerCase() &&
+    query.get('signer')?.toLowerCase() === agent.agentAddress.toLowerCase() &&
+    validAsterNonce(query.get('nonce'), request) &&
+    (!operationKeys.includes('symbol') || (!!request.symbol && query.get('symbol') === request.symbol)) &&
+    (request.action !== 'query_order' || (!!request.client_order_id && query.get('origClientOrderId') === request.client_order_id)) &&
+    (request.action !== 'update_leverage' || (
+      Number.isSafeInteger(request.leverage) && request.leverage! >= 1 && request.leverage! <= 125 &&
+      query.get('leverage') === String(request.leverage)
+    ))
+  if (!valid) throw new Error('Aster payload is not an allowed private request')
+}
+
+function validAsterNonce(value: string | undefined, request: SigningRequest): boolean {
+  if (!value || !/^\d+$/.test(value)) return false
+  const nonce = Number(value)
+  const createdAt = Date.parse(request.created_at)
+  const expiresAt = Date.parse(request.expires_at)
+  return Number.isSafeInteger(nonce) && Number.isFinite(createdAt) && Number.isFinite(expiresAt) &&
+    nonce >= createdAt * 1_000 && nonce < (expiresAt + 1) * 1_000
 }
 
 function parseUniqueQuery(value: string): Map<string, string> {

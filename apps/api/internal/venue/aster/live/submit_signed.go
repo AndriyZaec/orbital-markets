@@ -39,27 +39,27 @@ type FillResult struct {
 }
 
 type Client struct {
-	orderEndpoint string
-	httpClient    *http.Client
-	logger        *slog.Logger
-	fillsMu       sync.RWMutex
-	fills         map[string]FillResult
+	baseURL    string
+	httpClient *http.Client
+	logger     *slog.Logger
+	fillsMu    sync.RWMutex
+	fills      map[string]FillResult
 }
 
-func NewClient(orderEndpoint string, httpClient *http.Client, logger *slog.Logger) *Client {
+func NewClient(baseURL string, httpClient *http.Client, logger *slog.Logger) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: orderSubmitTimeout}
 	}
 	client := *httpClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Client{
-		orderEndpoint: orderEndpoint, httpClient: &client, logger: logger,
+		baseURL: strings.TrimRight(baseURL, "/"), httpClient: &client, logger: logger,
 		fills: make(map[string]FillResult),
 	}
 }
 
 func NewDefaultClient(logger *slog.Logger) *Client {
-	return NewClient(orderURL, &http.Client{Timeout: orderSubmitTimeout}, logger)
+	return NewClient(asterAPIBaseURL, &http.Client{Timeout: orderSubmitTimeout}, logger)
 }
 
 // SubmitSignedOrder relays an already-authorized browser-agent signature.
@@ -74,7 +74,7 @@ func (c *Client) SubmitSignedOrder(
 		return nil, fmt.Errorf("%w: %v", ErrSubmissionNotSent, err)
 	}
 	body := query + "&signature=" + url.QueryEscape(signed.Signature)
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.orderEndpoint, strings.NewReader(body))
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/fapi/v3/order", strings.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("%w: build order request: %v", ErrSubmissionNotSent, err)
 	}
@@ -224,14 +224,7 @@ func validateSignedOrder(signed domain.SignedAction, request *domain.SigningRequ
 	if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
 		return "", fmt.Errorf("decode Aster unsigned order: %w", err)
 	}
-	if unsigned.Domain.Name != "AsterSignTransaction" || unsigned.Domain.Version != "1" ||
-		unsigned.Domain.ChainID != mainnetChainID ||
-		!strings.EqualFold(unsigned.Domain.VerifyingContract, "0x0000000000000000000000000000000000000000") ||
-		unsigned.PrimaryType != "Message" || unsigned.Message.Msg == "" ||
-		!equalEIP712Fields(unsigned.Types.Domain, []EIP712Field{
-			{Name: "name", Type: "string"}, {Name: "version", Type: "string"},
-			{Name: "chainId", Type: "uint256"}, {Name: "verifyingContract", Type: "address"},
-		}) || !equalEIP712Fields(unsigned.Types.Message, []EIP712Field{{Name: "msg", Type: "string"}}) {
+	if !validAsterTypedData(unsigned) {
 		return "", fmt.Errorf("invalid Aster typed-data envelope")
 	}
 	values, err := url.ParseQuery(unsigned.Message.Msg)

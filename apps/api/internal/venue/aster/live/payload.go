@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	orderURL          = "https://fapi.asterdex.com/fapi/v3/order"
+	asterAPIBaseURL   = "https://fapi.asterdex.com"
+	orderURL          = asterAPIBaseURL + "/fapi/v3/order"
 	signingRequestTTL = 30 * time.Second
 	mainnetChainID    = 1666
 	mainnetName       = "Mainnet"
@@ -220,23 +221,7 @@ func buildPayload(
 		queryParameter{"nonce", strconv.FormatInt(nonce, 10)},
 	)
 	queryString := encodeQuery(params)
-	unsigned := AsterUnsignedOrder{
-		Domain: EIP712Domain{
-			Name: "AsterSignTransaction", Version: "1", ChainID: mainnetChainID,
-			VerifyingContract: "0x0000000000000000000000000000000000000000",
-		},
-		Types: EIP712Types{
-			Domain: []EIP712Field{
-				{Name: "name", Type: "string"},
-				{Name: "version", Type: "string"},
-				{Name: "chainId", Type: "uint256"},
-				{Name: "verifyingContract", Type: "address"},
-			},
-			Message: []EIP712Field{{Name: "msg", Type: "string"}},
-		},
-		PrimaryType: "Message",
-		Message:     AsterMessage{Msg: queryString},
-	}
+	unsigned := newAsterTypedData(queryString)
 	unsignedBytes, err := json.Marshal(unsigned)
 	if err != nil {
 		return nil, fmt.Errorf("marshal Aster unsigned order: %w", err)

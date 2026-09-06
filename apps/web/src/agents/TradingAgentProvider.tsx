@@ -9,6 +9,7 @@ import {
   authorizeAsterAgent,
   type AsterApproveAgentRequest,
 } from './aster-agent.ts'
+import { runAsterPrivateRequest, type AsterPrivateInput } from './aster-private.ts'
 import {
   approveHyperliquidBuilderFee,
   authorizeHyperliquidAgent,
@@ -26,6 +27,7 @@ import { assertSupportedSigningVenue, signWithStoredTradingAgent } from './signi
 import {
   clearStoredTradingAgent,
   loadAfterOwnerChange,
+  loadStoredTradingAgent,
   type StorageLike,
 } from './storage.ts'
 import type { TradingAgentState, Venue } from './types'
@@ -244,8 +246,26 @@ function TradingAgentSession({
     setState(missingState(venue, ownerAddress))
   }
 
+  const requestAster = async <T,>(input: Omit<AsterPrivateInput, 'account' | 'agent'>): Promise<T> => {
+    if (!asterOwner || aster.status !== 'ready' || !aster.agentAddress) {
+      throw new Error('Aster authorization is not ready')
+    }
+    const ownerAddress = asterOwner
+    const agentAddress = aster.agentAddress
+    const requestStillCurrent = () => {
+      if (!ownerStillCurrent('aster', ownerAddress, owners.current)) return false
+      return loadStoredTradingAgent(browserStorage(), 'aster', ownerAddress)
+        ?.agentAddress.toLowerCase() === agentAddress.toLowerCase()
+    }
+    return runAsterPrivateRequest<T>(
+      { ...input, account: ownerAddress, agent: agentAddress },
+      sign,
+      requestStillCurrent,
+    )
+  }
+
   return (
-    <TradingAgentContext.Provider value={{ pacifica, hyperliquid, aster, authorize, sign, clear }}>
+    <TradingAgentContext.Provider value={{ pacifica, hyperliquid, aster, authorize, sign, requestAster, clear }}>
       {children}
     </TradingAgentContext.Provider>
   )
