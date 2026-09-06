@@ -514,18 +514,20 @@ func (s *Subscriber) handleMarginMode(data json.RawMessage) {
 //	  "f": "-0.00023989",   // position funding fee
 //	  "i": false,           // isolated mode
 //	  "l": null,            // liquidation price (null if N/A)
-//	  "t": 1764133203991    // timestamp ms
+//	  "t": 1764133203991,   // timestamp ms
+//	  "I": "uuid"          // position ID
 //	}]
 func (s *Subscriber) handlePositions(data json.RawMessage) {
 	var positions []struct {
-		S string  `json:"s"` // symbol
-		D string  `json:"d"` // side: "bid" or "ask"
-		A string  `json:"a"` // amount
-		P string  `json:"p"` // entry price
-		M string  `json:"m"` // margin
-		F string  `json:"f"` // funding fee
-		I bool    `json:"i"` // isolated
-		L *string `json:"l"` // liquidation price (nullable)
+		S          string  `json:"s"` // symbol
+		D          string  `json:"d"` // side: "bid" or "ask"
+		A          string  `json:"a"` // amount
+		P          string  `json:"p"` // entry price
+		M          string  `json:"m"` // margin
+		F          string  `json:"f"` // funding fee
+		I          bool    `json:"i"` // isolated
+		L          *string `json:"l"` // liquidation price (nullable)
+		PositionID string  `json:"I"` // prevents case-insensitive matching with i
 	}
 	if err := json.Unmarshal(data, &positions); err != nil {
 		s.logger.Warn("pacifica: parse account_positions", "err", err)

@@ -127,3 +127,19 @@ func TestHandleLeverageAcceptsNumberAndString(t *testing.T) {
 		})
 	}
 }
+
+func TestHandlePositionsSeparatesIsolatedFlagFromPositionID(t *testing.T) {
+	state := NewAccountState()
+	state.ResetForAccount("owner")
+	subscriber := &Subscriber{
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		state:   state,
+		account: "owner",
+	}
+	subscriber.handlePositions(json.RawMessage(`[{"s":"CL","d":"bid","a":"474.55","p":"87.656748","m":"0","f":"222.44227748","i":false,"l":null,"t":1788724804827,"I":"7ff0458c-bde8-48a6-825f-f9b53824a285"}]`))
+
+	positions := state.Snapshot().Positions
+	if len(positions) != 1 || positions[0].Symbol != "CL" || positions[0].Size != 474.55 {
+		t.Fatalf("positions = %+v", positions)
+	}
+}
