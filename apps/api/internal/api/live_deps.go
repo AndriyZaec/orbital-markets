@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mr-tron/base58"
@@ -44,6 +46,7 @@ type LiveDeps struct {
 	pacificaBuilderApprover       pacificaBuilderCodeApprover
 	pacificaBuilderApprovalReader pacificaBuilderCodeApprovalReader
 	agentAuthorizations           *agentAuthorizationRegistry
+	agentOwnerLocks               [64]sync.Mutex
 }
 
 func NewLiveDeps(
@@ -181,6 +184,13 @@ func (d *LiveDeps) acquireRecoveryAccounts(pacificaAccount, hyperliquidAccount s
 func (d *LiveDeps) lockAgentOwner(venue, owner string) (func(), error) {
 	if d == nil || d.accounts == nil {
 		return func() {}, nil
+	}
+	if _, supported := d.accounts.factories[venue]; !supported {
+		hasher := fnv.New32a()
+		_, _ = hasher.Write([]byte(venue + ":" + normalizeAgentAuthorization(venue, owner)))
+		lock := &d.agentOwnerLocks[hasher.Sum32()%uint32(len(d.agentOwnerLocks))]
+		lock.Lock()
+		return lock.Unlock, nil
 	}
 	lease, err := d.accounts.AcquireRecovery(venue, owner)
 	if err != nil {

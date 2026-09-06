@@ -37,7 +37,10 @@ func (f *fakeAsterAgentApprover) ApproveAgent(_ context.Context, request asterli
 func TestHandleAsterAgentApproveValidatesAndRelays(t *testing.T) {
 	now := time.Now()
 	approver := &fakeAsterAgentApprover{}
-	server := &Server{live: &LiveDeps{asterAgentApprover: approver}}
+	server := &Server{live: &LiveDeps{
+		asterAgentApprover: approver,
+		accounts:           &accountFeedRegistry{factories: map[string]accountFeedFactory{}},
+	}}
 	request := asterlive.ApproveAgentRequest{
 		User: "0x1111111111111111111111111111111111111111", Nonce: now.UnixMicro(),
 		Signature: "0x" + strings.Repeat("1", 128) + "1b",
