@@ -509,12 +509,19 @@ func venueDisplayName(venue string) string {
 // orderLegsByRisk resolves riskier-first ordering: the leg with higher slippage
 // (thinner book) is submitted first. Mirrors executor.orderLegs.
 func orderLegsByRisk(plan *domain.ExecutionPlan) (legPlan, legPlan) {
-	a := legPlan{venue: plan.Leg1.Venue, symbol: plan.Leg1.Asset, side: plan.Leg1.Side, price: plan.Leg1.ExpectedPrice}
-	b := legPlan{venue: plan.Leg2.Venue, symbol: plan.Leg2.Asset, side: plan.Leg2.Side, price: plan.Leg2.ExpectedPrice}
+	a := legPlan{venue: plan.Leg1.Venue, symbol: legMarketKey(plan.Leg1), side: plan.Leg1.Side, price: plan.Leg1.ExpectedPrice}
+	b := legPlan{venue: plan.Leg2.Venue, symbol: legMarketKey(plan.Leg2), side: plan.Leg2.Side, price: plan.Leg2.ExpectedPrice}
 	if plan.Leg1.Slippage >= plan.Leg2.Slippage {
 		return a, b
 	}
 	return b, a
+}
+
+func legMarketKey(leg domain.Leg) string {
+	if leg.MarketKey != "" {
+		return leg.MarketKey
+	}
+	return leg.Asset
 }
 
 // buildOpenSigningRequest builds an open-order signing request for one leg.

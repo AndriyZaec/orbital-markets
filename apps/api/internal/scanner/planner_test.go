@@ -130,6 +130,34 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	}
 }
 
+func TestBuildPlanPreservesVenueMarketKeys(t *testing.T) {
+	now := time.Now()
+	left := leverageTestAdapter{name: "left", data: []venue.MarketData{{
+		Venue: "left", Asset: "BTC", MarketKey: "BTC-PERP", MarkPrice: 100, IndexPrice: 100,
+		FundingRate: 0.001, BidPrice: 99, BidSize: 1000, AskPrice: 100, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 5, Timestamp: now,
+	}}}
+	right := leverageTestAdapter{name: "right", data: []venue.MarketData{{
+		Venue: "right", Asset: "BTC", MarketKey: "BTCUSDT", MarkPrice: 100, IndexPrice: 100,
+		FundingRate: -0.001, BidPrice: 99, BidSize: 1000, AskPrice: 100, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 5, Timestamp: now,
+	}}}
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), left, right)
+	s.scan(context.Background())
+	opportunities := s.Opportunities()
+	if len(opportunities) == 0 {
+		t.Fatal("expected BTC opportunity")
+	}
+	plan, err := s.BuildPlan(context.Background(), opportunities[0].ID, 2, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]string{plan.Leg1.Venue: plan.Leg1.MarketKey, plan.Leg2.Venue: plan.Leg2.MarketKey}
+	if keys["left"] != "BTC-PERP" || keys["right"] != "BTCUSDT" {
+		t.Fatalf("market keys = %+v", keys)
+	}
+}
+
 func containsWarning(warnings []string, want string) bool {
 	for _, warning := range warnings {
 		if strings.Contains(warning, want) {

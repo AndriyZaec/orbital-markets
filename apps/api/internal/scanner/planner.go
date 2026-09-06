@@ -92,6 +92,7 @@ func (s *Scanner) BuildPlan(
 	leg1 := domain.Leg{
 		Venue:         longSnap.Venue,
 		Asset:         longSnap.Asset,
+		MarketKey:     longSnap.MarketKey,
 		Side:          domain.SideLong,
 		ExpectedPrice: longSnap.AskPrice, // buy at ask
 		Slippage:      estimateExecutionSlippage(longSnap, domain.SideLong, notional),
@@ -101,6 +102,7 @@ func (s *Scanner) BuildPlan(
 	leg2 := domain.Leg{
 		Venue:         shortSnap.Venue,
 		Asset:         shortSnap.Asset,
+		MarketKey:     shortSnap.MarketKey,
 		Side:          domain.SideShort,
 		ExpectedPrice: shortSnap.BidPrice, // sell at bid
 		Slippage:      estimateExecutionSlippage(shortSnap, domain.SideShort, notional),
