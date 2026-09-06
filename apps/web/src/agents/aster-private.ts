@@ -22,6 +22,12 @@ interface AsterPrivateResponse<T> {
   data: T
   uncertain?: boolean
   error?: string
+  state_applied?: boolean
+}
+
+interface AsterAccountSnapshotPayloads {
+  snapshot_id: string
+  requests: SigningRequest[]
 }
 
 export async function runAsterPrivateRequest<T>(
@@ -38,6 +44,51 @@ export async function runAsterPrivateRequest<T>(
     throw await apiResponseError(preparedResponse, 'Unable to prepare the Aster request.')
   }
   const request = await preparedResponse.json() as SigningRequest
+  const result = await submitPreparedAsterRequest<T>(input, request, sign, requestStillCurrent)
+  return result.data
+}
+
+export async function refreshAsterAccountSnapshot(
+  account: string,
+  agent: string,
+  sign: (request: SigningRequest) => Promise<SignedAction>,
+  requestStillCurrent: () => boolean,
+): Promise<void> {
+  const preparedResponse = await apiFetch('/api/v1/live/aster/account/prepare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account, agent }),
+  })
+  if (!preparedResponse.ok) {
+    throw await apiResponseError(preparedResponse, 'Unable to prepare the Aster account snapshot.')
+  }
+  const payloads = await preparedResponse.json() as AsterAccountSnapshotPayloads
+  const operations: AsterPrivateOperation[] = ['get_position_mode', 'get_account', 'get_positions']
+  const requests = new Map(payloads.requests?.map((request) => [request.action, request]))
+  const coherent = !!payloads.snapshot_id && payloads.requests?.length === operations.length &&
+    requests.size === operations.length && operations.every((operation) => {
+      const request = requests.get(operation)
+      return request?.snapshot_id === payloads.snapshot_id && request.created_at === payloads.requests[0]?.created_at
+    })
+  if (!coherent) throw new Error('Orbital returned an incoherent Aster account snapshot')
+
+  for (const operation of operations) {
+    const request = requests.get(operation)!
+    const result = await submitPreparedAsterRequest(
+      { operation, account, agent }, request, sign, requestStillCurrent,
+    )
+    if (!result.state_applied) {
+      throw new Error('Orbital did not apply the Aster account snapshot')
+    }
+  }
+}
+
+async function submitPreparedAsterRequest<T>(
+  input: AsterPrivateInput,
+  request: SigningRequest,
+  sign: (request: SigningRequest) => Promise<SignedAction>,
+  requestStillCurrent: () => boolean,
+): Promise<AsterPrivateResponse<T>> {
   if (request.venue !== 'aster' || request.action !== input.operation ||
     request.account.toLowerCase() !== input.account.toLowerCase() ||
     request.signer?.toLowerCase() !== input.agent.toLowerCase() ||
@@ -68,5 +119,5 @@ export async function runAsterPrivateRequest<T>(
   if (!requestStillCurrent()) {
     throw new Error('Aster owner or authorization changed during the private request')
   }
-  return result.data
+  return result
 }

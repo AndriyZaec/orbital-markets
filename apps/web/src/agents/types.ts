@@ -30,5 +30,6 @@ export interface TradingAgentManager {
   authorize(venue: Venue): Promise<void>
   sign(request: SigningRequest): Promise<SignedAction>
   requestAster<T>(input: Omit<AsterPrivateInput, 'account' | 'agent'>): Promise<T>
+  refreshAsterAccount(): Promise<void>
   clear(venue: Venue): void
 }

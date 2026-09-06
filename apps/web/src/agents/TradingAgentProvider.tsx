@@ -9,7 +9,11 @@ import {
   authorizeAsterAgent,
   type AsterApproveAgentRequest,
 } from './aster-agent.ts'
-import { runAsterPrivateRequest, type AsterPrivateInput } from './aster-private.ts'
+import {
+  refreshAsterAccountSnapshot,
+  runAsterPrivateRequest,
+  type AsterPrivateInput,
+} from './aster-private.ts'
 import {
   approveHyperliquidBuilderFee,
   authorizeHyperliquidAgent,
@@ -109,6 +113,7 @@ function TradingAgentSession({
   const [aster, setAster] = useState(() => initialState('aster', asterOwner))
   const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
+  const asterAccountRefresh = useRef<{ key: string; promise: Promise<void> } | null>(null)
   owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
   if (pacifica.ownerAddress !== pacificaOwner) {
     setPacifica(initialState('pacifica', pacificaOwner))
@@ -264,8 +269,32 @@ function TradingAgentSession({
     )
   }
 
+  const refreshAsterAccount = async (): Promise<void> => {
+    if (!asterOwner || aster.status !== 'ready' || !aster.agentAddress) {
+      throw new Error('Aster authorization is not ready')
+    }
+    const ownerAddress = asterOwner
+    const agentAddress = aster.agentAddress
+    const key = `${ownerAddress.toLowerCase()}:${agentAddress.toLowerCase()}`
+    if (asterAccountRefresh.current?.key === key) return asterAccountRefresh.current.promise
+    const requestStillCurrent = () => {
+      if (!ownerStillCurrent('aster', ownerAddress, owners.current)) return false
+      return loadStoredTradingAgent(browserStorage(), 'aster', ownerAddress)
+        ?.agentAddress.toLowerCase() === agentAddress.toLowerCase()
+    }
+    const promise = refreshAsterAccountSnapshot(ownerAddress, agentAddress, sign, requestStillCurrent)
+    asterAccountRefresh.current = { key, promise }
+    try {
+      await promise
+    } finally {
+      if (asterAccountRefresh.current?.promise === promise) asterAccountRefresh.current = null
+    }
+  }
+
   return (
-    <TradingAgentContext.Provider value={{ pacifica, hyperliquid, aster, authorize, sign, requestAster, clear }}>
+    <TradingAgentContext.Provider value={{
+      pacifica, hyperliquid, aster, authorize, sign, requestAster, refreshAsterAccount, clear,
+    }}>
       {children}
     </TradingAgentContext.Provider>
   )

@@ -1,5 +1,6 @@
 export interface SigningRequest {
   id: string
+  snapshot_id?: string
   client_order_id: string
   position_id?: string
   leg?: number

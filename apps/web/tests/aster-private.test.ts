@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { runAsterPrivateRequest } from '../src/agents/aster-private.ts'
+import { refreshAsterAccountSnapshot, runAsterPrivateRequest } from '../src/agents/aster-private.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
 
 const account = '0x1111111111111111111111111111111111111111'
@@ -119,6 +119,58 @@ test('Aster private request surfaces an uncertain outcome without returning data
   }
 })
 
+test('Aster account refresh signs and submits one coherent three-part snapshot', async () => {
+  const originalFetch = globalThis.fetch
+  const operations = ['get_position_mode', 'get_account', 'get_positions'] as const
+  const requests = operations.map(snapshotRequest)
+  const signed: string[] = []
+  let calls = 0
+  globalThis.fetch = async () => {
+    calls += 1
+    if (calls === 1) return Response.json({ snapshot_id: 'snapshot-1', requests })
+    const operation = operations[calls - 2]
+    return Response.json({
+      request_id: requests[calls - 2].id, operation, data: {}, state_applied: true,
+    })
+  }
+  try {
+    await refreshAsterAccountSnapshot(account, agent, async (request) => {
+      signed.push(request.action)
+      return {
+        request_id: request.id, client_order_id: '', venue: 'aster',
+        signer_address: agent, signature: `0x${'1'.repeat(130)}`,
+      }
+    }, () => true)
+    assert.deepEqual(signed, operations)
+    assert.equal(calls, 4)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('Aster account refresh rejects mixed snapshot generations before signing', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = [
+    snapshotRequest('get_position_mode'),
+    { ...snapshotRequest('get_account'), snapshot_id: 'snapshot-2' },
+    snapshotRequest('get_positions'),
+  ]
+  let signed = false
+  globalThis.fetch = async () => Response.json({ snapshot_id: 'snapshot-1', requests })
+  try {
+    await assert.rejects(
+      refreshAsterAccountSnapshot(account, agent, async () => {
+        signed = true
+        throw new Error('must not sign')
+      }, () => true),
+      /incoherent Aster account snapshot/,
+    )
+    assert.equal(signed, false)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 function privateRequest(): SigningRequest {
   return {
     id: 'aster-get_position_mode-1', client_order_id: '', venue: 'aster',
@@ -126,5 +178,11 @@ function privateRequest(): SigningRequest {
     amount: 0, price: 0, reduce_only: false,
     unsigned_payload: {}, venue_metadata: {},
     created_at: '2026-09-06T12:00:00Z', expires_at: '2099-09-06T12:00:30Z',
+  }
+}
+
+function snapshotRequest(action: SigningRequest['action']): SigningRequest {
+  return {
+    ...privateRequest(), id: `aster-${action}-1`, snapshot_id: 'snapshot-1', action,
   }
 }
