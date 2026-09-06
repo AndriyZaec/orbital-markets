@@ -100,11 +100,11 @@ func TestSubmitSignedPrivateRejectsUncorrelatedMutationResponse(t *testing.T) {
 func TestValidatePrivateResponseRequiresCorrelatedOrder(t *testing.T) {
 	request := &domain.SigningRequest{Symbol: "BTCUSDT", ClientOrderID: "orbital-order-1"}
 	valid := []byte(`{"orderId":123,"clientOrderId":"orbital-order-1","symbol":"BTCUSDT","status":"FILLED","executedQty":"1","avgPrice":"100"}`)
-	if err := validatePrivateResponse(QueryOrder, request, valid); err != nil {
+	if _, err := validatePrivateResponse(QueryOrder, request, valid); err != nil {
 		t.Fatal(err)
 	}
 	invalid := []byte(`{"orderId":123,"clientOrderId":"another-order","symbol":"BTCUSDT","status":"FILLED","executedQty":"1","avgPrice":"100"}`)
-	if err := validatePrivateResponse(QueryOrder, request, invalid); err == nil {
+	if _, err := validatePrivateResponse(QueryOrder, request, invalid); err == nil {
 		t.Fatal("uncorrelated order response was accepted")
 	}
 }
@@ -127,7 +127,7 @@ func TestValidatePrivateResponseAcceptsAllowlistedOperationShapes(t *testing.T) 
 	}
 	for _, test := range tests {
 		t.Run(string(test.operation), func(t *testing.T) {
-			if err := validatePrivateResponse(test.operation, test.request, []byte(test.body)); err != nil {
+			if _, err := validatePrivateResponse(test.operation, test.request, []byte(test.body)); err != nil {
 				t.Fatal(err)
 			}
 		})
