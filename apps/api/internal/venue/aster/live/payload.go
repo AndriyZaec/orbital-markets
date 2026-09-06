@@ -83,14 +83,23 @@ func BuildOpenPayload(
 	clientOrderID string,
 	builder *BuilderConfig,
 ) (*domain.SigningRequest, error) {
-	if builder != nil {
-		if err := validateBuilder(*builder); err != nil {
-			return nil, err
-		}
-	}
 	return buildPayload(
 		rules, user, signer, symbol, side, amount, price, clientOrderID,
 		false, "open", openSlippageBPS, builder, time.Now(), nextAsterNonce(),
+	)
+}
+
+func BuildClosePayload(
+	rules OrderRuleMap,
+	user, signer, symbol string,
+	positionSide domain.Side,
+	amount, price float64,
+	clientOrderID string,
+	builder *BuilderConfig,
+) (*domain.SigningRequest, error) {
+	return buildReducePayload(
+		rules, user, signer, symbol, positionSide, amount, price, clientOrderID,
+		"close", builder,
 	)
 }
 
@@ -103,13 +112,40 @@ func BuildUnwindPayload(
 	amount, price float64,
 	clientOrderID string,
 ) (*domain.SigningRequest, error) {
+	return buildReducePayload(
+		rules, user, signer, symbol, positionSide, amount, price, clientOrderID,
+		"unwind", nil,
+	)
+}
+
+func BuildEmergencyClosePayload(
+	rules OrderRuleMap,
+	user, signer, symbol string,
+	positionSide domain.Side,
+	amount, price float64,
+	clientOrderID string,
+) (*domain.SigningRequest, error) {
+	return buildReducePayload(
+		rules, user, signer, symbol, positionSide, amount, price, clientOrderID,
+		"emergency_close", nil,
+	)
+}
+
+func buildReducePayload(
+	rules OrderRuleMap,
+	user, signer, symbol string,
+	positionSide domain.Side,
+	amount, price float64,
+	clientOrderID, action string,
+	builder *BuilderConfig,
+) (*domain.SigningRequest, error) {
 	orderSide, err := oppositeSide(positionSide)
 	if err != nil {
 		return nil, err
 	}
 	return buildPayload(
 		rules, user, signer, symbol, orderSide, amount, price, clientOrderID,
-		true, "unwind", unwindSlippageBPS, nil, time.Now(), nextAsterNonce(),
+		true, action, unwindSlippageBPS, builder, time.Now(), nextAsterNonce(),
 	)
 }
 
@@ -126,6 +162,11 @@ func buildPayload(
 	now time.Time,
 	nonce int64,
 ) (*domain.SigningRequest, error) {
+	if builder != nil {
+		if err := validateBuilder(*builder); err != nil {
+			return nil, err
+		}
+	}
 	if !addressPattern.MatchString(user) {
 		return nil, fmt.Errorf("invalid Aster user address")
 	}
@@ -150,7 +191,7 @@ func buildPayload(
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s quantity: %w", symbol, err)
 	}
-	_, priceWire, err := normalizePrice(referencePrice, side, slippageBPS, rules)
+	limitPrice, priceWire, err := normalizePrice(referencePrice, side, slippageBPS, rules)
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s price: %w", symbol, err)
 	}
@@ -170,6 +211,7 @@ func buildPayload(
 		queryParameter{"price", priceWire},
 		queryParameter{"timeInForce", "IOC"},
 		queryParameter{"newClientOrderId", clientOrderID},
+		queryParameter{"newOrderRespType", "RESULT"},
 		queryParameter{"reduceOnly", strconv.FormatBool(reduceOnly)},
 		queryParameter{"positionSide", "BOTH"},
 		queryParameter{"asterChain", mainnetName},
@@ -214,7 +256,7 @@ func buildPayload(
 		Symbol:          symbol,
 		Side:            strings.ToLower(venueSide),
 		Amount:          quantity,
-		Price:           referencePrice,
+		Price:           limitPrice,
 		ReduceOnly:      reduceOnly,
 		UnsignedPayload: unsignedBytes,
 		VenueMetadata:   metaBytes,

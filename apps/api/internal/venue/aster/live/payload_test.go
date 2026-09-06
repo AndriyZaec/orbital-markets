@@ -42,7 +42,7 @@ func TestBuildOpenPayloadMatchesAsterCodeSigningFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Amount != 2.123 || request.Side != "buy" || request.ReduceOnly {
+	if request.Amount != 2.123 || request.Price != 100.6 || request.Side != "buy" || request.ReduceOnly {
 		t.Fatalf("request summary = %+v", request)
 	}
 	var unsigned AsterUnsignedOrder
@@ -51,7 +51,7 @@ func TestBuildOpenPayloadMatchesAsterCodeSigningFixture(t *testing.T) {
 	}
 	want := "symbol=BTCUSDT&type=LIMIT&builder=" + testBuilder +
 		"&feeRate=0.0002&side=BUY&quantity=2.123&price=100.6&timeInForce=IOC" +
-		"&newClientOrderId=orbital-l1open-1700000000000000000&reduceOnly=false" +
+		"&newClientOrderId=orbital-l1open-1700000000000000000&newOrderRespType=RESULT&reduceOnly=false" +
 		"&positionSide=BOTH&asterChain=Mainnet&user=" + testUser +
 		"&signer=" + testSigner + "&nonce=1700000000123456"
 	if unsigned.Message.Msg != want {
@@ -82,8 +82,47 @@ func TestBuildUnwindPayloadIsReduceOnlyAndOmitsBuilderFee(t *testing.T) {
 		t.Fatalf("recovery query charges builder fee: %s", unsigned.Message.Msg)
 	}
 	if !strings.Contains(unsigned.Message.Msg, "side=SELL&quantity=2.123&price=99&timeInForce=IOC") ||
+		!strings.Contains(unsigned.Message.Msg, "newOrderRespType=RESULT") ||
 		!strings.Contains(unsigned.Message.Msg, "reduceOnly=true&positionSide=BOTH") {
 		t.Fatalf("unwind query = %s", unsigned.Message.Msg)
+	}
+}
+
+func TestCloseAndEmergencyClosePayloadsRemainReduceOnly(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string
+		build  func() (*domain.SigningRequest, error)
+	}{
+		{
+			name: "close", action: "close",
+			build: func() (*domain.SigningRequest, error) {
+				return BuildClosePayload(
+					payloadTestRules, testUser, testSigner, "BTCUSDT", domain.SideShort,
+					1, 100, "close-order", nil,
+				)
+			},
+		},
+		{
+			name: "emergency close", action: "emergency_close",
+			build: func() (*domain.SigningRequest, error) {
+				return BuildEmergencyClosePayload(
+					payloadTestRules, testUser, testSigner, "BTCUSDT", domain.SideLong,
+					1, 100, "emergency-close-order",
+				)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := test.build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if request.Action != test.action || !request.ReduceOnly {
+				t.Fatalf("request = %+v", request)
+			}
+		})
 	}
 }
 
