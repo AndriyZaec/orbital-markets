@@ -17,6 +17,7 @@ import (
 	appdb "github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
@@ -780,9 +781,13 @@ func newResidualExposureServer(t *testing.T) (*Server, *sql.DB) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	liveStore := executor.NewStore(database, logger)
+	modules, err := venue.NewLiveModuleRegistry(pacificlive.NewLiveModule(recoveryTestLotSizes{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	live := &LiveDeps{
 		liveStore: liveStore, signingStore: domain.NewSigningRequestStore(),
-		pacificaLotSizes: recoveryTestLotSizes{},
+		modules: modules,
 	}
 	return &Server{ctx: context.Background(), liveStore: liveStore, live: live, logger: logger}, database
 }

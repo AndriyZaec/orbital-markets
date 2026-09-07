@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
+	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
+	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
 func TestMergeNormFillsCalculatesAggregateHedge(t *testing.T) {
@@ -58,13 +61,20 @@ func TestUnwindConfirmationDoesNotHideResidualExposure(t *testing.T) {
 }
 
 func TestRetryMinimumAppliesOnlyToNormalizedHyperliquidNotional(t *testing.T) {
-	if !retryBelowMinimumNotional("hyperliquid", 0.099, 100) {
+	modules, err := venue.NewLiveModuleRegistry(
+		paclive.NewLiveModule(nil), hllive.NewLiveModule(nil),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{live: &LiveDeps{modules: modules}}
+	if minimum := server.minimumRetryNotional("hyperliquid"); 0.099*100 >= minimum {
 		t.Fatal("Hyperliquid retry below $10 should be suppressed")
 	}
-	if retryBelowMinimumNotional("hyperliquid", 0.1, 100) {
+	if minimum := server.minimumRetryNotional("hyperliquid"); 0.1*100 < minimum {
 		t.Fatal("Hyperliquid retry at $10 should be allowed")
 	}
-	if retryBelowMinimumNotional("pacifica", 0.01, 100) {
+	if minimum := server.minimumRetryNotional("pacifica"); minimum > 0 && 0.01*100 < minimum {
 		t.Fatal("Hyperliquid minimum must not suppress Pacifica retries")
 	}
 }

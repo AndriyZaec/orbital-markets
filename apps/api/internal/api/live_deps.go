@@ -15,6 +15,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
@@ -35,9 +36,8 @@ type LiveDeps struct {
 	liveStore                     *executor.Store
 	sessions                      *SessionManager
 	accounts                      *accountFeedRegistry
-	hlAssetMap                    hllive.AssetMap
+	modules                       *venue.LiveModuleRegistry
 	hlBuilder                     *hllive.BuilderCode
-	pacificaLotSizes              pacificlive.LotSizeMap
 	asterPrivate                  asterPrivateSubmitter
 	asterAgentApprover            asterAgentApprover
 	hlAgentApprover               hyperliquidAgentApprover
@@ -58,6 +58,13 @@ func NewLiveDeps(
 	hlAssetMap hllive.AssetMap,
 	pacificaLotSizes pacificlive.LotSizeMap,
 ) *LiveDeps {
+	modules, err := venue.NewLiveModuleRegistry(
+		pacificlive.NewLiveModule(pacificaLotSizes),
+		hllive.NewLiveModule(hlAssetMap),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("configure live venue modules: %v", err))
+	}
 	factories := map[string]accountFeedFactory{
 		"aster":       &asterAccountFeedFactory{},
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
@@ -69,9 +76,8 @@ func NewLiveDeps(
 		signingStore:                  signingStore,
 		liveStore:                     liveStore,
 		sessions:                      NewSessionManager(),
-		hlAssetMap:                    hlAssetMap,
+		modules:                       modules,
 		hlBuilder:                     hllive.OrbitalBuilderCode(),
-		pacificaLotSizes:              pacificaLotSizes,
 		asterPrivate:                  asterlive.NewDefaultClient(logger),
 		asterAgentApprover:            asterlive.NewDefaultAgentApprover(),
 		hlAgentApprover:               hlApprover,
@@ -89,6 +95,17 @@ func NewLiveDeps(
 			RecoveryReserve: defaultRecoveryAccountFeedReserve,
 		}),
 	}
+}
+
+func (d *LiveDeps) liveModule(name string) (venue.LiveModule, error) {
+	if d == nil || d.modules == nil {
+		return nil, fmt.Errorf("live venue modules not configured")
+	}
+	module, ok := d.modules.Module(name)
+	if !ok {
+		return nil, fmt.Errorf("unsupported venue: %s", name)
+	}
+	return module, nil
 }
 
 func (d *LiveDeps) applyAsterPrivateResult(

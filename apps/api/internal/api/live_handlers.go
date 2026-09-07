@@ -16,8 +16,6 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
-	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
-	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
 const (
@@ -309,8 +307,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	leg1UnwindCloid := fmt.Sprintf("orbital-l1unwind-%d", now.UnixNano()+1)
 
 	leg1Open, err := s.buildOpenSigningRequest(
-		leg1, leg1Amount, leg1OpenCloid, req.AccountPacifica, req.AccountHyperliquid,
-		req.AgentPacifica, req.AgentHyperliquid,
+		leg1, leg1Amount, leg1OpenCloid, bindings,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 open", "err", err)
@@ -321,8 +318,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leg1Unwind, err := s.buildUnwindSigningRequest(
-		leg1, leg1Amount, leg1UnwindCloid, req.AccountPacifica, req.AccountHyperliquid,
-		req.AgentPacifica, req.AgentHyperliquid,
+		leg1, leg1Amount, leg1UnwindCloid, bindings,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 unwind", "err", err)
@@ -336,18 +332,32 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	leverage := int(plan.Leverage.Leverage)
-	pacificaLeverage, err := paclive.BuildUpdateLeveragePayload(req.AccountPacifica, plan.Asset, leverage)
+	pacificaModule, err := s.live.liveModule("pacifica")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Pacifica live module not configured"})
+		return
+	}
+	pacificaLeverage, err := pacificaModule.BuildLeverage(venue.LiveLeverageParams{
+		Account: req.AccountPacifica, Signer: req.AgentPacifica,
+		Symbol: plan.Asset, Leverage: leverage,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Pacifica leverage payload build failed"})
 		return
 	}
-	pacificaLeverage.Signer = req.AgentPacifica
-	hyperliquidLeverage, err := hllive.BuildUpdateLeveragePayload(s.live.hlAssetMap, req.AccountHyperliquid, plan.Asset, leverage)
+	hyperliquidModule, err := s.live.liveModule("hyperliquid")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Hyperliquid live module not configured"})
+		return
+	}
+	hyperliquidLeverage, err := hyperliquidModule.BuildLeverage(venue.LiveLeverageParams{
+		Account: req.AccountHyperliquid, Signer: req.AgentHyperliquid,
+		Symbol: plan.Asset, Leverage: leverage,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Hyperliquid leverage payload build failed"})
 		return
 	}
-	hyperliquidLeverage.Signer = req.AgentHyperliquid
 
 	s.live.signingStore.Store(leg1Open)
 	s.live.signingStore.Store(leg1Unwind)
@@ -444,16 +454,11 @@ func (s *Server) normalizeLiveHedgeAmount(amount float64, legs ...legPlan) (floa
 	for range 8 {
 		next := current
 		for _, leg := range legs {
-			var normalized float64
-			var err error
-			switch leg.venue {
-			case "pacifica":
-				normalized, err = paclive.NormalizeAmount(s.live.pacificaLotSizes, leg.symbol, current)
-			case "hyperliquid":
-				normalized, err = hllive.NormalizeAmount(s.live.hlAssetMap, leg.symbol, current)
-			default:
-				return 0, fmt.Errorf("unsupported venue: %s", leg.venue)
+			module, err := s.live.liveModule(leg.venue)
+			if err != nil {
+				return 0, err
 			}
+			normalized, err := module.NormalizeAmount(leg.symbol, current)
 			if err != nil {
 				return 0, fmt.Errorf("normalize %s amount: %w", leg.venue, err)
 			}
@@ -525,62 +530,39 @@ func legMarketKey(leg domain.Leg) string {
 }
 
 // buildOpenSigningRequest builds an open-order signing request for one leg.
-// accountPacifica is only used for Pacifica; Hyperliquid derives the account
-// from the signature at submit time.
 func (s *Server) buildOpenSigningRequest(
-	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid,
-	agentPacifica, agentHyperliquid string,
+	leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
 ) (*domain.SigningRequest, error) {
-	var request *domain.SigningRequest
-	var err error
-	switch leg.venue {
-	case "pacifica":
-		request, err = paclive.BuildOpenPayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
-	case "hyperliquid":
-		if s.live.hlAssetMap == nil {
-			return nil, fmt.Errorf("hyperliquid asset map not configured")
-		}
-		request, err = hllive.BuildOpenPayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
-	default:
-		return nil, fmt.Errorf("unsupported venue: %s", leg.venue)
+	module, err := s.live.liveModule(leg.venue)
+	if err != nil {
+		return nil, err
 	}
-	if err == nil {
-		request.Account = accountForVenue(leg.venue, accountPacifica, accountHyperliquid)
-		request.Signer = signerForVenue(leg.venue, agentPacifica, agentHyperliquid)
-		if request.Signer == "" {
-			return nil, fmt.Errorf("%s trading agent required", leg.venue)
-		}
-	}
-	return request, err
+	return module.BuildOpen(venue.LiveOrderParams{
+		Account: bindings.Accounts[leg.venue],
+		Signer:  bindings.Agents[leg.venue],
+		Symbol:  leg.symbol, Side: leg.side, Amount: amount, Price: leg.price,
+		ClientOrderID: clientOrderID,
+	})
 }
 
 // buildUnwindSigningRequest builds a reduce-only close signing request for one leg.
 // Side is the position side; the close payload inverts it internally.
 func (s *Server) buildUnwindSigningRequest(
-	leg legPlan, amount float64, clientOrderID, accountPacifica, accountHyperliquid,
-	agentPacifica, agentHyperliquid string,
+	leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
 ) (*domain.SigningRequest, error) {
-	var request *domain.SigningRequest
-	var err error
-	switch leg.venue {
-	case "pacifica":
-		request, err = paclive.BuildUnwindPayload(s.live.pacificaLotSizes, accountPacifica, leg.symbol, leg.side, amount, leg.price, clientOrderID)
-	case "hyperliquid":
-		if s.live.hlAssetMap == nil {
-			return nil, fmt.Errorf("hyperliquid asset map not configured")
-		}
-		request, err = hllive.BuildUnwindPayload(s.live.hlAssetMap, leg.symbol, leg.side, amount, leg.price, clientOrderID)
-	default:
-		return nil, fmt.Errorf("unsupported venue: %s", leg.venue)
+	module, err := s.live.liveModule(leg.venue)
+	if err != nil {
+		return nil, err
 	}
-	if err == nil {
-		request.Account = accountForVenue(leg.venue, accountPacifica, accountHyperliquid)
-		request.Signer = signerForVenue(leg.venue, agentPacifica, agentHyperliquid)
-		if request.Signer == "" {
-			return nil, fmt.Errorf("%s trading agent required", leg.venue)
-		}
-	}
-	return request, err
+	return module.BuildReduce(venue.LiveReduceParams{
+		LiveOrderParams: venue.LiveOrderParams{
+			Account: bindings.Accounts[leg.venue],
+			Signer:  bindings.Agents[leg.venue],
+			Symbol:  leg.symbol, Side: leg.side, Amount: amount, Price: leg.price,
+			ClientOrderID: clientOrderID,
+		},
+		Action: venue.ReduceActionUnwind,
+	})
 }
 
 // handleLiveSubmit accepts a user-signed venue action and submits it.
@@ -1594,77 +1576,54 @@ func (s *Server) buildCloseSigningRequestForAction(
 ) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
-
-	var request *domain.SigningRequest
-	var err error
-	switch fill.Venue {
-	case "pacifica":
-		buildClose := paclive.BuildClosePayload
-		if emergency {
-			buildClose = paclive.BuildEmergencyClosePayload
-		}
-		request, err = buildClose(
-			s.live.pacificaLotSizes,
-			accountPacifica,
-			fill.Symbol,
-			positionSide,
-			fill.FilledAmount,
-			price,
-			clientOrderID,
-		)
-	case "hyperliquid":
-		if s.live.hlAssetMap == nil {
-			return nil, fmt.Errorf("hyperliquid asset map not configured")
-		}
+	module, err := s.live.liveModule(fill.Venue)
+	if err != nil {
+		return nil, err
+	}
+	closePricePolicy := module.Capabilities().ClosePricePolicy
+	if closePricePolicy == venue.ClosePriceFromMarketBBO {
 		if s.closeMarkets == nil {
-			return nil, fmt.Errorf("current hyperliquid BBO for %s unavailable", fill.Symbol)
+			return nil, fmt.Errorf("current %s BBO for %s unavailable", fill.Venue, fill.Symbol)
 		}
 		market, marketErr := s.closeMarkets.MarketSnapshot(ctx, fill.Venue, fill.Symbol)
 		if marketErr != nil {
-			return nil, fmt.Errorf("current hyperliquid BBO for %s unavailable: %w", fill.Symbol, marketErr)
+			return nil, fmt.Errorf("current %s BBO for %s unavailable: %w", fill.Venue, fill.Symbol, marketErr)
 		}
 		quoteAge := time.Since(market.Timestamp)
 		if market.Timestamp.IsZero() || quoteAge > maxCloseQuoteAge || quoteAge < -time.Second {
-			return nil, fmt.Errorf("current hyperliquid BBO for %s is stale", fill.Symbol)
+			return nil, fmt.Errorf("current %s BBO for %s is stale", fill.Venue, fill.Symbol)
 		}
 		switch positionSide {
 		case domain.SideLong:
 			price = market.BidPrice
 			if price <= 0 || market.BidSize <= 0 {
-				return nil, fmt.Errorf("current hyperliquid bid for %s unavailable", fill.Symbol)
+				return nil, fmt.Errorf("current %s bid for %s unavailable", fill.Venue, fill.Symbol)
 			}
 		case domain.SideShort:
 			price = market.AskPrice
 			if price <= 0 || market.AskSize <= 0 {
-				return nil, fmt.Errorf("current hyperliquid ask for %s unavailable", fill.Symbol)
+				return nil, fmt.Errorf("current %s ask for %s unavailable", fill.Venue, fill.Symbol)
 			}
 		default:
 			return nil, fmt.Errorf("invalid position side: %q", fill.Side)
 		}
 		if math.IsNaN(price) || math.IsInf(price, 0) {
-			return nil, fmt.Errorf("current hyperliquid BBO for %s is invalid", fill.Symbol)
+			return nil, fmt.Errorf("current %s BBO for %s is invalid", fill.Venue, fill.Symbol)
 		}
-		buildClose := hllive.BuildClosePayload
-		if emergency {
-			buildClose = hllive.BuildEmergencyClosePayload
-		}
-		request, err = buildClose(
-			s.live.hlAssetMap,
-			fill.Symbol,
-			positionSide,
-			fill.FilledAmount,
-			price,
-			clientOrderID,
-		)
-	default:
-		return nil, fmt.Errorf("unsupported venue: %s", fill.Venue)
+	} else if closePricePolicy != venue.ClosePriceFromFill {
+		return nil, fmt.Errorf("unsupported close price policy for venue %s", fill.Venue)
 	}
-	if err == nil {
-		request.Account = accountForVenue(fill.Venue, accountPacifica, accountHyperliquid)
-		request.Signer = signerForVenue(fill.Venue, agentPacifica, agentHyperliquid)
-		if request.Signer == "" {
-			return nil, fmt.Errorf("%s trading agent required", fill.Venue)
-		}
+	action := venue.ReduceActionClose
+	if emergency {
+		action = venue.ReduceActionEmergencyClose
 	}
-	return request, err
+	return module.BuildReduce(venue.LiveReduceParams{
+		LiveOrderParams: venue.LiveOrderParams{
+			Account: accountForVenue(fill.Venue, accountPacifica, accountHyperliquid),
+			Signer:  signerForVenue(fill.Venue, agentPacifica, agentHyperliquid),
+			Symbol:  fill.Symbol, Side: positionSide, Amount: fill.FilledAmount,
+			Price: price, ClientOrderID: clientOrderID,
+		},
+		Action: action,
+	})
 }

@@ -28,12 +28,16 @@ func (closeQuoteTestAssetMap) AssetIndex(string) (int, bool)   { return 213, tru
 func (closeQuoteTestAssetMap) SizeDecimals(string) (int, bool) { return 0, true }
 
 func TestHyperliquidCloseUsesFreshExecutableSideBBO(t *testing.T) {
+	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := &Server{
 		closeMarkets: closeQuoteTestSource{snapshot: venue.MarketData{
 			Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, BidSize: 500,
 			AskPrice: 0.0537, AskSize: 500, Timestamp: time.Now(),
 		}},
-		live: &LiveDeps{hlAssetMap: closeQuoteTestAssetMap{}},
+		live: &LiveDeps{modules: modules},
 	}
 
 	request, err := server.buildCloseSigningRequest(
@@ -57,15 +61,19 @@ func TestHyperliquidCloseUsesFreshExecutableSideBBO(t *testing.T) {
 }
 
 func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
+	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := &Server{
 		closeMarkets: closeQuoteTestSource{snapshot: venue.MarketData{
 			Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, BidSize: 500,
 			AskPrice: 0.0537, AskSize: 500, Timestamp: time.Now().Add(-time.Minute),
 		}},
-		live: &LiveDeps{hlAssetMap: closeQuoteTestAssetMap{}},
+		live: &LiveDeps{modules: modules},
 	}
 
-	_, err := server.buildCloseSigningRequest(
+	_, err = server.buildCloseSigningRequest(
 		context.Background(),
 		executor.LiveFill{Venue: "hyperliquid", Symbol: "2Z", Side: string(domain.SideLong), FilledAmount: 265, AvgFillPrice: 0.0566},
 		"close-order", "pacifica-owner", "hl-owner", "pacifica-agent", "hl-agent",
@@ -76,12 +84,16 @@ func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
 }
 
 func TestHyperliquidShortCloseUsesCurrentAsk(t *testing.T) {
+	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := &Server{
 		closeMarkets: closeQuoteTestSource{snapshot: venue.MarketData{
 			Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, BidSize: 500,
 			AskPrice: 0.0537, AskSize: 500, Timestamp: time.Now(),
 		}},
-		live: &LiveDeps{hlAssetMap: closeQuoteTestAssetMap{}},
+		live: &LiveDeps{modules: modules},
 	}
 
 	request, err := server.buildCloseSigningRequest(

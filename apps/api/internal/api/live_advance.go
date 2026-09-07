@@ -245,10 +245,17 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 			return
 		}
 		update.markApplied()
-		// Hyperliquid's successful exchange response is the only pre-position
-		// confirmation available. Pacifica also exposes selected leverage in its
-		// account stream, so require that independent observation before trading.
-		if update.req.Venue == "pacifica" {
+		module, moduleErr := s.live.liveModule(update.req.Venue)
+		if moduleErr != nil {
+			sess.State = sessFailed
+			reason := update.name + " live module unavailable after leverage update; no order submitted"
+			s.finishLiveSession(ctx, sess, reason)
+			writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
+			return
+		}
+		// Some venues expose selected leverage through their account stream;
+		// require that independent observation when the module declares it.
+		if module.Capabilities().ConfirmLeverageChange {
 			feed, ok := sess.accounts.Feed(update.req.Venue)
 			if !ok {
 				sess.State = sessFailed
@@ -407,8 +414,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	leg2Cloid := fmt.Sprintf("orbital-l2open-%d", time.Now().UnixNano())
 	leg2Open, err := s.buildOpenSigningRequest(
 		sess.Leg2, fill.FilledAmount, leg2Cloid,
-		sess.AccountPacifica, sess.AccountHyperliquid,
-		sess.AgentPacifica, sess.AgentHyperliquid,
+		sess.venueBindings(),
 	)
 	if err != nil {
 		ur := s.fireUnwind(ctx, sess)

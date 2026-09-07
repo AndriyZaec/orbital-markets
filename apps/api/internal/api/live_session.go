@@ -116,6 +116,17 @@ type LiveSession struct {
 	accounts *liveAccountContext
 }
 
+func (s *LiveSession) venueBindings() liveVenueBindings {
+	return liveVenueBindings{
+		Accounts: map[string]string{
+			"pacifica": s.AccountPacifica, "hyperliquid": s.AccountHyperliquid,
+		},
+		Agents: map[string]string{
+			"pacifica": s.AgentPacifica, "hyperliquid": s.AgentHyperliquid,
+		},
+	}
+}
+
 func (s *LiveSession) expired() bool {
 	return time.Since(s.CreatedAt) > sessionTTL
 }
