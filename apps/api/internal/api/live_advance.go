@@ -66,13 +66,13 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAccounts(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if len(bindings.Accounts) != 2 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account bindings required for both session venues"})
 		return
 	}
 
 	sess, found, claimed := s.live.sessions.claimForAccounts(
-		req.SessionID, bindings.Accounts["pacifica"], bindings.Accounts["hyperliquid"],
+		req.SessionID, bindings.Accounts,
 	)
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found or expired"})
@@ -95,7 +95,7 @@ func (s *Server) handleLiveAdvance(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	accounts, err := s.live.acquireAccounts(sess.AccountPacifica, sess.AccountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(sess.Bindings.Accounts, false)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 		return
@@ -162,9 +162,27 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 
 	openSigned := findSigned(signed, sess.Leg1OpenReqID)
 	unwindSigned := findSigned(signed, sess.Leg1UnwindReqID)
-	pacificaLeverageSigned := findSigned(signed, sess.PacificaLeverageReqID)
-	hyperliquidLeverageSigned := findSigned(signed, sess.HyperliquidLeverageReqID)
-	if openSigned == nil || unwindSigned == nil || pacificaLeverageSigned == nil || hyperliquidLeverageSigned == nil {
+	type leverageUpdate struct {
+		venue  string
+		signed domain.SignedAction
+		req    *domain.SigningRequest
+	}
+	leverageUpdates := make([]leverageUpdate, 0, len(sess.LeverageRequests))
+	for _, venueName := range sess.venueNames() {
+		leverageReq := sess.LeverageRequests[venueName]
+		if leverageReq == nil {
+			continue
+		}
+		leverageSigned := findSigned(signed, leverageReq.ID)
+		if leverageSigned == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "expected signed leverage, leg-1 open, and leg-1 unwind actions",
+			})
+			return
+		}
+		leverageUpdates = append(leverageUpdates, leverageUpdate{venue: venueName, signed: *leverageSigned, req: leverageReq})
+	}
+	if openSigned == nil || unwindSigned == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "expected signed leverage, leg-1 open, and leg-1 unwind actions",
 		})
@@ -172,19 +190,16 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	}
 
 	// Validate + consume every prerequisite before making the first venue call.
-	pacificaLeverageReq, err := s.live.signingStore.ValidateAndConsume(*pacificaLeverageSigned)
-	if err != nil {
-		sess.State = sessFailed
-		s.finishLiveSession(ctx, sess, "Pacifica leverage signature validation failed before submission")
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Pacifica leverage validation failed: " + err.Error()})
-		return
-	}
-	hyperliquidLeverageReq, err := s.live.signingStore.ValidateAndConsume(*hyperliquidLeverageSigned)
-	if err != nil {
-		sess.State = sessFailed
-		s.finishLiveSession(ctx, sess, "Hyperliquid leverage signature validation failed before submission")
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Hyperliquid leverage validation failed: " + err.Error()})
-		return
+	for i := range leverageUpdates {
+		validated, err := s.live.signingStore.ValidateAndConsume(leverageUpdates[i].signed)
+		if err != nil {
+			sess.State = sessFailed
+			venueName := venueDisplayName(leverageUpdates[i].venue)
+			s.finishLiveSession(ctx, sess, venueName+" leverage signature validation failed before submission")
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": venueName + " leverage validation failed: " + err.Error()})
+			return
+		}
+		leverageUpdates[i].req = validated
 	}
 	openReq, err := s.live.signingStore.ValidateAndConsume(*openSigned)
 	if err != nil {
@@ -215,18 +230,11 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		return
 	}
 
-	for _, update := range []struct {
-		name        string
-		signed      domain.SignedAction
-		req         *domain.SigningRequest
-		markApplied func()
-	}{
-		{name: "Pacifica", signed: *pacificaLeverageSigned, req: pacificaLeverageReq, markApplied: func() { sess.PacificaLeverageApplied = true }},
-		{name: "Hyperliquid", signed: *hyperliquidLeverageSigned, req: hyperliquidLeverageReq, markApplied: func() { sess.HyperliquidLeverageApplied = true }},
-	} {
+	for _, update := range leverageUpdates {
+		name := venueDisplayName(update.venue)
 		if time.Now().After(update.req.ExpiresAt) {
 			sess.State = sessFailed
-			reason := update.name + " leverage update expired; no order submitted"
+			reason := name + " leverage update expired; no order submitted"
 			s.finishLiveSession(ctx, sess, reason)
 			writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
 			return
@@ -234,9 +242,9 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		result, err := s.submitSignedActionForAccounts(ctx, update.signed, update.req, sess.accounts)
 		if err != nil || result == nil || !result.Accepted {
 			sess.State = sessFailed
-			reason := update.name + " leverage update failed; venue leverage may be partially changed, but no order was submitted. Retry to reconcile both venues"
+			reason := name + " leverage update failed; venue leverage may be partially changed, but no order was submitted. Retry to reconcile both venues"
 			if result != nil && result.Error != "" {
-				reason = update.name + " leverage update rejected: " + result.Error + "; no order was submitted. Retry to reconcile both venues"
+				reason = name + " leverage update rejected: " + result.Error + "; no order was submitted. Retry to reconcile both venues"
 			}
 			s.finishLiveSession(ctx, sess, reason)
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -244,11 +252,11 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 			})
 			return
 		}
-		update.markApplied()
+		sess.LeverageApplied[update.venue] = true
 		module, moduleErr := s.live.liveModule(update.req.Venue)
 		if moduleErr != nil {
 			sess.State = sessFailed
-			reason := update.name + " live module unavailable after leverage update; no order submitted"
+			reason := name + " live module unavailable after leverage update; no order submitted"
 			s.finishLiveSession(ctx, sess, reason)
 			writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
 			return
@@ -259,7 +267,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 			feed, ok := sess.accounts.Feed(update.req.Venue)
 			if !ok {
 				sess.State = sessFailed
-				reason := update.name + " leverage confirmation unavailable; no order submitted"
+				reason := name + " leverage confirmation unavailable; no order submitted"
 				s.finishLiveSession(ctx, sess, reason)
 				writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
 				return
@@ -269,7 +277,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 			cancelConfirm()
 			if confirmErr != nil {
 				sess.State = sessFailed
-				reason := update.name + " did not confirm the selected leverage; no order submitted. Retry after account data refreshes"
+				reason := name + " did not confirm the selected leverage; no order submitted. Retry after account data refreshes"
 				s.finishLiveSession(ctx, sess, reason)
 				writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": reason})
 				return
@@ -320,10 +328,8 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		sess.State = sessFailed
 		s.live.sessions.remove(sess.ID)
 		reason := "leg 1 submit rejected"
-		if sub != nil && sub.Error != "" {
+		if sub.Error != "" {
 			reason = "leg 1 rejected: " + sub.Error
-		} else if err != nil {
-			reason = "leg 1 submit error: " + err.Error()
 		}
 		s.persistSession(ctx, sess, executor.ExecStateFailed, reason)
 		s.logger.Error("live advance: leg 1 not accepted", "session_id", sess.ID, "reason", reason)
@@ -753,9 +759,14 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 		StartedAt:     sess.CreatedAt,
 		CompletedAt:   time.Now(),
 	}
+	pacificaAccount, hyperliquidAccount, err := legacyDurableAccountPair(sess)
+	if err != nil {
+		s.logger.Error("live session: unsupported durable venue pair", "err", err, "session_id", sess.ID)
+		return ""
+	}
 	if err := s.live.liveStore.PersistFullResultAtomic(
 		ctx, res, sess.Plan.Leg1.Venue, sess.Plan.Leg2.Venue,
-		sess.AccountPacifica, sess.AccountHyperliquid,
+		pacificaAccount, hyperliquidAccount,
 		sess.Plan.Notional, sess.Plan.Leverage.Leverage,
 	); err != nil {
 		s.logger.Error("live session: persist terminal result", "err", err, "session_id", sess.ID)

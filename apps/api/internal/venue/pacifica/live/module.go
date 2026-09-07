@@ -22,6 +22,7 @@ func (m *LiveModule) Name() string {
 func (m *LiveModule) Capabilities() venue.LiveCapabilities {
 	return venue.LiveCapabilities{
 		ClosePricePolicy:      venue.ClosePriceFromFill,
+		LeverageUpdate:        venue.LeverageUpdateRequired,
 		ConfirmLeverageChange: true,
 		ClientOrderLookup:     true,
 	}

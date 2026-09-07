@@ -41,7 +41,7 @@ func TestLiveModuleBuildsBoundSigningRequests(t *testing.T) {
 		t.Fatalf("leverage request = %+v", leverage)
 	}
 	capabilities := module.Capabilities()
-	if capabilities.ClosePricePolicy != venue.ClosePriceFromMarketBBO || capabilities.MinimumRetryNotional != 10 || !capabilities.ClientOrderLookup {
+	if capabilities.ClosePricePolicy != venue.ClosePriceFromMarketBBO || capabilities.MinimumRetryNotional != 10 || capabilities.LeverageUpdate != venue.LeverageUpdateRequired || !capabilities.ClientOrderLookup {
 		t.Fatalf("capabilities = %+v", capabilities)
 	}
 }

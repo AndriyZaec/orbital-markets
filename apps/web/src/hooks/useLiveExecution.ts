@@ -15,6 +15,7 @@ import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
 import {
+  areValidLeg1SigningRequests,
   executionFailurePhase,
   executionPhaseFromStatus,
   normalizeHyperliquidAddress,
@@ -110,7 +111,7 @@ interface PrepareResp {
   riskier_venue: string
   hedge_venue: string
   expires_at: string
-  signing_requests: SigningRequest[] // [two leverage updates, leg1 open, leg1 unwind]
+  signing_requests: SigningRequest[] // [optional leverage updates, leg1 open, leg1 unwind]
 }
 
 interface AdvanceResp {
@@ -282,13 +283,8 @@ function useLiveExecutionState() {
       }
       const prep: PrepareResp = await prepResp.json()
       const leg1Requests = prep.signing_requests || []
-      const leverageVenues = new Set(leg1Requests
-        .filter((request) => request.action === 'update_leverage')
-        .map((request) => request.venue))
-      if (leg1Requests.length !== 4 || leverageVenues.size !== 2 ||
-        !leg1Requests.some((request) => request.action === 'open') ||
-        !leg1Requests.some((request) => request.action === 'unwind' && request.reduce_only)) {
-        throw new Error('Expected two leverage updates plus leg-1 open and unwind requests')
+      if (!areValidLeg1SigningRequests(leg1Requests, prep.riskier_venue, prep.hedge_venue)) {
+        throw new Error('Expected valid leverage updates plus leg-1 open and unwind requests')
       }
 
       // Snapshot the accounts the session was prepared for. Any subsequent
@@ -333,7 +329,7 @@ function useLiveExecutionState() {
         }
       }
 
-      // 2. Sign BOTH leg-1 requests up front. If either fails, submit nothing.
+      // 2. Sign every prepare request up front. If any fails, submit nothing.
       let signedLeg1: SignedAction[]
       try {
         signedLeg1 = []

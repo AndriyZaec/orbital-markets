@@ -74,6 +74,86 @@ type liveVenueBindings struct {
 	Agents   map[string]string
 }
 
+func (bindings liveVenueBindings) clone() liveVenueBindings {
+	return liveVenueBindings{
+		Accounts: cloneVenueBindingMap(bindings.Accounts),
+		Agents:   cloneVenueBindingMap(bindings.Agents),
+	}
+}
+
+func cloneVenueBindingMap(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source))
+	for venue, value := range source {
+		cloned[venue] = value
+	}
+	return cloned
+}
+
+func (bindings liveVenueBindings) matchesAccounts(accounts map[string]string) bool {
+	if len(bindings.Accounts) != len(accounts) {
+		return false
+	}
+	for venue, expected := range bindings.Accounts {
+		if !sameVenueBinding(venue, expected, accounts[venue]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (bindings liveVenueBindings) requireAccountsFor(venues []string) error {
+	return requireVenueBindings("account", bindings.Accounts, venues)
+}
+
+func (bindings liveVenueBindings) requireAgentsFor(venues []string) error {
+	return requireVenueBindings("agent", bindings.Agents, venues)
+}
+
+func (bindings liveVenueBindings) requireAccountsWithin(venues []string) error {
+	allowed := make(map[string]struct{}, len(venues))
+	for _, venue := range venues {
+		allowed[venue] = struct{}{}
+	}
+	for venue := range bindings.Accounts {
+		if _, ok := allowed[venue]; !ok {
+			return fmt.Errorf("unsupported live venue %q", venue)
+		}
+	}
+	return nil
+}
+
+func (bindings liveVenueBindings) requirePair() error {
+	if len(bindings.Accounts) != 2 || len(bindings.Agents) != 2 {
+		return fmt.Errorf("live execution requires account and agent bindings for exactly two venues")
+	}
+	for venue := range bindings.Accounts {
+		if bindings.Agents[venue] == "" {
+			return fmt.Errorf("agent.%s required", venue)
+		}
+	}
+	for venue := range bindings.Agents {
+		if bindings.Accounts[venue] == "" {
+			return fmt.Errorf("account.%s required", venue)
+		}
+	}
+	return nil
+}
+
+func requireVenueBindings(kind string, bindings map[string]string, venues []string) error {
+	if len(venues) != 2 || venues[0] == venues[1] {
+		return fmt.Errorf("live execution requires exactly two distinct venues")
+	}
+	if len(bindings) != len(venues) {
+		return fmt.Errorf("%s bindings required for both plan venues", kind)
+	}
+	for _, venue := range venues {
+		if strings.TrimSpace(bindings[venue]) == "" {
+			return fmt.Errorf("%s.%s required", kind, venue)
+		}
+	}
+	return nil
+}
+
 func (request liveVenueBindingsRequest) resolve() (liveVenueBindings, error) {
 	accounts, err := normalizeVenueBindings("accounts", request.Accounts)
 	if err != nil {
@@ -104,8 +184,8 @@ func normalizeVenueBindings(kind string, input uniqueVenueBindings) (map[string]
 	seen := make(map[string]struct{}, len(input))
 	for rawVenue, rawValue := range input {
 		venue := strings.ToLower(strings.TrimSpace(rawVenue))
-		if !isCurrentLiveVenue(venue) {
-			return nil, fmt.Errorf("unsupported live venue %q", rawVenue)
+		if venue == "" {
+			return nil, fmt.Errorf("%s venue must not be empty", kind)
 		}
 		if _, duplicate := seen[venue]; duplicate {
 			return nil, fmt.Errorf("duplicate %s binding for %s", kind, venue)
@@ -135,33 +215,24 @@ func mergeLegacyVenueBindings(kind string, target, legacy map[string]string) err
 }
 
 func (bindings liveVenueBindings) requireAccounts() error {
-	if bindings.Accounts["pacifica"] == "" || bindings.Accounts["hyperliquid"] == "" {
+	if err := bindings.requireAccountsFor(currentLiveVenues); err != nil {
 		return fmt.Errorf("account_pacifica and account_hyperliquid required")
 	}
 	return nil
 }
 
 func (bindings liveVenueBindings) requireAgents() error {
-	if bindings.Agents["pacifica"] == "" || bindings.Agents["hyperliquid"] == "" {
+	if err := bindings.requireAgentsFor(currentLiveVenues); err != nil {
 		return fmt.Errorf("agent_pacifica and agent_hyperliquid required")
 	}
 	return nil
 }
 
 func sameVenueBinding(venue, left, right string) bool {
-	if venue == "hyperliquid" {
+	if venue == "hyperliquid" || venue == "aster" {
 		return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
 	}
 	return strings.TrimSpace(left) == strings.TrimSpace(right)
-}
-
-func isCurrentLiveVenue(venue string) bool {
-	for _, supported := range currentLiveVenues {
-		if venue == supported {
-			return true
-		}
-	}
-	return false
 }
 
 func liveVenueBindingsFromQuery(values url.Values) (liveVenueBindings, error) {

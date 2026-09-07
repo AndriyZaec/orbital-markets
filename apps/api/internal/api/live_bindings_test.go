@@ -44,13 +44,10 @@ func TestLiveVenueBindingsAcceptCompatibleRequestShapes(t *testing.T) {
 	}
 }
 
-func TestLiveVenueBindingsRejectAmbiguousOrUnsupportedRequests(t *testing.T) {
+func TestLiveVenueBindingsRejectAmbiguousRequests(t *testing.T) {
 	tests := map[string]liveVenueBindingsRequest{
 		"conflicting account alias": {
 			Accounts: map[string]string{"pacifica": "sol-owner"}, AccountPacifica: "other-owner",
-		},
-		"unsupported venue": {
-			Accounts: map[string]string{"aster": "0xabc"},
 		},
 		"duplicate normalized venue": {
 			Accounts: map[string]string{"pacifica": "sol-owner", " Pacifica ": "sol-owner"},
@@ -63,6 +60,31 @@ func TestLiveVenueBindingsRejectAmbiguousOrUnsupportedRequests(t *testing.T) {
 				t.Fatal("expected binding resolution error")
 			}
 		})
+	}
+}
+
+func TestLiveVenueBindingsNormalizeArbitraryVenuesButKeepLegacyRoutesStrict(t *testing.T) {
+	bindings, err := (liveVenueBindingsRequest{
+		Accounts: map[string]string{" Alpha ": "owner-a", "BETA": "owner-b"},
+		Agents:   map[string]string{"alpha": "agent-a", "beta": "agent-b"},
+	}).resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bindings.requirePair(); err != nil {
+		t.Fatal(err)
+	}
+	if bindings.Accounts["alpha"] != "owner-a" || bindings.Accounts["beta"] != "owner-b" {
+		t.Fatalf("unexpected normalized bindings: %+v", bindings.Accounts)
+	}
+	if err := bindings.requireAccounts(); err == nil {
+		t.Fatal("legacy account route accepted an arbitrary venue pair")
+	}
+}
+
+func TestAsterBindingsCompareCaseInsensitively(t *testing.T) {
+	if !sameVenueBinding("aster", "0xAbC", " 0xabc ") {
+		t.Fatal("Aster EVM addresses should compare case-insensitively")
 	}
 }
 

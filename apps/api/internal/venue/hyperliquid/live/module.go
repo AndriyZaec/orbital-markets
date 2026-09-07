@@ -25,6 +25,7 @@ func (m *LiveModule) Capabilities() venue.LiveCapabilities {
 	return venue.LiveCapabilities{
 		ClosePricePolicy:     venue.ClosePriceFromMarketBBO,
 		MinimumRetryNotional: minimumRetryNotional,
+		LeverageUpdate:       venue.LeverageUpdateRequired,
 		ClientOrderLookup:    true,
 	}
 }

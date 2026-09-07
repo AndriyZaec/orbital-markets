@@ -17,9 +17,17 @@ const (
 	ClosePriceFromMarketBBO ClosePricePolicy = "market_bbo"
 )
 
+type LeverageUpdatePolicy string
+
+const (
+	LeverageUpdateRequired    LeverageUpdatePolicy = "required"
+	LeverageUpdateNotRequired LeverageUpdatePolicy = "not_required"
+)
+
 type LiveCapabilities struct {
 	ClosePricePolicy      ClosePricePolicy
 	MinimumRetryNotional  float64
+	LeverageUpdate        LeverageUpdatePolicy
 	ConfirmLeverageChange bool
 	ClientOrderLookup     bool
 }
@@ -90,6 +98,9 @@ func NewLiveModuleRegistry(modules ...LiveModule) (*LiveModuleRegistry, error) {
 		}
 		if capabilities.MinimumRetryNotional < 0 || math.IsNaN(capabilities.MinimumRetryNotional) || math.IsInf(capabilities.MinimumRetryNotional, 0) {
 			return nil, fmt.Errorf("invalid minimum retry notional for live venue module %q", name)
+		}
+		if capabilities.LeverageUpdate != LeverageUpdateRequired && capabilities.LeverageUpdate != LeverageUpdateNotRequired {
+			return nil, fmt.Errorf("invalid leverage update policy for live venue module %q", name)
 		}
 		registry.modules[name] = module
 		registry.names = append(registry.names, name)

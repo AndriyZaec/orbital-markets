@@ -116,6 +116,17 @@ func TestLiveAccountHandlersAcceptVenueMaps(t *testing.T) {
 	}
 }
 
+func TestLiveBalancesRejectUnsupportedVenueBindings(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?accounts%5Baster%5D=0xabc", nil)
+	response := httptest.NewRecorder()
+
+	new(Server).handleLiveBalances(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s, want bad request", response.Code, response.Body.String())
+	}
+}
+
 func assertBalancePair(t *testing.T, server *Server, pacifica, hyperliquid string, pacEquity, hlEquity float64) {
 	t.Helper()
 	request := httptest.NewRequest("GET", "/api/v1/live/balances?account_pacifica="+pacifica+"&account_hyperliquid="+hyperliquid, nil)

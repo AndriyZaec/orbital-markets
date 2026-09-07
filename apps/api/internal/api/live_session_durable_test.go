@@ -40,16 +40,19 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 		SignerAddress: "wallet", Signature: "signature",
 	}
 	session := &LiveSession{
-		ID:              "session-1",
-		Plan:            &domain.ExecutionPlan{ID: "plan-1", Asset: "SOL", Notional: 10},
-		Leg1:            legPlan{venue: "pacifica", symbol: "SOL", side: domain.SideLong, price: 100},
-		Leg2:            legPlan{venue: "hyperliquid", symbol: "SOL", side: domain.SideShort, price: 101},
-		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
-		AgentPacifica: "sol-agent", AgentHyperliquid: "0xagent",
+		ID:   "session-1",
+		Plan: &domain.ExecutionPlan{ID: "plan-1", Asset: "SOL", Notional: 10},
+		Leg1: legPlan{venue: "pacifica", symbol: "SOL", side: domain.SideLong, price: 100},
+		Leg2: legPlan{venue: "hyperliquid", symbol: "SOL", side: domain.SideShort, price: 101},
+		Bindings: liveVenueBindings{
+			Accounts: map[string]string{"pacifica": "sol-wallet", "hyperliquid": "0xwallet"},
+			Agents:   map[string]string{"pacifica": "sol-agent", "hyperliquid": "0xagent"},
+		},
 		State: sessAwaitingLeg2Sign, BaselineLeg1Size: 3, BaselineLeg2Size: -2,
 		Leg1OpenReq: req, Leg1UnwindReq: req,
-		PacificaLeverageReqID: pacificaLeverageReq.ID, HyperliquidLeverageReqID: hyperliquidLeverageReq.ID,
-		PacificaLeverageReq: pacificaLeverageReq, HyperliquidLeverageReq: hyperliquidLeverageReq,
+		LeverageRequests: map[string]*domain.SigningRequest{
+			"pacifica": pacificaLeverageReq, "hyperliquid": hyperliquidLeverageReq,
+		},
 		ArmedUnwindReq: req, ArmedUnwindSigned: signed,
 		Leg1Fill:     &normFill{FilledAmount: 10, AvgFillPrice: 100, Filled: true},
 		Leg2Attempts: 1,
@@ -80,15 +83,15 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	if restored.ArmedUnwindReq.Signer != "sol-agent" {
 		t.Fatalf("armed request signer = %q, want persisted session agent", restored.ArmedUnwindReq.Signer)
 	}
-	if restored.AgentPacifica != "sol-agent" || restored.AgentHyperliquid != "0xagent" {
-		t.Fatalf("agent identities not restored: %q/%q", restored.AgentPacifica, restored.AgentHyperliquid)
+	if restored.Bindings.Agents["pacifica"] != "sol-agent" || restored.Bindings.Agents["hyperliquid"] != "0xagent" {
+		t.Fatalf("agent identities not restored: %+v", restored.Bindings.Agents)
 	}
 	if !agentBoundLeg1Requests(restored) {
 		t.Fatal("restored leg-1 requests lost their agent binding")
 	}
-	if restored.PacificaLeverageReq == nil || restored.HyperliquidLeverageReq == nil ||
-		restored.PacificaLeverageReq.Leverage != 2 || restored.HyperliquidLeverageReq.Leverage != 2 {
-		t.Fatalf("restored leverage requests = %+v / %+v", restored.PacificaLeverageReq, restored.HyperliquidLeverageReq)
+	if restored.LeverageRequests["pacifica"] == nil || restored.LeverageRequests["hyperliquid"] == nil ||
+		restored.LeverageRequests["pacifica"].Leverage != 2 || restored.LeverageRequests["hyperliquid"].Leverage != 2 {
+		t.Fatalf("restored leverage requests = %+v", restored.LeverageRequests)
 	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)
@@ -156,7 +159,9 @@ func TestSessionManagerAllowsOnlyOneInFlightAction(t *testing.T) {
 func TestLiveAdvanceRejectsAnotherAccountPairBeforeClaim(t *testing.T) {
 	manager := NewSessionManager()
 	manager.put(&LiveSession{
-		ID: "session-1", AccountPacifica: "sol-owner", AccountHyperliquid: "0xAbC",
+		ID: "session-1", Bindings: liveVenueBindings{Accounts: map[string]string{
+			"pacifica": "sol-owner", "hyperliquid": "0xAbC",
+		}},
 		CreatedAt: time.Now(),
 	})
 	server := &Server{live: &LiveDeps{sessions: manager}}
@@ -170,7 +175,9 @@ func TestLiveAdvanceRejectsAnotherAccountPairBeforeClaim(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
-	if _, found, claimed := manager.claimForAccounts("session-1", "sol-owner", "0xabc"); !found || !claimed {
+	if _, found, claimed := manager.claimForAccounts("session-1", map[string]string{
+		"pacifica": "sol-owner", "hyperliquid": "0xabc",
+	}); !found || !claimed {
 		t.Fatal("another account pair claimed or blocked the live session")
 	}
 }
@@ -182,9 +189,15 @@ func TestDurableSessionOwnershipRequiresMatchingEnvelopeAndSigningAccounts(t *te
 	newSession := func() *LiveSession {
 		return &LiveSession{
 			ID: "session-1", Plan: &domain.ExecutionPlan{ID: "plan-1", Asset: "SOL"},
-			AccountPacifica: "sol-owner", AccountHyperliquid: "0xAbC",
+			Leg1: legPlan{venue: "pacifica"}, Leg2: legPlan{venue: "hyperliquid"},
+			Bindings: liveVenueBindings{Accounts: map[string]string{
+				"pacifica": "sol-owner", "hyperliquid": "0xAbC",
+			}},
 			Leg1OpenReq: &domain.SigningRequest{Venue: "pacifica", Account: "sol-owner"},
 			Leg2OpenReq: &domain.SigningRequest{Venue: "hyperliquid", Account: "0xABC"},
+			LeverageRequests: map[string]*domain.SigningRequest{
+				"pacifica": {Venue: "pacifica", Account: "sol-owner"},
+			},
 		}
 	}
 	if err := validateDurableSessionOwnership(record, newSession()); err != nil {
@@ -193,10 +206,16 @@ func TestDurableSessionOwnershipRequiresMatchingEnvelopeAndSigningAccounts(t *te
 
 	tests := map[string]func(*LiveSession){
 		"session ID": func(session *LiveSession) { session.ID = "other-session" },
-		"account":    func(session *LiveSession) { session.AccountPacifica = "other-owner" },
+		"account":    func(session *LiveSession) { session.Bindings.Accounts["pacifica"] = "other-owner" },
 		"asset":      func(session *LiveSession) { session.Plan.Asset = "BTC" },
 		"request account": func(session *LiveSession) {
 			session.Leg2OpenReq.Account = "0xdef"
+		},
+		"leverage request venue": func(session *LiveSession) {
+			session.LeverageRequests["pacifica"].Venue = "hyperliquid"
+		},
+		"unsupported leg venue": func(session *LiveSession) {
+			session.Leg2.venue = "aster"
 		},
 	}
 	for name, mutate := range tests {
@@ -207,5 +226,17 @@ func TestDurableSessionOwnershipRequiresMatchingEnvelopeAndSigningAccounts(t *te
 				t.Fatal("expected durable ownership mismatch")
 			}
 		})
+	}
+}
+
+func TestLegacyDurableAccountPairRejectsUnrepresentableVenues(t *testing.T) {
+	session := &LiveSession{
+		Leg1: legPlan{venue: "alpha"}, Leg2: legPlan{venue: "beta"},
+		Bindings: liveVenueBindings{Accounts: map[string]string{
+			"alpha": "alpha-owner", "beta": "beta-owner",
+		}},
+	}
+	if _, _, err := legacyDurableAccountPair(session); err == nil {
+		t.Fatal("legacy durable storage accepted an unrepresentable venue pair")
 	}
 }

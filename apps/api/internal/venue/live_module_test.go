@@ -12,7 +12,19 @@ type registryTestModule struct {
 
 func (m registryTestModule) Name() string { return m.name }
 func (registryTestModule) Capabilities() LiveCapabilities {
+	return LiveCapabilities{ClosePricePolicy: ClosePriceFromFill, LeverageUpdate: LeverageUpdateNotRequired}
+}
+
+type registryMissingLeveragePolicyModule struct{ registryTestModule }
+
+func (registryMissingLeveragePolicyModule) Capabilities() LiveCapabilities {
 	return LiveCapabilities{ClosePricePolicy: ClosePriceFromFill}
+}
+
+type registryInvalidLeveragePolicyModule struct{ registryTestModule }
+
+func (registryInvalidLeveragePolicyModule) Capabilities() LiveCapabilities {
+	return LiveCapabilities{ClosePricePolicy: ClosePriceFromFill, LeverageUpdate: "sometimes"}
 }
 func (registryTestModule) NormalizeAmount(_ string, amount float64) (float64, error) {
 	return amount, nil
@@ -51,12 +63,14 @@ func TestLiveModuleRegistryIndexesModulesByNormalizedVenue(t *testing.T) {
 func TestLiveModuleRegistryRejectsInvalidModules(t *testing.T) {
 	var typedNil *registryTestModule
 	tests := map[string][]LiveModule{
-		"nil":        {nil},
-		"typed nil":  {typedNil},
-		"empty name": {registryTestModule{}},
-		"mixed case": {registryTestModule{name: "Alpha"}},
-		"whitespace": {registryTestModule{name: " alpha"}},
-		"duplicate":  {registryTestModule{name: "alpha"}, registryTestModule{name: "alpha"}},
+		"nil":                     {nil},
+		"typed nil":               {typedNil},
+		"empty name":              {registryTestModule{}},
+		"mixed case":              {registryTestModule{name: "Alpha"}},
+		"whitespace":              {registryTestModule{name: " alpha"}},
+		"duplicate":               {registryTestModule{name: "alpha"}, registryTestModule{name: "alpha"}},
+		"missing leverage policy": {registryMissingLeveragePolicyModule{registryTestModule{name: "alpha"}}},
+		"invalid leverage policy": {registryInvalidLeveragePolicyModule{registryTestModule{name: "alpha"}}},
 	}
 	for name, modules := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 const recoveryAccountTimeout = 20 * time.Second
@@ -299,7 +300,7 @@ func (s *Server) restoreLiveSessions() {
 				continue
 			}
 			if session.expired() || session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
-				session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil ||
+				!s.requiredLeverageRequestsPresent(session) ||
 				time.Now().After(session.Leg1OpenReq.ExpiresAt) || time.Now().After(session.Leg1UnwindReq.ExpiresAt) {
 				session.State = sessFailed
 				s.finishSafeDurableSession(session.ID, "expired_safe", "expired before any order submission")
@@ -307,8 +308,9 @@ func (s *Server) restoreLiveSessions() {
 			}
 			s.live.signingStore.Store(session.Leg1OpenReq)
 			s.live.signingStore.Store(session.Leg1UnwindReq)
-			s.live.signingStore.Store(session.PacificaLeverageReq)
-			s.live.signingStore.Store(session.HyperliquidLeverageReq)
+			for _, request := range session.leverageSigningRequests() {
+				s.live.signingStore.Store(request)
+			}
 			s.live.sessions.put(session)
 			s.logger.Info("live recovery: restored pre-exposure session", "session_id", session.ID)
 			continue
@@ -318,17 +320,32 @@ func (s *Server) restoreLiveSessions() {
 	}
 }
 
-func agentBoundLeg1Requests(session *LiveSession) bool {
-	if session == nil || session.AgentPacifica == "" || session.AgentHyperliquid == "" ||
-		session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
-		session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil {
+func (s *Server) requiredLeverageRequestsPresent(session *LiveSession) bool {
+	if session == nil {
 		return false
 	}
-	for _, request := range []*domain.SigningRequest{
-		session.Leg1OpenReq, session.Leg1UnwindReq,
-		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
-	} {
-		expected := signerForVenue(request.Venue, session.AgentPacifica, session.AgentHyperliquid)
+	for _, venueName := range session.venueNames() {
+		module, err := s.live.liveModule(venueName)
+		if err != nil || module.Capabilities().LeverageUpdate == venue.LeverageUpdateRequired && session.LeverageRequests[venueName] == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func agentBoundLeg1Requests(session *LiveSession) bool {
+	if session == nil || session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil {
+		return false
+	}
+	for _, venueName := range session.venueNames() {
+		if session.Bindings.Agents[venueName] == "" {
+			return false
+		}
+	}
+	requests := []*domain.SigningRequest{session.Leg1OpenReq, session.Leg1UnwindReq}
+	requests = append(requests, session.leverageSigningRequests()...)
+	for _, request := range requests {
+		expected := session.Bindings.Agents[request.Venue]
 		if expected == "" || request.Signer == "" {
 			return false
 		}
@@ -381,7 +398,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 		s.logger.Info("live recovery: session owned by another server", "session_id", session.ID)
 		return
 	}
-	accounts, err := s.live.acquireRecoveryAccounts(session.AccountPacifica, session.AccountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(session.Bindings.Accounts, true)
 	if err != nil {
 		s.logger.Error("live recovery: account feeds unavailable", "err", err, "session_id", session.ID)
 		return

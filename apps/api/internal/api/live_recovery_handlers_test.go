@@ -565,7 +565,10 @@ func TestLiveSessionStatusReturnsTerminalRecoveryOutcome(t *testing.T) {
 	now := time.Now()
 	payload, err := marshalLiveSession(&LiveSession{
 		ID: "session-recovered", Plan: &domain.ExecutionPlan{ID: "position-residual", Asset: "SOL"},
-		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
+		Leg1: legPlan{venue: "pacifica"}, Leg2: legPlan{venue: "hyperliquid"},
+		Bindings: liveVenueBindings{Accounts: map[string]string{
+			"pacifica": "sol-wallet", "hyperliquid": "0xwallet",
+		}},
 		CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
@@ -616,7 +619,10 @@ func TestLiveSessionStatusRejectsAnotherAccountPair(t *testing.T) {
 	now := time.Now()
 	payload, err := marshalLiveSession(&LiveSession{
 		ID: "session-private", Plan: &domain.ExecutionPlan{ID: "position-residual", Asset: "SOL"},
-		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
+		Leg1: legPlan{venue: "pacifica"}, Leg2: legPlan{venue: "hyperliquid"},
+		Bindings: liveVenueBindings{Accounts: map[string]string{
+			"pacifica": "sol-wallet", "hyperliquid": "0xwallet",
+		}},
 		CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {

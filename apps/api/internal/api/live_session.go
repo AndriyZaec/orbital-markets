@@ -71,28 +71,21 @@ type LiveSession struct {
 	Leg1 legPlan // riskier leg
 	Leg2 legPlan // hedge leg
 
-	AccountPacifica    string
-	AccountHyperliquid string
-	AgentPacifica      string
-	AgentHyperliquid   string
+	Bindings liveVenueBindings
 
 	State sessionState
 
 	// Signing request correlation IDs issued to the frontend.
-	Leg1OpenReqID              string
-	Leg1UnwindReqID            string
-	PacificaLeverageReqID      string
-	HyperliquidLeverageReqID   string
-	Leg2OpenReqID              string
-	Leg2RetryReqID             string
-	Leg1OpenReq                *domain.SigningRequest
-	Leg1UnwindReq              *domain.SigningRequest
-	PacificaLeverageReq        *domain.SigningRequest
-	HyperliquidLeverageReq     *domain.SigningRequest
-	PacificaLeverageApplied    bool
-	HyperliquidLeverageApplied bool
-	Leg2OpenReq                *domain.SigningRequest
-	Leg2RetryReq               *domain.SigningRequest
+	Leg1OpenReqID    string
+	Leg1UnwindReqID  string
+	Leg2OpenReqID    string
+	Leg2RetryReqID   string
+	Leg1OpenReq      *domain.SigningRequest
+	Leg1UnwindReq    *domain.SigningRequest
+	LeverageRequests map[string]*domain.SigningRequest
+	LeverageApplied  map[string]bool
+	Leg2OpenReq      *domain.SigningRequest
+	Leg2RetryReq     *domain.SigningRequest
 
 	// Armed reduce-only unwind for leg 1 — signed up front, held to fire on any
 	// failure after leg 1 opens. Reduce-only auto-caps to the actual open size.
@@ -117,14 +110,34 @@ type LiveSession struct {
 }
 
 func (s *LiveSession) venueBindings() liveVenueBindings {
-	return liveVenueBindings{
-		Accounts: map[string]string{
-			"pacifica": s.AccountPacifica, "hyperliquid": s.AccountHyperliquid,
-		},
-		Agents: map[string]string{
-			"pacifica": s.AgentPacifica, "hyperliquid": s.AgentHyperliquid,
-		},
+	return s.Bindings.clone()
+}
+
+func (s *LiveSession) venueNames() []string {
+	venues := make([]string, 0, 2)
+	for _, venue := range []string{s.Leg1.venue, s.Leg2.venue} {
+		if venue != "" && (len(venues) == 0 || venues[0] != venue) {
+			venues = append(venues, venue)
+		}
 	}
+	return venues
+}
+
+func (s *LiveSession) leverageSigningRequests() []*domain.SigningRequest {
+	requests := make([]*domain.SigningRequest, 0, len(s.LeverageRequests))
+	for _, venue := range s.venueNames() {
+		if request := s.LeverageRequests[venue]; request != nil {
+			requests = append(requests, request)
+		}
+	}
+	return requests
+}
+
+func (s *LiveSession) signingRequests() []*domain.SigningRequest {
+	requests := []*domain.SigningRequest{s.Leg1OpenReq, s.Leg1UnwindReq}
+	requests = append(requests, s.leverageSigningRequests()...)
+	requests = append(requests, s.Leg2OpenReq, s.Leg2RetryReq, s.ArmedUnwindReq)
+	return requests
 }
 
 func (s *LiveSession) expired() bool {
@@ -166,10 +179,9 @@ func (m *SessionManager) claim(id string) (*LiveSession, bool, bool) {
 	return m.claimMatching(id, nil)
 }
 
-func (m *SessionManager) claimForAccounts(id, pacificaAccount, hyperliquidAccount string) (*LiveSession, bool, bool) {
+func (m *SessionManager) claimForAccounts(id string, accounts map[string]string) (*LiveSession, bool, bool) {
 	return m.claimMatching(id, func(session *LiveSession) bool {
-		return sameVenueBinding("pacifica", session.AccountPacifica, pacificaAccount) &&
-			sameVenueBinding("hyperliquid", session.AccountHyperliquid, hyperliquidAccount)
+		return session.Bindings.matchesAccounts(accounts)
 	})
 }
 

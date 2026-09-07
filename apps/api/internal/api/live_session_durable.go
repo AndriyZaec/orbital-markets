@@ -59,20 +59,29 @@ type durableLiveSession struct {
 	UpdatedAt                  string                    `json:"updated_at"`
 }
 
+func signingRequestID(request *domain.SigningRequest, fallback string) string {
+	if request != nil && request.ID != "" {
+		return request.ID
+	}
+	return fallback
+}
+
 func marshalLiveSession(session *LiveSession) ([]byte, error) {
+	pacificaLeverage := session.LeverageRequests["pacifica"]
+	hyperliquidLeverage := session.LeverageRequests["hyperliquid"]
 	durable := durableLiveSession{
 		ID: session.ID, Plan: session.Plan,
 		Leg1:            durableLegPlan{Venue: session.Leg1.venue, Symbol: session.Leg1.symbol, Side: session.Leg1.side, Price: session.Leg1.price},
 		Leg2:            durableLegPlan{Venue: session.Leg2.venue, Symbol: session.Leg2.symbol, Side: session.Leg2.side, Price: session.Leg2.price},
-		AccountPacifica: session.AccountPacifica, AccountHyperliquid: session.AccountHyperliquid,
-		AgentPacifica: session.AgentPacifica, AgentHyperliquid: session.AgentHyperliquid,
+		AccountPacifica: session.Bindings.Accounts["pacifica"], AccountHyperliquid: session.Bindings.Accounts["hyperliquid"],
+		AgentPacifica: session.Bindings.Agents["pacifica"], AgentHyperliquid: session.Bindings.Agents["hyperliquid"],
 		State:         session.State,
 		Leg1OpenReqID: session.Leg1OpenReqID, Leg1UnwindReqID: session.Leg1UnwindReqID,
-		PacificaLeverageReqID: session.PacificaLeverageReqID, HyperliquidLeverageReqID: session.HyperliquidLeverageReqID,
+		PacificaLeverageReqID: signingRequestID(pacificaLeverage, ""), HyperliquidLeverageReqID: signingRequestID(hyperliquidLeverage, ""),
 		Leg2OpenReqID: session.Leg2OpenReqID, Leg2RetryReqID: session.Leg2RetryReqID,
 		Leg1OpenReq: session.Leg1OpenReq, Leg1UnwindReq: session.Leg1UnwindReq,
-		PacificaLeverageReq: session.PacificaLeverageReq, HyperliquidLeverageReq: session.HyperliquidLeverageReq,
-		PacificaLeverageApplied: session.PacificaLeverageApplied, HyperliquidLeverageApplied: session.HyperliquidLeverageApplied,
+		PacificaLeverageReq: pacificaLeverage, HyperliquidLeverageReq: hyperliquidLeverage,
+		PacificaLeverageApplied: session.LeverageApplied["pacifica"], HyperliquidLeverageApplied: session.LeverageApplied["hyperliquid"],
 		Leg2OpenReq: session.Leg2OpenReq, Leg2RetryReq: session.Leg2RetryReq,
 		ArmedUnwindSigned: session.ArmedUnwindSigned, ArmedUnwindReq: session.ArmedUnwindReq,
 		Leg1Fill: session.Leg1Fill, Leg2Fill: session.Leg2Fill,
@@ -99,17 +108,22 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 	}
 	session := &LiveSession{
 		ID: durable.ID, Plan: durable.Plan,
-		Leg1:            legPlan{venue: durable.Leg1.Venue, symbol: durable.Leg1.Symbol, side: durable.Leg1.Side, price: durable.Leg1.Price},
-		Leg2:            legPlan{venue: durable.Leg2.Venue, symbol: durable.Leg2.Symbol, side: durable.Leg2.Side, price: durable.Leg2.Price},
-		AccountPacifica: durable.AccountPacifica, AccountHyperliquid: durable.AccountHyperliquid,
-		AgentPacifica: durable.AgentPacifica, AgentHyperliquid: durable.AgentHyperliquid,
+		Leg1: legPlan{venue: durable.Leg1.Venue, symbol: durable.Leg1.Symbol, side: durable.Leg1.Side, price: durable.Leg1.Price},
+		Leg2: legPlan{venue: durable.Leg2.Venue, symbol: durable.Leg2.Symbol, side: durable.Leg2.Side, price: durable.Leg2.Price},
+		Bindings: liveVenueBindings{
+			Accounts: map[string]string{"pacifica": durable.AccountPacifica, "hyperliquid": durable.AccountHyperliquid},
+			Agents:   map[string]string{"pacifica": durable.AgentPacifica, "hyperliquid": durable.AgentHyperliquid},
+		},
 		State:         durable.State,
 		Leg1OpenReqID: durable.Leg1OpenReqID, Leg1UnwindReqID: durable.Leg1UnwindReqID,
-		PacificaLeverageReqID: durable.PacificaLeverageReqID, HyperliquidLeverageReqID: durable.HyperliquidLeverageReqID,
 		Leg2OpenReqID: durable.Leg2OpenReqID, Leg2RetryReqID: durable.Leg2RetryReqID,
 		Leg1OpenReq: durable.Leg1OpenReq, Leg1UnwindReq: durable.Leg1UnwindReq,
-		PacificaLeverageReq: durable.PacificaLeverageReq, HyperliquidLeverageReq: durable.HyperliquidLeverageReq,
-		PacificaLeverageApplied: durable.PacificaLeverageApplied, HyperliquidLeverageApplied: durable.HyperliquidLeverageApplied,
+		LeverageRequests: map[string]*domain.SigningRequest{
+			"pacifica": durable.PacificaLeverageReq, "hyperliquid": durable.HyperliquidLeverageReq,
+		},
+		LeverageApplied: map[string]bool{
+			"pacifica": durable.PacificaLeverageApplied, "hyperliquid": durable.HyperliquidLeverageApplied,
+		},
 		Leg2OpenReq: durable.Leg2OpenReq, Leg2RetryReq: durable.Leg2RetryReq,
 		ArmedUnwindSigned: durable.ArmedUnwindSigned, ArmedUnwindReq: durable.ArmedUnwindReq,
 		Leg1Fill: durable.Leg1Fill, Leg2Fill: durable.Leg2Fill,
@@ -129,8 +143,11 @@ func validateDurableSessionOwnership(record executor.DurableSessionRecord, sessi
 	if record.ID != session.ID {
 		return fmt.Errorf("session ID does not match durable envelope")
 	}
-	if !sameVenueBinding("pacifica", record.AccountPacifica, session.AccountPacifica) ||
-		!sameVenueBinding("hyperliquid", record.AccountHyperliquid, session.AccountHyperliquid) {
+	if _, _, err := legacyDurableAccountPair(session); err != nil {
+		return err
+	}
+	if !sameVenueBinding("pacifica", record.AccountPacifica, session.Bindings.Accounts["pacifica"]) ||
+		!sameVenueBinding("hyperliquid", record.AccountHyperliquid, session.Bindings.Accounts["hyperliquid"]) {
 		return fmt.Errorf("session accounts do not match durable envelope")
 	}
 	if session.Plan == nil {
@@ -140,39 +157,32 @@ func validateDurableSessionOwnership(record executor.DurableSessionRecord, sessi
 		return fmt.Errorf("session asset does not match durable envelope")
 	}
 
-	requests := []*domain.SigningRequest{
-		session.Leg1OpenReq, session.Leg1UnwindReq,
-		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
-		session.Leg2OpenReq, session.Leg2RetryReq, session.ArmedUnwindReq,
+	for venueName, request := range session.LeverageRequests {
+		if request != nil && request.Venue != venueName {
+			return fmt.Errorf("%s leverage request has venue %s", venueName, request.Venue)
+		}
 	}
-	for _, request := range requests {
+	for _, request := range session.signingRequests() {
 		if request == nil {
 			continue
 		}
-		expected := accountForVenue(request.Venue, record.AccountPacifica, record.AccountHyperliquid)
+		expected := session.Bindings.Accounts[request.Venue]
 		if expected == "" || !sameVenueBinding(request.Venue, expected, request.Account) {
 			return fmt.Errorf("%s signing request account does not match durable envelope", request.Venue)
 		}
 	}
 
-	session.AccountPacifica = strings.TrimSpace(record.AccountPacifica)
-	session.AccountHyperliquid = strings.ToLower(strings.TrimSpace(record.AccountHyperliquid))
+	session.Bindings.Accounts["pacifica"] = strings.TrimSpace(record.AccountPacifica)
+	session.Bindings.Accounts["hyperliquid"] = strings.ToLower(strings.TrimSpace(record.AccountHyperliquid))
 	return nil
 }
 
 // Persisted sessions created before account-scoped feeds did not store the
 // request account. Backfill it so an armed unwind remains usable after deploy.
 func backfillSigningRequestAccounts(session *LiveSession) {
-	requests := []*domain.SigningRequest{
-		session.Leg1OpenReq, session.Leg1UnwindReq,
-		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
-		session.Leg2OpenReq, session.Leg2RetryReq, session.ArmedUnwindReq,
-	}
-	for _, request := range requests {
+	for _, request := range session.signingRequests() {
 		if request != nil && request.Account == "" {
-			request.Account = accountForVenue(
-				request.Venue, session.AccountPacifica, session.AccountHyperliquid,
-			)
+			request.Account = session.Bindings.Accounts[request.Venue]
 		}
 	}
 }
@@ -183,8 +193,37 @@ func parseSessionTime(value string) (time.Time, error) {
 	return time.Parse(timeFormat, value)
 }
 
+func legacyDurableAccountPair(session *LiveSession) (string, string, error) {
+	if session == nil {
+		return "", "", fmt.Errorf("session missing")
+	}
+	venues := session.venueNames()
+	if err := requireLegacyDurableVenuePair(venues); err != nil {
+		return "", "", err
+	}
+	pacifica := strings.TrimSpace(session.Bindings.Accounts["pacifica"])
+	hyperliquid := strings.ToLower(strings.TrimSpace(session.Bindings.Accounts["hyperliquid"]))
+	if pacifica == "" || hyperliquid == "" {
+		return "", "", fmt.Errorf("durable session account bindings missing")
+	}
+	return pacifica, hyperliquid, nil
+}
+
+func requireLegacyDurableVenuePair(venues []string) error {
+	if len(venues) != 2 ||
+		!((venues[0] == "pacifica" && venues[1] == "hyperliquid") ||
+			(venues[0] == "hyperliquid" && venues[1] == "pacifica")) {
+		return fmt.Errorf("durable storage does not support venue pair %v", venues)
+	}
+	return nil
+}
+
 func (s *Server) saveLiveSession(ctx context.Context, session *LiveSession) error {
 	session.UpdatedAt = time.Now()
+	pacificaAccount, hyperliquidAccount, err := legacyDurableAccountPair(session)
+	if err != nil {
+		return err
+	}
 	payload, err := marshalLiveSession(session)
 	if err != nil {
 		return err
@@ -200,8 +239,8 @@ func (s *Server) saveLiveSession(ctx context.Context, session *LiveSession) erro
 	}
 	if err := s.liveStore.UpsertDurableSession(ctx, executor.DurableSessionRecord{
 		ID: session.ID, State: string(session.State), Payload: payload,
-		AccountPacifica:    strings.TrimSpace(session.AccountPacifica),
-		AccountHyperliquid: strings.ToLower(strings.TrimSpace(session.AccountHyperliquid)),
+		AccountPacifica:    pacificaAccount,
+		AccountHyperliquid: hyperliquidAccount,
 		Asset:              session.Plan.Asset,
 		HasExposure:        session.hasPossibleExposure(),
 		ExpiresAt:          session.CreatedAt.Add(sessionTTL), CreatedAt: session.CreatedAt,
