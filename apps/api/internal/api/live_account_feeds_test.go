@@ -173,3 +173,33 @@ func TestAsterAccountFeedAppliesDepositRequiredState(t *testing.T) {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }
+
+func TestLiveDepsAppliesAsterDepositRequiredWithoutSnapshotUpdate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &asterAccountFeedFactory{},
+	}, accountFeedRegistryConfig{})
+	lease, err := registry.Acquire("aster", "0xowner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	live := &LiveDeps{accounts: registry}
+
+	applied, err := live.applyAsterPrivateResult(&domain.SigningRequest{
+		Account: "0xowner", Signer: "0xagent",
+	}, &asterlive.PrivateResult{DepositRequired: true})
+	if err != nil || !applied {
+		t.Fatalf("applied = %v, error = %v", applied, err)
+	}
+	current, found := registry.Lookup("aster", "0xowner")
+	if !found {
+		t.Fatal("Aster account feed not found")
+	}
+	snapshot := current.Feed().Snapshot()
+	current.Release()
+	if snapshot.UnavailableReason != "Aster account requires a deposit" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}

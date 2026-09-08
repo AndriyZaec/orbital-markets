@@ -125,7 +125,7 @@ func (d *LiveDeps) applyAsterPrivateResult(
 	request *domain.SigningRequest,
 	result *asterlive.PrivateResult,
 ) (bool, error) {
-	if result == nil || result.AccountUpdate == nil {
+	if result == nil || (result.AccountUpdate == nil && !result.DepositRequired) {
 		return false, nil
 	}
 	if d == nil || d.accounts == nil {
