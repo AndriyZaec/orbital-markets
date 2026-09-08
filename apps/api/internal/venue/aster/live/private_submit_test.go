@@ -84,6 +84,25 @@ func TestSubmitSignedPrivateMarksServerFailureAmbiguous(t *testing.T) {
 	}
 }
 
+func TestSubmitSignedPrivateTreatsDepositRequiredAsEmptySnapshot(t *testing.T) {
+	operations := []PrivateOperation{GetPositionMode, GetAccount, GetPositions}
+	for _, operation := range operations {
+		t.Run(string(operation), func(t *testing.T) {
+			request, signed := validSignedPrivate(t, PrivateRequestParams{Operation: operation})
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.WriteHeader(http.StatusBadRequest)
+				_, _ = response.Write([]byte(`{"code":-5050,"msg":"This function can only be used after deposit"}`))
+			}))
+			defer server.Close()
+
+			result, err := NewClient(server.URL, server.Client(), nil).SubmitSignedPrivate(context.Background(), signed, request)
+			if err != nil || result.AccountUpdate == nil {
+				t.Fatalf("result = %+v, error = %v", result, err)
+			}
+		})
+	}
+}
+
 func TestSubmitSignedPrivateRejectsUncorrelatedMutationResponse(t *testing.T) {
 	request, signed := validSignedPrivate(t, PrivateRequestParams{Operation: UpdateLeverage, Symbol: "BTCUSDT", Leverage: 5})
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {

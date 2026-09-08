@@ -16,7 +16,10 @@ import (
 	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
 )
 
-const maxPrivateResponse = 2 << 20
+const (
+	maxPrivateResponse       = 2 << 20
+	asterDepositRequiredCode = -5050
+)
 
 type PrivateResult struct {
 	Operation     PrivateOperation     `json:"operation"`
@@ -66,15 +69,27 @@ func (c *Client) SubmitSignedPrivate(
 	if response.StatusCode >= http.StatusInternalServerError {
 		return nil, fmt.Errorf("%w: Aster %s returned HTTP %d", ErrSubmissionAmbiguous, operation, response.StatusCode)
 	}
+	var venueError struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if json.Unmarshal(responseBody, &venueError) == nil && venueError.Code == asterDepositRequiredCode {
+		if emptyBody, ok := undepositedSnapshotBody(operation); ok {
+			accountUpdate, err := validatePrivateResponse(operation, request, emptyBody)
+			if err != nil {
+				return nil, fmt.Errorf("%w: build empty Aster %s response: %v", ErrSubmissionAmbiguous, operation, err)
+			}
+			return &PrivateResult{
+				Operation: operation, Data: emptyBody, AccountUpdate: accountUpdate,
+				SubmittedAt: submittedAt, RespondedAt: time.Now(),
+			}, nil
+		}
+	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("submit Aster %s: %s", operation, parseAsterOrderError(response.StatusCode, responseBody))
 	}
 	if !json.Valid(responseBody) {
 		return nil, fmt.Errorf("%w: decode Aster %s response", ErrSubmissionAmbiguous, operation)
-	}
-	var venueError struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
 	}
 	if json.Unmarshal(responseBody, &venueError) == nil && venueError.Code != 0 && venueError.Code != http.StatusOK {
 		return nil, fmt.Errorf("submit Aster %s: %s", operation, formatAsterError(venueError.Code, venueError.Msg))
@@ -87,6 +102,19 @@ func (c *Client) SubmitSignedPrivate(
 		Operation: operation, Data: append(json.RawMessage(nil), responseBody...), AccountUpdate: accountUpdate,
 		SubmittedAt: submittedAt, RespondedAt: time.Now(),
 	}, nil
+}
+
+func undepositedSnapshotBody(operation PrivateOperation) (json.RawMessage, bool) {
+	switch operation {
+	case GetPositionMode:
+		return json.RawMessage(`{"dualSidePosition":false}`), true
+	case GetAccount:
+		return json.RawMessage(`{"canTrade":false,"totalMarginBalance":"0","availableBalance":"0","positions":[]}`), true
+	case GetPositions:
+		return json.RawMessage(`[]`), true
+	default:
+		return nil, false
+	}
 }
 
 func validatePrivateResponse(operation PrivateOperation, request *domain.SigningRequest, body []byte) (*asteraccount.Update, error) {
