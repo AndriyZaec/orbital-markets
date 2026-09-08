@@ -6,8 +6,7 @@ import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useTelegramLink } from '@/hooks/useTelegramLink'
 import { trackAnalytics } from '@/lib/analytics'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import { venueMetadata } from '@/lib/venue-metadata'
 import telegramLogo from '@/assets/telegram-logo.svg'
 
 // Static venue metadata (logos, blurbs, chain). Runtime
@@ -23,9 +22,9 @@ interface VenueDef {
 }
 
 const VENUES: VenueDef[] = [
-  { id: 'pacifica', name: 'Pacifica', logo: pacificaLogo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana' },
-  { id: 'hyperliquid', name: 'Hyperliquid', logo: hlLogo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1' },
-  { id: 'aster', name: 'Aster', logo: null, description: 'Browser-agent authorization and live account connection', chain: 'BNB Chain', preview: false },
+  { id: 'pacifica', name: venueMetadata('pacifica').label, logo: venueMetadata('pacifica').logo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana' },
+  { id: 'hyperliquid', name: venueMetadata('hyperliquid').label, logo: venueMetadata('hyperliquid').logo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1' },
+  { id: 'aster', name: venueMetadata('aster').label, logo: venueMetadata('aster').logo, description: 'Browser-agent authorization and live account connection', chain: 'BNB Chain', preview: false },
 ]
 
 interface Props {

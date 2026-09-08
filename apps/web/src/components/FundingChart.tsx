@@ -9,6 +9,7 @@ import {
   type FundingDirection,
   type ReturnProjection,
 } from '@/lib/funding-chart'
+import { venueMetadata } from '@/lib/venue-metadata'
 
 interface Props {
   asset: string
@@ -60,14 +61,11 @@ function formatNotional(value: number) {
 }
 
 function venueLabel(venue: string) {
-  if (venue.toLowerCase() === 'hyperliquid') return 'Hyperliquid'
-  return venue.charAt(0).toUpperCase() + venue.slice(1)
+  return venueMetadata(venue).label
 }
 
 function venueColor(venue: string) {
-  if (venue.toLowerCase() === 'pacifica') return '#22d3ee'
-  if (venue.toLowerCase() === 'hyperliquid') return '#a78bfa'
-  return '#f59e0b'
+  return venueMetadata(venue).color
 }
 
 export function FundingChart({

@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 import { AssetIcon } from '@/components/AssetIcon'
 import { trackAnalytics } from '@/lib/analytics'
+import { venueMetadata } from '@/lib/venue-metadata'
 
 interface Props {
   opportunity: Opportunity
@@ -61,9 +62,7 @@ function fmtLiqPrice(leg: { liquidation_price: number; leverage: number } | null
 // a positive balance. When disconnected (or before first snapshot) render
 // "--" so we don't misleadingly show $0.00.
 function venueLabel(venue: string): string {
-  if (venue.toLowerCase() === 'hyperliquid') return 'Hyperliquid'
-  if (venue.toLowerCase() === 'pacifica') return 'Pacifica'
-  return venue
+  return venueMetadata(venue).label
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {

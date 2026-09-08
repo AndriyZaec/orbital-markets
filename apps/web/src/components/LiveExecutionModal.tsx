@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { LiveExecutionState, ExecutionPhase, LegFillView, UnwindStatus } from '@/hooks/useLiveExecution'
 import { recoveryPresentation, type RecoveryTone } from '@/lib/degraded-execution'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import { venueMetadata } from '@/lib/venue-metadata'
 import { AssetIcon } from '@/components/AssetIcon'
 
 interface Props {
@@ -83,13 +82,11 @@ const STATUS_STYLE: Record<LegStatus, { dot: string; text: string; label: string
   skipped: { dot: 'bg-zinc-600', text: 'text-muted-foreground', label: 'Not attempted' },
 }
 
-const venueLogos: Record<string, string> = { pacifica: pacificaLogo, hyperliquid: hlLogo }
-
 function LegCard({
   label, venue, status, amount, fill,
 }: { label: string; venue: string | null; status: LegStatus; amount?: number; fill?: LegFillView | null }) {
   const s = STATUS_STYLE[status]
-  const logo = venue ? venueLogos[venue] : undefined
+  const metadata = venue ? venueMetadata(venue) : null
   return (
     <div className={`rounded-lg border px-4 py-3 ${
       status === 'accepted' ? 'border-green-500/20 bg-green-500/[0.03]'
@@ -102,9 +99,9 @@ function LegCard({
     }`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          {logo && <img src={logo} alt={venue ?? ''} className="size-5 rounded-sm" />}
+          {metadata?.logo && <img src={metadata.logo} alt={metadata.label} className="size-5 rounded-sm" />}
           <span className="text-xs font-semibold text-foreground">{label}</span>
-          {venue && <span className="text-[10px] text-muted-foreground capitalize">{venue}</span>}
+          {metadata && <span className="text-[10px] text-muted-foreground">{metadata.label}</span>}
         </div>
         <div className="flex items-center gap-1.5">
           <div className={`size-1.5 rounded-full ${s.dot}`} />

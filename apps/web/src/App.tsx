@@ -28,8 +28,7 @@ import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import { venueMetadata } from '@/lib/venue-metadata'
 
 type View = 'trade' | 'portfolio'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
@@ -617,6 +616,8 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 const isLongA = opp.direction === 'long_a_short_b'
                 const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
                 const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
+                const venueA = venueMetadata(opp.venue_pair.venue_a)
+                const venueB = venueMetadata(opp.venue_pair.venue_b)
                 const maxLev = opp.max_leverage || 1
                 const apr = opp.annualized_gross_edge
 
@@ -643,8 +644,8 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <PositionRoute longVenue={longVenue} shortVenue={shortVenue} />
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
-                      <FundingRateLine label="PAC" value={fundingForVenue(opp, 'pacifica')} color="text-cyan-400" />
-                      <FundingRateLine label="HL" value={fundingForVenue(opp, 'hyperliquid')} color="text-violet-400" />
+                      <FundingRateLine label={venueA.shortLabel} value={opp.funding_rate_a} color={venueA.textColor} />
+                      <FundingRateLine label={venueB.shortLabel} value={opp.funding_rate_b} color={venueB.textColor} />
                     </TableCell>
                     <TableCell className="border-l border-white/[0.035] py-3 text-right font-mono text-foreground">
                       <MetricFlash value={Math.abs(opp.funding_spread)}>{fmtRate(Math.abs(opp.funding_spread))}</MetricFlash>
@@ -1017,14 +1018,14 @@ function OpportunitySignalCell({ signal }: { signal: OpportunitySignal | null })
 }
 
 function VenueIcon({ venue }: { venue: string }) {
-  const v = venue.toLowerCase()
-  if (v === 'pacifica') {
-    return <span className="inline-flex items-center justify-center size-7 rounded bg-white/[0.04] border border-border" title="Pacifica"><img src={pacificaLogo} alt="Pacifica" className="size-5" /></span>
-  }
-  if (v === 'hyperliquid') {
-    return <span className="inline-flex items-center justify-center size-7 rounded bg-white/[0.04] border border-border" title="Hyperliquid"><img src={hlLogo} alt="Hyperliquid" className="size-5" /></span>
-  }
-  return <span className="inline-flex items-center justify-center size-7 rounded bg-white/[0.06] border border-border text-[11px] font-bold text-muted-foreground uppercase" title={venue}>{venue[0]}</span>
+  const metadata = venueMetadata(venue)
+  return (
+    <span className="inline-flex size-7 items-center justify-center rounded border border-border bg-white/[0.04]" title={metadata.label}>
+      {metadata.logo
+        ? <img src={metadata.logo} alt={metadata.label} className="size-5" />
+        : <span className="text-[11px] font-bold text-muted-foreground">{metadata.shortLabel[0]}</span>}
+    </span>
+  )
 }
 
 function StatItem({ label, value, mono, negative, children }: {

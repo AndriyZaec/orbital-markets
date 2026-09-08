@@ -12,9 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
 import { portfolioPositionCategory } from '@/lib/portfolio-position'
+import { venueMetadata } from '@/lib/venue-metadata'
 import {
   portfolioPerformance,
   type PortfolioPerformance,
@@ -758,11 +757,6 @@ const STATUS_VIEW: Record<
   error:             { label: 'Error',           color: 'text-red-400',          dot: 'bg-red-400' },
 }
 
-const VENUE_LOGOS: Partial<Record<VenueReadiness['venue'], string>> = {
-  pacifica: pacificaLogo,
-  hyperliquid: hlLogo,
-}
-
 const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
   pacifica: 'bg-[radial-gradient(circle_at_8%_0%,rgba(34,211,238,0.055),transparent_52%)]',
   hyperliquid: 'bg-[radial-gradient(circle_at_8%_0%,rgba(139,92,246,0.055),transparent_52%)]',
@@ -771,7 +765,7 @@ const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
 
 function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; maskAmounts: boolean }) {
   const view = STATUS_VIEW[readiness.status]
-  const logo = VENUE_LOGOS[readiness.venue]
+  const logo = venueMetadata(readiness.venue).logo
   // Show a real number only when we actually have one from the backend.
   // On disconnect (or before the first snapshot) equity/available are null;
   // render "--" rather than an ambiguous $0.00.

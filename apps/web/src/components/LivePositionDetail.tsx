@@ -10,8 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AssetIcon } from '@/components/AssetIcon'
 import { ExternalLinkIcon } from 'lucide-react'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import { venueMetadata } from '@/lib/venue-metadata'
 
 interface Props {
   position: LivePosition
@@ -75,8 +74,6 @@ function pnlColor(n: number) {
   if (n < 0) return 'text-red-400'
   return ''
 }
-
-const venueLogos: Record<string, string> = { pacifica: pacificaLogo, hyperliquid: hlLogo }
 
 function needsAttention(state: string) {
   return state === 'degraded' || state === 'failed' || state === 'closing'
@@ -334,7 +331,7 @@ function CloseFailure({ outcome }: { outcome: CloseOutcome }) {
 }
 
 function FillCard({ fill }: { fill: LiveFillDetail }) {
-  const logo = venueLogos[fill.venue]
+  const metadata = venueMetadata(fill.venue)
   const isGood = fill.filled
   const isBad = !fill.accepted || (fill.error && fill.error.length > 0)
 
@@ -346,8 +343,8 @@ function FillCard({ fill }: { fill: LiveFillDetail }) {
     }`}>
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[10px] text-muted-foreground font-medium">Leg {fill.leg}</span>
-        {logo && <img src={logo} alt={fill.venue} className="size-3.5 rounded-sm" />}
-        <span className="text-[11px] text-foreground capitalize">{fill.venue}</span>
+        {metadata.logo && <img src={metadata.logo} alt={metadata.label} className="size-3.5 rounded-sm" />}
+        <span className="text-[11px] text-foreground">{metadata.label}</span>
         <span className={`ml-auto text-[10px] font-medium ${
           fill.filled ? 'text-green-400' : fill.accepted ? 'text-yellow-400' : 'text-red-400'
         }`}>
@@ -398,13 +395,13 @@ function EventRow({ event: ev }: { event: LiveEventDetail }) {
 function LegCard({ label, venue, currentPrice, liqPrice, liqDist, liqRisk }: {
   label: string; venue: string; currentPrice: number; liqPrice: number; liqDist: number; liqRisk: string
 }) {
-  const logo = venueLogos[venue]
+  const metadata = venueMetadata(venue)
   return (
     <div className="rounded-lg border border-border bg-white/[0.02] px-3 py-3">
       <div className="flex items-center gap-2 mb-2.5">
         <span className="text-[10px] text-muted-foreground font-medium">{label}</span>
-        {logo && <img src={logo} alt={venue} className="size-4 rounded-sm" />}
-        <span className="text-xs text-foreground capitalize">{venue}</span>
+        {metadata.logo && <img src={metadata.logo} alt={metadata.label} className="size-4 rounded-sm" />}
+        <span className="text-xs text-foreground">{metadata.label}</span>
       </div>
       <div className="flex flex-col gap-1.5 text-[11px]">
         <div className="flex justify-between"><span className="text-muted-foreground">Price</span><span className="font-mono text-foreground">{fmtPrice(currentPrice)}</span></div>
