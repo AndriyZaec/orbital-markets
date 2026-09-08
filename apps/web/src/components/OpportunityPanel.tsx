@@ -240,6 +240,18 @@ export function OpportunityPanel({
   }
 
   const handleExecuteLive = () => {
+    if (!plan || plan.opportunity_id !== opp.id || plan.asset.toUpperCase() !== opp.asset.toUpperCase() ||
+      plan.leverage.leverage !== leverage) return
+    const intentLegs = liveVenues.map((venue, index) => {
+      const leg = [plan.leg_1, plan.leg_2].find((candidate) => candidate.venue.toLowerCase() === venue)
+      if (!leg) return null
+      return {
+        venue,
+        symbol: leg.market_key ?? opp.asset,
+        side: index === 0 ? 'buy' as const : 'sell' as const,
+      }
+    })
+    if (!intentLegs[0] || !intentLegs[1]) return
     // Kick a balance refresh alongside the execute. Non-blocking: readiness
     // was already ready when the button enabled; this just tightens the
     // window between last-known-fresh and actual submission.
@@ -251,8 +263,15 @@ export function OpportunityPanel({
       notional_bucket: notionalBucket(plan?.notional ?? notionalForPlan ?? opp.recommended_notional),
     })
     setShowLiveModal(true)
-    const asterLeg = [plan?.leg_1, plan?.leg_2].find((leg) => leg?.venue.toLowerCase() === 'aster')
-    executeLive(opp.id, leverage, notionalForPlan, liveVenues, asterLeg?.market_key ?? asterLeg?.asset)
+    const asterLeg = [plan.leg_1, plan.leg_2].find((leg) => leg.venue.toLowerCase() === 'aster')
+    executeLive({
+      opportunityId: opp.id,
+      asset: opp.asset,
+      leverage,
+      requestedNotional: plan.notional,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      legs: intentLegs as [NonNullable<(typeof intentLegs)[number]>, NonNullable<(typeof intentLegs)[number]>],
+    }, asterLeg?.market_key ?? asterLeg?.asset)
   }
 
   const handleCloseLiveModal = () => {

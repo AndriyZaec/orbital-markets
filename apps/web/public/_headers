@@ -4,3 +4,4 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: interest-cohort=()
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src https://connect.solflare.com; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https://app.hyperliquid.xyz; connect-src 'self' https://api.orbitalmarkets.xyz https://api.hyperliquid.xyz https://api.mainnet-beta.solana.com https://eth.merkle.io https://arb1.arbitrum.io https://56.rpc.thirdweb.com https://eu.i.posthog.com wss://api.mainnet-beta.solana.com wss://fstream.asterdex.com; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests

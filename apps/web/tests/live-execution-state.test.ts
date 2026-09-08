@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  assertExecutionIntentRequest,
+  assertPreparedExecutionIntent,
   areValidLeg1SigningRequests,
   executionFailurePhase,
   executionPhaseFromStatus,
   normalizeHyperliquidAddress,
   normalizePacificaAddress,
 } from '../src/lib/live-execution-state.ts'
+import type { SigningRequest } from '../src/types/signing.ts'
 
 test('maps recovery statuses to explicit UI phases', () => {
   assert.equal(executionPhaseFromStatus('awaiting_leg2_retry_sign'), 'awaiting_leg2_retry')
@@ -39,4 +42,71 @@ test('accepts optional per-venue leverage requests before leg 1', () => {
   assert.equal(areValidLeg1SigningRequests([
     pacificaLeverage, pacificaLeverage, open, unwind,
   ], 'pacifica', 'hyperliquid'), false)
+})
+
+const intent = {
+  opportunityId: 'opp-1',
+  asset: 'BTC',
+  leverage: 3,
+  requestedNotional: 100,
+  expiresAt: '2026-09-08T12:01:00.000Z',
+  legs: [
+    { venue: 'aster', symbol: 'BTCUSDT', side: 'buy' },
+    { venue: 'pacifica', symbol: 'BTC', side: 'sell' },
+  ],
+} as const
+
+function signingRequest(overrides: Partial<SigningRequest> = {}): SigningRequest {
+  return {
+    id: 'request-1',
+    client_order_id: 'client-1',
+    venue: 'aster',
+    action: 'open',
+    account: 'owner',
+    symbol: 'BTCUSDT',
+    side: 'buy',
+    amount: 1,
+    price: 100,
+    reduce_only: false,
+    unsigned_payload: {},
+    expires_at: '2026-09-08T12:00:30.000Z',
+    created_at: '2026-09-08T12:00:00.000Z',
+    ...overrides,
+  }
+}
+
+test('execution intent accepts only the prepared asset and venue pair', () => {
+  assert.doesNotThrow(() => assertPreparedExecutionIntent(intent, {
+    asset: 'BTC',
+    riskierVenue: 'aster',
+    hedgeVenue: 'pacifica',
+  }, Date.parse('2026-09-08T12:00:00.000Z')))
+
+  assert.throws(() => assertPreparedExecutionIntent(intent, {
+    asset: 'ETH',
+    riskierVenue: 'aster',
+    hedgeVenue: 'pacifica',
+  }, Date.parse('2026-09-08T12:00:00.000Z')), /intent/)
+  assert.throws(() => assertPreparedExecutionIntent(intent, {
+    asset: 'BTC',
+    riskierVenue: 'hyperliquid',
+    hedgeVenue: 'pacifica',
+  }, Date.parse('2026-09-08T12:00:00.000Z')), /intent/)
+})
+
+test('execution intent binds symbol, direction, leverage, lifetime, and reuse', () => {
+  const consumed = new Set<string>()
+  const now = Date.parse('2026-09-08T12:00:00.000Z')
+  assert.doesNotThrow(() => assertExecutionIntentRequest(intent, signingRequest(), consumed, now))
+  assert.throws(() => assertExecutionIntentRequest(intent, signingRequest(), consumed, now), /already consumed/)
+  assert.throws(() => assertExecutionIntentRequest(intent, signingRequest({ id: 'wrong-side', side: 'sell' }), new Set(), now), /intent/)
+  assert.throws(() => assertExecutionIntentRequest(intent, signingRequest({ id: 'wrong-symbol', symbol: 'ETHUSDT' }), new Set(), now), /intent/)
+  assert.throws(() => assertExecutionIntentRequest(intent, signingRequest({
+    id: 'wrong-leverage', action: 'update_leverage', side: '', amount: 0, price: 0, leverage: 4,
+  }), new Set(), now), /intent/)
+  assert.throws(() => assertExecutionIntentRequest(intent, signingRequest({ id: 'expired-intent' }), new Set(), Date.parse(intent.expiresAt) + 1), /expired/)
+
+  assert.doesNotThrow(() => assertExecutionIntentRequest(intent, signingRequest({
+    id: 'unwind', action: 'unwind', side: 'sell', reduce_only: true,
+  }), new Set(), now))
 })

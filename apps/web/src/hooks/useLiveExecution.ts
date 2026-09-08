@@ -16,12 +16,15 @@ import type { SigningRequest, SignedAction } from '@/types/signing'
 import type { Venue } from '@/agents/types'
 import { useTradingAgents } from './useTradingAgents'
 import {
+  assertExecutionIntentRequest,
+  assertPreparedExecutionIntent,
   areValidLeg1SigningRequests,
   executionFailurePhase,
   executionPhaseFromStatus,
   normalizeHyperliquidAddress,
   normalizePacificaAddress,
   type AdvanceStatus,
+  type ExecutionIntent,
 } from '@/lib/live-execution-state'
 
 // Two-phase non-custodial open (Option A):
@@ -207,6 +210,8 @@ function useLiveExecutionState() {
   const accountsRef = useRef<Record<Venue, string | null>>({
     pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
   })
+  const executionInFlightRef = useRef(false)
+  const consumedRequestIdsRef = useRef(new Set<string>())
   useEffect(() => {
     accountsRef.current = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress }
   }, [asterAddress, hyperliquidAddress, pacificaAddress])
@@ -228,12 +233,13 @@ function useLiveExecutionState() {
   }
 
   const executeLive = useCallback(async (
-    opportunityId: string,
-    leverage: number,
-    requestedNotional?: number,
-    venues: [Venue, Venue] = ['pacifica', 'hyperliquid'],
+    intent: ExecutionIntent,
     asterSymbol?: string,
   ) => {
+    const opportunityId = intent.opportunityId
+    const leverage = intent.leverage
+    const requestedNotional = intent.requestedNotional
+    const venues = intent.legs.map((leg) => leg.venue) as [Venue, Venue]
     const authorityByVenue: Record<Venue, string | null> = {
       pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
     }
@@ -250,6 +256,8 @@ function useLiveExecutionState() {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Authorize both venues first' })
       return
     }
+    if (executionInFlightRef.current) return
+    executionInFlightRef.current = true
 
     setState({ ...INITIAL_STATE, phase: 'preparing' })
 
@@ -292,8 +300,17 @@ function useLiveExecutionState() {
       }
       const prep: PrepareResp = await prepResp.json()
       const leg1Requests = prep.signing_requests || []
+      assertPreparedExecutionIntent(intent, {
+        asset: prep.asset,
+        riskierVenue: prep.riskier_venue,
+        hedgeVenue: prep.hedge_venue,
+      })
       if (!areValidLeg1SigningRequests(leg1Requests, prep.riskier_venue, prep.hedge_venue)) {
         throw new Error('Expected valid leverage updates plus leg-1 open and unwind requests')
+      }
+      const signForIntent = async (request: SigningRequest): Promise<SignedAction> => {
+        assertExecutionIntentRequest(intent, request, consumedRequestIdsRef.current)
+        return tradingAgents.sign(request)
       }
 
       // Snapshot the accounts the session was prepared for. Any subsequent
@@ -352,7 +369,7 @@ function useLiveExecutionState() {
       try {
         signedLeg1 = []
         for (const req of leg1Requests) {
-          signedLeg1.push(await tradingAgents.sign(req))
+          signedLeg1.push(await signForIntent(req))
         }
       } catch (e) {
         // Signing-failure rule: nothing submitted, abort cleanly.
@@ -406,12 +423,27 @@ function useLiveExecutionState() {
         return
       }
 
+      const abortInvalidRequest = async (reason: string) => {
+        const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
+        setState((s) => ({
+          ...s,
+          phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'degraded',
+          reason: abortResp?.reason ?? (abortResp
+            ? `${reason}. Armed unwind fired.`
+            : `${reason}; abort failed. Manual action may be required.`),
+          unwound: abortResp?.unwound ?? false,
+          unwindStatus: (abortResp?.unwind_status ?? (abortResp ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+          remainingExposure: abortResp?.remaining_exposure ?? [],
+        }))
+      }
+
       // status === 'awaiting_leg2_sign'
       const leg2Reqs = adv1.signing_requests || []
-      if (leg2Reqs.length < 1) {
-        throw new Error('Expected leg-2 signing request from backend')
-      }
       const leg2Req = leg2Reqs[0]
+      if (!leg2Req || leg2Reqs.length !== 1 || leg2Req.venue !== prep.hedge_venue || leg2Req.action !== 'open') {
+        await abortInvalidRequest('Leg-2 signing request does not match the execution intent')
+        return
+      }
 
       setState((s) => ({
         ...s,
@@ -447,7 +479,7 @@ function useLiveExecutionState() {
       // 4. Sign leg 2. If it fails, tell the backend to abort -> fires armed unwind.
       let signedLeg2: SignedAction
       try {
-        signedLeg2 = await tradingAgents.sign(leg2Req)
+        signedLeg2 = await signForIntent(leg2Req)
       } catch (e) {
         const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
         setState((s) => ({
@@ -496,7 +528,11 @@ function useLiveExecutionState() {
 
       if (adv2.status === 'awaiting_leg2_retry_sign') {
         const retryReq = adv2.signing_requests?.[0]
-        if (!retryReq) throw new Error('Expected residual leg-2 retry signing request')
+        if (!retryReq || adv2.signing_requests?.length !== 1 ||
+          retryReq.venue !== prep.hedge_venue || retryReq.action !== 'open') {
+          await abortInvalidRequest('Residual leg-2 retry does not match the execution intent')
+          return
+        }
         setState((s) => ({
           ...s,
           phase: 'awaiting_leg2_retry',
@@ -527,7 +563,7 @@ function useLiveExecutionState() {
         } else {
           let signedRetry: SignedAction | null = null
           try {
-            signedRetry = await tradingAgents.sign(retryReq)
+            signedRetry = await signForIntent(retryReq)
           } catch (e) {
             const message = `Leg 2 retry signing failed: ${e instanceof Error ? e.message : 'unknown error'}`
             const abortResp = await abortRetry(message)
@@ -576,6 +612,8 @@ function useLiveExecutionState() {
           ? { reason: `Execution response is uncertain: ${e instanceof Error ? e.message : 'Unknown error'}` }
           : { error: e instanceof Error ? e.message : 'Unknown error' }),
       }))
+    } finally {
+      executionInFlightRef.current = false
     }
   }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
 

@@ -1,5 +1,69 @@
 import type { SigningRequest } from '@/types/signing'
 
+export interface ExecutionIntent {
+  opportunityId: string
+  asset: string
+  leverage: number
+  requestedNotional: number
+  expiresAt: string
+  legs: readonly [
+    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell' },
+    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell' },
+  ]
+}
+
+interface PreparedExecution {
+  asset: string
+  riskierVenue: string
+  hedgeVenue: string
+}
+
+export function assertPreparedExecutionIntent(
+  intent: ExecutionIntent,
+  prepared: PreparedExecution,
+  now = Date.now(),
+): void {
+  const expiresAt = Date.parse(intent.expiresAt)
+  if (!Number.isFinite(expiresAt) || now > expiresAt) {
+    throw new Error('Execution intent expired')
+  }
+  const venues = new Set(intent.legs.map((leg) => leg.venue))
+  if (intent.legs[0].venue === intent.legs[1].venue ||
+    prepared.asset.trim().toUpperCase() !== intent.asset.trim().toUpperCase() ||
+    prepared.riskierVenue === prepared.hedgeVenue ||
+    !venues.has(prepared.riskierVenue as SigningRequest['venue']) ||
+    !venues.has(prepared.hedgeVenue as SigningRequest['venue'])) {
+    throw new Error('Prepared execution does not match the execution intent')
+  }
+}
+
+export function assertExecutionIntentRequest(
+  intent: ExecutionIntent,
+  request: SigningRequest,
+  consumedRequestIds: Set<string>,
+  now = Date.now(),
+): void {
+  const expiresAt = Date.parse(intent.expiresAt)
+  if (!Number.isFinite(expiresAt) || now > expiresAt) throw new Error('Execution intent expired')
+  if (consumedRequestIds.has(request.id)) throw new Error('Signing request was already consumed')
+
+  const leg = intent.legs.find((candidate) => candidate.venue === request.venue)
+  let valid = Boolean(leg) && request.symbol.trim().toUpperCase() === leg?.symbol.trim().toUpperCase()
+  if (request.action === 'update_leverage') {
+    valid = valid && request.leverage === intent.leverage
+  } else if (request.action === 'open' || request.action === 'unwind') {
+    const expectedSide = request.action === 'open'
+      ? leg?.side
+      : leg?.side === 'buy' ? 'sell' : 'buy'
+    valid = valid && request.side === expectedSide &&
+      request.reduce_only === (request.action === 'unwind')
+  } else {
+    valid = false
+  }
+  if (!valid) throw new Error('Signing request does not match the execution intent')
+  consumedRequestIds.add(request.id)
+}
+
 export type AdvanceStatus =
   | 'awaiting_leg2_sign'
   | 'awaiting_leg2_retry_sign'
