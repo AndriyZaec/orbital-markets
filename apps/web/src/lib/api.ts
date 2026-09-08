@@ -60,5 +60,9 @@ export function userErrorMessage(cause: unknown, fallback: string): string {
   if (cause instanceof TypeError && /failed to fetch|load failed|network(?:error| request)/i.test(cause.message)) {
     return 'Unable to reach Orbital. Check your connection and try again.'
   }
-  return cause instanceof Error && cause.message ? cause.message : fallback
+  if (cause instanceof Error && cause.message) return cause.message
+  if (cause && typeof cause === 'object' && 'message' in cause && typeof cause.message === 'string' && cause.message) {
+    return cause.message
+  }
+  return fallback
 }

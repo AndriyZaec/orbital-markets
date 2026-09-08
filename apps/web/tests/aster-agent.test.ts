@@ -6,6 +6,7 @@ import {
   authorizeAsterAgent,
   buildAsterApproveAgentAction,
   buildAsterApproveAgentTypedData,
+  buildAsterApproveBuilderTypedData,
   signAsterAgentRequest,
 } from '../src/agents/aster-agent.ts'
 import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
@@ -15,27 +16,34 @@ import { TestTradingAgentStore } from './trading-agent-test-store.ts'
 import builderConfig from '../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 const ownerAddress = '0x14791697260E4c9A71f18484C9f997B308e59325'
+const ownerAccount = privateKeyToAccount('0x0123456789012345678901234567890123456789012345678901234567890123')
 const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111'
 const agentAddress = '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A'
 
-test('Aster approval is perpetual-only and signed on BSC', async () => {
+test('Aster management approvals use the MetaMask-compatible BSC domain', async () => {
   const action = buildAsterApproveAgentAction(ownerAddress, agentAddress, 1_748_970_123_456)
-  const typedData = buildAsterApproveAgentTypedData(action)
+  const agentTypedData = buildAsterApproveAgentTypedData(action)
+  const builderTypedData = buildAsterApproveBuilderTypedData(action)
 
   assert.equal(action.nonce, 1_748_970_123_456_000)
   assert.equal(action.canSpotTrade, false)
   assert.equal(action.canPerpTrade, true)
   assert.equal(action.canWithdraw, false)
-  assert.equal(action.builder, builderConfig.address)
-  assert.equal(action.maxFeeRate, '0.0002')
+  assert.equal(action.ipWhitelist, '')
   assert.equal(action.signatureChainId, 56)
-  assert.equal(typedData.domain.chainId, 56)
-  assert.equal(typedData.primaryType, 'ApproveAgent')
-  const owner = privateKeyToAccount('0x0123456789012345678901234567890123456789012345678901234567890123')
-  assert.equal(
-    await owner.signTypedData(typedData),
-    '0x2d41cd0c2ba4a0c613c1beb02e11170ae5f497c934c8b6a2ba713bb347e82fb066cd5ebb2967e9c7a00b0978b059f78a0ad9c92b058f6794ac93f3ee4ca01db21c',
-  )
+  assert.equal(agentTypedData.domain.chainId, 56n)
+  assert.equal(agentTypedData.primaryType, 'ApproveAgent')
+  assert.deepEqual(Object.keys(agentTypedData.message), [
+    'AgentName', 'AgentAddress', 'IpWhitelist', 'Expired', 'CanSpotTrade',
+    'CanPerpTrade', 'CanWithdraw', 'AsterChain', 'User', 'Nonce',
+  ])
+  assert.equal(builderTypedData.domain.chainId, 56n)
+  assert.equal(builderTypedData.primaryType, 'ApproveBuilder')
+  assert.deepEqual(Object.keys(builderTypedData.message), [
+    'Builder', 'MaxFeeRate', 'BuilderName', 'AsterChain', 'User', 'Nonce',
+  ])
+  assert.match(await ownerAccount.signTypedData(agentTypedData), /^0x[0-9a-f]{130}$/)
+  assert.match(await ownerAccount.signTypedData(builderTypedData), /^0x[0-9a-f]{130}$/)
 })
 
 test('Aster authorization relays no private key and persists only after acceptance', async () => {
@@ -46,7 +54,7 @@ test('Aster authorization relays no private key and persists only after acceptan
     storage,
     ownerAddress,
     now: () => now,
-    signTypedData: async () => `0x${'1'.repeat(128)}1b`,
+    signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
     relay: async (request) => {
       relayed = JSON.stringify(request)
       assert.equal(storage.values.size, 0)
@@ -63,7 +71,7 @@ test('Aster authorization does not relay after the owner changes', async () => {
   await assert.rejects(authorizeAsterAgent({
     storage: new TestTradingAgentStore(),
     ownerAddress,
-    signTypedData: async () => `0x${'1'.repeat(128)}1b`,
+    signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
     ownerStillCurrent: () => false,
     relay: async () => { relayed = true },
   }), /owner changed/)

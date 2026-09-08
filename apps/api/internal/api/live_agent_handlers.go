@@ -81,6 +81,7 @@ func (s *Server) handleAsterAgentApprove(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.live.asterAgentApprover.ApproveAgent(r.Context(), request); err != nil {
+		s.logger.Warn("Aster agent approval rejected", "err", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Aster agent approval rejected"})
 		return
 	}

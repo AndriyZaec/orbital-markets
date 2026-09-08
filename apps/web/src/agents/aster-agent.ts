@@ -1,4 +1,4 @@
-import { type Address, type Hex } from 'viem'
+import { recoverTypedDataAddress, type Address, type Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import builderConfig from '../../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
@@ -7,9 +7,9 @@ import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
-const ownerChainId = 56
 const orderChainId = 1666
-const agentName = 'Orbital Markets'
+const ownerChainId = 56
+const agentName = 'OrbitalMarkets'
 const agentLifetime = 7 * 24 * 60 * 60 * 1000
 export const asterBuilderAddress = builderConfig.address.toLowerCase() as Address
 export const asterBuilderFeeRate = String(builderConfig.fee / 100_000)
@@ -20,18 +20,21 @@ export interface AsterApproveAgentRequest {
   signature: Hex
   agentName: typeof agentName
   agentAddress: Address
+  ipWhitelist: ''
   expired: number
   canSpotTrade: false
   canPerpTrade: true
   canWithdraw: false
+  asterChain: 'Mainnet'
+  signatureChainId: typeof ownerChainId
   builder: Address
   maxFeeRate: string
   builderName: typeof agentName
-  asterChain: 'Mainnet'
-  signatureChainId: typeof ownerChainId
+  builderNonce: number
+  builderSignature: Hex
 }
 
-type AsterApproveAgentAction = Omit<AsterApproveAgentRequest, 'signature'>
+type AsterApproveAgentAction = Omit<AsterApproveAgentRequest, 'signature' | 'builderSignature'>
 
 export function generateAsterAgent(): { privateKey: Hex; agentAddress: Address } {
   const privateKey = generatePrivateKey()
@@ -50,15 +53,17 @@ export function buildAsterApproveAgentAction(
     nonce: now * 1000,
     agentName,
     agentAddress: agentAddress as Address,
+    ipWhitelist: '',
     expired: now + agentLifetime,
     canSpotTrade: false,
     canPerpTrade: true,
     canWithdraw: false,
+    asterChain: 'Mainnet',
+    signatureChainId: ownerChainId,
     builder: asterBuilderAddress,
     maxFeeRate: asterBuilderFeeRate,
     builderName: agentName,
-    asterChain: 'Mainnet',
-    signatureChainId: ownerChainId,
+    builderNonce: now * 1000 + 1,
   }
 }
 
@@ -67,36 +72,38 @@ export function buildAsterApproveAgentTypedData(action: AsterApproveAgentAction)
     domain: {
       name: 'AsterSignTransaction',
       version: '1',
-      chainId: ownerChainId,
+      chainId: BigInt(ownerChainId),
       verifyingContract: zeroAddress,
     },
     types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+      ] as const,
       ApproveAgent: [
         { name: 'AgentName', type: 'string' },
         { name: 'AgentAddress', type: 'string' },
+        { name: 'IpWhitelist', type: 'string' },
         { name: 'Expired', type: 'uint256' },
         { name: 'CanSpotTrade', type: 'bool' },
         { name: 'CanPerpTrade', type: 'bool' },
         { name: 'CanWithdraw', type: 'bool' },
-        { name: 'Builder', type: 'string' },
-        { name: 'MaxFeeRate', type: 'string' },
-        { name: 'BuilderName', type: 'string' },
         { name: 'AsterChain', type: 'string' },
         { name: 'User', type: 'string' },
         { name: 'Nonce', type: 'uint256' },
-      ],
+      ] as const,
     },
     primaryType: 'ApproveAgent' as const,
     message: {
       AgentName: action.agentName,
       AgentAddress: action.agentAddress,
+      IpWhitelist: action.ipWhitelist,
       Expired: BigInt(action.expired),
       CanSpotTrade: action.canSpotTrade,
       CanPerpTrade: action.canPerpTrade,
       CanWithdraw: action.canWithdraw,
-      Builder: action.builder,
-      MaxFeeRate: action.maxFeeRate,
-      BuilderName: action.builderName,
       AsterChain: action.asterChain,
       User: action.user,
       Nonce: BigInt(action.nonce),
@@ -104,10 +111,50 @@ export function buildAsterApproveAgentTypedData(action: AsterApproveAgentAction)
   }
 }
 
+export function buildAsterApproveBuilderTypedData(action: AsterApproveAgentAction) {
+  return {
+    domain: {
+      name: 'AsterSignTransaction',
+      version: '1',
+      chainId: BigInt(ownerChainId),
+      verifyingContract: zeroAddress,
+    },
+    types: {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+      ] as const,
+      ApproveBuilder: [
+        { name: 'Builder', type: 'string' },
+        { name: 'MaxFeeRate', type: 'string' },
+        { name: 'BuilderName', type: 'string' },
+        { name: 'AsterChain', type: 'string' },
+        { name: 'User', type: 'string' },
+        { name: 'Nonce', type: 'uint256' },
+      ] as const,
+    },
+    primaryType: 'ApproveBuilder' as const,
+    message: {
+      Builder: action.builder,
+      MaxFeeRate: action.maxFeeRate,
+      BuilderName: action.builderName,
+      AsterChain: action.asterChain,
+      User: action.user,
+      Nonce: BigInt(action.builderNonce),
+    },
+  }
+}
+
+export type AsterApprovalTypedData =
+  | ReturnType<typeof buildAsterApproveAgentTypedData>
+  | ReturnType<typeof buildAsterApproveBuilderTypedData>
+
 export async function authorizeAsterAgent(options: {
   storage: TradingAgentStore
   ownerAddress: string
-  signTypedData: (typedData: ReturnType<typeof buildAsterApproveAgentTypedData>) => Promise<Hex>
+  signTypedData: (typedData: AsterApprovalTypedData) => Promise<Hex>
   relay: (request: AsterApproveAgentRequest) => Promise<void>
   ownerStillCurrent?: () => boolean
   now?: () => number
@@ -118,11 +165,17 @@ export async function authorizeAsterAgent(options: {
     generated.agentAddress,
     options.now?.() ?? Date.now(),
   )
-  const signature = await options.signTypedData(buildAsterApproveAgentTypedData(action))
+  const builderTypedData = buildAsterApproveBuilderTypedData(action)
+  const builderSignature = await options.signTypedData(builderTypedData)
+  await assertAsterOwnerSignature(builderTypedData, builderSignature, action.user)
+
+  const agentTypedData = buildAsterApproveAgentTypedData(action)
+  const signature = await options.signTypedData(agentTypedData)
+  await assertAsterOwnerSignature(agentTypedData, signature, action.user)
   if (options.ownerStillCurrent && !options.ownerStillCurrent()) {
     throw new Error('Aster owner changed during agent authorization')
   }
-  await options.relay({ ...action, signature })
+  await options.relay({ ...action, signature, builderSignature })
 
   const agent: StoredTradingAgent = {
     version: 2,
@@ -136,6 +189,19 @@ export async function authorizeAsterAgent(options: {
   }
   await options.storage.save(agent)
   return agent
+}
+
+async function assertAsterOwnerSignature(
+  typedData: AsterApprovalTypedData,
+  signature: Hex,
+  ownerAddress: Address,
+): Promise<void> {
+  const recoveredOwner = typedData.primaryType === 'ApproveAgent'
+    ? await recoverTypedDataAddress({ ...typedData, signature })
+    : await recoverTypedDataAddress({ ...typedData, signature })
+  if (recoveredOwner.toLowerCase() !== ownerAddress.toLowerCase()) {
+    throw new Error('Aster approval signature does not match the owner wallet')
+  }
 }
 
 export async function signAsterAgentRequest(

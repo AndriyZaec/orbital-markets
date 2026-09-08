@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
+import { isHex, serializeTypedData, type Hex } from 'viem'
 import { useAccount, useDisconnect, useSignTypedData, useSwitchChain } from 'wagmi'
 import { bsc, mainnet } from 'wagmi/chains'
 
-import { apiError, apiFetch } from '@/lib/api'
+import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
 import {
   asterBuilderAddress,
   authorizeAsterAgent,
+  type AsterApprovalTypedData,
   type AsterApproveAgentRequest,
 } from './aster-agent.ts'
 import {
@@ -86,6 +88,22 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
       switchToAuthorizationChain={(targetChainId) => switchChainAsync({ chainId: targetChainId })}
       solanaSignMessage={solana.signMessage}
       signTypedData={signTypedDataAsync}
+      signAsterTypedData={async (typedData) => {
+        if (!evm.address) throw new Error('Aster owner wallet is unavailable')
+        const provider = (window as Window & {
+          ethereum?: { request(args: { method: string; params: [string, string] }): Promise<unknown> }
+        }).ethereum
+        if (!provider) throw new Error('MetaMask is unavailable; reconnect the wallet')
+        const serialized = typedData.primaryType === 'ApproveAgent'
+          ? serializeTypedData(typedData)
+          : serializeTypedData(typedData)
+        const signature = await provider.request({
+          method: 'eth_signTypedData_v4',
+          params: [evm.address, serialized],
+        })
+        if (!isHex(signature)) throw new Error('Aster owner wallet returned an invalid signature')
+        return signature
+      }}
       disconnectSolana={() => solana.disconnect()}
       disconnectEvm={disconnectEvm}
     >
@@ -104,6 +122,7 @@ function TradingAgentSession({
   switchToAuthorizationChain,
   solanaSignMessage,
   signTypedData,
+  signAsterTypedData,
   disconnectSolana,
   disconnectEvm,
 }: {
@@ -116,6 +135,7 @@ function TradingAgentSession({
   switchToAuthorizationChain: (chainId: typeof mainnet.id | typeof bsc.id) => Promise<unknown>
   solanaSignMessage?: (message: Uint8Array) => Promise<Uint8Array>
   signTypedData: ReturnType<typeof useSignTypedData>['signTypedDataAsync']
+  signAsterTypedData: (typedData: AsterApprovalTypedData) => Promise<Hex>
   disconnectSolana: () => Promise<void>
   disconnectEvm: () => Promise<void>
 }) {
@@ -189,7 +209,7 @@ function TradingAgentSession({
       }
       setState({ venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Authorization failed'
+      const message = userErrorMessage(error, 'Authorization failed')
       if (ownerStillCurrent(venue, ownerAddress, owners.current)) {
         setState({ venue, ownerAddress, agentAddress: null, status: 'error', error: message })
       }
@@ -279,7 +299,7 @@ function TradingAgentSession({
     return authorizeAsterAgent({
       storage,
       ownerAddress,
-      signTypedData: (typedData) => signTypedData(typedData),
+      signTypedData: signAsterTypedData,
       relay: (request) => relayAuthorization('/api/v1/live/agents/aster/approve', request),
       ownerStillCurrent: () => ownerStillCurrent('aster', ownerAddress, owners.current),
     })
