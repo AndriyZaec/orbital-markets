@@ -104,6 +104,22 @@ func TestLiveVenueBindingsParseMapQuery(t *testing.T) {
 	}
 }
 
+func TestLiveVenueBindingsParseAsterPairQuery(t *testing.T) {
+	bindings, err := liveVenueBindingsFromQuery(url.Values{
+		"accounts[aster]":    {"0xabc"},
+		"accounts[pacifica]": {"sol-owner"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bindings.requireAccountPair(); err != nil {
+		t.Fatal(err)
+	}
+	if bindings.Accounts["aster"] != "0xabc" || bindings.Accounts["pacifica"] != "sol-owner" {
+		t.Fatalf("unexpected Aster pair bindings: %+v", bindings.Accounts)
+	}
+}
+
 func TestLiveVenueBindingsRejectDuplicateJSONAndQueryKeys(t *testing.T) {
 	var request liveVenueBindingsRequest
 	if err := json.Unmarshal([]byte(`{"accounts":{"pacifica":"first","pacifica":"second"}}`), &request); err == nil {

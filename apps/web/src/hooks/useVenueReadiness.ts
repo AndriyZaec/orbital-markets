@@ -5,7 +5,7 @@ import { useLiveBalances } from './useLiveBalances'
 import { useTradingAgents } from './useTradingAgents'
 import type { TradingAgentState } from '@/agents/types'
 import { trackAnalytics } from '@/lib/analytics'
-import { liveVenueBindingsBody } from '@/lib/live-bindings'
+import { liveAccountsKey, liveVenueBindingsBody, type VenueAddressMap } from '@/lib/live-bindings'
 
 // Single typed readiness layer for supported venues. Composes the
 // existing wallet-authority hook and the live-balances hook so the rest of
@@ -201,7 +201,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   const tradingAgents = useTradingAgents()
   const pacAddr = authority.pacifica.address
   const hlAddr = authority.hyperliquid.address
-  const balances = useLiveBalances(pacAddr, hlAddr)
+  const balances = useLiveBalances(pacAddr, hlAddr, authority.aster.address)
 
   // Ensure state — kick /live/accounts/ensure once per (pacAddr|hlAddr) pair
   // so backend account subscribers can start BEFORE Execute Live. Without
@@ -215,9 +215,15 @@ function useVenueReadinessState(): UseVenueReadinessResult {
 
   const pacSignerReady = authority.pacifica.readiness === 'ready'
   const hlSignerReady = authority.hyperliquid.readiness === 'ready'
+  const asterSignerReady = authority.aster.readiness === 'ready'
+  const ensureBindings = useMemo<VenueAddressMap>(() => Object.fromEntries([
+    ['pacifica', pacSignerReady ? pacAddr : null],
+    ['hyperliquid', hlSignerReady ? hlAddr : null],
+    ['aster', asterSignerReady ? authority.aster.address : null],
+  ].filter((entry): entry is [string, string] => !!entry[1])), [asterSignerReady, authority.aster.address, hlAddr, hlSignerReady, pacAddr, pacSignerReady])
 
-  const doEnsure = useCallback(async (pac: string, hl: string) => {
-    const pair = `${pac}|${hl}`
+  const doEnsure = useCallback(async (accounts: VenueAddressMap) => {
+    const pair = liveAccountsKey(accounts)
     if (inflightRef.current === pair) return // dedup concurrent calls
     inflightRef.current = pair
     setEnsureStatus('starting')
@@ -226,7 +232,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       const resp = await apiFetch('/api/v1/live/accounts/ensure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(liveVenueBindingsBody({ pacifica: pac, hyperliquid: hl })),
+        body: JSON.stringify(liveVenueBindingsBody(accounts)),
       })
       if (!resp.ok) {
         const b = await resp.json().catch(() => ({}))
@@ -247,18 +253,18 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   // Auto-start streams once per address pair as soon as BOTH signers are
   // ready. Manual retry (ensureAccounts) bypasses the attempted-set check.
   useEffect(() => {
-    if (!pacAddr || !hlAddr || !pacSignerReady || !hlSignerReady) return
-    const pair = `${pacAddr}|${hlAddr}`
+    if (Object.keys(ensureBindings).length < 2) return
+    const pair = liveAccountsKey(ensureBindings)
     if (attemptedRef.current.has(pair)) return
     attemptedRef.current.add(pair)
-    doEnsure(pacAddr, hlAddr)
-  }, [pacAddr, hlAddr, pacSignerReady, hlSignerReady, doEnsure])
+    doEnsure(ensureBindings)
+  }, [doEnsure, ensureBindings])
 
   const ensureAccounts = useCallback(async () => {
-    if (!pacAddr || !hlAddr) return
+    if (Object.keys(ensureBindings).length < 2) return
     // Manual retry: bypass the attempted-set gate.
-    await doEnsure(pacAddr, hlAddr)
-  }, [pacAddr, hlAddr, doEnsure])
+    await doEnsure(ensureBindings)
+  }, [doEnsure, ensureBindings])
 
   const value = useMemo<UseVenueReadinessResult>(() => {
     const pacifica = buildReadiness({
@@ -280,15 +286,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       address: authority.aster.address,
       authorityReadiness: authority.aster.readiness,
       agent: tradingAgents.aster,
-      balance: {
-        connected: false,
-        equity: 0,
-        available: 0,
-        stream_ready: false,
-        fresh: false,
-        reason: 'Browser-assisted Aster account connection is not enabled yet',
-      },
-      unavailableReason: 'Browser-assisted Aster account connection is not enabled yet',
+      balance: balances.aster,
     })
     const venues = [pacifica, hyperliquid, aster]
     const activeVenues = [pacifica, hyperliquid]

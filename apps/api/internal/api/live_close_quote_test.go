@@ -14,11 +14,15 @@ import (
 )
 
 type closeQuoteTestSource struct {
-	snapshot venue.MarketData
-	err      error
+	snapshot       venue.MarketData
+	err            error
+	requestedAsset *string
 }
 
-func (s closeQuoteTestSource) MarketSnapshot(context.Context, string, string) (venue.MarketData, error) {
+func (s closeQuoteTestSource) MarketSnapshot(_ context.Context, _, asset string) (venue.MarketData, error) {
+	if s.requestedAsset != nil {
+		*s.requestedAsset = asset
+	}
 	return s.snapshot, s.err
 }
 

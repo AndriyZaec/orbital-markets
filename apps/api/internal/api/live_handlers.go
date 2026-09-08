@@ -330,7 +330,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	leverage := int(plan.Leverage.Leverage)
-	leverageRequests, err := s.buildLeverageSigningRequests(planVenues, bindings, plan.Asset, leverage)
+	leverageRequests, err := s.buildLeverageSigningRequests(planVenues, bindings, map[string]string{
+		leg1.venue: leg1.symbol,
+		leg2.venue: leg2.symbol,
+	}, leverage)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -425,7 +428,7 @@ func livePlanVenues(plan *domain.ExecutionPlan) []string {
 func (s *Server) buildLeverageSigningRequests(
 	venues []string,
 	bindings liveVenueBindings,
-	symbol string,
+	symbols map[string]string,
 	leverage int,
 ) (map[string]*domain.SigningRequest, error) {
 	requests := make(map[string]*domain.SigningRequest, len(venues))
@@ -439,7 +442,7 @@ func (s *Server) buildLeverageSigningRequests(
 		}
 		request, err := module.BuildLeverage(venue.LiveLeverageParams{
 			Account: bindings.Accounts[venueName], Signer: bindings.Agents[venueName],
-			Symbol: symbol, Leverage: leverage,
+			Symbol: symbols[venueName], Leverage: leverage,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("%s leverage payload build failed: %w", venueDisplayName(venueName), err)
@@ -794,19 +797,28 @@ func (s *Server) handleLiveBalances(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAccountsWithin(currentLiveVenues); err != nil {
+	if err := bindings.requireAccountsWithin(supportedLiveVenues); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	pac, hl := s.liveAccountStatusesFor(
-		bindings.Accounts["pacifica"],
-		bindings.Accounts["hyperliquid"],
-		displayFreshness,
-	)
-	writeJSON(w, http.StatusOK, map[string]venueAccountStatus{
-		"pacifica":    pac,
-		"hyperliquid": hl,
-	})
+	writeJSON(w, http.StatusOK, s.liveAccountStatusesForBindings(bindings.Accounts, displayFreshness))
+}
+
+func (s *Server) liveAccountStatusesForBindings(bindings map[string]string, freshness time.Duration) map[string]venueAccountStatus {
+	statuses := make(map[string]venueAccountStatus, len(bindings))
+	for venue, account := range bindings {
+		status := buildVenueAccountStatus(venue, false, time.Time{}, 0, 0, freshness)
+		status.Reason = "account stream not active for requested wallet"
+		if s.live != nil && s.live.accounts != nil {
+			if lease, found := s.live.accounts.Lookup(venue, account); found {
+				snapshot := lease.Feed().Snapshot()
+				lease.Release()
+				status = buildVenueAccountStatus(venue, snapshot.Connected, snapshot.LastUpdated, snapshot.Equity, snapshot.Available, freshness)
+			}
+		}
+		statuses[venue] = status
+	}
+	return statuses
 }
 
 func (s *Server) liveAccountStatusesFor(pacAccount, hlAddress string, freshness time.Duration) (venueAccountStatus, venueAccountStatus) {
@@ -873,7 +885,11 @@ func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAccounts(); err != nil {
+	if len(bindings.Accounts) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one account binding required"})
+		return
+	}
+	if err := bindings.requireAccountsWithin(supportedLiveVenues); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -888,24 +904,18 @@ func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request
 	// Snapshot readiness right after the call. On a very first ensure the
 	// snapshot will typically still be empty (streams start asynchronously);
 	// the frontend polls /live/balances to see them go ready.
-	pac, hl := liveAccountStatuses(accounts, displayFreshness)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"pacifica":    pac,
-		"hyperliquid": hl,
-	})
+	writeJSON(w, http.StatusOK, s.liveAccountStatusesForBindings(bindings.Accounts, displayFreshness))
 }
 
 // handleLivePositions returns all live positions, newest first.
 //
 // GET /api/v1/live/positions
 func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
-	pacificaAccount, hyperliquidAccount, ok := liveAccountsFromQuery(w, r)
+	bindings, ok := liveAccountPairFromQuery(w, r)
 	if !ok {
 		return
 	}
-	positions, err := s.liveStore.ListPositionsForBindings(r.Context(), map[string]string{
-		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
-	})
+	positions, err := s.liveStore.ListPositionsForBindings(r.Context(), bindings)
 	if err != nil {
 		s.logger.Error("live positions: list failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -930,13 +940,11 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pacificaAccount, hyperliquidAccount, ok := liveAccountsFromQuery(w, r)
+	bindings, ok := liveAccountPairFromQuery(w, r)
 	if !ok {
 		return
 	}
-	pos, err := s.liveStore.GetPositionForBindings(r.Context(), id, map[string]string{
-		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
-	})
+	pos, err := s.liveStore.GetPositionForBindings(r.Context(), id, bindings)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
 		return
@@ -978,6 +986,15 @@ func liveAccountsFromQuery(w http.ResponseWriter, r *http.Request) (string, stri
 	return bindings.Accounts["pacifica"], bindings.Accounts["hyperliquid"], true
 }
 
+func liveAccountPairFromQuery(w http.ResponseWriter, r *http.Request) (map[string]string, bool) {
+	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
+	if err != nil || bindings.requireAccountPair() != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account bindings for exactly two live venues required"})
+		return nil, false
+	}
+	return bindings.Accounts, true
+}
+
 // handleLiveClose prepares close signing requests for a single live position.
 //
 // POST /api/v1/live/close/{id}
@@ -1010,14 +1027,10 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAccounts(); err != nil {
+	if err := bindings.requireAccountPair(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	req.AccountPacifica = bindings.Accounts["pacifica"]
-	req.AccountHyperliquid = bindings.Accounts["hyperliquid"]
-	req.AgentPacifica = bindings.Agents["pacifica"]
-	req.AgentHyperliquid = bindings.Agents["hyperliquid"]
 	pos, err := s.liveStore.GetPositionForBindings(r.Context(), id, bindings.Accounts)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
@@ -1060,7 +1073,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := bindings.requireAgents(); err != nil {
+	if err := bindings.requireAgentsFor([]string{pos.VenueA, pos.VenueB}); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error() + " when venue exposure remains"})
 		return
 	}
@@ -1104,10 +1117,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
-		sigReq, err := s.buildCloseSigningRequest(
-			r.Context(), fill, cloid, req.AccountPacifica, req.AccountHyperliquid,
-			req.AgentPacifica, req.AgentHyperliquid,
-		)
+		sigReq, err := s.buildCloseSigningRequestForBindings(r.Context(), fill, pos.Asset, cloid, bindings, false)
 		if err != nil {
 			s.logger.Error("live close: build close payload", "err", err, "id", id, "leg", fill.Leg)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -1169,23 +1179,41 @@ func (s *Server) freshVenueExposureFills(
 	defer accounts.Release()
 	unlock := accounts.Lock()
 	defer unlock()
+	symbols, err := s.positionVenueSymbols(ctx, position.ID, position.Asset)
+	if err != nil {
+		return nil, fmt.Errorf("could not resolve venue symbols")
+	}
 
 	refreshCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
 	defer cancel()
+	updatedAfter, err := time.Parse(time.RFC3339, position.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("position activity time is invalid")
+	}
+	closeActivity, err := s.liveStore.LastCloseActivity(ctx, position.ID)
+	if err != nil {
+		return nil, fmt.Errorf("could not read close activity")
+	}
+	if closeActivity.After(updatedAfter) {
+		updatedAfter = closeActivity
+	}
 	for _, venue := range []string{position.VenueA, position.VenueB} {
 		feed, ok := accounts.Feed(venue)
-		if !ok || feed.RefreshPositions(refreshCtx) != nil {
+		if !ok {
+			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
+		}
+		if venue != "aster" && feed.RefreshPositions(refreshCtx) != nil {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
 		}
 		snapshot := feed.Snapshot()
-		if snapshot.PositionsUpdatedAt.IsZero() || time.Since(snapshot.PositionsUpdatedAt) > admissionFreshness {
+		if !positionStateReady(snapshot.PositionsUpdatedAt, updatedAfter) {
 			return nil, fmt.Errorf("fresh %s exposure is unavailable; verify both venues directly", venue)
 		}
 	}
 
 	var fills []executor.LiveFill
 	for leg, venue := range []string{position.VenueA, position.VenueB} {
-		size, price := currentVenuePosition(accounts, venue, position.Asset)
+		size, price := currentVenuePosition(accounts, venue, symbols[venue])
 		if math.Abs(size) <= 1e-9 {
 			continue
 		}
@@ -1197,7 +1225,7 @@ func (s *Server) freshVenueExposureFills(
 			PositionID:      position.ID,
 			Leg:             leg + 1,
 			Venue:           venue,
-			Symbol:          position.Asset,
+			Symbol:          symbols[venue],
 			Side:            string(side),
 			RequestedAmount: math.Abs(size),
 			FilledAmount:    math.Abs(size),
@@ -1294,13 +1322,23 @@ func (s *Server) inspectPositionVenueTruth(
 	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
 	defer cancel()
 	venues := []string{position.VenueA, position.VenueB}
+	symbols, err := s.positionVenueSymbols(ctx, position.ID, position.Asset)
+	if err != nil {
+		return positionExposureUnknown, err
+	}
 	for _, venue := range venues {
 		feed, ok := accounts.Feed(venue)
 		if !ok {
 			return positionExposureUnknown, nil
 		}
-		if err := feed.RefreshPositions(reconcileCtx); err != nil {
-			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
+		if venue != "aster" {
+			if err := feed.RefreshPositions(reconcileCtx); err != nil {
+				s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
+				return positionExposureUnknown, nil
+			}
+		} else if snapshot := feed.Snapshot(); snapshot.PositionsUpdatedAt.IsZero() ||
+			time.Since(snapshot.PositionsUpdatedAt) > admissionFreshness {
+			s.logger.Warn("live position: Aster browser position snapshot stale", "id", position.ID)
 			return positionExposureUnknown, nil
 		}
 	}
@@ -1313,12 +1351,31 @@ func (s *Server) inspectPositionVenueTruth(
 		if !ok {
 			return positionExposureUnknown, nil
 		}
-		size, _ := currentVenuePosition(accounts, venue, position.Asset)
+		size, _ := currentVenuePosition(accounts, venue, symbols[venue])
 		if math.Abs(size) > 1e-9 {
 			return positionExposurePresent, nil
 		}
 	}
 	return positionExposureFlat, nil
+}
+
+func (s *Server) positionVenueSymbols(ctx context.Context, positionID, fallback string) (map[string]string, error) {
+	fills, err := s.liveStore.GetFills(ctx, positionID)
+	if err != nil {
+		return nil, err
+	}
+	symbols := make(map[string]string, 2)
+	for _, fill := range fills {
+		if fill.Venue != "" && fill.Symbol != "" {
+			symbols[fill.Venue] = fill.Symbol
+		}
+	}
+	for _, venue := range []string{"pacifica", "hyperliquid", "aster"} {
+		if symbols[venue] == "" {
+			symbols[venue] = fallback
+		}
+	}
+	return symbols, nil
 }
 
 func waitForPositionState(ctx context.Context, accounts *liveAccountContext, venues []string, after time.Time) bool {
@@ -1381,18 +1438,10 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAccounts(); err != nil {
+	if err := bindings.requirePair(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAgents(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	req.AccountPacifica = bindings.Accounts["pacifica"]
-	req.AccountHyperliquid = bindings.Accounts["hyperliquid"]
-	req.AgentPacifica = bindings.Agents["pacifica"]
-	req.AgentHyperliquid = bindings.Agents["hyperliquid"]
 	authorized, err := s.live.agentAuthorizationsMatch(r.Context(), bindings.Accounts, bindings.Agents)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to verify trading agent authorization"})
@@ -1507,15 +1556,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 
 			cloid := fmt.Sprintf("kill-%s-leg%d-%d", pos.ID[:8], fill.Leg, time.Now().UnixNano())
 
-			sigReq, err := s.buildEmergencyCloseSigningRequest(
-				ctx,
-				fill,
-				cloid,
-				req.AccountPacifica,
-				req.AccountHyperliquid,
-				req.AgentPacifica,
-				req.AgentHyperliquid,
-			)
+			sigReq, err := s.buildCloseSigningRequestForBindings(ctx, fill, pos.Asset, cloid, bindings, true)
 			if err != nil {
 				s.logger.Error("kill switch: build close payload",
 					"err", err, "id", pos.ID, "leg", fill.Leg, "venue", fill.Venue)
@@ -1595,6 +1636,20 @@ func (s *Server) buildCloseSigningRequestForAction(
 	accountPacifica, accountHyperliquid, agentPacifica, agentHyperliquid string,
 	emergency bool,
 ) (*domain.SigningRequest, error) {
+	return s.buildCloseSigningRequestForBindings(ctx, fill, fill.Symbol, clientOrderID, liveVenueBindings{
+		Accounts: map[string]string{"pacifica": accountPacifica, "hyperliquid": accountHyperliquid},
+		Agents:   map[string]string{"pacifica": agentPacifica, "hyperliquid": agentHyperliquid},
+	}, emergency)
+}
+
+func (s *Server) buildCloseSigningRequestForBindings(
+	ctx context.Context,
+	fill executor.LiveFill,
+	marketAsset string,
+	clientOrderID string,
+	bindings liveVenueBindings,
+	emergency bool,
+) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
 	module, err := s.live.liveModule(fill.Venue)
@@ -1606,7 +1661,7 @@ func (s *Server) buildCloseSigningRequestForAction(
 		if s.closeMarkets == nil {
 			return nil, fmt.Errorf("current %s BBO for %s unavailable", fill.Venue, fill.Symbol)
 		}
-		market, marketErr := s.closeMarkets.MarketSnapshot(ctx, fill.Venue, fill.Symbol)
+		market, marketErr := s.closeMarkets.MarketSnapshot(ctx, fill.Venue, marketAsset)
 		if marketErr != nil {
 			return nil, fmt.Errorf("current %s BBO for %s unavailable: %w", fill.Venue, fill.Symbol, marketErr)
 		}
@@ -1640,8 +1695,8 @@ func (s *Server) buildCloseSigningRequestForAction(
 	}
 	return module.BuildReduce(venue.LiveReduceParams{
 		LiveOrderParams: venue.LiveOrderParams{
-			Account: accountForVenue(fill.Venue, accountPacifica, accountHyperliquid),
-			Signer:  signerForVenue(fill.Venue, agentPacifica, agentHyperliquid),
+			Account: bindings.Accounts[fill.Venue],
+			Signer:  bindings.Agents[fill.Venue],
 			Symbol:  fill.Symbol, Side: positionSide, Amount: fill.FilledAmount,
 			Price: price, ClientOrderID: clientOrderID,
 		},

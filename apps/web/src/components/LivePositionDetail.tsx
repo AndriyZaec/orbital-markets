@@ -83,7 +83,7 @@ function needsAttention(state: string) {
 }
 
 export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props) {
-  const { data, loading, error: detailError, refetch } = useLivePositionDetail(pos.id)
+  const { data, loading, error: detailError, refetch } = useLivePositionDetail(pos.id, [pos.venue_a, pos.venue_b])
   const fills = data?.fills ?? []
   const events = data?.events ?? []
   const [leg1Venue, leg2Venue] = monitoredLegVenues(fills, pos.venue_a, pos.venue_b)
@@ -105,7 +105,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
 
   const handleClose = () => {
     setConfirmClose(false)
-    liveClose.closePosition(pos.id)
+    liveClose.closePosition(pos.id, [pos.venue_a, pos.venue_b])
   }
 
   const reasonEvent = [...events].reverse().find(e =>

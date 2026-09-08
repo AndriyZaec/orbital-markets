@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 import { liveAccountsQuery } from '@/lib/live-bindings'
+import type { Venue } from '@/agents/types'
 
 export interface LiveFillDetail {
   id: number
@@ -38,28 +39,33 @@ export interface LivePositionDetailData {
   events: LiveEventDetail[]
 }
 
-export function useLivePositionDetail(positionId: string | null) {
+export function useLivePositionDetail(positionId: string | null, venues: [Venue, Venue]) {
   const [data, setData] = useState<LivePositionDetailData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
-  const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
+  const [venueA, venueB] = venues
+  const accounts = useMemo(
+    () => ({
+      [venueA]: authorityAddress(venueA, pacificaAddress, hyperliquidAddress, asterAddress),
+      [venueB]: authorityAddress(venueB, pacificaAddress, hyperliquidAddress, asterAddress),
+    }),
+    [asterAddress, hyperliquidAddress, pacificaAddress, venueA, venueB],
+  )
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
     const request = ++requestSequence.current
     if (signal?.aborted) return
     setData(null)
     setError(null)
-    if (!positionId || !pacificaAddress || !hyperliquidAddress) {
+    if (!positionId || Object.values(accounts).some((account) => !account)) {
       setLoading(false)
       return
     }
     setLoading(true)
     try {
-      const query = liveAccountsQuery({
-        pacifica: pacificaAddress,
-        hyperliquid: hyperliquidAddress,
-      })
+      const query = liveAccountsQuery(accounts)
       const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`, { signal })
       if (!resp.ok) throw await apiResponseError(resp, 'This position is no longer available.')
       const d: LivePositionDetailData = await resp.json()
@@ -72,7 +78,7 @@ export function useLivePositionDetail(positionId: string | null) {
     } finally {
       if (request === requestSequence.current) setLoading(false)
     }
-  }, [positionId, pacificaAddress, hyperliquidAddress])
+  }, [positionId, accounts])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -86,4 +92,13 @@ export function useLivePositionDetail(positionId: string | null) {
   const refetch = useCallback(() => fetch_(), [fetch_])
 
   return { data, loading, error, refetch }
+}
+
+function authorityAddress(
+  venue: Venue,
+  pacifica: string | null,
+  hyperliquid: string | null,
+  aster: string | null,
+): string {
+  return (venue === 'pacifica' ? pacifica : venue === 'aster' ? aster : hyperliquid) ?? ''
 }

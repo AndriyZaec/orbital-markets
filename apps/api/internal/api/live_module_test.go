@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -75,14 +76,18 @@ func TestLiveLeverageRequestsFollowModuleCapabilities(t *testing.T) {
 		Agents:   map[string]string{"alpha": "alpha-agent", "beta": "beta-agent"},
 	}
 
-	requests, err := server.buildLeverageSigningRequests([]string{"alpha", "beta"}, bindings, "SOL", 3)
+	requests, err := server.buildLeverageSigningRequests([]string{"alpha", "beta"}, bindings, map[string]string{
+		"alpha": "SOL-A",
+		"beta":  "SOL-B",
+	}, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 1 || requests["alpha"] == nil || requests["beta"] != nil {
 		t.Fatalf("leverage requests = %+v", requests)
 	}
-	if alpha.leverage.Account != "alpha-owner" || alpha.leverage.Signer != "alpha-agent" || alpha.leverage.Leverage != 3 {
+	if alpha.leverage.Account != "alpha-owner" || alpha.leverage.Signer != "alpha-agent" ||
+		alpha.leverage.Symbol != "SOL-A" || alpha.leverage.Leverage != 3 {
 		t.Fatalf("alpha leverage params = %+v", alpha.leverage)
 	}
 }
@@ -154,5 +159,42 @@ func TestLiveSigningDispatchesThroughRegisteredModule(t *testing.T) {
 	}
 	if module.reduce.Action != venue.ReduceActionUnwind {
 		t.Fatalf("reduce action = %q, want unwind", module.reduce.Action)
+	}
+}
+
+func TestAsterEmergencyCloseUsesAsterBindingsAndNativeSymbol(t *testing.T) {
+	aster := &fakeLiveModule{name: "aster", capabilities: venue.LiveCapabilities{
+		ClosePricePolicy: venue.ClosePriceFromMarketBBO,
+	}}
+	modules, err := venue.NewLiveModuleRegistry(aster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requestedAsset string
+	server := &Server{
+		closeMarkets: closeQuoteTestSource{snapshot: venue.MarketData{
+			Venue: "aster", Asset: "BTCUSDT", BidPrice: 99, BidSize: 1, AskPrice: 101, AskSize: 1, Timestamp: time.Now(),
+		}, requestedAsset: &requestedAsset},
+		live: &LiveDeps{modules: modules},
+	}
+	bindings := liveVenueBindings{
+		Accounts: map[string]string{"aster": "0xowner", "hyperliquid": "0xowner"},
+		Agents:   map[string]string{"aster": "0xaster-agent", "hyperliquid": "0xhl-agent"},
+	}
+
+	request, err := server.buildCloseSigningRequestForBindings(context.Background(), executor.LiveFill{
+		Venue: "aster", Symbol: "BTCUSDT", Side: string(domain.SideLong), FilledAmount: 0.5, AvgFillPrice: 100,
+	}, "BTC", "aster-kill", bindings, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Venue != "aster" || aster.reduce.Account != "0xowner" || aster.reduce.Signer != "0xaster-agent" {
+		t.Fatalf("request = %+v, reduce params = %+v", request, aster.reduce)
+	}
+	if aster.reduce.Symbol != "BTCUSDT" || aster.reduce.Action != venue.ReduceActionEmergencyClose {
+		t.Fatalf("reduce params = %+v", aster.reduce)
+	}
+	if requestedAsset != "BTC" {
+		t.Fatalf("market quote asset = %q, want canonical BTC", requestedAsset)
 	}
 }

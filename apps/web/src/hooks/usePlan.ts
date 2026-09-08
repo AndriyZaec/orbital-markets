@@ -7,6 +7,7 @@ type LiqRiskLevel = 'safe' | 'elevated' | 'warning' | 'critical' | ''
 interface Leg {
   venue: string
   asset: string
+  market_key?: string
   side: 'long' | 'short'
   expected_price: number
   slippage: number

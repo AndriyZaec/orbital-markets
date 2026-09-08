@@ -16,11 +16,12 @@ func (s *Server) handleLiveSessionStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	pacificaAccount, hyperliquidAccount, ok := liveAccountsFromQuery(w, r)
-	if !ok {
+	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
+	if err != nil || bindings.requireAccountPair() != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account bindings for both session venues required"})
 		return
 	}
-	response, err := s.liveSessionStatusSnapshot(r.Context(), id, pacificaAccount, hyperliquidAccount)
+	response, err := s.liveSessionStatusSnapshot(r.Context(), id, bindings.Accounts)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "live session not found"})
 		return
@@ -30,15 +31,13 @@ func (s *Server) handleLiveSessionStatus(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) liveSessionStatusSnapshot(
 	ctx context.Context,
-	id, pacificaAccount, hyperliquidAccount string,
+	id string, accounts map[string]string,
 ) (map[string]any, error) {
 	record, err := s.liveStore.GetDurableSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	requestedBindings := liveVenueBindings{Accounts: map[string]string{
-		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
-	}}
+	requestedBindings := liveVenueBindings{Accounts: accounts}
 	if !requestedBindings.matchesAccounts(durableRecordAccountBindings(record)) {
 		return nil, errors.New("live session account mismatch")
 	}

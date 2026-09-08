@@ -13,6 +13,7 @@ import { subscribeLiveSessionEvents } from '@/lib/live-events'
 import { liveAccountsQuery, liveVenueBindingsBody, type VenueAddressMap } from '@/lib/live-bindings'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction } from '@/types/signing'
+import type { Venue } from '@/agents/types'
 import { useTradingAgents } from './useTradingAgents'
 import {
   areValidLeg1SigningRequests,
@@ -65,6 +66,7 @@ export interface LiveExecutionState {
   sessionId: string | null
   accountPacifica: string | null
   accountHyperliquid: string | null
+  accounts: VenueAddressMap
   riskierVenue: string | null
   hedgeVenue: string | null
   leg1Requests: SigningRequest[] // [open, unwind]
@@ -88,6 +90,7 @@ const INITIAL_STATE: LiveExecutionState = {
   sessionId: null,
   accountPacifica: null,
   accountHyperliquid: null,
+  accounts: {},
   riskierVenue: null,
   hedgeVenue: null,
   leg1Requests: [],
@@ -133,22 +136,18 @@ const recoveryFallbackPollMs = 5_000
 
 function useLiveExecutionState() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
-  const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
   const tradingAgents = useTradingAgents()
 
   useEffect(() => {
-    if (state.phase !== 'recovering' || !state.sessionId ||
-      !state.accountPacifica || !state.accountHyperliquid) return
+    if (state.phase !== 'recovering' || !state.sessionId || Object.keys(state.accounts).length !== 2) return
 
     let cancelled = false
     let streamConnected = false
     let fallbackTimer = 0
     let deadlineTimer = 0
     const sessionId = state.sessionId
-    const accounts = {
-      pacifica: state.accountPacifica,
-      hyperliquid: state.accountHyperliquid,
-    }
+    const accounts = state.accounts
     const query = liveAccountsQuery(accounts)
     const apply = (result: AdvanceResp) => {
       if (cancelled || result.status === 'recovering') return false
@@ -199,16 +198,18 @@ function useLiveExecutionState() {
       window.clearTimeout(fallbackTimer)
       window.clearTimeout(deadlineTimer)
     }
-  }, [state.phase, state.sessionId, state.accountPacifica, state.accountHyperliquid])
+  }, [state.phase, state.sessionId, state.accounts])
 
   // Live refs of the currently connected accounts. The executeLive async
   // callback is created once and closes over stale addresses; refs let us
   // read the LATEST connected accounts inside the flow without re-creating
   // the callback (which would cancel in-flight sessions).
-  const pacificaRef = useRef<string | null>(pacificaAddress)
-  const hyperliquidRef = useRef<string | null>(hyperliquidAddress)
-  useEffect(() => { pacificaRef.current = pacificaAddress }, [pacificaAddress])
-  useEffect(() => { hyperliquidRef.current = hyperliquidAddress }, [hyperliquidAddress])
+  const accountsRef = useRef<Record<Venue, string | null>>({
+    pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+  })
+  useEffect(() => {
+    accountsRef.current = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress }
+  }, [asterAddress, hyperliquidAddress, pacificaAddress])
 
   const postAdvance = async (
     accounts: VenueAddressMap,
@@ -230,13 +231,22 @@ function useLiveExecutionState() {
     opportunityId: string,
     leverage: number,
     requestedNotional?: number,
+    venues: [Venue, Venue] = ['pacifica', 'hyperliquid'],
+    asterSymbol?: string,
   ) => {
-    if (!pacificaAddress || !hyperliquidAddress) {
+    const authorityByVenue: Record<Venue, string | null> = {
+      pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+    }
+    const agentByVenue = {
+      pacifica: tradingAgents.pacifica,
+      hyperliquid: tradingAgents.hyperliquid,
+      aster: tradingAgents.aster,
+    }
+    if (venues[0] === venues[1] || venues.some((venue) => !authorityByVenue[venue])) {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Both venue accounts must be connected' })
       return
     }
-    if (tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready' ||
-      !tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress) {
+    if (venues.some((venue) => agentByVenue[venue].status !== 'ready' || !agentByVenue[venue].agentAddress)) {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Authorize both venues first' })
       return
     }
@@ -244,12 +254,14 @@ function useLiveExecutionState() {
     setState({ ...INITIAL_STATE, phase: 'preparing' })
 
     let exposurePossible = false
-    const preparedAccounts = {
-      pacifica: pacificaAddress,
-      hyperliquid: hyperliquidAddress,
-    }
+    const preparedAccounts = Object.fromEntries(venues.map((venue) => [venue, authorityByVenue[venue]!]))
+    const preparedAgents = Object.fromEntries(venues.map((venue) => [venue, agentByVenue[venue].agentAddress!]))
 
     try {
+      if (venues.includes('aster')) {
+        if (!asterSymbol) throw new Error('Aster market symbol is unavailable')
+        await tradingAgents.requestAster({ operation: 'get_leverage_brackets', symbol: asterSymbol })
+      }
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
       const prepResp = await apiFetch('/api/v1/live/prepare', {
         method: 'POST',
@@ -261,11 +273,8 @@ function useLiveExecutionState() {
             ? { requested_notional: requestedNotional }
             : {}),
           ...liveVenueBindingsBody(
-            { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress },
-            {
-              pacifica: tradingAgents.pacifica.agentAddress,
-              hyperliquid: tradingAgents.hyperliquid.agentAddress,
-            },
+            preparedAccounts,
+            preparedAgents,
           ),
         }),
       })
@@ -291,14 +300,22 @@ function useLiveExecutionState() {
       // wallet change must halt the flow (before leg 1) or trigger abort +
       // armed unwind (after leg 1). Comparisons are normalized (lowercased
       // for EVM, trimmed for Solana) so casing/whitespace doesn't false-flag.
-      const preparedPacifica = normalizePacificaAddress(pacificaAddress)
-      const preparedHyperliquid = normalizeHyperliquidAddress(hyperliquidAddress)
+      const normalizedAccounts = Object.fromEntries(venues.map((venue) => [
+        venue,
+        venue === 'pacifica'
+          ? normalizePacificaAddress(preparedAccounts[venue])
+          : normalizeHyperliquidAddress(preparedAccounts[venue]),
+      ]))
 
       const detectAccountChange = (): string | null => {
-        const nowPac = normalizePacificaAddress(pacificaRef.current)
-        const nowHl = normalizeHyperliquidAddress(hyperliquidRef.current)
-        if (nowPac !== preparedPacifica) return 'Pacifica'
-        if (nowHl !== preparedHyperliquid) return 'Hyperliquid'
+        for (const venue of venues) {
+          const current = venue === 'pacifica'
+            ? normalizePacificaAddress(accountsRef.current[venue])
+            : normalizeHyperliquidAddress(accountsRef.current[venue])
+          if (current !== normalizedAccounts[venue]) {
+            return venue === 'pacifica' ? 'Pacifica' : venue === 'aster' ? 'Aster' : 'Hyperliquid'
+          }
+        }
         return null
       }
 
@@ -309,6 +326,7 @@ function useLiveExecutionState() {
         sessionId: prep.session_id,
         accountPacifica: pacificaAddress,
         accountHyperliquid: hyperliquidAddress,
+        accounts: preparedAccounts,
         riskierVenue: prep.riskier_venue,
         hedgeVenue: prep.hedge_venue,
         leg1Requests,
@@ -559,7 +577,7 @@ function useLiveExecutionState() {
           : { error: e instanceof Error ? e.message : 'Unknown error' }),
       }))
     }
-  }, [pacificaAddress, hyperliquidAddress, tradingAgents])
+  }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL_STATE), [])
 

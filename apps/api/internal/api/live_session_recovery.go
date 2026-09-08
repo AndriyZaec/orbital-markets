@@ -103,6 +103,10 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 		return nil, false, nil
 	}
 	exposure := make(map[string]float64, 2)
+	symbols, err := s.positionVenueSymbols(s.ctx, position.ID, position.Asset)
+	if err != nil {
+		return nil, false, err
+	}
 	for _, venue := range []string{position.VenueA, position.VenueB} {
 		feed, ok := accounts.Feed(venue)
 		if !ok {
@@ -114,7 +118,7 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 			return nil, false, nil
 		}
 		for _, accountPosition := range snapshot.Positions {
-			if strings.EqualFold(accountPosition.Symbol, position.Asset) {
+			if strings.EqualFold(accountPosition.Symbol, symbols[venue]) {
 				exposure[venue] = signedSize(accountPosition.Side, accountPosition.Size)
 				break
 			}

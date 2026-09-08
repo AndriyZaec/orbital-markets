@@ -10,6 +10,7 @@ import (
 )
 
 var currentLiveVenues = []string{"pacifica", "hyperliquid"}
+var supportedLiveVenues = []string{"pacifica", "hyperliquid", "aster"}
 
 type liveVenueBindingsRequest struct {
 	Accounts uniqueVenueBindings `json:"accounts,omitempty"`
@@ -134,6 +135,18 @@ func (bindings liveVenueBindings) requirePair() error {
 	for venue := range bindings.Agents {
 		if bindings.Accounts[venue] == "" {
 			return fmt.Errorf("account.%s required", venue)
+		}
+	}
+	return nil
+}
+
+func (bindings liveVenueBindings) requireAccountPair() error {
+	if len(bindings.Accounts) != 2 {
+		return fmt.Errorf("live session requires account bindings for exactly two venues")
+	}
+	for venue := range bindings.Accounts {
+		if !supportedLiveVenue(venue) {
+			return fmt.Errorf("unsupported live venue %q", venue)
 		}
 	}
 	return nil

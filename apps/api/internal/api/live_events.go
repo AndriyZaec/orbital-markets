@@ -21,19 +21,19 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live execution not configured"})
 		return
 	}
-	pacificaAccount, hyperliquidAccount, ok := liveAccountsFromQuery(w, r)
+	requestedAccounts, ok := liveAccountPairFromQuery(w, r)
 	if !ok {
 		return
 	}
 	sessionID := r.URL.Query().Get("session_id")
 	if sessionID != "" {
-		if _, err := s.liveSessionStatusSnapshot(r.Context(), sessionID, pacificaAccount, hyperliquidAccount); err != nil {
+		if _, err := s.liveSessionStatusSnapshot(r.Context(), sessionID, requestedAccounts); err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "live session not found"})
 			return
 		}
 	}
 
-	accounts, err := s.live.acquireAccounts(pacificaAccount, hyperliquidAccount)
+	accounts, err := s.live.acquireAccountContext(requestedAccounts, false)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 		return
@@ -66,30 +66,26 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	emitBalances := func() bool {
-		pacificaFeed, pacificaOK := accounts.Feed("pacifica")
-		hyperliquidFeed, hyperliquidOK := accounts.Feed("hyperliquid")
-		if !pacificaOK || !hyperliquidOK {
-			return true
+		statuses := make(map[string]venueAccountStatus, len(requestedAccounts))
+		versionInput := make(map[string]any, len(requestedAccounts)*2)
+		for venue := range requestedAccounts {
+			feed, found := accounts.Feed(venue)
+			if !found {
+				return true
+			}
+			statuses[venue] = accountStatus(accounts, venue, displayFreshness)
+			versionInput[venue] = feed.Snapshot()
+			versionInput[venue+"_fresh"] = statuses[venue].Fresh
 		}
-		pacificaSnapshot := pacificaFeed.Snapshot()
-		hyperliquidSnapshot := hyperliquidFeed.Snapshot()
-		pac, hl := liveAccountStatuses(accounts, displayFreshness)
-		version, err := json.Marshal(map[string]any{
-			"pacifica":          pacificaSnapshot,
-			"hyperliquid":       hyperliquidSnapshot,
-			"pacifica_fresh":    pac.Fresh,
-			"hyperliquid_fresh": hl.Fresh,
-		})
+		version, err := json.Marshal(versionInput)
 		if err != nil || bytes.Equal(version, lastBalanceVersion) {
 			return true
 		}
 		lastBalanceVersion = version
-		return emitChanged("balances", map[string]any{"pacifica": pac, "hyperliquid": hl}, &lastBalances)
+		return emitChanged("balances", statuses, &lastBalances)
 	}
 	emitPositions := func() bool {
-		positions, err := s.liveStore.ListPositionsForBindings(r.Context(), map[string]string{
-			"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
-		})
+		positions, err := s.liveStore.ListPositionsForBindings(r.Context(), requestedAccounts)
 		if err != nil {
 			return true
 		}
@@ -102,7 +98,7 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 		if sessionID == "" {
 			return true
 		}
-		status, err := s.liveSessionStatusSnapshot(r.Context(), sessionID, pacificaAccount, hyperliquidAccount)
+		status, err := s.liveSessionStatusSnapshot(r.Context(), sessionID, requestedAccounts)
 		if err != nil {
 			return true
 		}

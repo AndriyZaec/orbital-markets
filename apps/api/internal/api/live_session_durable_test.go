@@ -264,6 +264,9 @@ func TestDurableSessionOwnershipRequiresMatchingEnvelopeAndSigningAccounts(t *te
 }
 
 func TestProductionPrepareGuardRejectsUnsupportedVenuePairs(t *testing.T) {
+	if err := requireCurrentLiveVenuePair([]string{"aster", "pacifica"}); err != nil {
+		t.Fatalf("production prepare guard rejected Aster pair: %v", err)
+	}
 	if err := requireCurrentLiveVenuePair([]string{"alpha", "beta"}); err == nil {
 		t.Fatal("production prepare guard accepted an unsupported venue pair")
 	}

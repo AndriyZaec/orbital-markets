@@ -272,12 +272,15 @@ func parseSessionTime(value string) (time.Time, error) {
 }
 
 func requireCurrentLiveVenuePair(venues []string) error {
-	if len(venues) != 2 ||
-		!((venues[0] == "pacifica" && venues[1] == "hyperliquid") ||
-			(venues[0] == "hyperliquid" && venues[1] == "pacifica")) {
+	if len(venues) != 2 || venues[0] == venues[1] ||
+		!supportedLiveVenue(venues[0]) || !supportedLiveVenue(venues[1]) {
 		return fmt.Errorf("live execution does not support venue pair %v", venues)
 	}
 	return nil
+}
+
+func supportedLiveVenue(venue string) bool {
+	return venue == "pacifica" || venue == "hyperliquid" || venue == "aster"
 }
 
 func (s *Server) saveLiveSession(ctx context.Context, session *LiveSession) error {

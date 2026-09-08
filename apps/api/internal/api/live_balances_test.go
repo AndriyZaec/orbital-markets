@@ -116,14 +116,34 @@ func TestLiveAccountHandlersAcceptVenueMaps(t *testing.T) {
 	}
 }
 
-func TestLiveBalancesRejectUnsupportedVenueBindings(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?accounts%5Baster%5D=0xabc", nil)
+func TestLiveBalancesReturnAsterAccountState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xabc": connectedSnapshot("aster", "0xabc", 75, 60),
+		}},
+	}, accountFeedRegistryConfig{})
+	server := &Server{live: &LiveDeps{accounts: registry}}
+	accounts, err := server.live.acquireAccountContext(map[string]string{"aster": "0xabc"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts.Release()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?accounts%5Baster%5D=0xAbC", nil)
 	response := httptest.NewRecorder()
 
-	new(Server).handleLiveBalances(response, request)
+	server.handleLiveBalances(response, request)
 
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body = %s, want bad request", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var balances map[string]venueAccountStatus
+	if err := json.Unmarshal(response.Body.Bytes(), &balances); err != nil {
+		t.Fatal(err)
+	}
+	if balances["aster"].Equity != 75 || !balances["aster"].Fresh {
+		t.Fatalf("unexpected Aster balance: %+v", balances["aster"])
 	}
 }
 

@@ -25,7 +25,7 @@ interface VenueDef {
 const VENUES: VenueDef[] = [
   { id: 'pacifica', name: 'Pacifica', logo: pacificaLogo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana' },
   { id: 'hyperliquid', name: 'Hyperliquid', logo: hlLogo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1' },
-  { id: 'aster', name: 'Aster', logo: null, description: 'Preview browser-agent authorization; live execution is not enabled', chain: 'BNB Chain', preview: true },
+  { id: 'aster', name: 'Aster', logo: null, description: 'Browser-agent authorization and live account connection', chain: 'BNB Chain', preview: false },
 ]
 
 interface Props {

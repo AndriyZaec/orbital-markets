@@ -51,5 +51,6 @@ export function useVenueAuthority() {
     isFullyReady,
     pacificaAddress: pacifica.address,
     hyperliquidAddress: hyperliquid.address,
+    asterAddress: aster.address,
   }
 }

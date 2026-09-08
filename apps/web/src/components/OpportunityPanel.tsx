@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
-import { useVenueReadiness } from '@/hooks/useVenueReadiness'
+import { useVenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -129,6 +129,7 @@ export function OpportunityPanel({
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
   const opportunityMaxLev = opp.max_leverage || 1
   const venuePair = `${longVenue}_${shortVenue}`
+  const liveVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()] as [VenueId, VenueId]
 
   const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: opportunityMaxLev })
   const leverage = leverageSelection.opportunityId === opp.id
@@ -163,16 +164,24 @@ export function OpportunityPanel({
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
   const {
-    aggregate: readinessAggregate,
     pacifica: pacReadiness,
     hyperliquid: hlReadiness,
+    aster: asterReadiness,
     refreshBalances,
   } = useVenueReadiness()
-  const isFullyReady = readinessAggregate.allReady
+  const readinessByVenue = {
+    pacifica: pacReadiness,
+    hyperliquid: hlReadiness,
+    aster: asterReadiness,
+  }
+  const selectedReadiness = liveVenues.map((venue) => readinessByVenue[venue])
+  const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
+  const noSelectedWallets = selectedReadiness.every((readiness) => readiness.status === 'disconnected')
   const balanceByVenue = (venue: string): number | null => {
     const v = venue.toLowerCase()
     if (v === 'pacifica') return pacReadiness.available
     if (v === 'hyperliquid') return hlReadiness.available
+    if (v === 'aster') return asterReadiness.available
     return null
   }
 
@@ -242,7 +251,8 @@ export function OpportunityPanel({
       notional_bucket: notionalBucket(plan?.notional ?? notionalForPlan ?? opp.recommended_notional),
     })
     setShowLiveModal(true)
-    executeLive(opp.id, leverage, notionalForPlan)
+    const asterLeg = [plan?.leg_1, plan?.leg_2].find((leg) => leg?.venue.toLowerCase() === 'aster')
+    executeLive(opp.id, leverage, notionalForPlan, liveVenues, asterLeg?.market_key ?? asterLeg?.asset)
   }
 
   const handleCloseLiveModal = () => {
@@ -489,7 +499,7 @@ export function OpportunityPanel({
             >
               {isFullyReady
                 ? hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
-                : readinessAggregate.statusLabel === 'Not connected'
+                : noSelectedWallets
                   ? 'Connect Wallets to Go Live'
                   : 'Accounts Not Ready'}
             </Button>
