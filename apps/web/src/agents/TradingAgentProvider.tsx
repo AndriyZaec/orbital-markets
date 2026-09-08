@@ -6,6 +6,7 @@ import { bsc, mainnet } from 'wagmi/chains'
 import { apiError, apiFetch } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
 import {
+  asterBuilderAddress,
   authorizeAsterAgent,
   type AsterApproveAgentRequest,
 } from './aster-agent.ts'
@@ -140,8 +141,11 @@ function TradingAgentSession({
       if (!ownerAddress) return
       try {
         let agent = await storage.restore(venue, ownerAddress)
-        if (venue === 'hyperliquid' && agent &&
-          agent.builderAddress?.toLowerCase() !== hyperliquidBuilderAddress.toLowerCase()) {
+        const expectedBuilder = venue === 'hyperliquid'
+          ? hyperliquidBuilderAddress
+          : venue === 'aster' ? asterBuilderAddress : null
+        if (expectedBuilder && agent &&
+          agent.builderAddress?.toLowerCase() !== expectedBuilder.toLowerCase()) {
           await storage.clear(venue, ownerAddress)
           agent = null
         }

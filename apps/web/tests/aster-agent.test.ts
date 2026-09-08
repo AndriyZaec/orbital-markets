@@ -12,6 +12,7 @@ import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
 import type { StoredTradingAgent } from '../src/agents/types.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
 import { TestTradingAgentStore } from './trading-agent-test-store.ts'
+import builderConfig from '../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 const ownerAddress = '0x14791697260E4c9A71f18484C9f997B308e59325'
 const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111'
@@ -25,13 +26,15 @@ test('Aster approval is perpetual-only and signed on BSC', async () => {
   assert.equal(action.canSpotTrade, false)
   assert.equal(action.canPerpTrade, true)
   assert.equal(action.canWithdraw, false)
+  assert.equal(action.builder, builderConfig.address)
+  assert.equal(action.maxFeeRate, '0.0002')
   assert.equal(action.signatureChainId, 56)
   assert.equal(typedData.domain.chainId, 56)
   assert.equal(typedData.primaryType, 'ApproveAgent')
   const owner = privateKeyToAccount('0x0123456789012345678901234567890123456789012345678901234567890123')
   assert.equal(
     await owner.signTypedData(typedData),
-    '0x23ab0a37ca52e98ab7f191e36179dd341d04dc2f0e95b5366242f05bd60932040c2899ab8993e48a1a5030673ad2f7eda8776341aebef96cb2e022645cc4d7511b',
+    '0x2d41cd0c2ba4a0c613c1beb02e11170ae5f497c934c8b6a2ba713bb347e82fb066cd5ebb2967e9c7a00b0978b059f78a0ad9c92b058f6794ac93f3ee4ca01db21c',
   )
 })
 
@@ -90,11 +93,22 @@ test('Aster signing rejects altered or duplicated order parameters', async () =>
   await assert.rejects(signAsterAgentRequest(duplicate, asterAgent()), /duplicate query parameters/)
 })
 
-test('Aster signing rejects builder fields until attribution is enabled', async () => {
+test('Aster signing rejects altered builder attribution', async () => {
   const request = asterSigningRequest()
   const payload = request.unsigned_payload as { message: { msg: string } }
-  payload.message.msg = payload.message.msg.replace('&side=BUY', '&builder=0x3333333333333333333333333333333333333333&side=BUY')
+  payload.message.msg = payload.message.msg.replace(builderConfig.address, '0x3333333333333333333333333333333333333333')
   await assert.rejects(signAsterAgentRequest(request, asterAgent()), /not an allowed IOC order/)
+
+  const alteredFee = asterSigningRequest()
+  const alteredFeePayload = alteredFee.unsigned_payload as { message: { msg: string } }
+  alteredFeePayload.message.msg = alteredFeePayload.message.msg.replace('feeRate=0.0002', 'feeRate=0.001')
+  await assert.rejects(signAsterAgentRequest(alteredFee, asterAgent()), /not an allowed IOC order/)
+})
+
+test('Aster signing rejects an agent authorized before builder attribution', async () => {
+  const legacyAgent = asterAgent()
+  delete legacyAgent.builderAddress
+  await assert.rejects(signAsterAgentRequest(asterSigningRequest(), legacyAgent), /not an allowed IOC order/)
 })
 
 test('Aster agent signs only allowlisted private account requests', async () => {
@@ -125,6 +139,7 @@ function asterAgent(): StoredTradingAgent {
     privateKey,
     authorizedAt: '2026-08-10T12:00:00.000Z',
     expiresAt: '2099-08-10T12:00:00.000Z',
+    builderAddress: builderConfig.address,
   }
 }
 
@@ -132,6 +147,8 @@ function asterSigningRequest(): SigningRequest {
   const message = [
     'symbol=BTCUSDT',
     'type=LIMIT',
+    `builder=${builderConfig.address}`,
+    `feeRate=${String(builderConfig.fee / 100_000)}`,
     'side=BUY',
     'quantity=1',
     'price=100.5',

@@ -1,5 +1,6 @@
 import { type Address, type Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import builderConfig from '../../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
 import type { TradingAgentStore } from './storage.ts'
@@ -10,6 +11,8 @@ const ownerChainId = 56
 const orderChainId = 1666
 const agentName = 'Orbital Markets'
 const agentLifetime = 7 * 24 * 60 * 60 * 1000
+export const asterBuilderAddress = builderConfig.address.toLowerCase() as Address
+export const asterBuilderFeeRate = String(builderConfig.fee / 100_000)
 
 export interface AsterApproveAgentRequest {
   user: Address
@@ -21,6 +24,9 @@ export interface AsterApproveAgentRequest {
   canSpotTrade: false
   canPerpTrade: true
   canWithdraw: false
+  builder: Address
+  maxFeeRate: string
+  builderName: typeof agentName
   asterChain: 'Mainnet'
   signatureChainId: typeof ownerChainId
 }
@@ -48,6 +54,9 @@ export function buildAsterApproveAgentAction(
     canSpotTrade: false,
     canPerpTrade: true,
     canWithdraw: false,
+    builder: asterBuilderAddress,
+    maxFeeRate: asterBuilderFeeRate,
+    builderName: agentName,
     asterChain: 'Mainnet',
     signatureChainId: ownerChainId,
   }
@@ -69,6 +78,9 @@ export function buildAsterApproveAgentTypedData(action: AsterApproveAgentAction)
         { name: 'CanSpotTrade', type: 'bool' },
         { name: 'CanPerpTrade', type: 'bool' },
         { name: 'CanWithdraw', type: 'bool' },
+        { name: 'Builder', type: 'string' },
+        { name: 'MaxFeeRate', type: 'string' },
+        { name: 'BuilderName', type: 'string' },
         { name: 'AsterChain', type: 'string' },
         { name: 'User', type: 'string' },
         { name: 'Nonce', type: 'uint256' },
@@ -82,6 +94,9 @@ export function buildAsterApproveAgentTypedData(action: AsterApproveAgentAction)
       CanSpotTrade: action.canSpotTrade,
       CanPerpTrade: action.canPerpTrade,
       CanWithdraw: action.canWithdraw,
+      Builder: action.builder,
+      MaxFeeRate: action.maxFeeRate,
+      BuilderName: action.builderName,
       AsterChain: action.asterChain,
       User: action.user,
       Nonce: BigInt(action.nonce),
@@ -117,6 +132,7 @@ export async function authorizeAsterAgent(options: {
     privateKey: generated.privateKey,
     authorizedAt: new Date(Math.floor(action.nonce / 1000)).toISOString(),
     expiresAt: new Date(action.expired).toISOString(),
+    builderAddress: asterBuilderAddress,
   }
   await options.storage.save(agent)
   return agent
@@ -195,11 +211,13 @@ function allowedAsterRequest(request: SigningRequest, agent: StoredTradingAgent)
   if (request.action === 'open' ? request.reduce_only : !request.reduce_only) {
     throw new Error('Aster payload is not an allowed IOC order')
   }
+  const chargesBuilderFee = request.action === 'open' || request.action === 'close'
   const expectedKeys = [
     'symbol', 'type', 'side', 'quantity', 'price', 'timeInForce',
     'newClientOrderId', 'newOrderRespType', 'reduceOnly', 'positionSide',
     'asterChain', 'user', 'signer', 'nonce',
   ]
+  if (chargesBuilderFee) expectedKeys.push('builder', 'feeRate')
   const quantity = Number(query.get('quantity'))
   const price = Number(query.get('price'))
   const nonce = Number(query.get('nonce'))
@@ -216,6 +234,11 @@ function allowedAsterRequest(request: SigningRequest, agent: StoredTradingAgent)
     query.get('positionSide') === 'BOTH' && query.get('asterChain') === 'Mainnet' &&
     query.get('user')?.toLowerCase() === request.account.toLowerCase() &&
     query.get('signer')?.toLowerCase() === agent.agentAddress.toLowerCase() &&
+    (!chargesBuilderFee || (
+      agent.builderAddress?.toLowerCase() === asterBuilderAddress &&
+      query.get('builder')?.toLowerCase() === asterBuilderAddress &&
+      query.get('feeRate') === asterBuilderFeeRate
+    )) &&
     Number.isSafeInteger(nonce) && nonce > 0
   if (!validQuery) throw new Error('Aster payload is not an allowed IOC order')
 

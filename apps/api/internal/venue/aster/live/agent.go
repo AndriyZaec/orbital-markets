@@ -36,11 +36,14 @@ type ApproveAgentRequest struct {
 	CanSpotTrade     bool   `json:"canSpotTrade"`
 	CanPerpTrade     bool   `json:"canPerpTrade"`
 	CanWithdraw      bool   `json:"canWithdraw"`
+	Builder          string `json:"builder"`
+	MaxFeeRate       string `json:"maxFeeRate"`
+	BuilderName      string `json:"builderName"`
 	AsterChain       string `json:"asterChain"`
 	SignatureChainID int    `json:"signatureChainId"`
 }
 
-func (r ApproveAgentRequest) Validate(now time.Time) error {
+func (r ApproveAgentRequest) Validate(now time.Time, builder BuilderConfig) error {
 	if !addressPattern.MatchString(r.User) || !addressPattern.MatchString(r.AgentAddress) ||
 		strings.EqualFold(r.User, r.AgentAddress) {
 		return fmt.Errorf("invalid Aster owner or agent address")
@@ -51,6 +54,9 @@ func (r ApproveAgentRequest) Validate(now time.Time) error {
 	}
 	if r.CanSpotTrade || !r.CanPerpTrade || r.CanWithdraw {
 		return fmt.Errorf("Aster agent approval must be perpetual-only without withdrawals")
+	}
+	if !strings.EqualFold(r.Builder, builder.Address) || r.MaxFeeRate != builder.FeeRate || r.BuilderName != asterAgentName {
+		return fmt.Errorf("invalid Aster builder approval")
 	}
 	nonceTime := time.UnixMicro(r.Nonce)
 	if nonceTime.Before(now.Add(-maxApprovalAge)) || nonceTime.After(now.Add(maxApprovalFutureSkew)) {
@@ -101,6 +107,9 @@ func (a *AgentApprover) ApproveAgent(ctx context.Context, request ApproveAgentRe
 		"canSpotTrade":     {strconv.FormatBool(request.CanSpotTrade)},
 		"canPerpTrade":     {strconv.FormatBool(request.CanPerpTrade)},
 		"canWithdraw":      {strconv.FormatBool(request.CanWithdraw)},
+		"builder":          {request.Builder},
+		"maxFeeRate":       {request.MaxFeeRate},
+		"builderName":      {request.BuilderName},
 		"asterChain":       {request.AsterChain},
 		"signatureChainId": {strconv.Itoa(request.SignatureChainID)},
 	}

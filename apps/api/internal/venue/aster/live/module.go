@@ -8,11 +8,12 @@ import (
 )
 
 type LiveModule struct {
-	rules OrderRuleMap
+	rules   OrderRuleMap
+	builder *BuilderConfig
 }
 
-func NewLiveModule(rules OrderRuleMap) *LiveModule {
-	return &LiveModule{rules: rules}
+func NewLiveModule(rules OrderRuleMap, builder *BuilderConfig) *LiveModule {
+	return &LiveModule{rules: rules, builder: builder}
 }
 
 func (m *LiveModule) Name() string {
@@ -43,7 +44,7 @@ func (m *LiveModule) NormalizeAmount(symbol string, amount float64) (float64, er
 func (m *LiveModule) BuildOpen(params venue.LiveOrderParams) (*domain.SigningRequest, error) {
 	return BuildOpenPayload(
 		m.rules, params.Account, params.Signer, params.Symbol, params.Side,
-		params.Amount, params.Price, params.ClientOrderID, nil,
+		params.Amount, params.Price, params.ClientOrderID, m.builder,
 	)
 }
 
@@ -52,7 +53,7 @@ func (m *LiveModule) BuildReduce(params venue.LiveReduceParams) (*domain.Signing
 	case venue.ReduceActionClose:
 		return BuildClosePayload(
 			m.rules, params.Account, params.Signer, params.Symbol, params.Side,
-			params.Amount, params.Price, params.ClientOrderID, nil,
+			params.Amount, params.Price, params.ClientOrderID, m.builder,
 		)
 	case venue.ReduceActionUnwind:
 		return BuildUnwindPayload(

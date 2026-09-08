@@ -13,12 +13,17 @@ import (
 func TestApproveAgentRequestAllowsOnlyBoundedPerpetualAccess(t *testing.T) {
 	now := time.Now()
 	request := validApproveAgentRequest(now)
-	if err := request.Validate(now); err != nil {
+	if err := request.Validate(now, testAsterBuilder()); err != nil {
 		t.Fatal(err)
 	}
 	request.CanWithdraw = true
-	if err := request.Validate(now); err == nil {
+	if err := request.Validate(now, testAsterBuilder()); err == nil {
 		t.Fatal("withdraw-enabled Aster agent was accepted")
+	}
+	request = validApproveAgentRequest(now)
+	request.MaxFeeRate = "0.001"
+	if err := request.Validate(now, testAsterBuilder()); err == nil {
+		t.Fatal("altered Aster builder fee cap was accepted")
 	}
 }
 
@@ -39,7 +44,9 @@ func TestAgentApproverRelaysWithoutPrivateKey(t *testing.T) {
 	if err := approver.ApproveAgent(context.Background(), validApproveAgentRequest(time.Now())); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.ToLower(relayed), "private") || !strings.Contains(relayed, "canPerpTrade=true") {
+	if strings.Contains(strings.ToLower(relayed), "private") || !strings.Contains(relayed, "canPerpTrade=true") ||
+		!strings.Contains(relayed, "builder=0x3333333333333333333333333333333333333333") ||
+		!strings.Contains(relayed, "maxFeeRate=0.0002") {
 		t.Fatalf("relayed body = %s", relayed)
 	}
 }
@@ -53,7 +60,14 @@ func validApproveAgentRequest(now time.Time) ApproveAgentRequest {
 		AgentAddress:     "0x2222222222222222222222222222222222222222",
 		Expired:          now.Add(7 * 24 * time.Hour).UnixMilli(),
 		CanPerpTrade:     true,
+		Builder:          testAsterBuilder().Address,
+		MaxFeeRate:       testAsterBuilder().FeeRate,
+		BuilderName:      asterAgentName,
 		AsterChain:       mainnetName,
 		SignatureChainID: asterSignatureChainID,
 	}
+}
+
+func testAsterBuilder() BuilderConfig {
+	return BuilderConfig{Address: "0x3333333333333333333333333333333333333333", FeeRate: "0.0002"}
 }

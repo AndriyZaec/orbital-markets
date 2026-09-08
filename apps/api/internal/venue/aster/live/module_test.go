@@ -1,6 +1,7 @@
 package live
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -8,7 +9,7 @@ import (
 )
 
 func TestLiveModuleBuildsAsterSigningRequests(t *testing.T) {
-	module := NewLiveModule(payloadTestRules)
+	module := NewLiveModule(payloadTestRules, &BuilderConfig{Address: testBuilder, FeeRate: "0.0002"})
 	params := venue.LiveOrderParams{
 		Account: testUser, Signer: testSigner, Symbol: "BTCUSDT", Side: domain.SideLong,
 		Amount: 2.1239, Price: 100, ClientOrderID: "client-id",
@@ -28,6 +29,10 @@ func TestLiveModuleBuildsAsterSigningRequests(t *testing.T) {
 	if open.Venue != "aster" || open.Action != "open" || open.Account != testUser || open.Signer != testSigner {
 		t.Fatalf("open request = %+v", open)
 	}
+	if !strings.Contains(string(open.UnsignedPayload), "builder="+testBuilder) ||
+		!strings.Contains(string(open.UnsignedPayload), "feeRate=0.0002") {
+		t.Fatalf("open request omits builder attribution: %s", open.UnsignedPayload)
+	}
 	for _, action := range []venue.ReduceAction{
 		venue.ReduceActionClose, venue.ReduceActionUnwind, venue.ReduceActionEmergencyClose,
 	} {
@@ -37,6 +42,10 @@ func TestLiveModuleBuildsAsterSigningRequests(t *testing.T) {
 		}
 		if request.Action != string(action) || !request.ReduceOnly {
 			t.Fatalf("%s request = %+v", action, request)
+		}
+		hasBuilder := strings.Contains(string(request.UnsignedPayload), "builder="+testBuilder)
+		if hasBuilder != (action == venue.ReduceActionClose) {
+			t.Fatalf("%s builder attribution = %t", action, hasBuilder)
 		}
 	}
 	leverage, err := module.BuildLeverage(venue.LiveLeverageParams{
@@ -58,7 +67,7 @@ func TestLiveModuleBuildsAsterSigningRequests(t *testing.T) {
 }
 
 func TestLiveModuleRejectsUnknownReduceAction(t *testing.T) {
-	module := NewLiveModule(payloadTestRules)
+	module := NewLiveModule(payloadTestRules, nil)
 	_, err := module.BuildReduce(venue.LiveReduceParams{
 		LiveOrderParams: venue.LiveOrderParams{
 			Account: testUser, Signer: testSigner, Symbol: "BTCUSDT", Side: domain.SideLong,

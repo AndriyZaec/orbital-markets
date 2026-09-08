@@ -45,7 +45,7 @@ type pacificaBuilderCodeApprovalReader interface {
 }
 
 func (s *Server) handleAsterAgentApprove(w http.ResponseWriter, r *http.Request) {
-	if s.live == nil || s.live.asterAgentApprover == nil {
+	if s.live == nil || s.live.asterAgentApprover == nil || s.live.asterBuilder == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live agent authorization unavailable"})
 		return
 	}
@@ -61,7 +61,7 @@ func (s *Server) handleAsterAgentApprove(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	if err := request.Validate(time.Now()); err != nil {
+	if err := request.Validate(time.Now(), *s.live.asterBuilder); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

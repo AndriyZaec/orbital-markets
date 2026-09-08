@@ -39,6 +39,7 @@ func TestHandleAsterAgentApproveValidatesAndRelays(t *testing.T) {
 	approver := &fakeAsterAgentApprover{}
 	server := &Server{live: &LiveDeps{
 		asterAgentApprover: approver,
+		asterBuilder:       &asterlive.BuilderConfig{Address: hllive.OrbitalBuilder.Address, FeeRate: "0.0002"},
 		accounts:           &accountFeedRegistry{factories: map[string]accountFeedFactory{}},
 	}}
 	request := asterlive.ApproveAgentRequest{
@@ -46,6 +47,7 @@ func TestHandleAsterAgentApproveValidatesAndRelays(t *testing.T) {
 		Signature: "0x" + strings.Repeat("1", 128) + "1b",
 		AgentName: "Orbital Markets", AgentAddress: "0x2222222222222222222222222222222222222222",
 		Expired: now.Add(7 * 24 * time.Hour).UnixMilli(), CanPerpTrade: true,
+		Builder: hllive.OrbitalBuilder.Address, MaxFeeRate: "0.0002", BuilderName: "Orbital Markets",
 		AsterChain: "Mainnet", SignatureChainID: 56,
 	}
 	body, err := json.Marshal(request)
@@ -62,7 +64,10 @@ func TestHandleAsterAgentApproveValidatesAndRelays(t *testing.T) {
 }
 
 func TestHandleAsterAgentApproveRejectsPrivateKeyFields(t *testing.T) {
-	server := &Server{live: &LiveDeps{asterAgentApprover: &fakeAsterAgentApprover{}}}
+	server := &Server{live: &LiveDeps{
+		asterAgentApprover: &fakeAsterAgentApprover{},
+		asterBuilder:       &asterlive.BuilderConfig{Address: hllive.OrbitalBuilder.Address, FeeRate: "0.0002"},
+	}}
 	response := httptest.NewRecorder()
 	server.handleAsterAgentApprove(response, httptest.NewRequest(
 		http.MethodPost, "/api/v1/live/agents/aster/approve",

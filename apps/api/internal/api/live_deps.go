@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type LiveDeps struct {
 	accounts                      *accountFeedRegistry
 	modules                       *venue.LiveModuleRegistry
 	hlBuilder                     *hllive.BuilderCode
+	asterBuilder                  *asterlive.BuilderConfig
 	asterPrivate                  asterPrivateSubmitter
 	asterAgentApprover            asterAgentApprover
 	hlAgentApprover               hyperliquidAgentApprover
@@ -61,10 +63,15 @@ func NewLiveDeps(
 	asterRules asterlive.OrderRuleMap,
 ) *LiveDeps {
 	asterClient := asterlive.NewDefaultClient(logger)
+	hlBuilder := hllive.OrbitalBuilderCode()
+	asterBuilder := &asterlive.BuilderConfig{
+		Address: hlBuilder.Address,
+		FeeRate: strconv.FormatFloat(float64(hlBuilder.Fee)/100_000, 'f', -1, 64),
+	}
 	modules, err := venue.NewLiveModuleRegistry(
 		pacificlive.NewLiveModule(pacificaLotSizes),
 		hllive.NewLiveModule(hlAssetMap),
-		asterlive.NewLiveModule(asterRules),
+		asterlive.NewLiveModule(asterRules, asterBuilder),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("configure live venue modules: %v", err))
@@ -81,7 +88,8 @@ func NewLiveDeps(
 		liveStore:                     liveStore,
 		sessions:                      NewSessionManager(),
 		modules:                       modules,
-		hlBuilder:                     hllive.OrbitalBuilderCode(),
+		hlBuilder:                     hlBuilder,
+		asterBuilder:                  asterBuilder,
 		asterPrivate:                  asterClient,
 		asterAgentApprover:            asterlive.NewDefaultAgentApprover(),
 		hlAgentApprover:               hlApprover,
