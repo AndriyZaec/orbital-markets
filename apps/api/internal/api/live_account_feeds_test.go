@@ -5,10 +5,35 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
 )
+
+type fakeAsterAccountClient struct {
+	order   *domain.SubmissionResult
+	private *asterlive.PrivateResult
+	fill    *asterlive.FillResult
+}
+
+func (f *fakeAsterAccountClient) SubmitSignedOrder(
+	context.Context, domain.SignedAction, *domain.SigningRequest,
+) (*domain.SubmissionResult, error) {
+	return f.order, nil
+}
+
+func (f *fakeAsterAccountClient) SubmitSignedPrivate(
+	context.Context, domain.SignedAction, *domain.SigningRequest,
+) (*asterlive.PrivateResult, error) {
+	return f.private, nil
+}
+
+func (f *fakeAsterAccountClient) WaitForFill(context.Context, string, string) (*asterlive.FillResult, error) {
+	return f.fill, nil
+}
 
 func TestVenueAccountNormalization(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -79,5 +104,58 @@ func TestPacificaAcceptedLeverageUpdatesLocalAccountState(t *testing.T) {
 	applyAcceptedPacificaLeverage(state, request)
 	if got := state.Snapshot().SymbolConfigs["VIRTUAL"].Leverage; got != 2 {
 		t.Fatalf("leverage = %v, want 2", got)
+	}
+}
+
+func TestAsterAccountFeedSubmitsOrdersAndReturnsFill(t *testing.T) {
+	client := &fakeAsterAccountClient{
+		order: &domain.SubmissionResult{Venue: "aster", Accepted: true},
+		fill: &asterlive.FillResult{
+			OrderID: "42", ClientOrderID: "client-id", Status: "partial_fill",
+			FilledAmount: 0.5, AvgFillPrice: 100, Filled: true,
+		},
+	}
+	feed := &asterAccountFeed{state: asteraccount.NewAccountState("0xowner"), client: client}
+	request := &domain.SigningRequest{
+		Venue: "aster", Action: "open", Account: "0xowner", ClientOrderID: "client-id",
+	}
+	result, err := feed.SubmitSigned(context.Background(), domain.SignedAction{}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Accepted {
+		t.Fatalf("submission result = %+v", result)
+	}
+	fill, err := feed.WaitForFill(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fill.Filled || fill.OrderID != "42" || fill.FilledAmount != 0.5 || fill.AvgFillPrice != 100 {
+		t.Fatalf("fill = %+v", fill)
+	}
+}
+
+func TestAsterAccountFeedAppliesLeverageResponse(t *testing.T) {
+	now := time.Now()
+	update := asteraccount.LeverageUpdate{Symbol: "BTCUSDT", Leverage: 3}
+	client := &fakeAsterAccountClient{private: &asterlive.PrivateResult{
+		Operation:     asterlive.UpdateLeverage,
+		AccountUpdate: &asteraccount.Update{Leverage: &update},
+		SubmittedAt:   now, RespondedAt: now,
+	}}
+	feed := &asterAccountFeed{state: asteraccount.NewAccountState("0xowner"), client: client}
+	request := &domain.SigningRequest{
+		ID: "leverage", Venue: "aster", Action: string(asterlive.UpdateLeverage),
+		Account: "0xowner", Symbol: "BTCUSDT", Leverage: 3,
+	}
+	result, err := feed.SubmitSigned(context.Background(), domain.SignedAction{}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Accepted {
+		t.Fatalf("submission result = %+v", result)
+	}
+	if err := feed.WaitForLeverage(context.Background(), "BTCUSDT", 3); err != nil {
+		t.Fatal(err)
 	}
 }

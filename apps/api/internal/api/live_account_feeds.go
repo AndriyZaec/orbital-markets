@@ -20,7 +20,15 @@ import (
 	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
-type asterAccountFeedFactory struct{}
+type asterAccountClient interface {
+	SubmitSignedOrder(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error)
+	SubmitSignedPrivate(context.Context, domain.SignedAction, *domain.SigningRequest) (*asterlive.PrivateResult, error)
+	WaitForFill(context.Context, string, string) (*asterlive.FillResult, error)
+}
+
+type asterAccountFeedFactory struct {
+	client asterAccountClient
+}
 
 func (f *asterAccountFeedFactory) Normalize(account string) (string, error) {
 	account = strings.ToLower(strings.TrimSpace(account))
@@ -34,11 +42,12 @@ func (f *asterAccountFeedFactory) Normalize(account string) (string, error) {
 }
 
 func (f *asterAccountFeedFactory) Start(_ context.Context, account string) (liveAccountFeed, error) {
-	return &asterAccountFeed{state: asteraccount.NewAccountState(account)}, nil
+	return &asterAccountFeed{state: asteraccount.NewAccountState(account), client: f.client}, nil
 }
 
 type asterAccountFeed struct {
-	state *asteraccount.AccountState
+	state  *asteraccount.AccountState
+	client asterAccountClient
 }
 
 func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, result *asterlive.PrivateResult) (bool, error) {
@@ -91,16 +100,57 @@ func (f *asterAccountFeed) RefreshPositions(context.Context) error {
 	return fmt.Errorf("Aster position refresh requires an online browser signature")
 }
 
-func (f *asterAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error) {
-	return nil, fmt.Errorf("Aster live execution is not enabled")
+func (f *asterAccountFeed) SubmitSigned(
+	ctx context.Context,
+	signed domain.SignedAction,
+	request *domain.SigningRequest,
+) (*domain.SubmissionResult, error) {
+	if f.client == nil {
+		return nil, fmt.Errorf("Aster live client not configured")
+	}
+	if request.Action != string(asterlive.UpdateLeverage) {
+		return f.client.SubmitSignedOrder(ctx, signed, request)
+	}
+	result, err := f.client.SubmitSignedPrivate(ctx, signed, request)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("Aster leverage response missing")
+	}
+	applied, err := f.ApplyPrivateResult(request, result)
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return nil, fmt.Errorf("Aster leverage response did not update account state")
+	}
+	return &domain.SubmissionResult{
+		RequestID: request.ID, ClientOrderID: request.ClientOrderID,
+		Venue: "aster", Accepted: true,
+		SubmittedAt: result.SubmittedAt, RespondedAt: result.RespondedAt,
+	}, nil
 }
 
-func (f *asterAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error) {
-	return nil, fmt.Errorf("Aster live execution is not enabled")
+func (f *asterAccountFeed) WaitForFill(ctx context.Context, request *domain.SigningRequest) (*normFill, error) {
+	if f.client == nil {
+		return nil, fmt.Errorf("Aster live client not configured")
+	}
+	fill, err := f.client.WaitForFill(ctx, request.Account, request.ClientOrderID)
+	if err != nil {
+		return nil, err
+	}
+	return &normFill{
+		FilledAmount: fill.FilledAmount, AvgFillPrice: fill.AvgFillPrice,
+		OrderID: fill.OrderID, Status: fill.Status, Filled: fill.Filled,
+	}, nil
 }
 
-func (f *asterAccountFeed) WaitForLeverage(context.Context, string, float64) error {
-	return fmt.Errorf("Aster live execution is not enabled")
+func (f *asterAccountFeed) WaitForLeverage(_ context.Context, symbol string, leverage float64) error {
+	if math.Abs(f.state.Snapshot().LeverageBySymbol[symbol]-leverage) > 1e-9 {
+		return fmt.Errorf("Aster leverage was not confirmed")
+	}
+	return nil
 }
 
 type pacificaAccountFeedFactory struct {

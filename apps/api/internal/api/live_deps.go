@@ -59,6 +59,7 @@ func NewLiveDeps(
 	pacificaLotSizes pacificlive.LotSizeMap,
 	asterRules asterlive.OrderRuleMap,
 ) *LiveDeps {
+	asterClient := asterlive.NewDefaultClient(logger)
 	modules, err := venue.NewLiveModuleRegistry(
 		pacificlive.NewLiveModule(pacificaLotSizes),
 		hllive.NewLiveModule(hlAssetMap),
@@ -68,7 +69,7 @@ func NewLiveDeps(
 		panic(fmt.Sprintf("configure live venue modules: %v", err))
 	}
 	factories := map[string]accountFeedFactory{
-		"aster":       &asterAccountFeedFactory{},
+		"aster":       &asterAccountFeedFactory{client: asterClient},
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
 		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
 	}
@@ -80,7 +81,7 @@ func NewLiveDeps(
 		sessions:                      NewSessionManager(),
 		modules:                       modules,
 		hlBuilder:                     hllive.OrbitalBuilderCode(),
-		asterPrivate:                  asterlive.NewDefaultClient(logger),
+		asterPrivate:                  asterClient,
 		asterAgentApprover:            asterlive.NewDefaultAgentApprover(),
 		hlAgentApprover:               hlApprover,
 		hlBuilderApprover:             hlApprover,
