@@ -367,6 +367,44 @@ func TestLiveEventsEmitsInitialAccountSnapshots(t *testing.T) {
 	}
 }
 
+func TestLiveAccountEventsEmitsAllRequestedAccounts(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	registryCtx, cancelRegistry := context.WithCancel(context.Background())
+	t.Cleanup(cancelRegistry)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {Venue: "pacifica", Account: "sol-wallet", LastUpdated: updatedAt},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", LastUpdated: updatedAt},
+		}},
+		"aster": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xaster": {Venue: "aster", Account: "0xaster", LastUpdated: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	requestCtx, cancelRequest := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelRequest()
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/live/accounts/events?accounts%5Bpacifica%5D=sol-wallet&accounts%5Bhyperliquid%5D=0xwallet&accounts%5Baster%5D=0xaster", nil,
+	).WithContext(requestCtx)
+	response := httptest.NewRecorder()
+	server.handleLiveAccountEvents(response, request)
+
+	if response.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("content type = %q", response.Header().Get("Content-Type"))
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "event: balances\n") || !strings.Contains(body, `"pacifica"`) ||
+		!strings.Contains(body, `"hyperliquid"`) || !strings.Contains(body, `"aster"`) {
+		t.Fatalf("stream body = %q, want all requested account balances", body)
+	}
+	if strings.Contains(body, "event: positions\n") || strings.Contains(body, "event: session\n") {
+		t.Fatalf("stream body = %q, account stream must not emit pair events", body)
+	}
+}
+
 func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{

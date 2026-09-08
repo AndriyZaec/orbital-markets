@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
-import { runSingleFlight, shouldMonitorLiveUpdates } from '@/lib/polling'
-import { hasActiveLiveExposure, subscribeLiveAccountEvents } from '@/lib/live-events'
+import { runSingleFlight } from '@/lib/polling'
+import { subscribeLiveAccountUpdates } from '@/lib/live-events'
 import { useLiveExecution } from './useLiveExecution'
 import { usePageVisibility } from './usePageVisibility'
 import { liveAccountsQuery } from '@/lib/live-bindings'
@@ -20,6 +20,7 @@ interface VenueBalance {
   last_updated?: string
   age_seconds?: number
   reason?: string
+  unavailable?: boolean
 }
 
 interface Balances {
@@ -60,18 +61,13 @@ export function useLiveBalances(
   const requestSequence = useRef(0)
   const pageVisible = usePageVisibility()
   const { state: execution } = useLiveExecution()
-  const [exposure, setExposure] = useState<{
-    pair: string | null
-    active: boolean | null
-  }>({ pair: null, active: null })
-  const activeExposure = exposure.pair === pair ? exposure.active : null
   const executionUsesPair = pair !== null && Object.entries(execution.accounts).every(([venue, account]) => {
     const current = accounts[venue]
     return venue === 'pacifica' ? current === account : current?.toLowerCase() === account.toLowerCase()
   })
   const executionActive = executionUsesPair &&
     execution.phase !== 'idle' && execution.phase !== 'failed' && execution.phase !== 'aborted'
-  const shouldMonitor = shouldMonitorLiveUpdates(pageVisible, activeExposure, executionActive)
+  const shouldMonitor = pageVisible || executionActive
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
     if (signal?.aborted) return
@@ -93,11 +89,8 @@ export function useLiveBalances(
 
   useEffect(() => {
     streamConnected.current = false
-    if (!shouldMonitor || !pair || !accountPacifica || !accountHyperliquid) return
-    return subscribeLiveAccountEvents({
-      pacifica: accountPacifica,
-      hyperliquid: accountHyperliquid,
-    }, (event) => {
+    if (!shouldMonitor || !pair) return
+    return subscribeLiveAccountUpdates(accounts, (event) => {
       if (event.type === 'connected') streamConnected.current = true
       else if (event.type === 'disconnected') streamConnected.current = false
       else if (event.type === 'balances') {
@@ -106,28 +99,26 @@ export function useLiveBalances(
           pair,
           balances: { ...(current.pair === pair ? current.balances : EMPTY), ...(event.data as Partial<Balances>) },
         }))
-      } else if (event.type === 'positions') {
-        setExposure({ pair, active: hasActiveLiveExposure(event.data) })
       }
     })
-  }, [shouldMonitor, pair, accountPacifica, accountHyperliquid])
+  }, [accounts, shouldMonitor, pair])
 
   useEffect(() => {
     if (!pageVisible) return
     const controller = new AbortController()
     const initialId = setTimeout(() => fetch_(controller.signal), 0)
     const intervalId = setInterval(() => {
-      if (!streamConnected.current || accountAster) void fetch_(controller.signal)
-    }, accountAster ? 5_000 : pollInterval)
+      if (!streamConnected.current) void fetch_(controller.signal)
+    }, pollInterval)
     return () => {
       controller.abort()
       clearTimeout(initialId)
       clearInterval(intervalId)
     }
-  }, [accountAster, fetch_, pollInterval, pageVisible])
+  }, [fetch_, pollInterval, pageVisible])
 
   // Expose refetch so ensure-account-streams callers can force a poll and
-  // move the UI to "ready" without waiting for the next 5s tick. Returned
+  // move the UI to "ready" without waiting for the next fallback poll. Returned
   // shape is a superset of Balances (adds `refetch`); existing consumers
   // that only read pacifica/hyperliquid are unaffected.
   const balances = result.pair === pair ? result.balances : EMPTY

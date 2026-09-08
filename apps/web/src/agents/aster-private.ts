@@ -23,6 +23,7 @@ interface AsterPrivateResponse<T> {
   uncertain?: boolean
   error?: string
   state_applied?: boolean
+  deposit_required?: boolean
 }
 
 interface AsterAccountSnapshotPayloads {
@@ -53,7 +54,7 @@ export async function refreshAsterAccountSnapshot(
   agent: string,
   sign: (request: SigningRequest) => Promise<SignedAction>,
   requestStillCurrent: () => boolean | Promise<boolean>,
-): Promise<void> {
+): Promise<'ready' | 'deposit_required'> {
   const preparedResponse = await apiFetch('/api/v1/live/aster/account/prepare', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -77,10 +78,15 @@ export async function refreshAsterAccountSnapshot(
     const result = await submitPreparedAsterRequest(
       { operation, account, agent }, request, sign, requestStillCurrent,
     )
+    if (result.deposit_required) {
+      if (!result.state_applied) throw new Error('Orbital did not apply the Aster unavailable state')
+      return 'deposit_required'
+    }
     if (!result.state_applied) {
       throw new Error('Orbital did not apply the Aster account snapshot')
     }
   }
+  return 'ready'
 }
 
 async function submitPreparedAsterRequest<T>(

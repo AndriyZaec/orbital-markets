@@ -32,6 +32,7 @@ type liveAccountSnapshot struct {
 	Available          float64
 	Positions          []liveAccountPosition
 	LeverageBySymbol   map[string]float64
+	UnavailableReason  string
 }
 
 // liveAccountFeed hides venue-specific account state, submission, and fill tracking.

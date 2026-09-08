@@ -732,6 +732,7 @@ type venueAccountStatus struct {
 	LastUpdated *time.Time `json:"last_updated,omitempty"`
 	AgeSeconds  float64    `json:"age_seconds"`
 	Reason      string     `json:"reason,omitempty"` // human explanation when not ready
+	Unavailable bool       `json:"unavailable,omitempty"`
 }
 
 // buildVenueAccountStatus derives the readiness view from a raw venue snapshot.
@@ -769,11 +770,22 @@ func liveAccountStatuses(accounts *liveAccountContext, freshness time.Duration) 
 }
 
 func accountStatus(accounts *liveAccountContext, venue string, freshness time.Duration) venueAccountStatus {
-	snapshot := accountSnapshot(accounts, venue)
-	return buildVenueAccountStatus(
+	return buildVenueAccountStatusFromSnapshot(venue, accountSnapshot(accounts, venue), freshness)
+}
+
+func buildVenueAccountStatusFromSnapshot(venue string, snapshot liveAccountSnapshot, freshness time.Duration) venueAccountStatus {
+	status := buildVenueAccountStatus(
 		venue, snapshot.Connected, snapshot.LastUpdated,
 		snapshot.Equity, snapshot.Available, freshness,
 	)
+	if snapshot.UnavailableReason != "" {
+		status.Connected = false
+		status.StreamReady = false
+		status.Fresh = false
+		status.Reason = snapshot.UnavailableReason
+		status.Unavailable = true
+	}
+	return status
 }
 
 func accountSnapshot(accounts *liveAccountContext, venue string) liveAccountSnapshot {
@@ -813,7 +825,7 @@ func (s *Server) liveAccountStatusesForBindings(bindings map[string]string, fres
 			if lease, found := s.live.accounts.Lookup(venue, account); found {
 				snapshot := lease.Feed().Snapshot()
 				lease.Release()
-				status = buildVenueAccountStatus(venue, snapshot.Connected, snapshot.LastUpdated, snapshot.Equity, snapshot.Available, freshness)
+				status = buildVenueAccountStatusFromSnapshot(venue, snapshot, freshness)
 			}
 		}
 		statuses[venue] = status

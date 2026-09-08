@@ -51,7 +51,13 @@ type asterAccountFeed struct {
 }
 
 func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, result *asterlive.PrivateResult) (bool, error) {
-	if result == nil || result.AccountUpdate == nil {
+	if result == nil {
+		return false, nil
+	}
+	if result.DepositRequired {
+		return true, f.state.MarkUnavailable(request.Account, request.Signer, "Aster account requires a deposit")
+	}
+	if result.AccountUpdate == nil {
 		return false, nil
 	}
 	update := result.AccountUpdate
@@ -89,6 +95,7 @@ func (f *asterAccountFeed) Snapshot() liveAccountSnapshot {
 		LastUpdated: snapshot.LastUpdated, PositionsUpdatedAt: snapshot.PositionsUpdatedAt,
 		Equity: snapshot.Equity, Available: snapshot.Available,
 		Positions: positions, LeverageBySymbol: snapshot.LeverageBySymbol,
+		UnavailableReason: snapshot.UnavailableReason,
 	}
 }
 

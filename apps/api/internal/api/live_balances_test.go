@@ -147,6 +147,30 @@ func TestLiveBalancesReturnAsterAccountState(t *testing.T) {
 	}
 }
 
+func TestLiveBalancesReportsUnavailableAsterAccount(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xabc": {Venue: "aster", Account: "0xabc", UnavailableReason: "Aster account requires a deposit"},
+		}},
+	}, accountFeedRegistryConfig{})
+	server := &Server{live: &LiveDeps{accounts: registry}}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?accounts%5Baster%5D=0xabc", nil)
+	response := httptest.NewRecorder()
+
+	server.handleLiveBalances(response, request)
+
+	var balances map[string]venueAccountStatus
+	if err := json.Unmarshal(response.Body.Bytes(), &balances); err != nil {
+		t.Fatal(err)
+	}
+	aster := balances["aster"]
+	if !aster.Unavailable || aster.Connected || aster.StreamReady || aster.Reason != "Aster account requires a deposit" {
+		t.Fatalf("unexpected Aster status: %+v", aster)
+	}
+}
+
 func assertBalancePair(t *testing.T, server *Server, pacifica, hyperliquid string, pacEquity, hlEquity float64) {
 	t.Helper()
 	request := httptest.NewRequest("GET", "/api/v1/live/balances?account_pacifica="+pacifica+"&account_hyperliquid="+hyperliquid, nil)

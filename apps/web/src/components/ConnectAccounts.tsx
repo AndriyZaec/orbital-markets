@@ -73,6 +73,7 @@ function agentPill(r: VenueReadiness): DiagnosticPill {
 function balancePill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
   if (r.balanceReady) return { label: 'Ready', tone: 'ok' }
+  if (r.status === 'unavailable') return { label: 'Unavailable', tone: 'bad' }
   // Stream up but snapshot is old — surface as Stale, not Pending, so the
   // operator can tell the difference between "still initializing" and
   // "data went stale after being fresh".

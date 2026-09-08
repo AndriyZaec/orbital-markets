@@ -144,7 +144,10 @@ function TradingAgentSession({
   const [aster, setAster] = useState(() => initialState('aster', asterOwner))
   const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
-  const asterAccountRefresh = useRef<{ key: string; promise: Promise<void> } | null>(null)
+  const asterAccountRefresh = useRef<{
+    key: string
+    promise: Promise<'ready' | 'deposit_required'>
+  } | null>(null)
   const revokedPacificaAgents = useRef(new Set<string>())
   owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
 
@@ -452,7 +455,7 @@ function TradingAgentSession({
     )
   }
 
-  const refreshAsterAccount = async (): Promise<void> => {
+  const refreshAsterAccount = async (): Promise<'ready' | 'deposit_required'> => {
     if (!asterOwner || aster.status !== 'ready' || !aster.agentAddress) {
       throw new Error('Aster authorization is not ready')
     }
@@ -468,7 +471,7 @@ function TradingAgentSession({
     const promise = refreshAsterAccountSnapshot(ownerAddress, agentAddress, sign, requestStillCurrent)
     asterAccountRefresh.current = { key, promise }
     try {
-      await promise
+      return await promise
     } finally {
       if (asterAccountRefresh.current?.promise === promise) asterAccountRefresh.current = null
     }

@@ -31,40 +31,53 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
     let streamStarted = false
     let streamStarting = false
     let streamRetryAvailable = true
+    let accountUnavailable = false
 
     const retryStreamOnce = (retry: () => void) => {
-      if (!active || !streamRetryAvailable) return
+      if (!active || accountUnavailable || !streamRetryAvailable) return
       streamRetryAvailable = false
       window.clearTimeout(reconnectTimer)
       reconnectTimer = window.setTimeout(retry, streamRetryDelayMs)
     }
 
-    const refresh = async () => {
+    const refresh = async (): Promise<boolean> => {
       window.clearTimeout(refreshTimer)
       refreshTimer = 0
       if (refreshRunning) {
         refreshQueued = true
-        return
+        return false
       }
       refreshRunning = true
       refreshQueued = false
       lastRefreshAt = Date.now()
       try {
-        await refreshAccount()
+        const status = await refreshAccount()
+        if (status === 'deposit_required') {
+          accountUnavailable = true
+          streamRetryAvailable = false
+          streamStarted = false
+          window.clearTimeout(reconnectTimer)
+          const current = socket
+          socket = null
+          current?.close()
+        }
+        return true
       } catch {
         // The next stream event or heartbeat retries the complete snapshot.
+        return false
       } finally {
         refreshRunning = false
         if (active && refreshQueued) scheduleRefresh()
       }
     }
     const scheduleRefresh = () => {
+      if (accountUnavailable) return
       window.clearTimeout(refreshTimer)
       const minDelay = Math.max(250, 2_000 - (Date.now() - lastRefreshAt))
       refreshTimer = window.setTimeout(() => void refresh(), minDelay)
     }
     const connectSocket = (listenKey: string) => {
-      if (!active) return
+      if (!active || accountUnavailable) return
       const next = new WebSocket(`wss://fstream.asterdex.com/ws/${encodeURIComponent(listenKey)}`)
       socket = next
       next.onopen = () => {
@@ -92,7 +105,7 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       }
     }
     const start = async () => {
-      if (streamStarting) return
+      if (accountUnavailable || streamStarting) return
       streamStarting = true
       try {
         const result = await startUserStream()
@@ -112,11 +125,13 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
 
     // Delaying one tick prevents React StrictMode's probe mount from opening a duplicate stream.
     const startTimer = window.setTimeout(() => {
-      void refresh()
-      void start()
+      void refresh().then((refreshed) => {
+        if (refreshed && !accountUnavailable) void start()
+      })
     }, 0)
     const snapshotHeartbeat = window.setInterval(scheduleRefresh, snapshotHeartbeatMs)
     const keepalive = window.setInterval(() => {
+      if (accountUnavailable) return
       void keepaliveUserStream().catch(() => {
         const current = socket
         socket = null
@@ -140,7 +155,7 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       const current = socket
       socket = null
       current?.close()
-      if (streamStarted) void closeUserStream().catch(() => {})
+      if (streamStarted && !accountUnavailable) void closeUserStream().catch(() => {})
     }
   }, [manager.aster.agentAddress, manager.aster.ownerAddress, manager.aster.status])
 

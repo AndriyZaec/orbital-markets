@@ -134,7 +134,7 @@ test('Aster account refresh signs and submits one coherent three-part snapshot',
     })
   }
   try {
-    await refreshAsterAccountSnapshot(account, agent, async (request) => {
+    const status = await refreshAsterAccountSnapshot(account, agent, async (request) => {
       signed.push(request.action)
       return {
         request_id: request.id, client_order_id: '', venue: 'aster',
@@ -143,6 +143,35 @@ test('Aster account refresh signs and submits one coherent three-part snapshot',
     }, () => true)
     assert.deepEqual(signed, operations)
     assert.equal(calls, 4)
+    assert.equal(status, 'ready')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('Aster account refresh stops after deposit-required response', async () => {
+  const originalFetch = globalThis.fetch
+  const operations = ['get_position_mode', 'get_account', 'get_positions'] as const
+  const requests = operations.map(snapshotRequest)
+  let calls = 0
+  globalThis.fetch = async () => {
+    calls += 1
+    if (calls === 1) return Response.json({ snapshot_id: 'snapshot-1', requests })
+    return Response.json({
+      request_id: requests[0].id,
+      operation: operations[0],
+      data: { depositRequired: true },
+      deposit_required: true,
+      state_applied: true,
+    })
+  }
+  try {
+    const status = await refreshAsterAccountSnapshot(account, agent, async (request) => ({
+      request_id: request.id, client_order_id: '', venue: 'aster',
+      signer_address: agent, signature: `0x${'1'.repeat(130)}`,
+    }), () => true)
+    assert.equal(status, 'deposit_required')
+    assert.equal(calls, 2)
   } finally {
     globalThis.fetch = originalFetch
   }

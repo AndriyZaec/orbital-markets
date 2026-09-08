@@ -159,3 +159,17 @@ func TestAsterAccountFeedAppliesLeverageResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAsterAccountFeedAppliesDepositRequiredState(t *testing.T) {
+	feed := &asterAccountFeed{state: asteraccount.NewAccountState("0xowner")}
+	applied, err := feed.ApplyPrivateResult(&domain.SigningRequest{
+		Account: "0xowner", Signer: "0xagent",
+	}, &asterlive.PrivateResult{DepositRequired: true})
+	if err != nil || !applied {
+		t.Fatalf("applied = %v, error = %v", applied, err)
+	}
+	snapshot := feed.Snapshot()
+	if snapshot.Connected || snapshot.UnavailableReason != "Aster account requires a deposit" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}

@@ -25,6 +25,7 @@ type AccountStateSnapshot struct {
 	PositionsUpdatedAt time.Time
 	LastUpdated        time.Time
 	Connected          bool
+	UnavailableReason  string
 }
 
 type AccountState struct {
@@ -41,6 +42,7 @@ type AccountState struct {
 	positionsUpdatedAt time.Time
 	leverageBySymbol   map[string]float64
 	leverageBrackets   LeverageBrackets
+	unavailableReason  string
 }
 
 func NewAccountState(account string) *AccountState {
@@ -90,6 +92,7 @@ func (s *AccountState) ApplySnapshotPart(
 		s.modeUpdatedAt = time.Time{}
 		s.marginUpdatedAt = time.Time{}
 		s.positionsUpdatedAt = time.Time{}
+		s.unavailableReason = ""
 	} else if agent != s.agent || !createdAt.Equal(s.snapshotCreatedAt) {
 		return fmt.Errorf("Aster account snapshot generation mismatch")
 	}
@@ -111,6 +114,29 @@ func (s *AccountState) ApplySnapshotPart(
 			s.leverageBySymbol[position.Symbol] = position.Leverage
 		}
 	}
+	return nil
+}
+
+func (s *AccountState) MarkUnavailable(account, agent, reason string) error {
+	account = strings.ToLower(strings.TrimSpace(account))
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	if account == "" || account != s.account || agent == "" || strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("invalid Aster account unavailable context")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agent = agent
+	s.snapshotID = ""
+	s.snapshotCreatedAt = time.Time{}
+	s.mode = nil
+	s.margin = nil
+	s.positions = nil
+	s.modeUpdatedAt = time.Time{}
+	s.marginUpdatedAt = time.Time{}
+	s.positionsUpdatedAt = time.Time{}
+	s.leverageBySymbol = make(map[string]float64)
+	s.leverageBrackets = make(LeverageBrackets)
+	s.unavailableReason = strings.TrimSpace(reason)
 	return nil
 }
 
@@ -140,6 +166,7 @@ func (s *AccountState) snapshotAt(now time.Time) AccountStateSnapshot {
 		LeverageBySymbol:   copyMap(s.leverageBySymbol),
 		LeverageBrackets:   copyBrackets(s.leverageBrackets),
 		PositionsUpdatedAt: s.positionsUpdatedAt,
+		UnavailableReason:  s.unavailableReason,
 	}
 	if s.mode != nil {
 		snapshot.OneWayModeKnown = true

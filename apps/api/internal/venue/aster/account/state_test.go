@@ -57,3 +57,23 @@ func TestAccountStateRejectsMixedGenerations(t *testing.T) {
 		t.Fatalf("older generation contaminated state: %+v", snapshot)
 	}
 }
+
+func TestAccountStatePublishesUnavailableReasonUntilNewSnapshot(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	if err := state.MarkUnavailable("0xabcd", "0xagent", "Aster account requires a deposit"); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := state.Snapshot(); snapshot.Connected || snapshot.UnavailableReason != "Aster account requires a deposit" {
+		t.Fatalf("unavailable snapshot = %+v", snapshot)
+	}
+
+	now := time.Now()
+	if err := state.ApplySnapshotPart("0xabcd", "0xagent", "snapshot-1", now, now.Add(time.Millisecond), SnapshotPart{
+		Mode: &PositionMode{OneWay: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := state.Snapshot(); snapshot.UnavailableReason != "" {
+		t.Fatalf("new snapshot retained unavailable reason: %+v", snapshot)
+	}
+}

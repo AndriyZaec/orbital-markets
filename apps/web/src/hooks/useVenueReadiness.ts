@@ -129,10 +129,12 @@ function buildReadiness(args: {
     age_seconds?: number
     last_updated?: string
     reason?: string
+    unavailable?: boolean
   }
   unavailableReason?: string
 }): VenueReadiness {
-  const { venue, address, authorityReadiness, agent, balance, unavailableReason } = args
+  const { venue, address, authorityReadiness, agent, balance } = args
+  const unavailableReason = args.unavailableReason ?? (balance.unavailable ? balance.reason : undefined)
   const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
   const ownerMatches = venue === 'hyperliquid' || venue === 'aster'
     ? agent.ownerAddress?.toLowerCase() === address?.toLowerCase()
@@ -240,7 +242,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       }
       setEnsureStatus('ready')
       // Nudge balances so readiness can move to ready without waiting for
-      // the next 5s poll tick.
+      // the next fallback poll.
       balances.refetch().catch(() => {})
     } catch (e) {
       setEnsureStatus('error')

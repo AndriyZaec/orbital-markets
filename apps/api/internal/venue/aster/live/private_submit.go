@@ -22,11 +22,12 @@ const (
 )
 
 type PrivateResult struct {
-	Operation     PrivateOperation     `json:"operation"`
-	Data          json.RawMessage      `json:"data"`
-	AccountUpdate *asteraccount.Update `json:"-"`
-	SubmittedAt   time.Time            `json:"submitted_at"`
-	RespondedAt   time.Time            `json:"responded_at"`
+	Operation       PrivateOperation     `json:"operation"`
+	Data            json.RawMessage      `json:"data"`
+	AccountUpdate   *asteraccount.Update `json:"-"`
+	DepositRequired bool                 `json:"deposit_required,omitempty"`
+	SubmittedAt     time.Time            `json:"submitted_at"`
+	RespondedAt     time.Time            `json:"responded_at"`
 }
 
 func (c *Client) SubmitSignedPrivate(
@@ -74,13 +75,9 @@ func (c *Client) SubmitSignedPrivate(
 		Msg  string `json:"msg"`
 	}
 	if json.Unmarshal(responseBody, &venueError) == nil && venueError.Code == asterDepositRequiredCode {
-		if emptyBody, ok := undepositedSnapshotBody(operation); ok {
-			accountUpdate, err := validatePrivateResponse(operation, request, emptyBody)
-			if err != nil {
-				return nil, fmt.Errorf("%w: build empty Aster %s response: %v", ErrSubmissionAmbiguous, operation, err)
-			}
+		if isAccountSnapshotOperation(operation) {
 			return &PrivateResult{
-				Operation: operation, Data: emptyBody, AccountUpdate: accountUpdate,
+				Operation: operation, Data: json.RawMessage(`{"depositRequired":true}`), DepositRequired: true,
 				SubmittedAt: submittedAt, RespondedAt: time.Now(),
 			}, nil
 		}
@@ -104,16 +101,12 @@ func (c *Client) SubmitSignedPrivate(
 	}, nil
 }
 
-func undepositedSnapshotBody(operation PrivateOperation) (json.RawMessage, bool) {
+func isAccountSnapshotOperation(operation PrivateOperation) bool {
 	switch operation {
-	case GetPositionMode:
-		return json.RawMessage(`{"dualSidePosition":false}`), true
-	case GetAccount:
-		return json.RawMessage(`{"canTrade":false,"totalMarginBalance":"0","availableBalance":"0","positions":[]}`), true
-	case GetPositions:
-		return json.RawMessage(`[]`), true
+	case GetPositionMode, GetAccount, GetPositions:
+		return true
 	default:
-		return nil, false
+		return false
 	}
 }
 

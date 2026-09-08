@@ -25,14 +25,31 @@ function liveEventsUrl(accounts: VenueAddressMap, sessionId?: string) {
   return apiUrl(`/api/v1/live/events?${query}`)
 }
 
+function liveAccountEventsUrl(accounts: VenueAddressMap) {
+  return apiUrl(`/api/v1/live/accounts/events?${liveAccountsQuery(accounts)}`)
+}
+
 export function subscribeLiveAccountEvents(
   accounts: VenueAddressMap,
   listener: (event: LiveAccountEvent) => void,
 ): () => void {
-  const key = liveAccountsKey(accounts)
+  return subscribeLiveEventSource(
+    `pair:${liveAccountsKey(accounts)}`,
+    liveEventsUrl(accounts),
+    ['balances', 'positions'],
+    listener,
+  )
+}
+
+function subscribeLiveEventSource(
+  key: string,
+  url: string,
+  eventTypes: Array<'balances' | 'positions'>,
+  listener: (event: LiveAccountEvent) => void,
+): () => void {
   let channel = accountChannels.get(key)
   if (!channel) {
-    const source = new EventSource(liveEventsUrl(accounts), { withCredentials: true })
+    const source = new EventSource(url, { withCredentials: true })
     channel = { source, listeners: new Set(), connected: false }
     accountChannels.set(key, channel)
     const dispatch = (event: LiveAccountEvent) => {
@@ -46,7 +63,7 @@ export function subscribeLiveAccountEvents(
       channel!.connected = false
       dispatch({ type: 'disconnected' })
     }
-    for (const type of ['balances', 'positions'] as const) {
+    for (const type of eventTypes) {
       source.addEventListener(type, (message) => {
         try {
           dispatch({ type, data: JSON.parse((message as MessageEvent).data) })
@@ -66,6 +83,18 @@ export function subscribeLiveAccountEvents(
       accountChannels.delete(key)
     }
   }
+}
+
+export function subscribeLiveAccountUpdates(
+  accounts: VenueAddressMap,
+  listener: (event: LiveAccountEvent) => void,
+): () => void {
+  return subscribeLiveEventSource(
+    `accounts:${liveAccountsKey(accounts)}`,
+    liveAccountEventsUrl(accounts),
+    ['balances'],
+    listener,
+  )
 }
 
 export function subscribeLiveSessionEvents(

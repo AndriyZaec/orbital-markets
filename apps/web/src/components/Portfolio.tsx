@@ -754,7 +754,7 @@ const STATUS_VIEW: Record<
   agent_authorizing: { label: 'Authorizing',     color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   balance_pending:   { label: 'Pending',         color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   account_stale:     { label: 'Data stale',      color: 'text-yellow-400',       dot: 'bg-yellow-400' },
-  unavailable:       { label: 'Not enabled',     color: 'text-muted-foreground', dot: 'bg-muted-foreground' },
+  unavailable:       { label: 'Unavailable',     color: 'text-red-400',          dot: 'bg-red-400' },
   error:             { label: 'Error',           color: 'text-red-400',          dot: 'bg-red-400' },
 }
 

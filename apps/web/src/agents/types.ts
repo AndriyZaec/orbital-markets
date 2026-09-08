@@ -31,6 +31,6 @@ export interface TradingAgentManager {
   authorize(venue: Venue): Promise<void>
   sign(request: SigningRequest): Promise<SignedAction>
   requestAster<T>(input: Omit<AsterPrivateInput, 'account' | 'agent'>): Promise<T>
-  refreshAsterAccount(): Promise<void>
+  refreshAsterAccount(): Promise<'ready' | 'deposit_required'>
   disconnectWallet(wallet: WalletKind): Promise<void>
 }

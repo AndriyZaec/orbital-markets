@@ -84,7 +84,7 @@ func TestSubmitSignedPrivateMarksServerFailureAmbiguous(t *testing.T) {
 	}
 }
 
-func TestSubmitSignedPrivateTreatsDepositRequiredAsEmptySnapshot(t *testing.T) {
+func TestSubmitSignedPrivateMarksAccountSnapshotDepositRequired(t *testing.T) {
 	operations := []PrivateOperation{GetPositionMode, GetAccount, GetPositions}
 	for _, operation := range operations {
 		t.Run(string(operation), func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestSubmitSignedPrivateTreatsDepositRequiredAsEmptySnapshot(t *testing.T) {
 			defer server.Close()
 
 			result, err := NewClient(server.URL, server.Client(), nil).SubmitSignedPrivate(context.Background(), signed, request)
-			if err != nil || result.AccountUpdate == nil {
+			if err != nil || !result.DepositRequired || result.AccountUpdate != nil {
 				t.Fatalf("result = %+v, error = %v", result, err)
 			}
 		})

@@ -184,7 +184,8 @@ func (s *Server) handleAsterPrivateSubmit(w http.ResponseWriter, r *http.Request
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"request_id": signed.RequestID, "operation": operation, "data": result.Data,
-		"state_applied": stateApplied,
-		"submitted_at":  result.SubmittedAt, "responded_at": result.RespondedAt,
+		"deposit_required": result.DepositRequired,
+		"state_applied":    stateApplied,
+		"submitted_at":     result.SubmittedAt, "responded_at": result.RespondedAt,
 	})
 }
