@@ -57,10 +57,12 @@ func NewLiveDeps(
 	liveStore *executor.Store,
 	hlAssetMap hllive.AssetMap,
 	pacificaLotSizes pacificlive.LotSizeMap,
+	asterRules asterlive.OrderRuleMap,
 ) *LiveDeps {
 	modules, err := venue.NewLiveModuleRegistry(
 		pacificlive.NewLiveModule(pacificaLotSizes),
 		hllive.NewLiveModule(hlAssetMap),
+		asterlive.NewLiveModule(asterRules),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("configure live venue modules: %v", err))

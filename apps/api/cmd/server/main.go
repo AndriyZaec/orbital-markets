@@ -75,7 +75,7 @@ func main() {
 	go monitor.Run(ctx)
 
 	// Live execution deps (non-custodial signing flow)
-	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
+	liveDeps := startLive(ctx, logger, database, sc, pac, hl, ast)
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database)

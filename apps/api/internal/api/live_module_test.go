@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"log/slog"
 	"math"
 	"testing"
 	"time"
@@ -8,6 +10,19 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
+
+func TestNewLiveDepsRegistersAsterModule(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	deps := NewLiveDeps(ctx, slog.Default(), domain.NewSigningRequestStore(), nil, nil, nil, nil)
+	module, err := deps.liveModule("aster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if module.Name() != "aster" {
+		t.Fatalf("module = %q, want aster", module.Name())
+	}
+}
 
 type fakeLiveModule struct {
 	name         string
