@@ -292,9 +292,9 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
 
         {!loading && !error && displayed.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-5 py-4 text-center">
-            {!aggregate.allReady ? (
+            {!aggregate.tradingReady ? (
               <>
-                <p className="text-muted-foreground text-xs">Connect both wallets and authorize each venue to start live trading</p>
+                <p className="text-muted-foreground text-xs">Connect and authorize at least two venues to start live trading</p>
                 {onConnectWallets && (
                   <button
                     onClick={onConnectWallets}

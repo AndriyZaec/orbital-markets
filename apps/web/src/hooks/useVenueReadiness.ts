@@ -54,7 +54,7 @@ export interface VenueReadiness {
 }
 
 export interface AggregateReadiness {
-  allReady: boolean
+  tradingReady: boolean
   readyCount: number
   totalCount: number
   blockingReasons: string[]
@@ -289,20 +289,19 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       balance: balances.aster,
     })
     const venues = [pacifica, hyperliquid, aster]
-    const activeVenues = [pacifica, hyperliquid]
-    const readyCount = activeVenues.filter((v) => v.status === 'ready').length
-    const totalCount = activeVenues.length
-    const allReady = readyCount === totalCount
+    const readyCount = venues.filter((v) => v.status === 'ready').length
+    const totalCount = venues.length
+    const tradingReady = readyCount >= 2
 
     // Aggregate blocking reasons are prefixed with the venue label so the UI
     // can render a flat list without losing context.
-    const blockingReasons = activeVenues.flatMap((v) =>
+    const blockingReasons = venues.flatMap((v) =>
       v.blockingReasons.map((r) => `${v.label}: ${r}`),
     )
 
     let statusLabel: AggregateReadiness['statusLabel']
-    if (allReady) statusLabel = 'Ready'
-    else if (activeVenues.every((v) => v.status === 'disconnected')) statusLabel = 'Not connected'
+    if (tradingReady) statusLabel = 'Ready'
+    else if (venues.every((v) => v.status === 'disconnected')) statusLabel = 'Not connected'
     else statusLabel = 'Needs attention'
 
     return {
@@ -315,7 +314,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       ensureAccounts,
       refreshBalances: balances.refetch,
       aggregate: {
-        allReady,
+        tradingReady,
         readyCount,
         totalCount,
         blockingReasons,
@@ -325,12 +324,16 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   }, [authority.pacifica, authority.hyperliquid, authority.aster, tradingAgents.pacifica, tradingAgents.hyperliquid, tradingAgents.aster, balances, ensureStatus, ensureError, ensureAccounts])
 
   useEffect(() => {
-    if (!value.aggregate.allReady || !pacAddr || !hlAddr) return
-    const pair = `${pacAddr}|${hlAddr}`
-    if (readyPairsTrackedRef.current.has(pair)) return
-    readyPairsTrackedRef.current.add(pair)
-    trackAnalytics('accounts_ready', { venue_pair: 'pacifica_hyperliquid' })
-  }, [value.aggregate.allReady, pacAddr, hlAddr])
+    const readyVenues = value.venues.filter((venue) => venue.status === 'ready' && venue.address)
+    readyVenues.forEach((first, index) => {
+      readyVenues.slice(index + 1).forEach((second) => {
+        const key = `${first.venue}:${first.address}|${second.venue}:${second.address}`
+        if (readyPairsTrackedRef.current.has(key)) return
+        readyPairsTrackedRef.current.add(key)
+        trackAnalytics('accounts_ready', { venue_pair: `${first.venue}_${second.venue}` })
+      })
+    })
+  }, [value.venues])
 
   return value
 }

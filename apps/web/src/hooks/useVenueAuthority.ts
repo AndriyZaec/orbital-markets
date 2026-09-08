@@ -41,14 +41,12 @@ export function useVenueAuthority() {
   }, [evmAccount.isConnected, evmAccount.address])
 
   const venueAuthorities = useMemo(() => [pacifica, hyperliquid, aster], [pacifica, hyperliquid, aster])
-  const isFullyReady = pacifica.readiness === 'ready' && hyperliquid.readiness === 'ready'
 
   return {
     venueAuthorities,
     pacifica,
     hyperliquid,
     aster,
-    isFullyReady,
     pacificaAddress: pacifica.address,
     hyperliquidAddress: hyperliquid.address,
     asterAddress: aster.address,

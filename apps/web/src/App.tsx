@@ -771,7 +771,7 @@ function AccountsHeaderButton({
   onClick,
 }: {
   aggregate: {
-    allReady: boolean
+    tradingReady: boolean
     statusLabel: 'Ready' | 'Needs attention' | 'Not connected'
     blockingReasons: string[]
   }
@@ -779,7 +779,7 @@ function AccountsHeaderButton({
   onClick: () => void
 }) {
   const notConnected = aggregate.statusLabel === 'Not connected'
-  const ready = aggregate.allReady
+  const ready = aggregate.tradingReady
 
   const tone = open
     ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'

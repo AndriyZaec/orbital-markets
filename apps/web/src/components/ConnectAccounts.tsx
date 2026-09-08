@@ -9,22 +9,20 @@ import { trackAnalytics } from '@/lib/analytics'
 import { venueMetadata } from '@/lib/venue-metadata'
 import telegramLogo from '@/assets/telegram-logo.svg'
 
-// Static venue metadata (logos, blurbs, chain). Runtime
+// Static venue presentation. Runtime
 // readiness comes from useVenueReadiness — the single typed layer that
 // composes wallet + signer + balance state.
 interface VenueDef {
   id: VenueId
   name: string
   logo: string | null
-  description: string
-  chain: string
   preview?: boolean
 }
 
 const VENUES: VenueDef[] = [
-  { id: 'pacifica', name: venueMetadata('pacifica').label, logo: venueMetadata('pacifica').logo, description: 'Solana-native perp DEX with on-chain settlement', chain: 'Solana' },
-  { id: 'hyperliquid', name: venueMetadata('hyperliquid').label, logo: venueMetadata('hyperliquid').logo, description: 'High-performance L1 perp exchange', chain: 'Hyperliquid L1' },
-  { id: 'aster', name: venueMetadata('aster').label, logo: venueMetadata('aster').logo, description: 'Browser-agent authorization and live account connection', chain: 'BNB Chain', preview: false },
+  { id: 'pacifica', name: venueMetadata('pacifica').label, logo: venueMetadata('pacifica').logo },
+  { id: 'hyperliquid', name: venueMetadata('hyperliquid').label, logo: venueMetadata('hyperliquid').logo },
+  { id: 'aster', name: venueMetadata('aster').label, logo: venueMetadata('aster').logo },
 ]
 
 interface Props {
@@ -263,7 +261,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <span className={`font-medium ${summaryTone.text}`}>{aggregate.statusLabel}</span>
           </div>
         </div>
-        {!aggregate.allReady && aggregate.blockingReasons.length > 0 && (
+        {!aggregate.tradingReady && aggregate.blockingReasons.length > 0 && (
           <ul className="mt-2 flex flex-col gap-0.5">
             {aggregate.blockingReasons.map((r, i) => (
               <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
@@ -303,7 +301,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       : 'border-border bg-white/[0.02]'
                 }`}
               >
-                {/* Top row: logo + name + address/description */}
+                {/* Top row: logo + name + address */}
                 <div className="flex items-center gap-2.5 mb-2">
                   <div className="size-8 rounded-md bg-white/[0.04] border border-border flex items-center justify-center shrink-0 overflow-hidden">
                     {venue.logo ? (
@@ -315,13 +313,10 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-semibold text-foreground">{venue.name}</span>
-                      <span className="text-[9px] px-1 py-px rounded bg-white/[0.06] text-muted-foreground/70 font-medium">{venue.chain}</span>
                       {venue.preview && <span className="text-[9px] px-1 py-px rounded bg-amber-500/10 text-amber-300/80 font-medium">Preview</span>}
                     </div>
-                    {readiness?.shortAddress ? (
+                    {readiness?.shortAddress && (
                       <p className="text-[10px] text-muted-foreground/70 font-mono leading-snug mt-0.5 truncate">{readiness.shortAddress}</p>
-                    ) : (
-                      <p className="text-[10px] text-muted-foreground/50 leading-snug mt-0.5 truncate">{venue.description}</p>
                     )}
                   </div>
                 </div>

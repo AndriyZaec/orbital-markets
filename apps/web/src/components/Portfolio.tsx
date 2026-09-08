@@ -264,7 +264,7 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
       <Section
         title="Connected Accounts"
         action={
-          !readiness.allReady && (
+          !readiness.tradingReady && (
             <button
               onClick={onConnectWallets}
               className="text-[12px] text-blue-400 hover:text-blue-300 transition-colors"
