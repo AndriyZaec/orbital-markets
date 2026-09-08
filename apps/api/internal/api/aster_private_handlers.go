@@ -160,6 +160,9 @@ func (s *Server) handleAsterPrivateSubmit(w http.ResponseWriter, r *http.Request
 	}
 	result, err := s.live.asterPrivate.SubmitSignedPrivate(r.Context(), signed, request)
 	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("Aster private submit failed", "operation", operation, "account", request.Account, "err", err)
+		}
 		if errors.Is(err, asterlive.ErrSubmissionNotSent) {
 			s.live.signingStore.Store(request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

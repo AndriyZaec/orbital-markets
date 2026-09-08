@@ -2,6 +2,9 @@ import { useEffect, useEffectEvent, type ReactNode } from 'react'
 
 import { useTradingAgentManager } from './TradingAgentContext'
 
+const streamRetryDelayMs = 30_000
+const snapshotHeartbeatMs = 60_000
+
 export function AsterAccountBridge({ children }: { children: ReactNode }) {
   const manager = useTradingAgentManager()
   const refreshAccount = useEffectEvent(() => manager.refreshAsterAccount())
@@ -27,6 +30,14 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
     let lastRefreshAt = 0
     let streamStarted = false
     let streamStarting = false
+    let streamRetryAvailable = true
+
+    const retryStreamOnce = (retry: () => void) => {
+      if (!active || !streamRetryAvailable) return
+      streamRetryAvailable = false
+      window.clearTimeout(reconnectTimer)
+      reconnectTimer = window.setTimeout(retry, streamRetryDelayMs)
+    }
 
     const refresh = async () => {
       window.clearTimeout(refreshTimer)
@@ -56,7 +67,10 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       if (!active) return
       const next = new WebSocket(`wss://fstream.asterdex.com/ws/${encodeURIComponent(listenKey)}`)
       socket = next
-      next.onopen = scheduleRefresh
+      next.onopen = () => {
+        streamRetryAvailable = true
+        scheduleRefresh()
+      }
       next.onmessage = (event) => {
         try {
           const payload = JSON.parse(String(event.data)) as { e?: string }
@@ -74,7 +88,7 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       next.onerror = () => next.close()
       next.onclose = () => {
         if (!active || socket !== next) return
-        reconnectTimer = window.setTimeout(() => connectSocket(listenKey), 2_000)
+        retryStreamOnce(() => connectSocket(listenKey))
       }
     }
     const start = async () => {
@@ -82,15 +96,15 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       streamStarting = true
       try {
         const result = await startUserStream()
-        streamStarted = true
         if (!active) {
           void closeUserStream().catch(() => {})
           return
         }
         if (!result.listenKey) throw new Error('Aster user stream returned no listen key')
+        streamStarted = true
         connectSocket(result.listenKey)
       } catch {
-        if (active) reconnectTimer = window.setTimeout(() => void start(), 2_000)
+        retryStreamOnce(() => void start())
       } finally {
         streamStarting = false
       }
@@ -101,7 +115,7 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       void refresh()
       void start()
     }, 0)
-    const snapshotHeartbeat = window.setInterval(scheduleRefresh, 10_000)
+    const snapshotHeartbeat = window.setInterval(scheduleRefresh, snapshotHeartbeatMs)
     const keepalive = window.setInterval(() => {
       void keepaliveUserStream().catch(() => {
         const current = socket
