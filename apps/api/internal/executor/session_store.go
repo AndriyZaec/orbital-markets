@@ -14,6 +14,7 @@ type DurableSessionRecord struct {
 	ID                 string
 	State              string
 	Payload            []byte
+	AccountBindings    map[string]string
 	AccountPacifica    string
 	AccountHyperliquid string
 	Asset              string
@@ -28,28 +29,39 @@ type DurableSessionRecord struct {
 
 // UpsertDurableSession journals the latest recoverable session state.
 func (s *Store) UpsertDurableSession(ctx context.Context, record DurableSessionRecord) error {
+	bindings, bindingsJSON, bindingsKey, accountPacifica, accountHyperliquid, err := storedAccountBindings(
+		record.AccountBindings, record.AccountPacifica, record.AccountHyperliquid,
+	)
+	if err != nil {
+		return err
+	}
+	record.AccountBindings = bindings
 	now := time.Now().UTC()
 	createdAt := record.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = now
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO live_sessions (
 			id, state, payload, account_pacifica, account_hyperliquid, asset,
+			account_bindings_json, account_bindings_key,
 			has_exposure, expires_at,
 			created_at, updated_at, terminal_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 		ON CONFLICT(id) DO UPDATE SET
 			state = excluded.state,
 			payload = excluded.payload,
 			account_pacifica = excluded.account_pacifica,
 			account_hyperliquid = excluded.account_hyperliquid,
+			account_bindings_json = excluded.account_bindings_json,
+			account_bindings_key = excluded.account_bindings_key,
 			asset = excluded.asset,
 			has_exposure = excluded.has_exposure,
 			expires_at = excluded.expires_at,
 			updated_at = excluded.updated_at,
 			terminal_at = NULL`,
-		record.ID, record.State, string(record.Payload), record.AccountPacifica, record.AccountHyperliquid, record.Asset,
+		record.ID, record.State, string(record.Payload), accountPacifica, accountHyperliquid, record.Asset,
+		bindingsJSON, bindingsKey,
 		boolToInt(record.HasExposure),
 		record.ExpiresAt.UTC().Format(time.RFC3339Nano),
 		createdAt.UTC().Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
@@ -67,17 +79,32 @@ func (s *Store) SupersedeSafeDurableSessions(
 	ctx context.Context,
 	accountPacifica, accountHyperliquid, asset string,
 ) ([]string, error) {
+	return s.SupersedeSafeDurableSessionsForBindings(ctx, map[string]string{
+		"pacifica": accountPacifica, "hyperliquid": accountHyperliquid,
+	}, asset)
+}
+
+func (s *Store) SupersedeSafeDurableSessionsForBindings(
+	ctx context.Context,
+	bindings map[string]string,
+	asset string,
+) ([]string, error) {
+	match, args, err := accountBindingsLookup(bindings)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	queryArgs := append([]any{now, now}, args...)
+	queryArgs = append(queryArgs, asset)
 	rows, err := s.db.QueryContext(ctx, `
 		UPDATE live_sessions
 		SET state = 'superseded_safe',
 			recovery_detail = 'superseded by a new prepare before order submission',
 			updated_at = ?, terminal_at = ?
-		WHERE account_pacifica = ? AND account_hyperliquid = ? AND asset = ?
+		WHERE `+match+` AND asset = ?
 			AND terminal_at IS NULL AND has_exposure = 0
 		RETURNING id`,
-		now, now,
-		strings.TrimSpace(accountPacifica), strings.ToLower(strings.TrimSpace(accountHyperliquid)), asset,
+		queryArgs...,
 	)
 	if err != nil {
 		return nil, err
@@ -100,24 +127,43 @@ func (s *Store) ActiveDurableSessionForAccountAsset(
 	ctx context.Context,
 	accountPacifica, accountHyperliquid, asset string,
 ) (DurableSessionRecord, error) {
+	return s.ActiveDurableSessionForBindings(ctx, map[string]string{
+		"pacifica": accountPacifica, "hyperliquid": accountHyperliquid,
+	}, asset)
+}
+
+func (s *Store) ActiveDurableSessionForBindings(
+	ctx context.Context,
+	bindings map[string]string,
+	asset string,
+) (DurableSessionRecord, error) {
 	var record DurableSessionRecord
 	var hasExposure int64
-	err := s.db.QueryRowContext(ctx, `
+	match, args, err := accountBindingsLookup(bindings)
+	if err != nil {
+		return record, err
+	}
+	args = append(args, asset)
+	err = s.db.QueryRowContext(ctx, `
 		SELECT id, state, has_exposure
 		FROM live_sessions
-		WHERE account_pacifica = ? AND account_hyperliquid = ? AND asset = ?
+		WHERE `+match+` AND asset = ?
 			AND terminal_at IS NULL
 		LIMIT 1`,
-		strings.TrimSpace(accountPacifica), strings.ToLower(strings.TrimSpace(accountHyperliquid)), asset,
+		args...,
 	).Scan(&record.ID, &record.State, &hasExposure)
 	record.HasExposure = hasExposure != 0
+	if err == nil {
+		record.AccountBindings, _ = canonicalBindingsOnly(bindings)
+	}
 	return record, err
 }
 
 // ListActiveDurableSessions returns non-terminal sessions for startup recovery.
 func (s *Store) ListActiveDurableSessions(ctx context.Context) ([]DurableSessionRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, state, payload, account_pacifica, account_hyperliquid, asset,
+		SELECT id, state, payload, account_pacifica, account_hyperliquid,
+			account_bindings_json, account_bindings_key, asset,
 			has_exposure, expires_at, created_at, updated_at
 		FROM live_sessions
 		WHERE terminal_at IS NULL
@@ -130,17 +176,28 @@ func (s *Store) ListActiveDurableSessions(ctx context.Context) ([]DurableSession
 	var records []DurableSessionRecord
 	for rows.Next() {
 		var record DurableSessionRecord
-		var payload, expiresAt, createdAt, updatedAt string
+		var payload, bindingsJSON, bindingsKey, expiresAt, createdAt, updatedAt string
 		var hasExposure int64
 		if err := rows.Scan(
 			&record.ID, &record.State, &payload,
-			&record.AccountPacifica, &record.AccountHyperliquid, &record.Asset, &hasExposure,
+			&record.AccountPacifica, &record.AccountHyperliquid, &bindingsJSON, &bindingsKey,
+			&record.Asset, &hasExposure,
 			&expiresAt, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, err
 		}
 		var decodeErrors []string
 		var parseErr error
+		if record.AccountBindings, parseErr = decodeAccountBindings(
+			bindingsJSON, bindingsKey, record.AccountPacifica, record.AccountHyperliquid,
+		); parseErr != nil {
+			decodeErrors = append(decodeErrors, fmt.Sprintf("account_bindings: %v", parseErr))
+			if len(record.AccountBindings) == 0 {
+				record.AccountBindings, _ = decodeAccountBindings(
+					"", "", record.AccountPacifica, record.AccountHyperliquid,
+				)
+			}
+		}
 		if record.ExpiresAt, parseErr = time.Parse(time.RFC3339Nano, expiresAt); parseErr != nil {
 			decodeErrors = append(decodeErrors, fmt.Sprintf("expires_at: %v", parseErr))
 		}
@@ -161,21 +218,27 @@ func (s *Store) ListActiveDurableSessions(ctx context.Context) ([]DurableSession
 // GetDurableSession returns active or terminal session state for client recovery polling.
 func (s *Store) GetDurableSession(ctx context.Context, id string) (DurableSessionRecord, error) {
 	var record DurableSessionRecord
-	var payload string
+	var payload, bindingsJSON, bindingsKey string
 	var hasExposure int64
 	var terminalAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, state, payload, account_pacifica, account_hyperliquid, asset,
+		SELECT id, state, payload, account_pacifica, account_hyperliquid,
+			account_bindings_json, account_bindings_key, asset,
 			has_exposure, recovery_detail, terminal_at
 		FROM live_sessions
 		WHERE id = ?`, id).Scan(
 		&record.ID, &record.State, &payload,
-		&record.AccountPacifica, &record.AccountHyperliquid, &record.Asset,
+		&record.AccountPacifica, &record.AccountHyperliquid, &bindingsJSON, &bindingsKey, &record.Asset,
 		&hasExposure, &record.RecoveryDetail, &terminalAt,
 	)
 	record.Payload = []byte(payload)
 	record.HasExposure = hasExposure != 0
 	record.Terminal = terminalAt.Valid
+	if err == nil {
+		record.AccountBindings, err = decodeAccountBindings(
+			bindingsJSON, bindingsKey, record.AccountPacifica, record.AccountHyperliquid,
+		)
+	}
 	return record, err
 }
 
@@ -252,22 +315,57 @@ func (s *Store) UpsertRecoveryBlockedPosition(
 	ctx context.Context,
 	sessionID, asset, accountPacifica, accountHyperliquid, detail string,
 ) error {
+	return s.UpsertRecoveryBlockedPositionForBindings(ctx, sessionID, asset, map[string]string{
+		"pacifica": accountPacifica, "hyperliquid": accountHyperliquid,
+	}, detail)
+}
+
+func (s *Store) UpsertRecoveryBlockedPositionForBindings(
+	ctx context.Context,
+	sessionID, asset string,
+	bindings map[string]string,
+	detail string,
+) error {
+	_, bindingsJSON, bindingsKey, accountPacifica, accountHyperliquid, err := storedAccountBindings(bindings, "", "")
+	if err != nil {
+		return err
+	}
+	return s.upsertRecoveryBlockedPosition(
+		ctx, sessionID, asset, accountPacifica, accountHyperliquid, bindingsJSON, bindingsKey, detail,
+	)
+}
+
+// UpsertUnownedRecoveryBlockedPosition is the corruption fallback when an
+// exposed durable record no longer contains enough valid ownership data.
+func (s *Store) UpsertUnownedRecoveryBlockedPosition(
+	ctx context.Context,
+	sessionID, asset, detail string,
+) error {
+	return s.upsertRecoveryBlockedPosition(ctx, sessionID, asset, "", "", "", "", detail)
+}
+
+func (s *Store) upsertRecoveryBlockedPosition(
+	ctx context.Context,
+	sessionID, asset, accountPacifica, accountHyperliquid, bindingsJSON, bindingsKey, detail string,
+) error {
 	positionID := "recovery-" + sessionID
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO live_positions (
 			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
 			account_pacifica, account_hyperliquid,
+			account_bindings_json, account_bindings_key,
 			notional, leverage, started_at, updated_at
-		) VALUES (?, ?, 'recovery-blocked', ?, 'unknown', 'unknown', ?, ?, ?, 0, 0, ?, ?)
+		) VALUES (?, ?, 'recovery-blocked', ?, 'unknown', 'unknown', ?, ?, ?, ?, ?, 0, 0, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			account_pacifica = excluded.account_pacifica,
 			account_hyperliquid = excluded.account_hyperliquid,
+			account_bindings_json = excluded.account_bindings_json,
+			account_bindings_key = excluded.account_bindings_key,
 			updated_at = excluded.updated_at
-		WHERE live_positions.account_pacifica != excluded.account_pacifica
-		   OR live_positions.account_hyperliquid != excluded.account_hyperliquid`,
+		WHERE live_positions.account_bindings_key != excluded.account_bindings_key`,
 		positionID, sessionID, asset, string(ExecStateDegraded), accountPacifica,
-		strings.ToLower(strings.TrimSpace(accountHyperliquid)), now, now)
+		accountHyperliquid, bindingsJSON, bindingsKey, now, now)
 	if err != nil {
 		return err
 	}

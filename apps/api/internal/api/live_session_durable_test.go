@@ -101,6 +101,40 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	}
 }
 
+func TestDurableLiveSessionRoundTripPreservesGenericVenueBindings(t *testing.T) {
+	request := &domain.SigningRequest{
+		ID: "alpha-leverage", Venue: "alpha", Action: "update_leverage",
+		Account: "owner-a", Signer: "agent-a", Symbol: "SOL", Leverage: 2,
+	}
+	session := &LiveSession{
+		ID: "session-generic", Plan: &domain.ExecutionPlan{ID: "plan-generic", Asset: "SOL"},
+		Leg1: legPlan{venue: "alpha"}, Leg2: legPlan{venue: "beta"},
+		Bindings: liveVenueBindings{
+			Accounts: map[string]string{"alpha": "owner-a", "beta": "owner-b"},
+			Agents:   map[string]string{"alpha": "agent-a", "beta": "agent-b"},
+		},
+		LeverageRequests: map[string]*domain.SigningRequest{"alpha": request},
+		LeverageApplied:  map[string]bool{"alpha": true},
+		CreatedAt:        time.Now(),
+	}
+
+	payload, err := marshalLiveSession(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := unmarshalLiveSession(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Bindings.Accounts["alpha"] != "owner-a" || restored.Bindings.Accounts["beta"] != "owner-b" ||
+		restored.Bindings.Agents["alpha"] != "agent-a" || restored.Bindings.Agents["beta"] != "agent-b" {
+		t.Fatalf("restored bindings = %+v", restored.Bindings)
+	}
+	if restored.LeverageRequests["alpha"] == nil || !restored.LeverageApplied["alpha"] {
+		t.Fatalf("restored leverage state = %+v / %+v", restored.LeverageRequests, restored.LeverageApplied)
+	}
+}
+
 func TestSessionManagerReturnsExpiredSessionsForRecovery(t *testing.T) {
 	manager := NewSessionManager()
 	session := &LiveSession{
@@ -229,14 +263,8 @@ func TestDurableSessionOwnershipRequiresMatchingEnvelopeAndSigningAccounts(t *te
 	}
 }
 
-func TestLegacyDurableAccountPairRejectsUnrepresentableVenues(t *testing.T) {
-	session := &LiveSession{
-		Leg1: legPlan{venue: "alpha"}, Leg2: legPlan{venue: "beta"},
-		Bindings: liveVenueBindings{Accounts: map[string]string{
-			"alpha": "alpha-owner", "beta": "beta-owner",
-		}},
-	}
-	if _, _, err := legacyDurableAccountPair(session); err == nil {
-		t.Fatal("legacy durable storage accepted an unrepresentable venue pair")
+func TestProductionPrepareGuardRejectsUnsupportedVenuePairs(t *testing.T) {
+	if err := requireCurrentLiveVenuePair([]string{"alpha", "beta"}); err == nil {
+		t.Fatal("production prepare guard accepted an unsupported venue pair")
 	}
 }

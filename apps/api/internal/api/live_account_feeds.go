@@ -268,13 +268,13 @@ func (f *hyperliquidAccountFeed) Snapshot() liveAccountSnapshot {
 }
 
 func (d *LiveDeps) LiquidationPrices(_ context.Context, position *executor.LivePosition) (map[string]float64, error) {
-	accounts, err := d.acquireRecoveryAccounts(position.AccountPacifica, position.AccountHyperliquid)
+	accounts, err := d.acquireAccountContext(position.AccountBindings, true)
 	if err != nil {
 		return nil, err
 	}
 	defer accounts.Release()
 	prices := make(map[string]float64, 2)
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
+	for _, venue := range []string{position.VenueA, position.VenueB} {
 		feed, ok := accounts.Feed(venue)
 		if !ok {
 			return nil, fmt.Errorf("%s account feed unavailable", venue)

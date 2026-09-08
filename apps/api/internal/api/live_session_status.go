@@ -36,8 +36,10 @@ func (s *Server) liveSessionStatusSnapshot(
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(record.AccountPacifica) != strings.TrimSpace(pacificaAccount) ||
-		!strings.EqualFold(strings.TrimSpace(record.AccountHyperliquid), strings.TrimSpace(hyperliquidAccount)) {
+	requestedBindings := liveVenueBindings{Accounts: map[string]string{
+		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
+	}}
+	if !requestedBindings.matchesAccounts(durableRecordAccountBindings(record)) {
 		return nil, errors.New("live session account mismatch")
 	}
 
@@ -56,9 +58,7 @@ func (s *Server) liveSessionStatusSnapshot(
 	if err != nil || validateDurableSessionOwnership(record, session) != nil {
 		return response, nil
 	}
-	position, err := s.liveStore.GetPositionForAccounts(
-		ctx, session.Plan.ID, record.AccountPacifica, record.AccountHyperliquid,
-	)
+	position, err := s.liveStore.GetPositionForBindings(ctx, session.Plan.ID, record.AccountBindings)
 	if err != nil {
 		return response, nil
 	}

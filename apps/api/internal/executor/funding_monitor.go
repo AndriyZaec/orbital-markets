@@ -84,25 +84,19 @@ func (m *FundingMonitor) realized(ctx context.Context, position *LivePosition, s
 			return 0, false
 		}
 		m.attemptedAt[position.ID] = now
-		requests := []struct {
-			venue   string
-			account string
-		}{
-			{venue: "pacifica", account: position.AccountPacifica},
-			{venue: "hyperliquid", account: position.AccountHyperliquid},
-		}
-		for _, request := range requests {
-			source, ok := m.sources[request.venue]
-			if !ok || request.account == "" {
+		for _, venueName := range []string{position.VenueA, position.VenueB} {
+			account := position.AccountBindings[venueName]
+			source, ok := m.sources[venueName]
+			if !ok || account == "" {
 				return 0, false
 			}
-			payments, err := source.FundingPayments(ctx, request.account, position.Asset, since, until)
+			payments, err := source.FundingPayments(ctx, account, position.Asset, since, until)
 			if err != nil {
-				m.logger.Warn("funding monitor: fetch payments", "err", err, "id", position.ID, "venue", request.venue)
+				m.logger.Warn("funding monitor: fetch payments", "err", err, "id", position.ID, "venue", venueName)
 				return 0, false
 			}
 			if err := m.store.InsertFundingPayments(ctx, position.ID, payments); err != nil {
-				m.logger.Warn("funding monitor: persist payments", "err", err, "id", position.ID, "venue", request.venue)
+				m.logger.Warn("funding monitor: persist payments", "err", err, "id", position.ID, "venue", venueName)
 				return 0, false
 			}
 		}

@@ -16,6 +16,26 @@ func (s *Store) PersistFullResultAtomic(
 	accountPacifica, accountHyperliquid string,
 	notional, leverage float64,
 ) error {
+	return s.PersistFullResultAtomicForBindings(ctx, result, venueA, venueB, map[string]string{
+		"pacifica": accountPacifica, "hyperliquid": accountHyperliquid,
+	}, notional, leverage)
+}
+
+func (s *Store) PersistFullResultAtomicForBindings(
+	ctx context.Context,
+	result *ExecutionResult,
+	venueA, venueB string,
+	bindings map[string]string,
+	notional, leverage float64,
+) error {
+	normalizedBindings, bindingsJSON, bindingsKey, accountPacifica, accountHyperliquid, err := storedAccountBindings(bindings, "", "")
+	if err != nil {
+		return err
+	}
+	venueA, venueB, err = requireBindingVenuePair(normalizedBindings, venueA, venueB)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -34,11 +54,13 @@ func (s *Store) PersistFullResultAtomic(
 		INSERT INTO live_positions (
 			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
 			account_pacifica, account_hyperliquid,
+			account_bindings_json, account_bindings_key,
 			notional, leverage, entry_spread, hedge_mismatch,
 			started_at, opened_at, completed_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
 		result.PlanID, result.PlanID, result.OpportunityID, result.Asset,
 		venueA, venueB, string(result.State), accountPacifica, accountHyperliquid,
+		bindingsJSON, bindingsKey,
 		notional, leverage, resultHedgeMismatch(result),
 		result.StartedAt.UTC().Format(time.RFC3339Nano), openedAt, completedAt, now,
 	)

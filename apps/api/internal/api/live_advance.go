@@ -759,14 +759,9 @@ func (s *Server) persistSession(ctx context.Context, sess *LiveSession, state ex
 		StartedAt:     sess.CreatedAt,
 		CompletedAt:   time.Now(),
 	}
-	pacificaAccount, hyperliquidAccount, err := legacyDurableAccountPair(sess)
-	if err != nil {
-		s.logger.Error("live session: unsupported durable venue pair", "err", err, "session_id", sess.ID)
-		return ""
-	}
-	if err := s.live.liveStore.PersistFullResultAtomic(
+	if err := s.live.liveStore.PersistFullResultAtomicForBindings(
 		ctx, res, sess.Plan.Leg1.Venue, sess.Plan.Leg2.Venue,
-		pacificaAccount, hyperliquidAccount,
+		sess.Bindings.Accounts,
 		sess.Plan.Notional, sess.Plan.Leverage.Leverage,
 	); err != nil {
 		s.logger.Error("live session: persist terminal result", "err", err, "session_id", sess.ID)

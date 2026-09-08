@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ func TestDurableSessionLifecycleRetainsTerminalAuditRecord(t *testing.T) {
 
 	err = store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
 		ID: "session-1", State: "awaiting_leg1_signs", Payload: []byte(`{"plan":"one"}`),
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
 		HasExposure: false, ExpiresAt: expiresAt,
 	})
 	if err != nil {
@@ -34,6 +36,7 @@ func TestDurableSessionLifecycleRetainsTerminalAuditRecord(t *testing.T) {
 	}
 	err = store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
 		ID: "session-1", State: "awaiting_leg2_sign", Payload: []byte(`{"plan":"one","armed":true}`),
+		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
 		HasExposure: true, ExpiresAt: expiresAt,
 	})
 	if err != nil {
@@ -71,6 +74,212 @@ func TestDurableSessionLifecycleRetainsTerminalAuditRecord(t *testing.T) {
 	}
 	if state != "recovered_degraded" || detail != "unwind not confirmed" || terminalAt == nil {
 		t.Fatalf("terminal row = state %q detail %q at %v", state, detail, terminalAt)
+	}
+}
+
+func TestDurableSessionsUseAnExactGenericBindingSlot(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "generic-sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bindings := map[string]string{"beta": "owner-b", "alpha": "owner-a"}
+	record := executor.DurableSessionRecord{
+		ID: "session-1", State: "awaiting_leg1_signs", Payload: []byte(`{}`),
+		AccountBindings: bindings, Asset: "SOL", ExpiresAt: time.Now().Add(time.Minute),
+	}
+	if err := store.UpsertDurableSession(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := store.ActiveDurableSessionForBindings(ctx, map[string]string{
+		"alpha": "owner-a", "beta": "owner-b",
+	}, "SOL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.ID != "session-1" || !reflect.DeepEqual(active.AccountBindings, bindings) {
+		t.Fatalf("active session = %+v", active)
+	}
+	var legacyPacifica, legacyHyperliquid, bindingsKey string
+	if err := database.QueryRow(`
+		SELECT account_pacifica, account_hyperliquid, account_bindings_key
+		FROM live_sessions WHERE id = 'session-1'`,
+	).Scan(&legacyPacifica, &legacyHyperliquid, &bindingsKey); err != nil {
+		t.Fatal(err)
+	}
+	if legacyPacifica != "" || legacyHyperliquid != "" || bindingsKey == "" {
+		t.Fatalf("generic legacy columns/key = %q / %q / %q", legacyPacifica, legacyHyperliquid, bindingsKey)
+	}
+
+	record.ID = "session-duplicate"
+	if err := store.UpsertDurableSession(ctx, record); err == nil {
+		t.Fatal("duplicate active generic binding slot was accepted")
+	}
+	record.ID = "session-other"
+	record.AccountBindings = map[string]string{"alpha": "owner-a", "beta": "other-owner"}
+	if err := store.UpsertDurableSession(ctx, record); err != nil {
+		t.Fatalf("different generic binding slot was rejected: %v", err)
+	}
+}
+
+func TestDurableSessionRecoveryRetainsOwnershipFromCanonicalKey(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "generic-corrupt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bindings := map[string]string{"alpha": "owner-a", "beta": "owner-b"}
+	if err := store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
+		ID: "corrupt-session", State: "leg1_submitted", Payload: []byte(`{}`),
+		AccountBindings: bindings, Asset: "SOL", HasExposure: true,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`
+		UPDATE live_sessions SET account_bindings_json = 'not-json'
+		WHERE id = 'corrupt-session'`); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.ListActiveDurableSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].DecodeError == "" ||
+		!reflect.DeepEqual(records[0].AccountBindings, bindings) {
+		t.Fatalf("corrupt record = %+v, want decode error with recovered ownership", records)
+	}
+}
+
+func TestGenericReadersFallBackToLegacyAccountColumns(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "legacy-read.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = database.Exec(`
+		INSERT INTO live_sessions (
+			id, state, payload, account_pacifica, account_hyperliquid, asset,
+			has_exposure, expires_at, created_at, updated_at
+		) VALUES ('legacy-session', 'awaiting_leg1_signs', '{}', 'sol-owner', '0xowner',
+			'SOL', 0, ?, ?, ?)`, now, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_pacifica, account_hyperliquid, notional, leverage, started_at, updated_at
+		) VALUES ('legacy-position', 'legacy-plan', 'opportunity', 'SOL', 'pacifica',
+			'hyperliquid', 'open', 'sol-owner', '0xowner', 10, 2, ?, ?)`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bindings := map[string]string{"pacifica": "sol-owner", "hyperliquid": "0xOwNeR"}
+	record, err := store.GetDurableSession(ctx, "legacy-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(record.AccountBindings, map[string]string{
+		"pacifica": "sol-owner", "hyperliquid": "0xowner",
+	}) {
+		t.Fatalf("legacy session bindings = %+v", record.AccountBindings)
+	}
+	position, err := store.GetPositionForBindings(ctx, "legacy-position", bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(position.AccountBindings, record.AccountBindings) {
+		t.Fatalf("legacy position bindings = %+v", position.AccountBindings)
+	}
+}
+
+func TestAtomicPositionPersistenceUsesGenericBindings(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "generic-position.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	result := &executor.ExecutionResult{
+		PlanID: "plan-generic", OpportunityID: "opportunity", Asset: "SOL",
+		State: executor.ExecStateOpen, StartedAt: time.Now(),
+	}
+	bindings := map[string]string{"alpha": "owner-a", "beta": "owner-b"}
+	if err := store.PersistFullResultAtomicForBindings(
+		context.Background(), result, "alpha", "beta",
+		map[string]string{"gamma": "owner-a", "delta": "owner-b"}, 10, 2,
+	); err == nil {
+		t.Fatal("position accepted bindings for a different venue pair")
+	}
+	if err := store.PersistFullResultAtomicForBindings(
+		context.Background(), result, "alpha", "beta", bindings, 10, 2,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	position, err := store.GetPositionForBindings(context.Background(), "plan-generic", bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(position.AccountBindings, bindings) {
+		t.Fatalf("position bindings = %+v, want %+v", position.AccountBindings, bindings)
+	}
+	if _, err := store.GetPositionForBindings(context.Background(), "plan-generic", map[string]string{
+		"alpha": "owner-a", "beta": "other-owner",
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("mismatched binding lookup error = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := database.Exec(`
+		UPDATE live_positions SET account_bindings_json = 'not-json'
+		WHERE id = 'plan-generic'`); err != nil {
+		t.Fatal(err)
+	}
+	positions, err := store.ListOpenPositions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 1 || positions[0].State != string(executor.ExecStateDegraded) ||
+		positions[0].RecoveryError == "" || !reflect.DeepEqual(positions[0].AccountBindings, bindings) {
+		t.Fatalf("corrupt position = %+v, want degraded position with recovered ownership", positions)
+	}
+	if _, err := database.Exec(`
+		UPDATE live_positions
+		SET state = 'closed', account_bindings_json = '{"alpha":"other","beta":"owners"}'
+		WHERE id = 'plan-generic'`); err != nil {
+		t.Fatal(err)
+	}
+	positions, err = store.ListPositions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 1 || positions[0].State != string(executor.ExecStateClosed) ||
+		positions[0].RecoveryError == "" || !reflect.DeepEqual(positions[0].AccountBindings, bindings) {
+		t.Fatalf("corrupt terminal position = %+v, want closed state with key ownership", positions)
+	}
+	if _, err := database.Exec(`
+		UPDATE live_positions
+		SET state = 'open', venue_a = 'gamma', venue_b = 'delta',
+			account_bindings_json = account_bindings_key
+		WHERE id = 'plan-generic'`); err != nil {
+		t.Fatal(err)
+	}
+	positions, err = store.ListOpenPositions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 1 || positions[0].State != string(executor.ExecStateDegraded) ||
+		positions[0].RecoveryError == "" {
+		t.Fatalf("venue mismatch position = %+v, want degraded recovery error", positions)
 	}
 }
 
@@ -199,6 +408,20 @@ func TestFlagDurableSessionKeepsPossibleExposureActive(t *testing.T) {
 	}
 	if events != 1 {
 		t.Fatalf("recovery blocked events = %d, want 1", events)
+	}
+	if err := store.UpsertUnownedRecoveryBlockedPosition(
+		ctx, "unowned-session", "BTC", "invalid ownership",
+	); err != nil {
+		t.Fatal(err)
+	}
+	var bindingsKey string
+	if err := database.QueryRow(`
+		SELECT account_bindings_key FROM live_positions WHERE id = 'recovery-unowned-session'
+	`).Scan(&bindingsKey); err != nil {
+		t.Fatal(err)
+	}
+	if bindingsKey != "" {
+		t.Fatalf("unowned recovery binding key = %q, want empty", bindingsKey)
 	}
 }
 

@@ -18,15 +18,54 @@ type fakeFundingHistory struct {
 	payments []venue.FundingPayment
 	calls    int
 	err      error
+	account  string
 	since    time.Time
 	until    time.Time
 }
 
-func (f *fakeFundingHistory) FundingPayments(_ context.Context, _, _ string, since, until time.Time) ([]venue.FundingPayment, error) {
+func (f *fakeFundingHistory) FundingPayments(_ context.Context, account, _ string, since, until time.Time) ([]venue.FundingPayment, error) {
 	f.calls++
+	f.account = account
 	f.since = since
 	f.until = until
 	return f.payments, f.err
+}
+
+func TestFundingUsesPersistedGenericVenueBindings(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "generic-funding.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := NewStore(database, logger)
+	startedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	result := &ExecutionResult{
+		PlanID: "generic-position", OpportunityID: "opportunity", Asset: "SOL",
+		State: ExecStateOpen, StartedAt: startedAt,
+	}
+	if err := store.PersistFullResultAtomicForBindings(
+		context.Background(), result, "alpha", "beta",
+		map[string]string{"alpha": "owner-a", "beta": "owner-b"}, 10, 2,
+	); err != nil {
+		t.Fatal(err)
+	}
+	position, err := store.GetPosition(context.Background(), result.PlanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha := &fakeFundingHistory{}
+	beta := &fakeFundingHistory{}
+	monitor := NewFundingMonitor(logger, store, map[string]venue.FundingHistory{
+		"alpha": alpha, "beta": beta,
+	})
+
+	if _, ok := monitor.realized(context.Background(), position, startedAt, time.Now().UTC(), true); !ok {
+		t.Fatal("generic funding sync was not published")
+	}
+	if alpha.calls != 1 || alpha.account != "owner-a" || beta.calls != 1 || beta.account != "owner-b" {
+		t.Fatalf("funding calls alpha=%d/%q beta=%d/%q", alpha.calls, alpha.account, beta.calls, beta.account)
+	}
 }
 
 func TestFinalFundingUsesActualHoldingInterval(t *testing.T) {

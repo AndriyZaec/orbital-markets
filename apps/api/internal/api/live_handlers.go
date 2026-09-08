@@ -121,7 +121,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := requireLegacyDurableVenuePair(planVenues); err != nil {
+	if err := requireCurrentLiveVenuePair(planVenues); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
@@ -264,8 +264,8 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	superseded, err := s.liveStore.SupersedeSafeDurableSessions(
-		r.Context(), bindings.Accounts["pacifica"], bindings.Accounts["hyperliquid"], plan.Asset,
+	superseded, err := s.liveStore.SupersedeSafeDurableSessionsForBindings(
+		r.Context(), bindings.Accounts, plan.Asset,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: supersede safe sessions", "err", err, "asset", plan.Asset)
@@ -275,8 +275,8 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	for _, sessionID := range superseded {
 		s.live.sessions.remove(sessionID)
 	}
-	activeSession, err := s.liveStore.ActiveDurableSessionForAccountAsset(
-		r.Context(), bindings.Accounts["pacifica"], bindings.Accounts["hyperliquid"], plan.Asset,
+	activeSession, err := s.liveStore.ActiveDurableSessionForBindings(
+		r.Context(), bindings.Accounts, plan.Asset,
 	)
 	if err == nil {
 		s.logger.Warn("live prepare: existing session blocks open",
@@ -365,8 +365,8 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	if err := s.saveLiveSession(r.Context(), sess); err != nil {
 		s.live.sessions.remove(sess.ID)
 		s.logger.Error("live prepare: persist session", "err", err, "session_id", sess.ID)
-		activeSession, activeErr := s.liveStore.ActiveDurableSessionForAccountAsset(
-			r.Context(), bindings.Accounts["pacifica"], bindings.Accounts["hyperliquid"], plan.Asset,
+		activeSession, activeErr := s.liveStore.ActiveDurableSessionForBindings(
+			r.Context(), bindings.Accounts, plan.Asset,
 		)
 		if activeErr == nil && activeSession.ID != sess.ID {
 			writeJSON(w, http.StatusConflict, liveSessionConflictResponse(
@@ -903,7 +903,9 @@ func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	positions, err := s.liveStore.ListPositionsForAccounts(r.Context(), pacificaAccount, hyperliquidAccount)
+	positions, err := s.liveStore.ListPositionsForBindings(r.Context(), map[string]string{
+		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
+	})
 	if err != nil {
 		s.logger.Error("live positions: list failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -932,7 +934,9 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	pos, err := s.liveStore.GetPositionForAccounts(r.Context(), id, pacificaAccount, hyperliquidAccount)
+	pos, err := s.liveStore.GetPositionForBindings(r.Context(), id, map[string]string{
+		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
 		return
@@ -1014,9 +1018,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	req.AccountHyperliquid = bindings.Accounts["hyperliquid"]
 	req.AgentPacifica = bindings.Agents["pacifica"]
 	req.AgentHyperliquid = bindings.Agents["hyperliquid"]
-	pos, err := s.liveStore.GetPositionForAccounts(
-		r.Context(), id, req.AccountPacifica, req.AccountHyperliquid,
-	)
+	pos, err := s.liveStore.GetPositionForBindings(r.Context(), id, bindings.Accounts)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
 		return
@@ -1031,7 +1033,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reconciledClosed, err := s.reconcilePositionAbsentFromVenues(
-		r.Context(), pos, req.AccountPacifica, req.AccountHyperliquid,
+		r.Context(), pos,
 	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reconcile venue exposure"})
@@ -1087,7 +1089,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	venueDerived := false
 	if pos.State == string(executor.ExecStateDegraded) && s.live.accounts != nil {
 		closeFills, err = s.freshVenueExposureFills(
-			r.Context(), pos, req.AccountPacifica, req.AccountHyperliquid,
+			r.Context(), pos,
 		)
 		if err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -1156,12 +1158,11 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 func (s *Server) freshVenueExposureFills(
 	ctx context.Context,
 	position *executor.LivePosition,
-	accountPacifica, accountHyperliquid string,
 ) ([]executor.LiveFill, error) {
 	if s.live.accounts == nil {
 		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
 	}
-	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, false)
 	if err != nil {
 		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
 	}
@@ -1171,7 +1172,7 @@ func (s *Server) freshVenueExposureFills(
 
 	refreshCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
 	defer cancel()
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
+	for _, venue := range []string{position.VenueA, position.VenueB} {
 		feed, ok := accounts.Feed(venue)
 		if !ok || feed.RefreshPositions(refreshCtx) != nil {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
@@ -1212,9 +1213,8 @@ func (s *Server) freshVenueExposureFills(
 func (s *Server) reconcilePositionAbsentFromVenues(
 	ctx context.Context,
 	position *executor.LivePosition,
-	accountPacifica, accountHyperliquid string,
 ) (bool, error) {
-	state, err := s.inspectPositionAfterCloseActivity(ctx, position, accountPacifica, accountHyperliquid)
+	state, err := s.inspectPositionAfterCloseActivity(ctx, position)
 	if err != nil || state != positionExposureFlat {
 		return false, err
 	}
@@ -1224,7 +1224,6 @@ func (s *Server) reconcilePositionAbsentFromVenues(
 func (s *Server) inspectPositionAfterCloseActivity(
 	ctx context.Context,
 	position *executor.LivePosition,
-	accountPacifica, accountHyperliquid string,
 ) (positionExposureState, error) {
 	if s.live == nil || s.live.accounts == nil {
 		return positionExposureUnknown, nil
@@ -1239,16 +1238,15 @@ func (s *Server) inspectPositionAfterCloseActivity(
 	if err != nil || time.Since(reconcileAfter) < positionReconciliationQuietPeriod {
 		return positionExposureUnknown, nil
 	}
-	return s.inspectPositionVenueTruth(ctx, position, accountPacifica, accountHyperliquid, reconcileAfter)
+	return s.inspectPositionVenueTruth(ctx, position, reconcileAfter)
 }
 
 func (s *Server) reconcilePositionFromVenueTruth(
 	ctx context.Context,
 	position *executor.LivePosition,
-	accountPacifica, accountHyperliquid string,
 	after time.Time,
 ) (bool, error) {
-	state, err := s.inspectPositionVenueTruth(ctx, position, accountPacifica, accountHyperliquid, after)
+	state, err := s.inspectPositionVenueTruth(ctx, position, after)
 	if err != nil || state != positionExposureFlat {
 		return false, err
 	}
@@ -1280,13 +1278,12 @@ const (
 func (s *Server) inspectPositionVenueTruth(
 	ctx context.Context,
 	position *executor.LivePosition,
-	accountPacifica, accountHyperliquid string,
 	after time.Time,
 ) (positionExposureState, error) {
 	if s.live == nil || s.live.accounts == nil {
 		return positionExposureUnknown, nil
 	}
-	accounts, err := s.live.acquireAccounts(accountPacifica, accountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, false)
 	if err != nil {
 		s.logger.Warn("live position: venue reconciliation unavailable", "err", err, "id", position.ID)
 		return positionExposureUnknown, nil
@@ -1296,7 +1293,8 @@ func (s *Server) inspectPositionVenueTruth(
 	defer unlock()
 	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
 	defer cancel()
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
+	venues := []string{position.VenueA, position.VenueB}
+	for _, venue := range venues {
 		feed, ok := accounts.Feed(venue)
 		if !ok {
 			return positionExposureUnknown, nil
@@ -1306,11 +1304,11 @@ func (s *Server) inspectPositionVenueTruth(
 			return positionExposureUnknown, nil
 		}
 	}
-	if !waitForPositionState(reconcileCtx, accounts, after) {
+	if !waitForPositionState(reconcileCtx, accounts, venues, after) {
 		return positionExposureUnknown, nil
 	}
 
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
+	for _, venue := range venues {
 		_, ok := accounts.Feed(venue)
 		if !ok {
 			return positionExposureUnknown, nil
@@ -1323,12 +1321,12 @@ func (s *Server) inspectPositionVenueTruth(
 	return positionExposureFlat, nil
 }
 
-func waitForPositionState(ctx context.Context, accounts *liveAccountContext, after time.Time) bool {
+func waitForPositionState(ctx context.Context, accounts *liveAccountContext, venues []string, after time.Time) bool {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		ready := true
-		for _, venue := range []string{"pacifica", "hyperliquid"} {
+		for _, venue := range venues {
 			feed, ok := accounts.Feed(venue)
 			if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, after) {
 				ready = false
@@ -1408,9 +1406,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 	s.logger.Warn("kill switch: activated")
 
 	ctx := r.Context()
-	positions, err := s.live.liveStore.ListCloseablePositionsForAccounts(
-		ctx, req.AccountPacifica, req.AccountHyperliquid,
-	)
+	positions, err := s.live.liveStore.ListCloseablePositionsForBindings(ctx, bindings.Accounts)
 	if err != nil {
 		s.logger.Error("kill switch: list positions", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -1486,7 +1482,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		venueDerived := false
 		if (pos.State == string(executor.ExecStateDegraded) || pos.State == string(executor.ExecStateClosing)) && s.live.accounts != nil {
 			closeFills, err = s.freshVenueExposureFills(
-				ctx, &pos, req.AccountPacifica, req.AccountHyperliquid,
+				ctx, &pos,
 			)
 			if err != nil {
 				pc.Error = err.Error()

@@ -57,7 +57,14 @@ func (s *Server) reconcileOpenPositions() {
 		if !ready {
 			continue
 		}
-		if math.Abs(exposure["pacifica"]) <= 1e-9 && math.Abs(exposure["hyperliquid"]) <= 1e-9 {
+		flat := true
+		for _, venueName := range []string{position.VenueA, position.VenueB} {
+			if math.Abs(exposure[venueName]) > 1e-9 {
+				flat = false
+				break
+			}
+		}
+		if flat {
 			if _, err := s.markPositionClosedFromVenueTruth(s.ctx, position); err != nil {
 				s.logger.Warn("live exposure recovery: mark flat position closed", "err", err, "id", position.ID)
 			}
@@ -82,7 +89,7 @@ func (s *Server) reconcileOpenPositions() {
 }
 
 func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[string]float64, bool, error) {
-	accounts, err := s.live.acquireRecoveryAccounts(position.AccountPacifica, position.AccountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -96,7 +103,7 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 		return nil, false, nil
 	}
 	exposure := make(map[string]float64, 2)
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
+	for _, venue := range []string{position.VenueA, position.VenueB} {
 		feed, ok := accounts.Feed(venue)
 		if !ok {
 			return nil, false, nil
@@ -126,11 +133,7 @@ func cachedExposureMatchesFills(exposure map[string]float64, fills []executor.Li
 	if len(expected) != 2 {
 		return false
 	}
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
-		expectedSize, ok := expected[venue]
-		if !ok {
-			return false
-		}
+	for venue, expectedSize := range expected {
 		tolerance := math.Max(math.Abs(expectedSize)*cachedExposureAmountTolerance, 1e-9)
 		if math.Abs(exposure[venue]-expectedSize) > tolerance {
 			return false
@@ -152,7 +155,7 @@ func (s *Server) reconcileClosingPositions() {
 		position := &positions[i]
 		ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
 		exposureState, err := s.inspectPositionAfterCloseActivity(
-			ctx, position, position.AccountPacifica, position.AccountHyperliquid,
+			ctx, position,
 		)
 		cancel()
 		if err != nil {
@@ -223,10 +226,7 @@ func (s *Server) restoreLiveSessions() {
 			if record.HasExposure {
 				detail := "invalid exposed session envelope: " + record.DecodeError
 				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-				_ = s.liveStore.UpsertRecoveryBlockedPosition(
-					s.ctx, record.ID, record.Asset,
-					record.AccountPacifica, record.AccountHyperliquid, detail,
-				)
+				s.surfaceRecoveryBlockedPosition(record, detail)
 			} else {
 				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", record.DecodeError)
 			}
@@ -238,10 +238,7 @@ func (s *Server) restoreLiveSessions() {
 			if record.HasExposure {
 				detail := "invalid exposed session payload: " + err.Error()
 				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-				_ = s.liveStore.UpsertRecoveryBlockedPosition(
-					s.ctx, record.ID, record.Asset,
-					record.AccountPacifica, record.AccountHyperliquid, detail,
-				)
+				s.surfaceRecoveryBlockedPosition(record, detail)
 			} else {
 				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", err.Error())
 			}
@@ -252,17 +249,14 @@ func (s *Server) restoreLiveSessions() {
 			if record.HasExposure {
 				detail := "invalid exposed session ownership: " + err.Error()
 				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-				_ = s.liveStore.UpsertRecoveryBlockedPosition(
-					s.ctx, record.ID, record.Asset,
-					record.AccountPacifica, record.AccountHyperliquid, detail,
-				)
+				s.surfaceRecoveryBlockedPosition(record, detail)
 			} else {
 				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", err.Error())
 			}
 			continue
 		}
-		if _, err := s.liveStore.GetPositionForAccounts(
-			s.ctx, session.Plan.ID, record.AccountPacifica, record.AccountHyperliquid,
+		if _, err := s.liveStore.GetPositionForBindings(
+			s.ctx, session.Plan.ID, record.AccountBindings,
 		); err == nil {
 			claimed, claimErr := s.liveStore.ClaimDurableSession(s.ctx, record.ID, s.recoveryOwner, sessionRecoveryLease)
 			if claimErr == nil && claimed {
@@ -277,10 +271,7 @@ func (s *Server) restoreLiveSessions() {
 		if _, err := s.liveStore.GetPosition(s.ctx, session.Plan.ID); err == nil {
 			detail := "position ID already belongs to another account pair"
 			_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-			_ = s.liveStore.UpsertRecoveryBlockedPosition(
-				s.ctx, record.ID, record.Asset,
-				record.AccountPacifica, record.AccountHyperliquid, detail,
-			)
+			s.surfaceRecoveryBlockedPosition(record, detail)
 			continue
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.Error("live recovery: check conflicting position", "err", err, "session_id", record.ID)
@@ -317,6 +308,21 @@ func (s *Server) restoreLiveSessions() {
 		}
 
 		s.recoverExposedSession(session, "server restarted during live execution")
+	}
+}
+
+func (s *Server) surfaceRecoveryBlockedPosition(record executor.DurableSessionRecord, detail string) {
+	bindings := durableRecordAccountBindings(record)
+	var err error
+	if len(bindings) == 0 {
+		err = s.liveStore.UpsertUnownedRecoveryBlockedPosition(s.ctx, record.ID, record.Asset, detail)
+	} else {
+		err = s.liveStore.UpsertRecoveryBlockedPositionForBindings(
+			s.ctx, record.ID, record.Asset, bindings, detail,
+		)
+	}
+	if err != nil {
+		s.logger.Error("live recovery: surface blocked position", "err", err, "session_id", record.ID)
 	}
 }
 

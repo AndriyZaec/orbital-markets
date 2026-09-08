@@ -403,6 +403,7 @@ func (s *Store) MarkCloseDegraded(ctx context.Context, positionID string) error 
 // livePositionCols is the column list for live_positions queries.
 const livePositionCols = `id, plan_id, opportunity_id, asset,
 	venue_a, venue_b, state, account_pacifica, account_hyperliquid,
+	account_bindings_json, account_bindings_key,
 	notional, leverage,
 	entry_spread, hedge_mismatch,
 	current_spread, current_basis, entry_basis, basis_change,
@@ -416,10 +417,12 @@ const livePositionCols = `id, plan_id, opportunity_id, asset,
 
 func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, error) {
 	var p LivePosition
+	var bindingsJSON, bindingsKey string
 	var openedAt, completedAt, monitorAt sql.NullString
 	err := scanner.Scan(
 		&p.ID, &p.PlanID, &p.OpportunityID, &p.Asset,
 		&p.VenueA, &p.VenueB, &p.State, &p.AccountPacifica, &p.AccountHyperliquid,
+		&bindingsJSON, &bindingsKey,
 		&p.Notional, &p.Leverage,
 		&p.EntrySpread, &p.HedgeMismatch,
 		&p.CurrentSpread, &p.CurrentBasis, &p.EntryBasis, &p.BasisChange,
@@ -433,6 +436,22 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 	)
 	if err != nil {
 		return nil, err
+	}
+	p.AccountBindings, err = decodeAccountBindings(
+		bindingsJSON, bindingsKey, p.AccountPacifica, p.AccountHyperliquid,
+	)
+	if err == nil && p.OpportunityID != "recovery-blocked" {
+		if len(p.AccountBindings) == 0 {
+			err = fmt.Errorf("position has no account bindings")
+		} else {
+			_, _, err = requireBindingVenuePair(p.AccountBindings, p.VenueA, p.VenueB)
+		}
+	}
+	if err != nil {
+		if p.State != string(ExecStateClosed) && p.State != string(ExecStateFailed) {
+			p.State = string(ExecStateDegraded)
+		}
+		p.RecoveryError = "invalid account bindings: " + err.Error()
 	}
 	p.OpenedAt = openedAt.String
 	p.CompletedAt = completedAt.String
@@ -448,10 +467,20 @@ func (s *Store) GetPosition(ctx context.Context, id string) (*LivePosition, erro
 }
 
 func (s *Store) GetPositionForAccounts(ctx context.Context, id, pacifica, hyperliquid string) (*LivePosition, error) {
+	return s.GetPositionForBindings(ctx, id, map[string]string{
+		"pacifica": pacifica, "hyperliquid": hyperliquid,
+	})
+}
+
+func (s *Store) GetPositionForBindings(ctx context.Context, id string, bindings map[string]string) (*LivePosition, error) {
+	match, args, err := accountBindingsLookup(bindings)
+	if err != nil {
+		return nil, err
+	}
+	args = append([]any{id}, args...)
 	row := s.db.QueryRowContext(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions
-		 WHERE id = ? AND account_pacifica = ? AND account_hyperliquid = ?`,
-		id, strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+		 WHERE id = ? AND `+match, args...)
 	return scanLivePosition(row)
 }
 
@@ -462,10 +491,19 @@ func (s *Store) ListPositions(ctx context.Context) ([]LivePosition, error) {
 }
 
 func (s *Store) ListPositionsForAccounts(ctx context.Context, pacifica, hyperliquid string) ([]LivePosition, error) {
+	return s.ListPositionsForBindings(ctx, map[string]string{
+		"pacifica": pacifica, "hyperliquid": hyperliquid,
+	})
+}
+
+func (s *Store) ListPositionsForBindings(ctx context.Context, bindings map[string]string) ([]LivePosition, error) {
+	match, args, err := accountBindingsLookup(bindings)
+	if err != nil {
+		return nil, err
+	}
 	return s.queryPositions(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions
-		 WHERE account_pacifica = ? AND account_hyperliquid = ? ORDER BY started_at DESC`,
-		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+		 WHERE `+match+` ORDER BY started_at DESC`, args...)
 }
 
 func (s *Store) ListRecentActivePositionsForAccounts(
@@ -473,15 +511,30 @@ func (s *Store) ListRecentActivePositionsForAccounts(
 	pacifica, hyperliquid string,
 	limit int,
 ) ([]LivePosition, error) {
+	return s.ListRecentActivePositionsForBindings(ctx, map[string]string{
+		"pacifica": pacifica, "hyperliquid": hyperliquid,
+	}, limit)
+}
+
+func (s *Store) ListRecentActivePositionsForBindings(
+	ctx context.Context,
+	bindings map[string]string,
+	limit int,
+) ([]LivePosition, error) {
 	if limit <= 0 {
 		return []LivePosition{}, nil
 	}
+	match, args, err := accountBindingsLookup(bindings)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, limit)
 	return s.queryPositions(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions
 		 WHERE state IN ('pending', 'open', 'degraded', 'closing')
-		   AND account_pacifica = ? AND account_hyperliquid = ?
+		   AND `+match+`
 		 ORDER BY started_at DESC LIMIT ?`,
-		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)), limit)
+		args...)
 }
 
 // ListOpenPositions returns positions in open or degraded state.
@@ -491,21 +544,41 @@ func (s *Store) ListOpenPositions(ctx context.Context) ([]LivePosition, error) {
 }
 
 func (s *Store) ListOpenPositionsForAccounts(ctx context.Context, pacifica, hyperliquid string) ([]LivePosition, error) {
+	return s.ListOpenPositionsForBindings(ctx, map[string]string{
+		"pacifica": pacifica, "hyperliquid": hyperliquid,
+	})
+}
+
+func (s *Store) ListOpenPositionsForBindings(ctx context.Context, bindings map[string]string) ([]LivePosition, error) {
+	match, args, err := accountBindingsLookup(bindings)
+	if err != nil {
+		return nil, err
+	}
 	return s.queryPositions(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions
-		 WHERE state IN ('open', 'degraded') AND account_pacifica = ? AND account_hyperliquid = ?
+		 WHERE state IN ('open', 'degraded') AND `+match+`
 		 ORDER BY started_at DESC`,
-		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+		args...)
 }
 
 // ListCloseablePositionsForAccounts includes interrupted closes so emergency
 // recovery remains available after an API restart.
 func (s *Store) ListCloseablePositionsForAccounts(ctx context.Context, pacifica, hyperliquid string) ([]LivePosition, error) {
+	return s.ListCloseablePositionsForBindings(ctx, map[string]string{
+		"pacifica": pacifica, "hyperliquid": hyperliquid,
+	})
+}
+
+func (s *Store) ListCloseablePositionsForBindings(ctx context.Context, bindings map[string]string) ([]LivePosition, error) {
+	match, args, err := accountBindingsLookup(bindings)
+	if err != nil {
+		return nil, err
+	}
 	return s.queryPositions(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions
-		 WHERE state IN ('open', 'degraded', 'closing') AND account_pacifica = ? AND account_hyperliquid = ?
+		 WHERE state IN ('open', 'degraded', 'closing') AND `+match+`
 		 ORDER BY started_at DESC`,
-		strings.TrimSpace(pacifica), strings.ToLower(strings.TrimSpace(hyperliquid)))
+		args...)
 }
 
 func (s *Store) ListClosingPositions(ctx context.Context) ([]LivePosition, error) {
@@ -718,41 +791,43 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 
 // LivePosition is the read model for a live position.
 type LivePosition struct {
-	ID                 string  `json:"id"`
-	PlanID             string  `json:"plan_id"`
-	OpportunityID      string  `json:"opportunity_id"`
-	Asset              string  `json:"asset"`
-	VenueA             string  `json:"venue_a"`
-	VenueB             string  `json:"venue_b"`
-	State              string  `json:"state"`
-	AccountPacifica    string  `json:"-"`
-	AccountHyperliquid string  `json:"-"`
-	Notional           float64 `json:"notional"`
-	Leverage           float64 `json:"leverage"`
-	EntrySpread        float64 `json:"entry_spread"`
-	HedgeMismatch      float64 `json:"hedge_mismatch"`
-	CurrentSpread      float64 `json:"current_spread"`
-	CurrentBasis       float64 `json:"current_basis"`
-	EntryBasis         float64 `json:"entry_basis"`
-	BasisChange        float64 `json:"basis_change"`
-	PricePnL           float64 `json:"price_pnl"`
-	FundingPnL         float64 `json:"funding_pnl"`
-	FundingPnLSource   string  `json:"funding_pnl_source"`
-	TotalPnL           float64 `json:"total_pnl"`
-	Leg1CurPrice       float64 `json:"leg1_current_price"`
-	Leg2CurPrice       float64 `json:"leg2_current_price"`
-	Leg1LiqPrice       float64 `json:"leg1_liq_price"`
-	Leg2LiqPrice       float64 `json:"leg2_liq_price"`
-	Leg1LiqDist        float64 `json:"leg1_liq_dist"`
-	Leg2LiqDist        float64 `json:"leg2_liq_dist"`
-	Leg1LiqRisk        string  `json:"leg1_liq_risk"`
-	Leg2LiqRisk        string  `json:"leg2_liq_risk"`
-	HoldHours          float64 `json:"hold_hours"`
-	StartedAt          string  `json:"started_at"`
-	OpenedAt           string  `json:"opened_at,omitempty"`
-	CompletedAt        string  `json:"completed_at,omitempty"`
-	MonitorAt          string  `json:"monitor_at,omitempty"`
-	UpdatedAt          string  `json:"updated_at"`
+	ID                 string            `json:"id"`
+	PlanID             string            `json:"plan_id"`
+	OpportunityID      string            `json:"opportunity_id"`
+	Asset              string            `json:"asset"`
+	VenueA             string            `json:"venue_a"`
+	VenueB             string            `json:"venue_b"`
+	State              string            `json:"state"`
+	RecoveryError      string            `json:"recovery_error,omitempty"`
+	AccountBindings    map[string]string `json:"-"`
+	AccountPacifica    string            `json:"-"`
+	AccountHyperliquid string            `json:"-"`
+	Notional           float64           `json:"notional"`
+	Leverage           float64           `json:"leverage"`
+	EntrySpread        float64           `json:"entry_spread"`
+	HedgeMismatch      float64           `json:"hedge_mismatch"`
+	CurrentSpread      float64           `json:"current_spread"`
+	CurrentBasis       float64           `json:"current_basis"`
+	EntryBasis         float64           `json:"entry_basis"`
+	BasisChange        float64           `json:"basis_change"`
+	PricePnL           float64           `json:"price_pnl"`
+	FundingPnL         float64           `json:"funding_pnl"`
+	FundingPnLSource   string            `json:"funding_pnl_source"`
+	TotalPnL           float64           `json:"total_pnl"`
+	Leg1CurPrice       float64           `json:"leg1_current_price"`
+	Leg2CurPrice       float64           `json:"leg2_current_price"`
+	Leg1LiqPrice       float64           `json:"leg1_liq_price"`
+	Leg2LiqPrice       float64           `json:"leg2_liq_price"`
+	Leg1LiqDist        float64           `json:"leg1_liq_dist"`
+	Leg2LiqDist        float64           `json:"leg2_liq_dist"`
+	Leg1LiqRisk        string            `json:"leg1_liq_risk"`
+	Leg2LiqRisk        string            `json:"leg2_liq_risk"`
+	HoldHours          float64           `json:"hold_hours"`
+	StartedAt          string            `json:"started_at"`
+	OpenedAt           string            `json:"opened_at,omitempty"`
+	CompletedAt        string            `json:"completed_at,omitempty"`
+	MonitorAt          string            `json:"monitor_at,omitempty"`
+	UpdatedAt          string            `json:"updated_at"`
 }
 
 // LiveFill is the read model for a leg fill.

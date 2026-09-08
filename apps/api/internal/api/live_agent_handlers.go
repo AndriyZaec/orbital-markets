@@ -262,15 +262,9 @@ func (s *Server) agentChangeBlocked(ctx context.Context, venue, owner string) (b
 	}
 	owner = strings.TrimSpace(owner)
 	for _, record := range records {
-		switch venue {
-		case "pacifica":
-			if strings.TrimSpace(record.AccountPacifica) == owner {
-				return true, nil
-			}
-		case "hyperliquid":
-			if strings.EqualFold(strings.TrimSpace(record.AccountHyperliquid), owner) {
-				return true, nil
-			}
+		account := durableRecordAccountBindings(record)[venue]
+		if account != "" && sameVenueBinding(venue, account, owner) {
+			return true, nil
 		}
 	}
 	return false, nil

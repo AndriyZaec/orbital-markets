@@ -87,7 +87,9 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 		return emitChanged("balances", map[string]any{"pacifica": pac, "hyperliquid": hl}, &lastBalances)
 	}
 	emitPositions := func() bool {
-		positions, err := s.liveStore.ListPositionsForAccounts(r.Context(), pacificaAccount, hyperliquidAccount)
+		positions, err := s.liveStore.ListPositionsForBindings(r.Context(), map[string]string{
+			"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,
+		})
 		if err != nil {
 			return true
 		}
