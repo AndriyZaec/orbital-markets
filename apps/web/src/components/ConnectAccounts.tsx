@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useWallet } from '@solana/wallet-adapter-react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
-import { useConnect as useEvmConnect, useDisconnect as useEvmDisconnect } from 'wagmi'
+import { useConnect as useEvmConnect } from 'wagmi'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
@@ -68,7 +67,9 @@ function signerPill(r: VenueReadiness): DiagnosticPill {
 }
 function agentPill(r: VenueReadiness): DiagnosticPill {
   if (!r.walletConnected) return { label: '—', tone: 'off' }
+  if (r.agentStatus === 'restoring') return { label: 'Restoring', tone: 'pending', loading: true }
   if (r.agentStatus === 'authorizing') return { label: 'Authorizing', tone: 'pending', loading: true }
+  if (r.agentStatus === 'disconnecting') return { label: 'Disconnecting', tone: 'pending', loading: true }
   if (r.agentStatus === 'error') return { label: 'Error', tone: 'bad' }
   return r.agentReady ? { label: 'Ready', tone: 'ok' } : { label: 'Required', tone: 'pending' }
 }
@@ -114,13 +115,11 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     if (open) refreshBalances().catch(() => {})
   }, [open, refreshBalances])
 
-  const solWallet = useWallet()
   const { setVisible: setSolModalVisible } = useWalletModal()
   // `connectors` is EIP-6963-populated: each installed EVM wallet announces
   // itself as a separate entry, so the user can pick one instead of being
   // silently routed to whatever won window.ethereum.
   const { connect: evmConnect, connectors: evmConnectors } = useEvmConnect()
-  const { disconnect: evmDisconnect } = useEvmDisconnect()
 
   // Which venue's wallet picker modal is open. Overlay-style — matches how
   // the Solana wallet-adapter modal renders and keeps the venue card tidy.
@@ -203,11 +202,11 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     setPickerOpen(null)
   }
 
-  const handleDisconnect = (venueId: string) => {
-    if (venueId === 'pacifica') {
-      solWallet.disconnect()
-    } else if (venueId === 'hyperliquid' || venueId === 'aster') {
-      evmDisconnect()
+  const handleDisconnect = async (venueId: VenueId) => {
+    try {
+      await tradingAgents.disconnectWallet(venueId === 'pacifica' ? 'solana' : 'evm')
+    } catch {
+      // The authorization UI owns the failure state.
     }
   }
 
@@ -288,6 +287,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             const readiness = getReadiness(venue.id)
             const isReady = readiness?.status === 'ready'
             const isErr = readiness?.status === 'error'
+            const disconnectBlocked = agentChangeBlocked || readiness?.agentStatus === 'restoring'
+              || readiness?.agentStatus === 'authorizing' || readiness?.agentStatus === 'disconnecting'
+              || (venue.id !== 'pacifica' && (hyperliquid.agentStatus === 'restoring'
+                || hyperliquid.agentStatus === 'authorizing' || hyperliquid.agentStatus === 'disconnecting'
+                || aster.agentStatus === 'restoring' || aster.agentStatus === 'authorizing'
+                || aster.agentStatus === 'disconnecting'))
 
             return (
               <div key={venue.id}
@@ -358,10 +363,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       {!readiness.agentReady && (
                         <button
                           onClick={() => handleAuthorize(venue.id as VenueId)}
-                          disabled={readiness.agentStatus === 'authorizing' || !readiness.signerReady}
+                          disabled={readiness.agentStatus === 'restoring' || readiness.agentStatus === 'authorizing' || !readiness.signerReady}
                           className="px-3 py-1 rounded text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
-                          {readiness.agentStatus === 'authorizing'
+                          {readiness.agentStatus === 'restoring'
+                            ? 'Restoring authorization...'
+                            : readiness.agentStatus === 'authorizing'
                             ? 'Authorizing…'
                             : readiness.agentStatus === 'error' ? `Reauthorize ${venue.name}` : `Authorize ${venue.name}`}
                         </button>
@@ -375,19 +382,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                           >
                             Reauthorize
                           </button>
-                          <button
-                            onClick={() => tradingAgents.clear(venue.id as VenueId)}
-                            disabled={agentChangeBlocked}
-                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                          >
-                            Clear Local Authorization
-                          </button>
                         </>
                       )}
                       <button
-                        onClick={() => handleDisconnect(venue.id)}
-                        disabled={agentChangeBlocked}
-                        className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] transition-colors"
+                        onClick={() => void handleDisconnect(venue.id)}
+                        disabled={disconnectBlocked}
+                        className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
                         {venue.id === 'pacifica' ? 'Disconnect' : 'Disconnect EVM Wallet'}
                       </button>
@@ -441,7 +441,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
-            Authorization keys stay in this browser session. Clearing a local key does not revoke it at the venue.
+            Authorization keys stay encrypted in this browser profile. Pacifica is revoked before disconnect; other venues are cleared locally.
           </p>
         </div>
       </div>

@@ -41,3 +41,12 @@ func (s *Store) AgentAuthorizationMatches(
 	}
 	return expected == agentAddress, nil
 }
+
+func (s *Store) DeleteAgentAuthorization(ctx context.Context, venue, ownerAccount, agentAddress string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM agent_authorizations
+		WHERE venue = ? AND owner_account = ? AND agent_address = ?`,
+		venue, ownerAccount, agentAddress,
+	)
+	return err
+}

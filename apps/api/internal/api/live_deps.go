@@ -43,6 +43,7 @@ type LiveDeps struct {
 	hlAgentApprover               hyperliquidAgentApprover
 	hlBuilderApprover             hyperliquidBuilderApprover
 	pacificaAgentBinder           pacificaAgentBinder
+	pacificaAgentRevoker          pacificaAgentRevoker
 	pacificaBuilder               *pacificlive.BuilderConfig
 	pacificaBuilderApprover       pacificaBuilderCodeApprover
 	pacificaBuilderApprovalReader pacificaBuilderCodeApprovalReader
@@ -86,6 +87,7 @@ func NewLiveDeps(
 		hlAgentApprover:               hlApprover,
 		hlBuilderApprover:             hlApprover,
 		pacificaAgentBinder:           pacificlive.NewDefaultAgentBinder(),
+		pacificaAgentRevoker:          pacificlive.NewDefaultAgentRevoker(),
 		pacificaBuilder:               pacificlive.OrbitalBuilderConfig(),
 		pacificaBuilderApprover:       pacificaBuilderApprover,
 		pacificaBuilderApprovalReader: pacificaBuilderApprover,
@@ -167,11 +169,27 @@ func (r *agentAuthorizationRegistry) matches(ctx context.Context, venue, owner, 
 	)
 }
 
+func (r *agentAuthorizationRegistry) remove(ctx context.Context, venue, owner, agent string) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	return r.store.DeleteAgentAuthorization(
+		ctx, venue, normalizeAgentAuthorization(venue, owner), normalizeAgentAuthorization(venue, agent),
+	)
+}
+
 func (d *LiveDeps) recordAgentAuthorization(ctx context.Context, venue, owner, agent string) error {
 	if d.agentAuthorizations == nil {
 		return nil
 	}
 	return d.agentAuthorizations.record(ctx, venue, owner, agent)
+}
+
+func (d *LiveDeps) removeAgentAuthorization(ctx context.Context, venue, owner, agent string) error {
+	if d.agentAuthorizations == nil {
+		return nil
+	}
+	return d.agentAuthorizations.remove(ctx, venue, owner, agent)
 }
 
 func (d *LiveDeps) agentAuthorizationMatches(ctx context.Context, venue, owner, agent string) (bool, error) {

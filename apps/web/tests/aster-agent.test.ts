@@ -8,10 +8,10 @@ import {
   buildAsterApproveAgentTypedData,
   signAsterAgentRequest,
 } from '../src/agents/aster-agent.ts'
-import { loadStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
 import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
 import type { StoredTradingAgent } from '../src/agents/types.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
+import { TestTradingAgentStore } from './trading-agent-test-store.ts'
 
 const ownerAddress = '0x14791697260E4c9A71f18484C9f997B308e59325'
 const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111'
@@ -36,7 +36,7 @@ test('Aster approval is perpetual-only and signed on BSC', async () => {
 })
 
 test('Aster authorization relays no private key and persists only after acceptance', async () => {
-  const storage = new TestStorage()
+  const storage = new TestTradingAgentStore()
   let relayed = ''
   const now = Date.now()
   const agent = await authorizeAsterAgent({
@@ -52,13 +52,13 @@ test('Aster authorization relays no private key and persists only after acceptan
 
   assert.equal(relayed.includes(agent.privateKey), false)
   assert.equal(relayed.includes('private'), false)
-  assert.equal(loadStoredTradingAgent(storage, 'aster', ownerAddress)?.agentAddress, agent.agentAddress)
+  assert.equal((await storage.restore('aster', ownerAddress))?.agentAddress, agent.agentAddress)
 })
 
 test('Aster authorization does not relay after the owner changes', async () => {
   let relayed = false
   await assert.rejects(authorizeAsterAgent({
-    storage: new TestStorage(),
+    storage: new TestTradingAgentStore(),
     ownerAddress,
     signTypedData: async () => `0x${'1'.repeat(128)}1b`,
     ownerStillCurrent: () => false,
@@ -68,11 +68,8 @@ test('Aster authorization does not relay after the owner changes', async () => {
 })
 
 test('a local Aster agent signs the exact allowed IOC payload', async () => {
-  const storage = new TestStorage()
-  storage.setItem(
-    `orbital.agent.aster.v1:${ownerAddress.toLowerCase()}`,
-    JSON.stringify(asterAgent()),
-  )
+  const storage = new TestTradingAgentStore()
+  await storage.save(asterAgent())
 
   const signed = await signWithStoredTradingAgent(storage, asterSigningRequest())
 
@@ -121,7 +118,7 @@ test('Aster agent rejects private request fields outside the operation policy', 
 function asterAgent(): StoredTradingAgent {
   assert.equal(privateKeyToAccount(privateKey).address.toLowerCase(), agentAddress.toLowerCase())
   return {
-    version: 1,
+    version: 2,
     venue: 'aster',
     ownerAddress,
     agentAddress,
@@ -232,11 +229,4 @@ function asterPrivateSigningRequest(action: SigningRequest['action']): SigningRe
 
 function privateAuthQuery(): string {
   return `asterChain=Mainnet&user=${ownerAddress}&signer=${agentAddress}&nonce=1786363200000000`
-}
-
-class TestStorage implements StorageLike {
-  readonly values = new Map<string, string>()
-  getItem(key: string) { return this.values.get(key) ?? null }
-  setItem(key: string, value: string) { this.values.set(key, value) }
-  removeItem(key: string) { this.values.delete(key) }
 }

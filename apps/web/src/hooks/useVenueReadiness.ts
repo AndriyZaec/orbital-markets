@@ -150,6 +150,7 @@ function buildReadiness(args: {
   if (errored) blockingReasons.push('Wallet reported an error')
   if (!walletConnected) blockingReasons.push('Wallet not connected')
   else if (!signerReady) blockingReasons.push('Wallet cannot sign required messages')
+  else if (agent.status === 'restoring') blockingReasons.push('Restoring authorization...')
   else if (agent.status === 'authorizing') blockingReasons.push('Authorization in progress')
   else if (agent.status === 'error') blockingReasons.push(agent.error || 'Authorization failed')
   else if (!agentReady) blockingReasons.push('Authorization required')
@@ -161,7 +162,7 @@ function buildReadiness(args: {
   if (errored) status = 'error'
   else if (!walletConnected) status = 'disconnected'
   else if (!signerReady) status = 'signer_missing'
-  else if (agent.status === 'authorizing') status = 'agent_authorizing'
+  else if (agent.status === 'restoring' || agent.status === 'authorizing') status = 'agent_authorizing'
   else if (!agentReady) status = agent.status === 'error' ? 'error' : 'agent_missing'
   else if (unavailableReason) status = 'unavailable'
   else if (!streamReady) status = 'balance_pending'

@@ -33,7 +33,7 @@ interface AsterAccountSnapshotPayloads {
 export async function runAsterPrivateRequest<T>(
   input: AsterPrivateInput,
   sign: (request: SigningRequest) => Promise<SignedAction>,
-  requestStillCurrent: () => boolean,
+  requestStillCurrent: () => boolean | Promise<boolean>,
 ): Promise<T> {
   const preparedResponse = await apiFetch('/api/v1/live/aster/private/prepare', {
     method: 'POST',
@@ -52,7 +52,7 @@ export async function refreshAsterAccountSnapshot(
   account: string,
   agent: string,
   sign: (request: SigningRequest) => Promise<SignedAction>,
-  requestStillCurrent: () => boolean,
+  requestStillCurrent: () => boolean | Promise<boolean>,
 ): Promise<void> {
   const preparedResponse = await apiFetch('/api/v1/live/aster/account/prepare', {
     method: 'POST',
@@ -87,7 +87,7 @@ async function submitPreparedAsterRequest<T>(
   input: AsterPrivateInput,
   request: SigningRequest,
   sign: (request: SigningRequest) => Promise<SignedAction>,
-  requestStillCurrent: () => boolean,
+  requestStillCurrent: () => boolean | Promise<boolean>,
 ): Promise<AsterPrivateResponse<T>> {
   if (request.venue !== 'aster' || request.action !== input.operation ||
     request.account.toLowerCase() !== input.account.toLowerCase() ||
@@ -98,7 +98,7 @@ async function submitPreparedAsterRequest<T>(
     throw new Error('Orbital returned a mismatched Aster signing request')
   }
   const signed = await sign(request)
-  if (!requestStillCurrent()) {
+  if (!await requestStillCurrent()) {
     throw new Error('Aster owner or authorization changed during the private request')
   }
   const submitResponse = await apiFetch('/api/v1/live/aster/private/submit', {
@@ -116,7 +116,7 @@ async function submitPreparedAsterRequest<T>(
   if (result.uncertain) {
     throw new Error(result.error || 'Aster request outcome is unknown; refresh account state before retrying')
   }
-  if (!requestStillCurrent()) {
+  if (!await requestStillCurrent()) {
     throw new Error('Aster owner or authorization changed during the private request')
   }
   return result

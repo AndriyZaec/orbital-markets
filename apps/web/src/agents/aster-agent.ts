@@ -2,7 +2,7 @@ import { type Address, type Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
-import { saveStoredTradingAgent, type StorageLike } from './storage.ts'
+import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
@@ -90,7 +90,7 @@ export function buildAsterApproveAgentTypedData(action: AsterApproveAgentAction)
 }
 
 export async function authorizeAsterAgent(options: {
-  storage: StorageLike
+  storage: TradingAgentStore
   ownerAddress: string
   signTypedData: (typedData: ReturnType<typeof buildAsterApproveAgentTypedData>) => Promise<Hex>
   relay: (request: AsterApproveAgentRequest) => Promise<void>
@@ -110,7 +110,7 @@ export async function authorizeAsterAgent(options: {
   await options.relay({ ...action, signature })
 
   const agent: StoredTradingAgent = {
-    version: 1,
+    version: 2,
     venue: 'aster',
     ownerAddress: options.ownerAddress,
     agentAddress: generated.agentAddress,
@@ -118,7 +118,7 @@ export async function authorizeAsterAgent(options: {
     authorizedAt: new Date(Math.floor(action.nonce / 1000)).toISOString(),
     expiresAt: new Date(action.expired).toISOString(),
   }
-  saveStoredTradingAgent(options.storage, agent)
+  await options.storage.save(agent)
   return agent
 }
 

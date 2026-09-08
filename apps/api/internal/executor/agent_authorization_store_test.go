@@ -41,3 +41,56 @@ func TestAgentAuthorizationPersistsAndCannotMoveBetweenOwners(t *testing.T) {
 		t.Fatal("agent authorization moved to another owner")
 	}
 }
+
+func TestAgentAuthorizationCanBeDeletedAfterRevocation(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "revoked-agents.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := context.Background()
+	const (
+		venue = "pacifica"
+		owner = "sol-owner"
+		agent = "sol-agent"
+	)
+	if err := store.UpsertAgentAuthorization(ctx, venue, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAgentAuthorization(ctx, venue, owner, agent); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := store.AgentAuthorizationMatches(ctx, venue, owner, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matches {
+		t.Fatal("revoked agent authorization remained registered")
+	}
+}
+
+func TestDeletingStaleAgentDoesNotRemoveCurrentAuthorization(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "current-agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := context.Background()
+	const (
+		venue        = "pacifica"
+		owner        = "sol-owner"
+		currentAgent = "current-agent"
+	)
+	if err := store.UpsertAgentAuthorization(ctx, venue, owner, currentAgent); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAgentAuthorization(ctx, venue, owner, "stale-agent"); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := store.AgentAuthorizationMatches(ctx, venue, owner, currentAgent)
+	if err != nil || !matches {
+		t.Fatalf("current authorization match = %v, err = %v", matches, err)
+	}
+}

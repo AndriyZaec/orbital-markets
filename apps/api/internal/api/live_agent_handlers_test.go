@@ -217,6 +217,10 @@ type fakePacificaAgentBinder struct {
 	request pacificlive.BindAgentRequest
 }
 
+type fakePacificaAgentRevoker struct {
+	request pacificlive.RevokeAgentRequest
+}
+
 type fakePacificaBuilderApprover struct {
 	request pacificlive.ApproveBuilderCodeRequest
 }
@@ -290,6 +294,77 @@ func (f *fakePacificaAgentBinder) BindAgent(_ context.Context, request pacificli
 	return nil
 }
 
+func (f *fakePacificaAgentRevoker) RevokeAgent(_ context.Context, request pacificlive.RevokeAgentRequest) error {
+	f.request = request
+	return nil
+}
+
+func TestHandlePacificaAgentRevokeVerifiesOwnerSignatureAndRelays(t *testing.T) {
+	revoker := &fakePacificaAgentRevoker{}
+	server := &Server{live: &LiveDeps{pacificaAgentRevoker: revoker}}
+	request := validPacificaRevokeRequest(t, time.Now().UnixMilli())
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+
+	server.handlePacificaAgentRevoke(response, httptest.NewRequest(http.MethodPost, "/api/v1/live/agents/pacifica/revoke", bytes.NewReader(body)))
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if revoker.request.AgentWallet != request.AgentWallet {
+		t.Fatalf("relayed request = %+v", revoker.request)
+	}
+}
+
+func TestHandlePacificaAgentRevokeRejectsWrongOwnerSignature(t *testing.T) {
+	server := &Server{live: &LiveDeps{pacificaAgentRevoker: &fakePacificaAgentRevoker{}}}
+	request := validPacificaRevokeRequest(t, time.Now().UnixMilli())
+	request.Signature = base58.Encode(make([]byte, ed25519.SignatureSize))
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+
+	server.handlePacificaAgentRevoke(response, httptest.NewRequest(http.MethodPost, "/api/v1/live/agents/pacifica/revoke", bytes.NewReader(body)))
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestHandlePacificaAgentRevokeIsBlockedDuringActiveSession(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	revoker := &fakePacificaAgentRevoker{}
+	server.live.pacificaAgentRevoker = revoker
+	request := validPacificaRevokeRequest(t, time.Now().UnixMilli())
+	err := server.live.liveStore.UpsertDurableSession(context.Background(), executor.DurableSessionRecord{
+		ID: "active-pacifica-revoke", State: "awaiting_leg2_sign", Payload: []byte(`{}`),
+		AccountPacifica: request.Account, AccountHyperliquid: "0xowner", Asset: "SOL",
+		HasExposure: true, ExpiresAt: time.Now().Add(time.Minute), CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+
+	server.handlePacificaAgentRevoke(response, httptest.NewRequest(http.MethodPost, "/api/v1/live/agents/pacifica/revoke", bytes.NewReader(body)))
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if revoker.request.Account != "" {
+		t.Fatal("active-session revocation reached Pacifica")
+	}
+}
+
 func TestHandlePacificaAgentBindVerifiesOwnerSignature(t *testing.T) {
 	binder := &fakePacificaAgentBinder{}
 	server := &Server{live: &LiveDeps{pacificaAgentBinder: binder}}
@@ -346,6 +421,27 @@ func validPacificaBindRequest(t *testing.T, timestamp int64) pacificlive.BindAge
 		Account: ownerAddress(owner), Signature: base58.Encode(ed25519.Sign(owner, message)),
 		Timestamp: timestamp, ExpiryWindow: 30_000,
 		AgentWallet: base58.Encode(agent.Public().(ed25519.PublicKey)),
+	}
+}
+
+func validPacificaRevokeRequest(t *testing.T, timestamp int64) pacificlive.RevokeAgentRequest {
+	t.Helper()
+	owner := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	agentSeed := make([]byte, ed25519.SeedSize)
+	for index := range agentSeed {
+		agentSeed[index] = byte(index + 32)
+	}
+	agent := ed25519.NewKeyFromSeed(agentSeed)
+	agentAddress := base58.Encode(agent.Public().(ed25519.PublicKey))
+	message, err := pacificlive.BuildSigningMessage("revoke_agent_wallet", timestamp, 30_000, map[string]any{
+		"agent_wallet": agentAddress,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pacificlive.RevokeAgentRequest{
+		Account: ownerAddress(owner), Signature: base58.Encode(ed25519.Sign(owner, message)),
+		Timestamp: timestamp, ExpiryWindow: 30_000, AgentWallet: agentAddress,
 	}
 }
 

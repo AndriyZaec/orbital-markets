@@ -15,10 +15,10 @@ import {
   hyperliquidBuilderFee,
   signHyperliquidAgentRequest,
 } from '../src/agents/hyperliquid-agent.ts'
-import { loadStoredTradingAgent, saveStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
 import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
 import type { StoredTradingAgent } from '../src/agents/types.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
+import { TestTradingAgentStore } from './trading-agent-test-store.ts'
 
 const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111'
 const agentAddress = '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A'
@@ -66,8 +66,8 @@ test('Hyperliquid builder approval uses the configured 2 bp maximum fee', () => 
 
 test('a local Hyperliquid agent signs the configured builder order', async () => {
   const request = hyperliquidSigningRequest()
-  const storage = new TestStorage()
-  saveStoredTradingAgent(storage, hyperliquidAgent())
+  const storage = new TestTradingAgentStore()
+  await storage.save(hyperliquidAgent())
   const signed = await signWithStoredTradingAgent(storage, request)
 
   assert.match(signed.signature, /^0x[0-9a-f]{130}$/)
@@ -76,7 +76,7 @@ test('a local Hyperliquid agent signs the configured builder order', async () =>
 })
 
 test('authorization relays no private key and persists only after venue acceptance', async () => {
-  const storage = new TestStorage()
+  const storage = new TestTradingAgentStore()
   let relayed = ''
   const agent = await authorizeHyperliquidAgent({
     storage,
@@ -95,11 +95,11 @@ test('authorization relays no private key and persists only after venue acceptan
 
   assert.equal(relayed.includes(agent.privateKey), false)
   assert.equal(relayed.includes('private'), false)
-  assert.equal(loadStoredTradingAgent(storage, 'hyperliquid', agent.ownerAddress)?.agentAddress, agent.agentAddress)
+  assert.equal((await storage.restore('hyperliquid', agent.ownerAddress))?.agentAddress, agent.agentAddress)
 })
 
 test('builder fee is approved before the Hyperliquid agent is persisted', async () => {
-  const storage = new TestStorage()
+  const storage = new TestTradingAgentStore()
   let builderApproved = false
   await authorizeHyperliquidAgent({
     storage,
@@ -123,13 +123,13 @@ test('builder fee is approved before the Hyperliquid agent is persisted', async 
   })
 
   assert.equal(
-    loadStoredTradingAgent(storage, 'hyperliquid', '0x14791697260E4c9A71f18484C9f997B308e59325')?.builderAddress,
+    (await storage.restore('hyperliquid', '0x14791697260E4c9A71f18484C9f997B308e59325'))?.builderAddress,
     hyperliquidBuilderAddress,
   )
 })
 
 test('an existing 2 bp builder allowance skips the repeat wallet approval', async () => {
-  const storage = new TestStorage()
+  const storage = new TestTradingAgentStore()
   let builderPrompted = false
   await authorizeHyperliquidAgent({
     storage,
@@ -249,7 +249,7 @@ test('a local Hyperliquid agent signs only the prepared cross leverage update', 
 
 function hyperliquidAgent(): StoredTradingAgent {
   return {
-    version: 1,
+    version: 2,
     venue: 'hyperliquid',
     ownerAddress: '0x14791697260E4c9A71f18484C9f997B308e59325',
     agentAddress,
@@ -320,11 +320,4 @@ function l1ConnectionId(action: unknown, nonce: number): `0x${string}` {
   input.set(encoded)
   new DataView(input.buffer).setBigUint64(encoded.length, BigInt(nonce), false)
   return keccak256(input)
-}
-
-class TestStorage implements StorageLike {
-  readonly values = new Map<string, string>()
-  getItem(key: string) { return this.values.get(key) ?? null }
-  setItem(key: string, value: string) { this.values.set(key, value) }
-  removeItem(key: string) { this.values.delete(key) }
 }

@@ -32,6 +32,10 @@ type pacificaAgentBinder interface {
 	BindAgent(context.Context, pacificlive.BindAgentRequest) error
 }
 
+type pacificaAgentRevoker interface {
+	RevokeAgent(context.Context, pacificlive.RevokeAgentRequest) error
+}
+
 type pacificaBuilderCodeApprover interface {
 	ApproveBuilderCode(context.Context, pacificlive.ApproveBuilderCodeRequest) error
 }
@@ -205,6 +209,54 @@ func (s *Server) handlePacificaAgentBind(w http.ResponseWriter, r *http.Request)
 	if err := s.live.recordAgentAuthorization(r.Context(), "pacifica", request.Account, request.AgentWallet); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Pacifica agent bound but local registration failed; reauthorize"})
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePacificaAgentRevoke(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil || s.live.pacificaAgentRevoker == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live agent revocation unavailable"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAgentAuthorizationBody)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request pacificlive.RevokeAgentRequest
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := request.Validate(time.Now()); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	unlockOwner, err := s.live.lockAgentOwner("pacifica", request.Account)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Pacifica owner is busy; retry revocation"})
+		return
+	}
+	defer unlockOwner()
+	blocked, err := s.agentChangeBlocked(r.Context(), "pacifica", request.Account)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to inspect active live sessions"})
+		return
+	}
+	if blocked {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "cannot revoke agent during an active live session"})
+		return
+	}
+	if err := s.live.pacificaAgentRevoker.RevokeAgent(r.Context(), request); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Pacifica agent revocation rejected"})
+		return
+	}
+	if err := s.live.removeAgentAuthorization(r.Context(), "pacifica", request.Account, request.AgentWallet); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("Pacifica agent revoked but local registration cleanup failed", "error", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
