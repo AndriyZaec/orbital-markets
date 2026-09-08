@@ -92,12 +92,12 @@ function categorize(p: LivePosition) {
 export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
   const { positions, loading: positionsLoading, error: positionsError } = useLivePositions()
   // One typed readiness layer, shared with the header and ConnectAccounts.
-  const { pacifica, hyperliquid, aggregate: readiness } = useVenueReadiness()
+  const { pacifica, hyperliquid, aster, aggregate: readiness } = useVenueReadiness()
   const [privateView, setPrivateView] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
   const [openedAt] = useState(() => Date.now())
-  const activityAccountKey = `${pacifica.address ?? ''}|${hyperliquid.address ?? ''}`
+  const activityAccountKey = `${pacifica.address ?? ''}|${hyperliquid.address ?? ''}|${aster.address ?? ''}`
   const [activitySnapshot, setActivitySnapshot] = useState<{
     accountKey: string
     positions: LivePosition[]
@@ -120,12 +120,12 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
     ? activitySnapshot.positions
     : []
 
-  // Sum only venues that actually report a value. If NEITHER venue has
+  // Sum only venues that actually report a value. If no venue has
   // reported equity, keep the tile as "--" rather than showing $0.00.
-  const equityValues = [pacifica.equity, hyperliquid.equity].filter(
+  const equityValues = [pacifica.equity, hyperliquid.equity, aster.equity].filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
-  const availableValues = [pacifica.available, hyperliquid.available].filter(
+  const availableValues = [pacifica.available, hyperliquid.available, aster.available].filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
   const totalEquity = equityValues.length > 0 ? equityValues.reduce((a, b) => a + b, 0) : null
@@ -274,9 +274,10 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
           )
         }
       >
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <VenueCard readiness={pacifica} maskAmounts={privateView} />
           <VenueCard readiness={hyperliquid} maskAmounts={privateView} />
+          <VenueCard readiness={aster} maskAmounts={privateView} />
         </div>
       </Section>
 
