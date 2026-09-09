@@ -77,3 +77,116 @@ func TestAccountStatePublishesUnavailableReasonUntilNewSnapshot(t *testing.T) {
 		t.Fatalf("new snapshot retained unavailable reason: %+v", snapshot)
 	}
 }
+
+func TestAccountStateAppliesCoherentRefreshWithoutRecheckingMode(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	createdAt := time.Now().Add(-time.Second)
+	mode := SnapshotPart{Mode: &PositionMode{OneWay: true}}
+	margin := SnapshotPart{Margin: &MarginSummary{CanTrade: true, Equity: 100, Available: 90}}
+	positions := []Position{{Symbol: "BTCUSDT", Side: "long", Size: 1, Leverage: 5}}
+	parts := []SnapshotPart{mode, margin, {Positions: &positions}}
+	for i, part := range parts {
+		if err := state.ApplySnapshotPart("0xabcd", "0xagent", "snapshot-1", createdAt, createdAt.Add(time.Duration(i+1)*time.Millisecond), part); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	refreshAt := createdAt.Add(time.Second)
+	newMargin := SnapshotPart{Margin: &MarginSummary{CanTrade: true, Equity: 120, Available: 110}}
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-1", refreshAt, refreshAt.Add(time.Millisecond), newMargin); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := state.snapshotAt(refreshAt.Add(2 * time.Millisecond)); snapshot.Equity != 100 || len(snapshot.Positions) != 1 {
+		t.Fatalf("partial refresh was published: %+v", snapshot)
+	}
+	newPositions := []Position{}
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-1", refreshAt, refreshAt.Add(2*time.Millisecond), SnapshotPart{Positions: &newPositions}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := state.snapshotAt(refreshAt.Add(3 * time.Millisecond))
+	if !snapshot.Connected || !snapshot.OneWayMode || snapshot.Equity != 120 || len(snapshot.Positions) != 0 {
+		t.Fatalf("complete refresh = %+v", snapshot)
+	}
+}
+
+func TestAccountStateIgnoresDelayedOlderRefreshParts(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	createdAt := time.Now().Add(-time.Second)
+	positions := []Position{{Symbol: "BTCUSDT", Side: "long", Size: 1, Leverage: 5}}
+	parts := []SnapshotPart{
+		{Mode: &PositionMode{OneWay: true}},
+		{Margin: &MarginSummary{CanTrade: true, Equity: 100, Available: 90}},
+		{Positions: &positions},
+	}
+	for i, part := range parts {
+		if err := state.ApplySnapshotPart("0xabcd", "0xagent", "snapshot-1", createdAt, createdAt.Add(time.Duration(i+1)*time.Millisecond), part); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	olderAt := createdAt.Add(time.Second)
+	newerAt := olderAt.Add(time.Second)
+	olderMargin := SnapshotPart{Margin: &MarginSummary{CanTrade: true, Equity: 110, Available: 100}}
+	newerMargin := SnapshotPart{Margin: &MarginSummary{CanTrade: true, Equity: 120, Available: 110}}
+	newerPositions := []Position{}
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-old", olderAt, newerAt, olderMargin); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-new", newerAt, newerAt.Add(time.Millisecond), newerMargin); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-old", olderAt, newerAt.Add(2*time.Millisecond), SnapshotPart{Positions: &positions}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-new", newerAt, newerAt.Add(3*time.Millisecond), SnapshotPart{Positions: &newerPositions}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := state.snapshotAt(newerAt.Add(4 * time.Millisecond))
+	if snapshot.SnapshotID != "refresh-new" || snapshot.Equity != 120 || len(snapshot.Positions) != 0 {
+		t.Fatalf("older refresh contaminated newer state: %+v", snapshot)
+	}
+}
+
+func TestAccountStateIgnoresRefreshSupersededByFullSnapshot(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	createdAt := time.Now().Add(-2 * time.Second)
+	positions := []Position{{Symbol: "BTCUSDT", Side: "long", Size: 1, Leverage: 5}}
+	initialParts := []SnapshotPart{
+		{Mode: &PositionMode{OneWay: true}},
+		{Margin: &MarginSummary{CanTrade: true, Equity: 100, Available: 90}},
+		{Positions: &positions},
+	}
+	for i, part := range initialParts {
+		if err := state.ApplySnapshotPart("0xabcd", "0xagent", "snapshot-1", createdAt, createdAt.Add(time.Duration(i+1)*time.Millisecond), part); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	refreshAt := createdAt.Add(time.Second)
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-1", refreshAt, refreshAt.Add(time.Millisecond), SnapshotPart{
+		Margin: &MarginSummary{CanTrade: true, Equity: 110, Available: 100},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fullAt := refreshAt.Add(time.Second)
+	fullPositions := []Position{}
+	fullParts := []SnapshotPart{
+		{Mode: &PositionMode{OneWay: true}},
+		{Margin: &MarginSummary{CanTrade: true, Equity: 130, Available: 120}},
+		{Positions: &fullPositions},
+	}
+	for i, part := range fullParts {
+		if err := state.ApplySnapshotPart("0xabcd", "0xagent", "snapshot-2", fullAt, fullAt.Add(time.Duration(i+1)*time.Millisecond), part); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := state.ApplyRefreshPart("0xabcd", "0xagent", "refresh-1", refreshAt, fullAt.Add(4*time.Millisecond), SnapshotPart{Positions: &positions}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := state.snapshotAt(fullAt.Add(5 * time.Millisecond))
+	if snapshot.SnapshotID != "snapshot-2" || snapshot.Equity != 130 || len(snapshot.Positions) != 0 {
+		t.Fatalf("delayed refresh contaminated full snapshot: %+v", snapshot)
+	}
+}

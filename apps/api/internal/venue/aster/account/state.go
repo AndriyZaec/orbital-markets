@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const browserHeartbeatTTL = 45 * time.Second
+const browserHeartbeatTTL = 6 * time.Minute
 
 type AccountStateSnapshot struct {
 	Account                   string
@@ -41,6 +41,12 @@ type AccountState struct {
 	modeUpdatedAt             time.Time
 	marginUpdatedAt           time.Time
 	positionsUpdatedAt        time.Time
+	refreshID                 string
+	refreshCreatedAt          time.Time
+	refreshMargin             *MarginSummary
+	refreshPositions          *[]Position
+	refreshMarginUpdatedAt    time.Time
+	refreshPositionsUpdatedAt time.Time
 	leverageBySymbol          map[string]float64
 	leverageBrackets          LeverageBrackets
 	leverageBracketsUpdatedAt map[string]time.Time
@@ -83,7 +89,8 @@ func (s *AccountState) ApplySnapshotPart(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if snapshotID != s.snapshotID {
-		if !s.snapshotCreatedAt.IsZero() && !createdAt.After(s.snapshotCreatedAt) {
+		if (!s.snapshotCreatedAt.IsZero() && !createdAt.After(s.snapshotCreatedAt)) ||
+			(!s.refreshCreatedAt.IsZero() && !createdAt.After(s.refreshCreatedAt)) {
 			return nil
 		}
 		s.agent = agent
@@ -95,6 +102,12 @@ func (s *AccountState) ApplySnapshotPart(
 		s.modeUpdatedAt = time.Time{}
 		s.marginUpdatedAt = time.Time{}
 		s.positionsUpdatedAt = time.Time{}
+		s.refreshID = ""
+		s.refreshCreatedAt = time.Time{}
+		s.refreshMargin = nil
+		s.refreshPositions = nil
+		s.refreshMarginUpdatedAt = time.Time{}
+		s.refreshPositionsUpdatedAt = time.Time{}
 		s.unavailableReason = ""
 	} else if agent != s.agent || !createdAt.Equal(s.snapshotCreatedAt) {
 		return fmt.Errorf("Aster account snapshot generation mismatch")
@@ -120,6 +133,70 @@ func (s *AccountState) ApplySnapshotPart(
 	return nil
 }
 
+func (s *AccountState) ApplyRefreshPart(
+	account, agent, refreshID string,
+	createdAt, respondedAt time.Time,
+	part SnapshotPart,
+) error {
+	account = strings.ToLower(strings.TrimSpace(account))
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	if account == "" || account != s.account || agent == "" || refreshID == "" || createdAt.IsZero() || respondedAt.Before(createdAt) {
+		return fmt.Errorf("invalid Aster account refresh context")
+	}
+	if (part.Margin == nil) == (part.Positions == nil) || part.Mode != nil {
+		return fmt.Errorf("Aster account refresh must contain margin or positions")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mode == nil || agent != s.agent {
+		return fmt.Errorf("full Aster account snapshot required")
+	}
+	if refreshID != s.refreshID {
+		if (!s.snapshotCreatedAt.IsZero() && !createdAt.After(s.snapshotCreatedAt)) ||
+			(!s.refreshCreatedAt.IsZero() && !createdAt.After(s.refreshCreatedAt)) {
+			return nil
+		}
+		s.refreshID = refreshID
+		s.refreshCreatedAt = createdAt
+		s.refreshMargin = nil
+		s.refreshPositions = nil
+		s.refreshMarginUpdatedAt = time.Time{}
+		s.refreshPositionsUpdatedAt = time.Time{}
+	} else if !createdAt.Equal(s.refreshCreatedAt) {
+		return fmt.Errorf("Aster account refresh generation mismatch")
+	}
+	if part.Margin != nil {
+		margin := *part.Margin
+		s.refreshMargin = &margin
+		s.refreshMarginUpdatedAt = respondedAt
+	}
+	if part.Positions != nil {
+		positions := append([]Position(nil), (*part.Positions)...)
+		s.refreshPositions = &positions
+		s.refreshPositionsUpdatedAt = respondedAt
+	}
+	if s.refreshMargin == nil || s.refreshPositions == nil {
+		return nil
+	}
+	s.margin = s.refreshMargin
+	s.positions = s.refreshPositions
+	s.marginUpdatedAt = s.refreshMarginUpdatedAt
+	s.positionsUpdatedAt = s.refreshPositionsUpdatedAt
+	s.snapshotID = s.refreshID
+	s.snapshotCreatedAt = s.refreshCreatedAt
+	s.unavailableReason = ""
+	for _, position := range *s.positions {
+		s.leverageBySymbol[position.Symbol] = position.Leverage
+	}
+	s.refreshID = ""
+	s.refreshMargin = nil
+	s.refreshPositions = nil
+	s.refreshMarginUpdatedAt = time.Time{}
+	s.refreshPositionsUpdatedAt = time.Time{}
+	return nil
+}
+
 func (s *AccountState) MarkUnavailable(account, agent, reason string) error {
 	account = strings.ToLower(strings.TrimSpace(account))
 	agent = strings.ToLower(strings.TrimSpace(agent))
@@ -137,6 +214,12 @@ func (s *AccountState) MarkUnavailable(account, agent, reason string) error {
 	s.modeUpdatedAt = time.Time{}
 	s.marginUpdatedAt = time.Time{}
 	s.positionsUpdatedAt = time.Time{}
+	s.refreshID = ""
+	s.refreshCreatedAt = time.Time{}
+	s.refreshMargin = nil
+	s.refreshPositions = nil
+	s.refreshMarginUpdatedAt = time.Time{}
+	s.refreshPositionsUpdatedAt = time.Time{}
 	s.leverageBySymbol = make(map[string]float64)
 	s.leverageBrackets = make(LeverageBrackets)
 	s.leverageBracketsUpdatedAt = make(map[string]time.Time)
@@ -191,8 +274,8 @@ func (s *AccountState) snapshotAt(now time.Time) AccountStateSnapshot {
 		snapshot.Positions = append([]Position(nil), (*s.positions)...)
 	}
 	if s.mode != nil && s.margin != nil && s.positions != nil {
-		snapshot.LastUpdated = oldest(s.modeUpdatedAt, s.marginUpdatedAt, s.positionsUpdatedAt)
-		newestUpdate := newest(s.modeUpdatedAt, s.marginUpdatedAt, s.positionsUpdatedAt)
+		snapshot.LastUpdated = oldest(s.marginUpdatedAt, s.positionsUpdatedAt)
+		newestUpdate := newest(s.marginUpdatedAt, s.positionsUpdatedAt)
 		snapshot.Connected = !snapshot.LastUpdated.IsZero() && newestUpdate.Sub(snapshot.LastUpdated) <= 30*time.Second &&
 			now.Sub(newestUpdate) <= browserHeartbeatTTL
 	}

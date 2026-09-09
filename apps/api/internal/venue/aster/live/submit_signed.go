@@ -228,8 +228,11 @@ func validateSignedOrder(signed domain.SignedAction, request *domain.SigningRequ
 		return "", fmt.Errorf("invalid Aster typed-data envelope")
 	}
 	values, err := url.ParseQuery(unsigned.Message.Msg)
-	if err != nil || validateAsterOrderQuery(values, request) != nil {
-		return "", fmt.Errorf("invalid Aster signed order query")
+	if err != nil {
+		return "", fmt.Errorf("invalid Aster signed order query: %w", err)
+	}
+	if err := validateAsterOrderQuery(values, request, metadata); err != nil {
+		return "", fmt.Errorf("invalid Aster signed order query: %w", err)
 	}
 	return unsigned.Message.Msg, nil
 }
@@ -246,19 +249,27 @@ func equalEIP712Fields(actual, expected []EIP712Field) bool {
 	return true
 }
 
-func validateAsterOrderQuery(values url.Values, request *domain.SigningRequest) error {
+func validateAsterOrderQuery(values url.Values, request *domain.SigningRequest, metadata AsterSubmitMeta) error {
 	allowed := map[string]bool{
 		"symbol": true, "type": true, "side": true, "quantity": true, "price": true,
 		"timeInForce": true, "newClientOrderId": true, "newOrderRespType": true,
 		"reduceOnly": true, "positionSide": true, "asterChain": true, "user": true,
-		"signer": true, "nonce": true,
+		"signer": true, "nonce": true, "builder": true, "feeRate": true,
 	}
 	for key, value := range values {
 		if !allowed[key] || len(value) != 1 {
 			return fmt.Errorf("unexpected or duplicate parameter")
 		}
 	}
-	if len(values) != 14 {
+	expectedParameters := 14
+	if metadata.Builder != "" || metadata.FeeRate != "" {
+		if validateBuilder(BuilderConfig{Address: metadata.Builder, FeeRate: metadata.FeeRate}) != nil ||
+			!strings.EqualFold(values.Get("builder"), metadata.Builder) || values.Get("feeRate") != metadata.FeeRate {
+			return fmt.Errorf("builder summary mismatch")
+		}
+		expectedParameters += 2
+	}
+	if len(values) != expectedParameters {
 		return fmt.Errorf("unexpected parameter count")
 	}
 	if values.Get("symbol") != request.Symbol || values.Get("type") != "LIMIT" ||

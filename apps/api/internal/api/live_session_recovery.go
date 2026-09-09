@@ -415,7 +415,12 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	}
 	defer accounts.Release()
 	unlockAccounts := accounts.Lock()
-	defer unlockAccounts()
+	accountsLocked := true
+	defer func() {
+		if accountsLocked {
+			unlockAccounts()
+		}
+	}()
 	session.accounts = accounts
 	defer func() { session.accounts = nil }()
 	s.live.sessions.put(session)
@@ -430,7 +435,11 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 
 	needLeg2 := originalState == sessAwaitingLeg2RetrySign ||
 		originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
+	accountsLocked = false
+	unlockAccounts()
 	truthReady := s.waitForRecoveryAccountState(ctx, session, needLeg2)
+	unlockAccounts = accounts.Lock()
+	accountsLocked = true
 	leg1Size, leg1Price := currentVenuePosition(accounts, session.Leg1.venue, session.Leg1.symbol)
 	leg2Size, leg2Price := currentVenuePosition(accounts, session.Leg2.venue, session.Leg2.symbol)
 	leg1Delta := leg1Size - session.BaselineLeg1Size

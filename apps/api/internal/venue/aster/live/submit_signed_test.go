@@ -133,6 +133,27 @@ func TestSubmitSignedOrderRejectsEndpointMetadataBeforeSending(t *testing.T) {
 	}
 }
 
+func TestValidateSignedOrderAcceptsBuilderAttribution(t *testing.T) {
+	request, err := buildPayload(
+		payloadTestRules, testUser, testSigner, "BTCUSDT", domain.SideLong,
+		1, 100, "orbital-order-1", false, "open", openSlippageBPS,
+		&BuilderConfig{Address: testBuilder, FeeRate: "0.0002"},
+		time.Now(), time.Now().UnixMicro(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := domain.SignedAction{
+		RequestID: request.ID, ClientOrderID: request.ClientOrderID, Venue: "aster",
+		SignerAddress: strings.ToUpper(testSigner[:2]) + testSigner[2:],
+		Signature:     "0x" + strings.Repeat("1", 128) + "1b",
+	}
+
+	if _, err := validateSignedOrder(signed, request); err != nil {
+		t.Fatalf("builder-attributed order rejected: %v", err)
+	}
+}
+
 func TestSubmitSignedOrderRejectsMutatedQueryBeforeSending(t *testing.T) {
 	request, signed := validSignedOrder(t)
 	var unsigned AsterUnsignedOrder

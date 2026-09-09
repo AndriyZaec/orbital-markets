@@ -455,20 +455,30 @@ function TradingAgentSession({
     )
   }
 
-  const refreshAsterAccount = async (): Promise<'ready' | 'deposit_required'> => {
+  const refreshAsterAccount = async (refreshOnly = false): Promise<'ready' | 'deposit_required'> => {
     if (!asterOwner || aster.status !== 'ready' || !aster.agentAddress) {
       throw new Error('Aster authorization is not ready')
     }
     const ownerAddress = asterOwner
     const agentAddress = aster.agentAddress
-    const key = `${ownerAddress.toLowerCase()}:${agentAddress.toLowerCase()}`
-    if (asterAccountRefresh.current?.key === key) return asterAccountRefresh.current.promise
+    const key = `${ownerAddress.toLowerCase()}:${agentAddress.toLowerCase()}:${refreshOnly ? 'refresh' : 'full'}`
+    const current = asterAccountRefresh.current
+    const accountKey = `${ownerAddress.toLowerCase()}:${agentAddress.toLowerCase()}:`
+    if (current?.key.startsWith(accountKey)) {
+      if (refreshOnly || current.key === key) return current.promise
+      try {
+        await current.promise
+      } catch {
+        // A pre-trade full refresh must still run after a failed background refresh.
+      }
+      return refreshAsterAccount(false)
+    }
     const requestStillCurrent = async () => {
       if (!ownerStillCurrent('aster', ownerAddress, owners.current)) return false
       return (await storage.restore('aster', ownerAddress))
         ?.agentAddress.toLowerCase() === agentAddress.toLowerCase()
     }
-    const promise = refreshAsterAccountSnapshot(ownerAddress, agentAddress, sign, requestStillCurrent)
+    const promise = refreshAsterAccountSnapshot(ownerAddress, agentAddress, sign, requestStillCurrent, refreshOnly)
     asterAccountRefresh.current = { key, promise }
     try {
       return await promise

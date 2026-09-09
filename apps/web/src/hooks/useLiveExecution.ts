@@ -268,6 +268,8 @@ function useLiveExecutionState() {
     try {
       if (venues.includes('aster')) {
         if (!asterSymbol) throw new Error('Aster market symbol is unavailable')
+        const accountStatus = await tradingAgents.refreshAsterAccount()
+        if (accountStatus === 'deposit_required') throw new Error('Aster account requires a deposit')
         await tradingAgents.requestAster({ operation: 'get_leverage_brackets', symbol: asterSymbol })
       }
       // 1. Prepare — get session + leg-1 open & unwind signing requests.

@@ -73,4 +73,10 @@ func TestParseLeverageData(t *testing.T) {
 	if maximum, found := MaximumLeverage(hype, "HYPEUSDT", 500); !found || maximum != 125 {
 		t.Fatalf("HYPE maximum = %d, found = %v, want 125, true", maximum, found)
 	}
+	wrapped, err := ParseLeverageBrackets([]byte(`[{"symbol":"BTCUSDT","brackets":[
+		{"initialLeverage":20,"notionalCap":10000,"notionalFloor":0}
+	]}]`), "BTCUSDT")
+	if err != nil || len(wrapped["BTCUSDT"]) != 1 {
+		t.Fatalf("wrapped brackets = %+v, err = %v", wrapped, err)
+	}
 }

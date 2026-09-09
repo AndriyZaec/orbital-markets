@@ -99,7 +99,7 @@ func TestStreamUpdatesPreserveIndependentFreshnessAndOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	timestamp := time.Now().UnixMilli()
-	mark := fmt.Sprintf(`{"stream":"!markPrice@arr@1s","data":[{"e":"markPriceUpdate","E":%d,"s":"BTCUSDT","p":"110","i":"109","r":"0.0016"}]}`, timestamp)
+	mark := fmt.Sprintf(`{"stream":"!markPrice@arr@1s","data":[{"e":"markPriceUpdate","E":%d,"s":"BTCUSDT","p":"110","P":"999","i":"109","r":"0.0016"}]}`, timestamp)
 	book := fmt.Sprintf(`{"stream":"!bookTicker","data":{"u":11,"E":%d,"T":%d,"s":"BTCUSDT","b":"109","B":"4","a":"110","A":"5"}}`, timestamp+2, timestamp+1)
 	if err := adapter.applyStreamMessage([]byte(mark)); err != nil {
 		t.Fatal(err)

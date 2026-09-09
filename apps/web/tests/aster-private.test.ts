@@ -177,6 +177,34 @@ test('Aster account refresh stops after deposit-required response', async () => 
   }
 })
 
+test('Aster lightweight account refresh omits position mode', async () => {
+  const originalFetch = globalThis.fetch
+  const operations = ['get_account', 'get_positions'] as const
+  const requests = operations.map(snapshotRequest)
+  const bodies: string[] = []
+  let calls = 0
+  globalThis.fetch = async (_input, init) => {
+    calls += 1
+    bodies.push(String(init?.body ?? ''))
+    if (calls === 1) return Response.json({ snapshot_id: 'snapshot-1', requests })
+    const operation = operations[calls - 2]
+    return Response.json({
+      request_id: requests[calls - 2].id, operation, data: {}, state_applied: true,
+    })
+  }
+  try {
+    const status = await refreshAsterAccountSnapshot(account, agent, async (request) => ({
+      request_id: request.id, client_order_id: '', venue: 'aster',
+      signer_address: agent, signature: `0x${'1'.repeat(130)}`,
+    }), () => true, true)
+    assert.equal(status, 'ready')
+    assert.equal(calls, 3)
+    assert.equal(JSON.parse(bodies[0]).refresh_only, true)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('Aster account refresh rejects mixed snapshot generations before signing', async () => {
   const originalFetch = globalThis.fetch
   const requests = [

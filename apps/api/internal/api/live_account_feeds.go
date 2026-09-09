@@ -65,10 +65,11 @@ func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, re
 		if request.SnapshotID == "" {
 			return false, nil
 		}
-		if err := f.state.ApplySnapshotPart(
-			request.Account, request.Signer, request.SnapshotID,
-			request.CreatedAt, result.RespondedAt, *update.SnapshotPart,
-		); err != nil {
+		apply := f.state.ApplySnapshotPart
+		if asterlive.IsAccountRefreshSnapshot(request.SnapshotID) {
+			apply = f.state.ApplyRefreshPart
+		}
+		if err := apply(request.Account, request.Signer, request.SnapshotID, request.CreatedAt, result.RespondedAt, *update.SnapshotPart); err != nil {
 			return false, err
 		}
 	}

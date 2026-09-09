@@ -24,8 +24,9 @@ func (s *Server) handleAsterAccountPrepare(w http.ResponseWriter, r *http.Reques
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var input struct {
-		Account string `json:"account"`
-		Agent   string `json:"agent"`
+		Account     string `json:"account"`
+		Agent       string `json:"agent"`
+		RefreshOnly bool   `json:"refresh_only,omitempty"`
 	}
 	if err := decoder.Decode(&input); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -35,7 +36,13 @@ func (s *Server) handleAsterAccountPrepare(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	payloads, err := asterlive.BuildAccountSnapshotPayloads(input.Account, input.Agent)
+	var payloads *asterlive.AccountSnapshotPayloads
+	var err error
+	if input.RefreshOnly {
+		payloads, err = asterlive.BuildAccountRefreshPayloads(input.Account, input.Agent)
+	} else {
+		payloads, err = asterlive.BuildAccountSnapshotPayloads(input.Account, input.Agent)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

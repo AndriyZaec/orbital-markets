@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -16,15 +17,16 @@ var privateSymbolPattern = regexp.MustCompile(`^[A-Z0-9_]{1,32}$`)
 type PrivateOperation string
 
 const (
-	GetPositionMode     PrivateOperation = "get_position_mode"
-	GetAccount          PrivateOperation = "get_account"
-	GetPositions        PrivateOperation = "get_positions"
-	GetLeverageBracket  PrivateOperation = "get_leverage_brackets"
-	QueryOrder          PrivateOperation = "query_order"
-	UpdateLeverage      PrivateOperation = "update_leverage"
-	StartUserStream     PrivateOperation = "start_user_stream"
-	KeepaliveUserStream PrivateOperation = "keepalive_user_stream"
-	CloseUserStream     PrivateOperation = "close_user_stream"
+	GetPositionMode      PrivateOperation = "get_position_mode"
+	GetAccount           PrivateOperation = "get_account"
+	GetPositions         PrivateOperation = "get_positions"
+	GetLeverageBracket   PrivateOperation = "get_leverage_brackets"
+	QueryOrder           PrivateOperation = "query_order"
+	UpdateLeverage       PrivateOperation = "update_leverage"
+	StartUserStream      PrivateOperation = "start_user_stream"
+	KeepaliveUserStream  PrivateOperation = "keepalive_user_stream"
+	CloseUserStream      PrivateOperation = "close_user_stream"
+	accountRefreshPrefix                  = "aster-account-refresh-"
 )
 
 type PrivateRequestParams struct {
@@ -104,9 +106,22 @@ func buildPrivatePayloadForSnapshot(
 }
 
 func BuildAccountSnapshotPayloads(user, signer string) (*AccountSnapshotPayloads, error) {
+	return buildAccountPayloads(user, signer, "aster-account-", []PrivateOperation{
+		GetPositionMode, GetAccount, GetPositions,
+	})
+}
+
+func BuildAccountRefreshPayloads(user, signer string) (*AccountSnapshotPayloads, error) {
+	return buildAccountPayloads(user, signer, accountRefreshPrefix, []PrivateOperation{GetAccount, GetPositions})
+}
+
+func IsAccountRefreshSnapshot(snapshotID string) bool {
+	return strings.HasPrefix(snapshotID, accountRefreshPrefix)
+}
+
+func buildAccountPayloads(user, signer, prefix string, operations []PrivateOperation) (*AccountSnapshotPayloads, error) {
 	now := time.Now()
-	snapshotID := fmt.Sprintf("aster-account-%d", nextAsterNonce())
-	operations := []PrivateOperation{GetPositionMode, GetAccount, GetPositions}
+	snapshotID := fmt.Sprintf("%s%d", prefix, nextAsterNonce())
 	requests := make([]*domain.SigningRequest, 0, len(operations))
 	for _, operation := range operations {
 		request, err := buildPrivatePayloadForSnapshot(PrivateRequestParams{

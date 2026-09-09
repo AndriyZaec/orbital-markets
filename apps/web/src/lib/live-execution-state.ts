@@ -12,6 +12,10 @@ export interface ExecutionIntent {
   ]
 }
 
+export function executionIntentSide(positionSide: 'long' | 'short'): 'buy' | 'sell' {
+  return positionSide === 'long' ? 'buy' : 'sell'
+}
+
 interface PreparedExecution {
   asset: string
   riskierVenue: string
@@ -55,7 +59,10 @@ export function assertExecutionIntentRequest(
     const expectedSide = request.action === 'open'
       ? leg?.side
       : leg?.side === 'buy' ? 'sell' : 'buy'
-    valid = valid && request.side === expectedSide &&
+    const expectedRequestSide = request.venue === 'pacifica'
+      ? expectedSide === 'buy' ? 'bid' : 'ask'
+      : expectedSide
+    valid = valid && request.side === expectedRequestSide &&
       request.reduce_only === (request.action === 'unwind')
   } else {
     valid = false

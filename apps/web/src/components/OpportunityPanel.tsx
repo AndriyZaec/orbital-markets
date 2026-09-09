@@ -11,6 +11,7 @@ import { AssetIcon } from '@/components/AssetIcon'
 import { trackAnalytics } from '@/lib/analytics'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { knownMaxLeverage, reconcileLeverageSelection } from '@/lib/leverage'
+import { executionIntentSide } from '@/lib/live-execution-state'
 
 interface Props {
   opportunity: Opportunity
@@ -258,13 +259,13 @@ export function OpportunityPanel({
   const handleExecuteLive = () => {
     if (!plan || plan.opportunity_id !== opp.id || plan.asset.toUpperCase() !== opp.asset.toUpperCase() ||
       plan.leverage.leverage !== leverage) return
-    const intentLegs = liveVenues.map((venue, index) => {
+    const intentLegs = liveVenues.map((venue) => {
       const leg = [plan.leg_1, plan.leg_2].find((candidate) => candidate.venue.toLowerCase() === venue)
       if (!leg) return null
       return {
         venue,
         symbol: leg.market_key ?? opp.asset,
-        side: index === 0 ? 'buy' as const : 'sell' as const,
+        side: executionIntentSide(leg.side),
       }
     })
     if (!intentLegs[0] || !intentLegs[1]) return

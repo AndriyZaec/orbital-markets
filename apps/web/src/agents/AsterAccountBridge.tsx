@@ -3,12 +3,13 @@ import { useEffect, useEffectEvent, type ReactNode } from 'react'
 import { useTradingAgentManager } from './TradingAgentContext'
 
 const streamRetryDelayMs = 30_000
-const snapshotHeartbeatMs = 60_000
+const snapshotHeartbeatMs = 5 * 60_000
+const fullReconciliationMs = 10 * 60_000
 const leverageBracketsRefreshMs = 4 * 60_000
 
 export function AsterAccountBridge({ children }: { children: ReactNode }) {
   const manager = useTradingAgentManager()
-  const refreshAccount = useEffectEvent(() => manager.refreshAsterAccount())
+  const refreshAccount = useEffectEvent((refreshOnly: boolean) => manager.refreshAsterAccount(refreshOnly))
   const startUserStream = useEffectEvent(() => manager.requestAster<{ listenKey: string }>({
     operation: 'start_user_stream',
   }))
@@ -32,12 +33,25 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
     let refreshRunning = false
     let refreshQueued = false
     let lastRefreshAt = 0
+    let lastFullRefreshAt = 0
     let streamStarted = false
     let streamStarting = false
     let streamRetryAvailable = true
     let accountUnavailable = false
     let leverageBracketsUpdatedAt = 0
     let leverageBracketsAttemptedAt = 0
+
+    const updateLeverageBrackets = async () => {
+      if (accountUnavailable || Date.now() - leverageBracketsUpdatedAt < leverageBracketsRefreshMs ||
+        Date.now() - leverageBracketsAttemptedAt < streamRetryDelayMs) return
+      leverageBracketsAttemptedAt = Date.now()
+      try {
+        await refreshLeverageBrackets()
+        leverageBracketsUpdatedAt = Date.now()
+      } catch {
+        // The next bracket heartbeat retries discovery.
+      }
+    }
 
     const retryStreamOnce = (retry: () => void) => {
       if (!active || accountUnavailable || !streamRetryAvailable) return
@@ -57,7 +71,8 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       refreshQueued = false
       lastRefreshAt = Date.now()
       try {
-        const status = await refreshAccount()
+        const fullRefresh = accountUnavailable || Date.now() - lastFullRefreshAt >= fullReconciliationMs
+        const status = await refreshAccount(!fullRefresh)
         if (status === 'deposit_required') {
           accountUnavailable = true
           streamRetryAvailable = false
@@ -67,19 +82,11 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
           socket = null
           current?.close()
         } else {
+          if (fullRefresh) lastFullRefreshAt = Date.now()
           const recovered = accountUnavailable
           accountUnavailable = false
           streamRetryAvailable = true
-          if (Date.now() - leverageBracketsUpdatedAt >= leverageBracketsRefreshMs &&
-            Date.now() - leverageBracketsAttemptedAt >= streamRetryDelayMs) {
-            leverageBracketsAttemptedAt = Date.now()
-            try {
-              await refreshLeverageBrackets()
-              leverageBracketsUpdatedAt = Date.now()
-            } catch {
-              // A later account refresh retries bracket discovery.
-            }
-          }
+          await updateLeverageBrackets()
           if (recovered && active) void start()
         }
         return true
@@ -150,6 +157,7 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       })
     }, 0)
     const snapshotHeartbeat = window.setInterval(scheduleRefresh, snapshotHeartbeatMs)
+    const leverageBracketsHeartbeat = window.setInterval(() => void updateLeverageBrackets(), leverageBracketsRefreshMs)
     const keepalive = window.setInterval(() => {
       if (accountUnavailable) return
       void keepaliveUserStream().catch(() => {
@@ -171,6 +179,7 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       window.clearTimeout(refreshTimer)
       window.clearTimeout(reconnectTimer)
       window.clearInterval(snapshotHeartbeat)
+      window.clearInterval(leverageBracketsHeartbeat)
       window.clearInterval(keepalive)
       const current = socket
       socket = null

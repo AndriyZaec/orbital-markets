@@ -83,3 +83,19 @@ func TestBuildAccountSnapshotPayloadsSharesOneGeneration(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildAccountRefreshPayloadsOmitsPositionMode(t *testing.T) {
+	payloads, err := BuildAccountRefreshPayloads(testUser, testSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsAccountRefreshSnapshot(payloads.SnapshotID) || len(payloads.Requests) != 2 {
+		t.Fatalf("payloads = %+v", payloads)
+	}
+	wantActions := []string{"get_account", "get_positions"}
+	for i, request := range payloads.Requests {
+		if request.SnapshotID != payloads.SnapshotID || request.Action != wantActions[i] {
+			t.Fatalf("request %d = %+v", i, request)
+		}
+	}
+}

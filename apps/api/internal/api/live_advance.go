@@ -12,6 +12,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 )
 
 const (
@@ -312,6 +313,20 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	// Submit leg 1.
 	sub, err := s.submitSignedActionForAccounts(ctx, *openSigned, openReq, sess.accounts)
 	if err != nil || sub == nil {
+		if errors.Is(err, asterlive.ErrSubmissionNotSent) {
+			s.logger.Error("live advance: leg 1 submission not sent",
+				"session_id", sess.ID, "venue", sess.Leg1.venue, "err", err)
+			sess.State = sessFailed
+			s.live.sessions.remove(sess.ID)
+			reason := err.Error() + "; no order was submitted"
+			s.persistSession(ctx, sess, executor.ExecStateFailed, reason)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"session_id": sess.ID, "status": string(sessFailed), "reason": reason,
+			})
+			return
+		}
+		s.logger.Error("live advance: leg 1 submission ambiguous",
+			"session_id", sess.ID, "venue", sess.Leg1.venue, "err", err)
 		s.live.sessions.remove(sess.ID)
 		go func() {
 			<-releaseDone

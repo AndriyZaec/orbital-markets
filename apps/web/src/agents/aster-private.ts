@@ -54,17 +54,20 @@ export async function refreshAsterAccountSnapshot(
   agent: string,
   sign: (request: SigningRequest) => Promise<SignedAction>,
   requestStillCurrent: () => boolean | Promise<boolean>,
+	refreshOnly = false,
 ): Promise<'ready' | 'deposit_required'> {
   const preparedResponse = await apiFetch('/api/v1/live/aster/account/prepare', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ account, agent }),
+    body: JSON.stringify({ account, agent, ...(refreshOnly ? { refresh_only: true } : {}) }),
   })
   if (!preparedResponse.ok) {
     throw await apiResponseError(preparedResponse, 'Unable to prepare the Aster account snapshot.')
   }
   const payloads = await preparedResponse.json() as AsterAccountSnapshotPayloads
-  const operations: AsterPrivateOperation[] = ['get_position_mode', 'get_account', 'get_positions']
+  const operations: AsterPrivateOperation[] = refreshOnly
+    ? ['get_account', 'get_positions']
+    : ['get_position_mode', 'get_account', 'get_positions']
   const requests = new Map(payloads.requests?.map((request) => [request.action, request]))
   const coherent = !!payloads.snapshot_id && payloads.requests?.length === operations.length &&
     requests.size === operations.length && operations.every((operation) => {

@@ -4,6 +4,7 @@ import {
   assertExecutionIntentRequest,
   assertPreparedExecutionIntent,
   areValidLeg1SigningRequests,
+  executionIntentSide,
   executionFailurePhase,
   executionPhaseFromStatus,
   normalizeHyperliquidAddress,
@@ -20,6 +21,11 @@ test('maps recovery statuses to explicit UI phases', () => {
 test('routes failures after submission to recovery', () => {
   assert.equal(executionFailurePhase(false), 'failed')
   assert.equal(executionFailurePhase(true), 'recovering')
+})
+
+test('maps both plan directions to their order sides', () => {
+  assert.equal(executionIntentSide('long'), 'buy')
+  assert.equal(executionIntentSide('short'), 'sell')
 })
 
 test('normalizes wallet addresses using venue semantics', () => {
@@ -109,4 +115,27 @@ test('execution intent binds symbol, direction, leverage, lifetime, and reuse', 
   assert.doesNotThrow(() => assertExecutionIntentRequest(intent, signingRequest({
     id: 'unwind', action: 'unwind', side: 'sell', reduce_only: true,
   }), new Set(), now))
+})
+
+test('execution intent accepts Pacifica native bid and ask sides', () => {
+  const pacificaIntent = {
+    ...intent,
+    legs: [
+      { venue: 'pacifica', symbol: '2Z', side: 'sell' },
+      { venue: 'aster', symbol: '2ZUSDT', side: 'buy' },
+    ],
+  } as const
+  const request = signingRequest({
+    id: 'pacifica-short', venue: 'pacifica', symbol: '2Z', side: 'ask',
+  })
+
+  assert.doesNotThrow(() => assertExecutionIntentRequest(
+    pacificaIntent, request, new Set(), Date.parse('2026-09-08T12:00:00.000Z'),
+  ))
+  assert.doesNotThrow(() => assertExecutionIntentRequest(
+    pacificaIntent,
+    { ...request, id: 'pacifica-unwind', action: 'unwind', side: 'bid', reduce_only: true },
+    new Set(),
+    Date.parse('2026-09-08T12:00:00.000Z'),
+  ))
 })

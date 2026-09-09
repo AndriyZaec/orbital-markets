@@ -87,12 +87,13 @@ type streamEnvelope struct {
 }
 
 type markPriceUpdate struct {
-	EventType   string `json:"e"`
-	EventTime   int64  `json:"E"`
-	Symbol      string `json:"s"`
-	MarkPrice   string `json:"p"`
-	IndexPrice  string `json:"i"`
-	FundingRate string `json:"r"`
+	EventType            string `json:"e"`
+	EventTime            int64  `json:"E"`
+	Symbol               string `json:"s"`
+	MarkPrice            string `json:"p"`
+	EstimatedSettlePrice string `json:"P"`
+	IndexPrice           string `json:"i"`
+	FundingRate          string `json:"r"`
 }
 
 type bookTickerUpdate struct {

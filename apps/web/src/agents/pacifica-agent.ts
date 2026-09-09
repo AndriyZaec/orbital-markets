@@ -245,6 +245,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
   const order = request.unsigned_payload as Partial<PacificaOrder> | null
   const amount = Number(order?.amount)
   const slippage = Number(order?.slippage_percent)
+  const expectedSide = request.side === 'buy' ? 'bid' : request.side === 'sell' ? 'ask' : request.side
   const allowed =
     request.venue === 'pacifica' &&
     agent.venue === 'pacifica' &&
@@ -257,8 +258,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     (order?.expiry_window ?? 0) > 0 &&
     (order?.expiry_window ?? 0) <= maxOrderExpiryWindow &&
     order?.symbol === request.symbol &&
-    ((request.side === 'buy' && order?.side === 'bid') ||
-      (request.side === 'sell' && order?.side === 'ask')) &&
+    (expectedSide === 'bid' || expectedSide === 'ask') && order?.side === expectedSide &&
     Number.isFinite(amount) &&
     amount > 0 &&
     Math.abs(amount - request.amount) < 1e-12 &&

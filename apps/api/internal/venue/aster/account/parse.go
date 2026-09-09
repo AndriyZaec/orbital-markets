@@ -236,7 +236,13 @@ func ParseLeverageBrackets(body []byte, expectedSymbol string) (LeverageBrackets
 	result := make(LeverageBrackets)
 	if expectedSymbol != "" {
 		var raw response
-		if err := decodeJSON(body, &raw); err != nil {
+		if jsonArray(body) {
+			var responses []response
+			if err := decodeJSON(body, &responses); err != nil || len(responses) != 1 {
+				return nil, fmt.Errorf("invalid leverage brackets")
+			}
+			raw = responses[0]
+		} else if err := decodeJSON(body, &raw); err != nil {
 			return nil, fmt.Errorf("invalid leverage brackets")
 		}
 		brackets, err := parse(raw)

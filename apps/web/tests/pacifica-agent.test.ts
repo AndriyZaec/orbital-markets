@@ -57,6 +57,15 @@ test('a local Pacifica agent signs the configured builder code', async () => {
   assert.equal(JSON.stringify(signed).includes(pacificaAgent().privateKey), false)
 })
 
+test('a local Pacifica agent accepts a native side in the signing request', async () => {
+  const request = pacificaSigningRequest()
+  request.side = 'ask'
+  request.unsigned_payload = { ...request.unsigned_payload as object, side: 'ask' }
+
+  const signed = await signPacificaAgentRequest(request, pacificaAgent())
+  assert.equal(signed.request_id, request.id)
+})
+
 test('the signing dispatcher rejects an unsupported venue before loading an agent', async () => {
   const request = { ...pacificaSigningRequest(), venue: 'dydx' } as unknown as SigningRequest
   await assert.rejects(

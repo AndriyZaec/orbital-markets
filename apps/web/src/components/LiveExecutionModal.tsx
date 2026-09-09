@@ -235,7 +235,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           )}
 
           {/* Mismatch readout */}
-          {state.mismatch != null && (
+          {state.mismatch != null && state.phase !== 'failed' && state.phase !== 'aborted' && (
             <p className="text-[11px] text-muted-foreground text-center mb-3">
               Hedge mismatch: <span className="font-mono text-foreground">{(state.mismatch * 100).toFixed(2)}%</span>
             </p>

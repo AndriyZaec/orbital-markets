@@ -74,6 +74,8 @@ type AsterUnsignedOrder struct {
 
 type AsterSubmitMeta struct {
 	OrderURL string `json:"order_url"`
+	Builder  string `json:"builder,omitempty"`
+	FeeRate  string `json:"fee_rate,omitempty"`
 }
 
 func BuildOpenPayload(
@@ -226,7 +228,12 @@ func buildPayload(
 	if err != nil {
 		return nil, fmt.Errorf("marshal Aster unsigned order: %w", err)
 	}
-	metaBytes, err := json.Marshal(AsterSubmitMeta{OrderURL: orderURL})
+	metadata := AsterSubmitMeta{OrderURL: orderURL}
+	if builder != nil {
+		metadata.Builder = builder.Address
+		metadata.FeeRate = builder.FeeRate
+	}
+	metaBytes, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("marshal Aster venue metadata: %w", err)
 	}
