@@ -66,15 +66,21 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
           const current = socket
           socket = null
           current?.close()
-        } else if (Date.now() - leverageBracketsUpdatedAt >= leverageBracketsRefreshMs &&
-          Date.now() - leverageBracketsAttemptedAt >= streamRetryDelayMs) {
-          leverageBracketsAttemptedAt = Date.now()
-          try {
-            await refreshLeverageBrackets()
-            leverageBracketsUpdatedAt = Date.now()
-          } catch {
-            // A later account refresh retries bracket discovery.
+        } else {
+          const recovered = accountUnavailable
+          accountUnavailable = false
+          streamRetryAvailable = true
+          if (Date.now() - leverageBracketsUpdatedAt >= leverageBracketsRefreshMs &&
+            Date.now() - leverageBracketsAttemptedAt >= streamRetryDelayMs) {
+            leverageBracketsAttemptedAt = Date.now()
+            try {
+              await refreshLeverageBrackets()
+              leverageBracketsUpdatedAt = Date.now()
+            } catch {
+              // A later account refresh retries bracket discovery.
+            }
           }
+          if (recovered && active) void start()
         }
         return true
       } catch {
@@ -86,7 +92,6 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       }
     }
     const scheduleRefresh = () => {
-      if (accountUnavailable) return
       window.clearTimeout(refreshTimer)
       const minDelay = Math.max(250, 2_000 - (Date.now() - lastRefreshAt))
       refreshTimer = window.setTimeout(() => void refresh(), minDelay)

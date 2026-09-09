@@ -40,6 +40,16 @@ func TestParsePositionsRejectsDuplicateAndNonFiniteValues(t *testing.T) {
 	}
 }
 
+func TestParsePositionsAcceptsCurrentAsterSymbolFormats(t *testing.T) {
+	positions, err := ParsePositions([]byte(`[
+		{"symbol":"B-MONEYUSDT","positionSide":"BOTH","positionAmt":"0","entryPrice":"0","leverage":"5","liquidationPrice":"0"},
+		{"symbol":"币安人生USDT","positionSide":"BOTH","positionAmt":"0","entryPrice":"0","leverage":"5","liquidationPrice":"0"}
+	]`))
+	if err != nil || len(positions) != 0 {
+		t.Fatalf("positions = %+v, err = %v", positions, err)
+	}
+}
+
 func TestParseLeverageData(t *testing.T) {
 	update, err := ParseLeverageUpdate([]byte(`{"symbol":"BTCUSDT","leverage":5}`))
 	if err != nil || update.Symbol != "BTCUSDT" || update.Leverage != 5 {

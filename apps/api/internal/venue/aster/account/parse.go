@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 type PositionMode struct {
@@ -305,11 +307,12 @@ func jsonArray(value []byte) bool {
 }
 
 func validSymbol(symbol string) bool {
-	if len(symbol) == 0 || len(symbol) > 32 {
+	if symbol == "" || utf8.RuneCountInString(symbol) > 32 {
 		return false
 	}
 	for _, char := range symbol {
-		if (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '_' {
+		ascii := (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == '-'
+		if !ascii && (char <= unicode.MaxASCII || (!unicode.IsLetter(char) && !unicode.IsNumber(char))) {
 			return false
 		}
 	}
