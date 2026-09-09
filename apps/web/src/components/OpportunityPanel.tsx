@@ -170,8 +170,11 @@ export function OpportunityPanel({
       ? [[readiness.venue, readiness.address]]
       : []))
     : undefined
+  const canRequestPlan = mode !== 'live' ||
+    !liveVenues.includes('aster') ||
+    Boolean(asterReadiness.address)
   const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(
-    opp.id,
+    canRequestPlan ? opp.id : null,
     debouncedLeverageForPlan,
     debouncedNotionalForPlan,
     planAccounts,
@@ -365,9 +368,7 @@ export function OpportunityPanel({
               </div>
             )}
           </div>
-          {maxLev === null ? (
-            <p className="mt-2 text-[12px] text-muted-foreground">Leverage limits unavailable</p>
-          ) : (
+          {maxLev !== null && (
             <LeverageRow
               label={`${longVenue} + ${shortVenue}`}
               value={leverage}
@@ -458,7 +459,7 @@ export function OpportunityPanel({
 
       {/* Action */}
       <div className="px-5 py-4 border-t border-border">
-        {planError && (
+        {canRequestPlan && planError && (
           <p className="text-[11px] text-red-400 mb-2">Plan error: {planError}</p>
         )}
         <div className="flex items-center gap-1.5 mb-3">
