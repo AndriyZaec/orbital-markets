@@ -10,6 +10,7 @@ import (
 const (
 	accountStateMaxAge     = 30 * time.Second
 	leverageBracketsMaxAge = 5 * time.Minute
+	maxSupportedLeverage   = 125
 )
 
 func ValidatePreTrade(snapshot AccountStateSnapshot, symbol string, marginRequired, leverage float64) []string {
@@ -61,7 +62,7 @@ func MaximumLeverage(brackets LeverageBrackets, symbol string, notional float64)
 	}
 	for _, bracket := range brackets[symbol] {
 		if notional >= bracket.NotionalFloor && notional < bracket.NotionalCap {
-			return int(bracket.InitialLeverage), true
+			return min(int(bracket.InitialLeverage), maxSupportedLeverage), true
 		}
 	}
 	return 0, false

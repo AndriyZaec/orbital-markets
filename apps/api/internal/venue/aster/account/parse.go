@@ -140,7 +140,7 @@ func ParsePositions(body []byte) ([]Position, error) {
 			return nil, fmt.Errorf("invalid %s liquidation price", raw.Symbol)
 		}
 		leverage, err := nonNegativeDecimal(raw.Leverage)
-		if err != nil || leverage > 125 {
+		if err != nil {
 			return nil, fmt.Errorf("invalid %s leverage", raw.Symbol)
 		}
 		unrealized := 0.0
@@ -215,7 +215,7 @@ func ParseLeverageBrackets(body []byte, expectedSymbol string) (LeverageBrackets
 		}
 		brackets := make([]LeverageBracket, 0, len(raw.Brackets))
 		for _, bracket := range raw.Brackets {
-			if bracket.InitialLeverage < 1 || bracket.InitialLeverage > 125 ||
+			if bracket.InitialLeverage < 1 ||
 				!finiteNumber(bracket.NotionalCap) || bracket.NotionalCap <= 0 ||
 				!finiteNumber(bracket.NotionalFloor) || bracket.NotionalFloor < 0 || bracket.NotionalFloor >= bracket.NotionalCap {
 				return nil, fmt.Errorf("invalid %s leverage bracket", raw.Symbol)

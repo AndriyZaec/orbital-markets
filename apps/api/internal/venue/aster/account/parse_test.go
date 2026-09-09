@@ -62,4 +62,15 @@ func TestParseLeverageData(t *testing.T) {
 	if err != nil || len(brackets["BTCUSDT"]) != 2 || brackets["BTCUSDT"][0].InitialLeverage != 20 {
 		t.Fatalf("brackets = %+v, err = %v", brackets, err)
 	}
+	hype, err := ParseLeverageBrackets([]byte(`{"symbol":"HYPEUSDT","brackets":[
+		{"initialLeverage":300,"notionalCap":1000,"notionalFloor":0},
+		{"initialLeverage":150,"notionalCap":2000,"notionalFloor":1000},
+		{"initialLeverage":100,"notionalCap":3000,"notionalFloor":2000}
+	]}`), "HYPEUSDT")
+	if err != nil || len(hype["HYPEUSDT"]) != 3 {
+		t.Fatalf("HYPE brackets = %+v, err = %v", hype, err)
+	}
+	if maximum, found := MaximumLeverage(hype, "HYPEUSDT", 500); !found || maximum != 125 {
+		t.Fatalf("HYPE maximum = %d, found = %v, want 125, true", maximum, found)
+	}
 }

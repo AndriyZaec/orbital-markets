@@ -127,14 +127,15 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>(() => (
     'trade'
   ))
-  const { opportunities, loading, error, lastUpdated } = useOpportunities()
+  const { aggregate: accountsAggregate, aster: asterReadiness } = useVenueReadiness()
+  const opportunityAccounts = asterReadiness.address ? { aster: asterReadiness.address } : undefined
+  const { opportunities, loading, error, lastUpdated } = useOpportunities(opportunityAccounts)
   const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
   const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
   // Header account status is driven by the same typed readiness layer used
   // by Connect Accounts and Execute Live — one source of truth for the
   // "is this trader actually ready to trade" signal.
-  const { aggregate: accountsAggregate } = useVenueReadiness()
   const tradingMode = 'live' as const
   // Matches useOpportunities' 60s poll interval — scanner refreshes every 60s.
   const countdown = useCountdown(lastUpdated, 60)

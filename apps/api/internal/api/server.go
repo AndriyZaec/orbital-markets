@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -182,6 +183,11 @@ const (
 )
 
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
+	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	limit := opportunitiesDefaultLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -192,6 +198,33 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	opps := s.scanner.Opportunities()
+	if resolveLeverageCap := s.live.accountLeverageResolver(bindings.Accounts); resolveLeverageCap != nil {
+		type marketLeverage struct {
+			marketKey string
+			maximum   int
+		}
+		markets := make(map[string]marketLeverage)
+		for _, snapshot := range s.scanner.MarketData(r.Context()) {
+			key := strings.ToLower(snapshot.Venue) + "\x00" + strings.ToUpper(snapshot.Asset)
+			markets[key] = marketLeverage{marketKey: snapshot.MarketKey, maximum: snapshot.MaxLeverage}
+		}
+		for i := range opps {
+			keyA := strings.ToLower(opps[i].VenuePair.VenueA) + "\x00" + strings.ToUpper(opps[i].Asset)
+			keyB := strings.ToLower(opps[i].VenuePair.VenueB) + "\x00" + strings.ToUpper(opps[i].Asset)
+			marketA, foundA := markets[keyA]
+			marketB, foundB := markets[keyB]
+			if !foundA || !foundB {
+				continue
+			}
+			if maximum, found := resolveLeverageCap(opps[i].VenuePair.VenueA, marketA.marketKey, opps[i].RecommendedNotional); found {
+				marketA.maximum = maximum
+			}
+			if maximum, found := resolveLeverageCap(opps[i].VenuePair.VenueB, marketB.marketKey, opps[i].RecommendedNotional); found {
+				marketB.maximum = maximum
+			}
+			opps[i].MaxLeverage = min(marketA.maximum, marketB.maximum)
+		}
+	}
 	responses, err := s.opportunitiesWithSignals(r.Context(), opps)
 	if err != nil {
 		s.logger.Warn("opportunities: load 7d signals", "err", err)
