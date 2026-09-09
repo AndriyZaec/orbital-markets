@@ -158,6 +158,59 @@ func TestBuildPlanPreservesVenueMarketKeys(t *testing.T) {
 	}
 }
 
+func TestBuildPlanUsesAccountLeverageCapForAsterMarket(t *testing.T) {
+	now := time.Now()
+	aster := leverageTestAdapter{name: "aster", data: []venue.MarketData{{
+		Venue: "aster", Asset: "MEME", MarketKey: "MEMEUSDT", MarkPrice: 0.01, IndexPrice: 0.01,
+		FundingRate: 0.001, BidPrice: 0.0099, BidSize: 1000, AskPrice: 0.0101, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 125, Timestamp: now,
+	}}}
+	pacifica := leverageTestAdapter{name: "pacifica", data: []venue.MarketData{{
+		Venue: "pacifica", Asset: "MEME", MarketKey: "MEME", MarkPrice: 0.01, IndexPrice: 0.01,
+		FundingRate: -0.001, BidPrice: 0.0099, BidSize: 1000, AskPrice: 0.0101, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 20, Timestamp: now,
+	}}}
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), aster, pacifica)
+	s.scan(context.Background())
+	opportunities := s.Opportunities()
+	if len(opportunities) != 1 {
+		t.Fatalf("opportunities = %d, want 1", len(opportunities))
+	}
+
+	resolverCalled := false
+	plan, err := s.BuildPlanWithLeverageCaps(
+		context.Background(), opportunities[0].ID, 10, 1500,
+		func(venueName, symbol string, notional float64) (int, bool) {
+			if venueName != "aster" {
+				return 0, false
+			}
+			resolverCalled = true
+			if symbol != "MEMEUSDT" || notional != 1500 {
+				t.Fatalf("resolver input = %s, %s, %v", venueName, symbol, notional)
+			}
+			return 10, true
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.MaxLeverage != 10 {
+		t.Fatalf("MaxLeverage = %d, want 10", plan.MaxLeverage)
+	}
+	if !resolverCalled {
+		t.Fatal("Aster leverage resolver was not called")
+	}
+	_, err = s.BuildPlanWithLeverageCaps(
+		context.Background(), opportunities[0].ID, 1, 1500,
+		func(venueName, _ string, _ float64) (int, bool) {
+			return 0, venueName == "aster"
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "maximum leverage unavailable") {
+		t.Fatalf("missing account cap error = %v", err)
+	}
+}
+
 func containsWarning(warnings []string, want string) bool {
 	for _, warning := range warnings {
 		if strings.Contains(warning, want) {

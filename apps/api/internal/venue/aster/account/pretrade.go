@@ -7,7 +7,10 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
-const accountStateMaxAge = 30 * time.Second
+const (
+	accountStateMaxAge     = 30 * time.Second
+	leverageBracketsMaxAge = 5 * time.Minute
+)
 
 func ValidatePreTrade(snapshot AccountStateSnapshot, symbol string, marginRequired, leverage float64) []string {
 	if !snapshot.Connected {
@@ -33,19 +36,33 @@ func ValidatePreTrade(snapshot AccountStateSnapshot, symbol string, marginRequir
 		blockers = append(blockers, fmt.Sprintf("leverage %.1fx below minimum %.0fx", leverage, domain.MinLeverage))
 	}
 	notional := marginRequired * leverage
-	maximum := 0.0
-	for _, bracket := range snapshot.LeverageBrackets[symbol] {
-		if notional >= bracket.NotionalFloor && notional < bracket.NotionalCap {
-			maximum = bracket.InitialLeverage
-			break
-		}
-	}
+	maximum, maximumKnown := FreshMaximumLeverage(snapshot, symbol, notional, time.Now())
 	if !finiteNumber(notional) || notional < 0 {
 		blockers = append(blockers, "invalid Aster planned notional")
-	} else if maximum == 0 {
+	} else if !maximumKnown {
 		blockers = append(blockers, fmt.Sprintf("Aster leverage brackets unavailable for %s", symbol))
-	} else if leverage > maximum {
-		blockers = append(blockers, fmt.Sprintf("Aster maximum leverage for %s is %.0fx", symbol, maximum))
+	} else if leverage > float64(maximum) {
+		blockers = append(blockers, fmt.Sprintf("Aster maximum leverage for %s is %dx", symbol, maximum))
 	}
 	return blockers
+}
+
+func FreshMaximumLeverage(snapshot AccountStateSnapshot, symbol string, notional float64, now time.Time) (int, bool) {
+	updatedAt := snapshot.LeverageBracketsUpdatedAt[symbol]
+	if updatedAt.IsZero() || now.Sub(updatedAt) > leverageBracketsMaxAge {
+		return 0, false
+	}
+	return MaximumLeverage(snapshot.LeverageBrackets, symbol, notional)
+}
+
+func MaximumLeverage(brackets LeverageBrackets, symbol string, notional float64) (int, bool) {
+	if !finiteNumber(notional) || notional < 0 {
+		return 0, false
+	}
+	for _, bracket := range brackets[symbol] {
+		if notional >= bracket.NotionalFloor && notional < bracket.NotionalCap {
+			return int(bracket.InitialLeverage), true
+		}
+	}
+	return 0, false
 }

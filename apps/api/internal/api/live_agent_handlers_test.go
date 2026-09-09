@@ -68,6 +68,7 @@ func TestHandleAsterAgentApproveValidatesAndRelays(t *testing.T) {
 func TestHandleAsterAgentApproveRejectsPrivateKeyFields(t *testing.T) {
 	server := &Server{live: &LiveDeps{
 		asterAgentApprover: &fakeAsterAgentApprover{},
+		asterBuilder:       &asterlive.BuilderConfig{},
 	}}
 	response := httptest.NewRecorder()
 	server.handleAsterAgentApprove(response, httptest.NewRequest(

@@ -4,6 +4,7 @@ import { useTradingAgentManager } from './TradingAgentContext'
 
 const streamRetryDelayMs = 30_000
 const snapshotHeartbeatMs = 60_000
+const leverageBracketsRefreshMs = 4 * 60_000
 
 export function AsterAccountBridge({ children }: { children: ReactNode }) {
   const manager = useTradingAgentManager()
@@ -13,6 +14,9 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
   }))
   const keepaliveUserStream = useEffectEvent(() => manager.requestAster({
     operation: 'keepalive_user_stream',
+  }))
+  const refreshLeverageBrackets = useEffectEvent(() => manager.requestAster({
+    operation: 'get_leverage_brackets',
   }))
   const closeUserStream = useEffectEvent(() => manager.requestAster({
     operation: 'close_user_stream',
@@ -32,6 +36,8 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
     let streamStarting = false
     let streamRetryAvailable = true
     let accountUnavailable = false
+    let leverageBracketsUpdatedAt = 0
+    let leverageBracketsAttemptedAt = 0
 
     const retryStreamOnce = (retry: () => void) => {
       if (!active || accountUnavailable || !streamRetryAvailable) return
@@ -60,6 +66,15 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
           const current = socket
           socket = null
           current?.close()
+        } else if (Date.now() - leverageBracketsUpdatedAt >= leverageBracketsRefreshMs &&
+          Date.now() - leverageBracketsAttemptedAt >= streamRetryDelayMs) {
+          leverageBracketsAttemptedAt = Date.now()
+          try {
+            await refreshLeverageBrackets()
+            leverageBracketsUpdatedAt = Date.now()
+          } catch {
+            // A later account refresh retries bracket discovery.
+          }
         }
         return true
       } catch {

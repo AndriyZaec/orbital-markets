@@ -76,7 +76,7 @@ func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, re
 		f.state.ApplyLeverage(*update.Leverage)
 	}
 	if update.LeverageBrackets != nil {
-		f.state.ApplyLeverageBrackets(update.LeverageBrackets)
+		f.state.ApplyLeverageBrackets(update.LeverageBrackets, request.CreatedAt)
 	}
 	return true, nil
 }
@@ -101,6 +101,10 @@ func (f *asterAccountFeed) Snapshot() liveAccountSnapshot {
 
 func (f *asterAccountFeed) PreTradeBlockers(leg domain.Leg) []string {
 	return asteraccount.ValidatePreTrade(f.state.Snapshot(), leg.MarketKey, leg.MarginRequired, leg.Leverage)
+}
+
+func (f *asterAccountFeed) MaxLeverage(symbol string, notional float64) (int, bool) {
+	return asteraccount.FreshMaximumLeverage(f.state.Snapshot(), symbol, notional, time.Now())
 }
 
 func (f *asterAccountFeed) RefreshPositions(context.Context) error {

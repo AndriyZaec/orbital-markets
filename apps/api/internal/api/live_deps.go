@@ -16,6 +16,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
@@ -51,6 +52,39 @@ type LiveDeps struct {
 	pacificaBuilderApprovalReader pacificaBuilderCodeApprovalReader
 	agentAuthorizations           *agentAuthorizationRegistry
 	agentOwnerLocks               [64]sync.Mutex
+}
+
+type accountLeverageSource interface {
+	MaxLeverage(symbol string, notional float64) (int, bool)
+}
+
+func (d *LiveDeps) accountLeverageResolver(accounts map[string]string) scanner.LeverageCapResolver {
+	if d == nil || d.accounts == nil || len(accounts) == 0 {
+		return nil
+	}
+	return func(venueName, symbol string, notional float64) (int, bool) {
+		if venueName != "aster" {
+			return 0, false
+		}
+		account := accounts[venueName]
+		if account == "" {
+			return 0, true
+		}
+		lease, found := d.accounts.Lookup(venueName, account)
+		if !found {
+			return 0, true
+		}
+		defer lease.Release()
+		source, ok := lease.Feed().(accountLeverageSource)
+		if !ok {
+			return 0, true
+		}
+		maximum, found := source.MaxLeverage(symbol, notional)
+		if !found {
+			return 0, true
+		}
+		return maximum, true
+	}
 }
 
 func NewLiveDeps(

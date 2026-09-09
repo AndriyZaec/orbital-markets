@@ -160,6 +160,47 @@ func TestAsterAccountFeedAppliesLeverageResponse(t *testing.T) {
 	}
 }
 
+func TestAsterAccountFeedResolvesNotionalLeverageCap(t *testing.T) {
+	feed := &asterAccountFeed{state: asteraccount.NewAccountState("0xowner")}
+	feed.state.ApplyLeverageBrackets(asteraccount.LeverageBrackets{"MEMEUSDT": {
+		{InitialLeverage: 20, NotionalFloor: 0, NotionalCap: 1000},
+		{InitialLeverage: 8, NotionalFloor: 1000, NotionalCap: 10000},
+	}}, time.Now())
+
+	maximum, found := feed.MaxLeverage("MEMEUSDT", 1500)
+	if !found || maximum != 8 {
+		t.Fatalf("maximum = %d, found = %v, want 8, true", maximum, found)
+	}
+}
+
+func TestLiveDepsResolvesAsterAccountLeverageCap(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	account := "0x1111111111111111111111111111111111111111"
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &asterAccountFeedFactory{},
+	}, accountFeedRegistryConfig{})
+	lease, err := registry.Acquire("aster", account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	live := &LiveDeps{accounts: registry}
+	applied, err := live.applyAsterPrivateResult(&domain.SigningRequest{Account: account, CreatedAt: time.Now()}, &asterlive.PrivateResult{
+		AccountUpdate: &asteraccount.Update{LeverageBrackets: asteraccount.LeverageBrackets{"MEMEUSDT": {
+			{InitialLeverage: 12, NotionalFloor: 0, NotionalCap: 10000},
+		}}},
+	})
+	if err != nil || !applied {
+		t.Fatalf("applied = %v, error = %v", applied, err)
+	}
+
+	maximum, found := live.accountLeverageResolver(map[string]string{"aster": account})("aster", "MEMEUSDT", 500)
+	if !found || maximum != 12 {
+		t.Fatalf("maximum = %d, found = %v, want 12, true", maximum, found)
+	}
+}
+
 func TestAsterAccountFeedAppliesDepositRequiredState(t *testing.T) {
 	feed := &asterAccountFeed{state: asteraccount.NewAccountState("0xowner")}
 	applied, err := feed.ApplyPrivateResult(&domain.SigningRequest{
@@ -180,7 +221,8 @@ func TestLiveDepsAppliesAsterDepositRequiredWithoutSnapshotUpdate(t *testing.T) 
 	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
 		"aster": &asterAccountFeedFactory{},
 	}, accountFeedRegistryConfig{})
-	lease, err := registry.Acquire("aster", "0xowner")
+	account := "0x1111111111111111111111111111111111111111"
+	lease, err := registry.Acquire("aster", account)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,12 +230,12 @@ func TestLiveDepsAppliesAsterDepositRequiredWithoutSnapshotUpdate(t *testing.T) 
 	live := &LiveDeps{accounts: registry}
 
 	applied, err := live.applyAsterPrivateResult(&domain.SigningRequest{
-		Account: "0xowner", Signer: "0xagent",
+		Account: account, Signer: "0x2222222222222222222222222222222222222222",
 	}, &asterlive.PrivateResult{DepositRequired: true})
 	if err != nil || !applied {
 		t.Fatalf("applied = %v, error = %v", applied, err)
 	}
-	current, found := registry.Lookup("aster", "0xowner")
+	current, found := registry.Lookup("aster", account)
 	if !found {
 		t.Fatal("Aster account feed not found")
 	}

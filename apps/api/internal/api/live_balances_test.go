@@ -155,6 +155,11 @@ func TestLiveBalancesReportsUnavailableAsterAccount(t *testing.T) {
 			"0xabc": {Venue: "aster", Account: "0xabc", UnavailableReason: "Aster account requires a deposit"},
 		}},
 	}, accountFeedRegistryConfig{})
+	lease, err := registry.Acquire("aster", "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
 	server := &Server{live: &LiveDeps{accounts: registry}}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?accounts%5Baster%5D=0xabc", nil)
 	response := httptest.NewRecorder()

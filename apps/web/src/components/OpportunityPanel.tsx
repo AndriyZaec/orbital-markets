@@ -10,6 +10,7 @@ import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 import { AssetIcon } from '@/components/AssetIcon'
 import { trackAnalytics } from '@/lib/analytics'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { knownMaxLeverage, reconcileLeverageSelection } from '@/lib/leverage'
 
 interface Props {
   opportunity: Opportunity
@@ -126,14 +127,15 @@ export function OpportunityPanel({
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const opportunityMaxLev = opp.max_leverage || 1
+  const opportunityMaxLev = knownMaxLeverage(opp.max_leverage)
+  const initialLeverage = opportunityMaxLev ?? 1
   const venuePair = `${longVenue}_${shortVenue}`
   const liveVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()] as [VenueId, VenueId]
 
-  const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: opportunityMaxLev })
+  const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: initialLeverage })
   const leverage = leverageSelection.opportunityId === opp.id
     ? leverageSelection.value
-    : opportunityMaxLev
+    : initialLeverage
   const setLeverage = (value: number) => setLeverageSelection({ opportunityId: opp.id, value })
   const [longOpen, setLongOpen] = useState(true)
   const [shortOpen, setShortOpen] = useState(true)
@@ -151,17 +153,6 @@ export function OpportunityPanel({
     leverage !== debouncedLeverageForPlan
 
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(
-    opp.id,
-    debouncedLeverageForPlan,
-    debouncedNotionalForPlan,
-  )
-  const planUpdating = planLoading || planInputsPending
-  const maxLev = maxLeverage || opportunityMaxLev
-  const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
-
-  // Live execution is gated by the typed readiness layer (wallet + signer +
-  // balance stream). blockingReasons is already venue-prefixed and de-duped.
   const {
     pacifica: pacReadiness,
     hyperliquid: hlReadiness,
@@ -174,6 +165,29 @@ export function OpportunityPanel({
     aster: asterReadiness,
   }
   const selectedReadiness = liveVenues.map((venue) => readinessByVenue[venue])
+  const planAccounts = mode === 'live'
+    ? Object.fromEntries(selectedReadiness.flatMap((readiness) => readiness.address
+      ? [[readiness.venue, readiness.address]]
+      : []))
+    : undefined
+  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(
+    opp.id,
+    debouncedLeverageForPlan,
+    debouncedNotionalForPlan,
+    planAccounts,
+  )
+  const planUpdating = planLoading || planInputsPending
+  const maxLev = maxLeverage ?? opportunityMaxLev
+  useEffect(() => {
+    if (maxLeverage === null) return
+    setLeverageSelection((current) => reconcileLeverageSelection(
+      current, opp.id, opportunityMaxLev, maxLeverage,
+    ))
+  }, [maxLeverage, opp.id, opportunityMaxLev])
+  const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
+
+  // Live execution is gated by the typed readiness layer (wallet + signer +
+  // balance stream). blockingReasons is already venue-prefixed and de-duped.
   const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
   const noSelectedWallets = selectedReadiness.every((readiness) => readiness.status === 'disconnected')
   const balanceByVenue = (venue: string): number | null => {
@@ -340,7 +354,9 @@ export function OpportunityPanel({
           <div className="mb-2">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Leverage</span>
-              <span className="text-[11px] text-muted-foreground/70">Pair max {maxLev}x</span>
+              <span className="text-[11px] text-muted-foreground/70">
+                Pair max {maxLev === null ? '--' : `${maxLev}x`}
+              </span>
             </div>
             {plan && (
               <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70">
@@ -349,12 +365,16 @@ export function OpportunityPanel({
               </div>
             )}
           </div>
-          <LeverageRow
-            label={`${longVenue} + ${shortVenue}`}
-            value={leverage}
-            max={maxLev}
-            onChange={setLeverage}
-          />
+          {maxLev === null ? (
+            <p className="mt-2 text-[12px] text-muted-foreground">Leverage limits unavailable</p>
+          ) : (
+            <LeverageRow
+              label={`${longVenue} + ${shortVenue}`}
+              value={leverage}
+              max={maxLev}
+              onChange={setLeverage}
+            />
+          )}
         </div>
 
         {/* Entry Type */}

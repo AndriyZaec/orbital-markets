@@ -95,7 +95,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		notional = *req.RequestedNotional
 	}
 	// 1. Build a fresh execution plan
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
+	plan, err := s.scanner.BuildPlanWithLeverageCaps(
+		r.Context(), req.OpportunityID, req.Leverage, notional,
+		s.live.accountLeverageResolver(bindings.Accounts),
+	)
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
 		writePlanError(w, http.StatusUnprocessableEntity, err)
@@ -218,20 +221,6 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if reasons := livePreTradeBlockers(plan, accounts); len(reasons) > 0 {
-		s.logger.Warn("live prepare: pre-trade blocked",
-			"code", livePreparePreTradeBlocked,
-			"opportunity_id", req.OpportunityID,
-			"reasons", reasons,
-		)
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error":   "pre-trade checks failed",
-			"code":    livePreparePreTradeBlocked,
-			"reasons": reasons,
-		})
-		return
-	}
-
 	// 4. Riskier leg first (higher slippage = thinner book → submit first).
 	leg1, leg2 := orderLegsByRisk(plan)
 	leg1Amount, err := liveBaseAmount(plan.Notional, leg1.price)
@@ -244,6 +233,24 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("live prepare: normalize hedge amount", "err", err, "asset", plan.Asset, "amount", leg1Amount)
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "requested size cannot be represented on both venues"})
+		return
+	}
+	plan.Leg1.MarginRequired = leg1Amount * plan.Leg1.ExpectedPrice / plan.Leg1.Leverage
+	plan.Leg2.MarginRequired = leg1Amount * plan.Leg2.ExpectedPrice / plan.Leg2.Leverage
+	plan.Leverage.MarginRequired = plan.Leg1.MarginRequired + plan.Leg2.MarginRequired
+	plan.Leverage.GrossExposure = leg1Amount * (plan.Leg1.ExpectedPrice + plan.Leg2.ExpectedPrice)
+	plan.Leverage.EffectiveLeverage = plan.Leverage.GrossExposure / plan.Leverage.MarginRequired
+	if reasons := livePreTradeBlockers(plan, accounts); len(reasons) > 0 {
+		s.logger.Warn("live prepare: pre-trade blocked",
+			"code", livePreparePreTradeBlocked,
+			"opportunity_id", req.OpportunityID,
+			"reasons", reasons,
+		)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "pre-trade checks failed",
+			"code":    livePreparePreTradeBlocked,
+			"reasons": reasons,
+		})
 		return
 	}
 	baselineLeg1Size, _ := currentVenuePosition(accounts, leg1.venue, leg1.symbol)

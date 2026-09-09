@@ -29,6 +29,7 @@ import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { knownMaxLeverage } from '@/lib/leverage'
 
 type View = 'trade' | 'portfolio'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
@@ -63,7 +64,7 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
   switch (field) {
     case 'asset': return opp.asset
     case 'apr': return opp.annualized_gross_edge
-    case 'aprMaxLev': return opp.annualized_gross_edge * (opp.max_leverage || 1)
+    case 'aprMaxLev': return opp.max_leverage > 0 ? opp.annualized_gross_edge * opp.max_leverage : 0
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
     case 'capacity': return opp.best_price_capacity
@@ -618,7 +619,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
                 const venueA = venueMetadata(opp.venue_pair.venue_a)
                 const venueB = venueMetadata(opp.venue_pair.venue_b)
-                const maxLev = opp.max_leverage || 1
+                const maxLev = knownMaxLeverage(opp.max_leverage)
                 const apr = opp.annualized_gross_edge
 
                 return (
@@ -636,7 +637,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                         <AssetIcon asset={opp.asset} />
                         <div>
                           <p className="font-semibold text-foreground">{opp.asset}</p>
-                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev === null ? '--' : `${maxLev}x`} · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
                         </div>
                       </div>
                     </TableCell>
@@ -653,7 +654,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
                       <p className="font-semibold text-emerald-400"><MetricFlash value={apr}>{fmtPct(apr)}</MetricFlash></p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">{fmtPct(apr * maxLev)} at {maxLev}x</p>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">{maxLev === null ? '-- at --' : `${fmtPct(apr * maxLev)} at ${maxLev}x`}</p>
                     </TableCell>
                     <TableCell className="py-3 text-right">
                       <OpportunitySignalCell signal={opp.signal_7d} />
@@ -704,7 +705,7 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const maxLev = opp.max_leverage || 1
+  const maxLev = knownMaxLeverage(opp.max_leverage)
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -720,10 +721,10 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
       <div className="px-5 py-2.5 flex items-center gap-6 border-b border-border shrink-0 overflow-x-auto">
         <StatItem label="Long"><VenueIcon venue={longVenue} /></StatItem>
         <StatItem label="Short"><VenueIcon venue={shortVenue} /></StatItem>
-        <StatItem label="Max Leverage" value={`${maxLev}x`} />
+        <StatItem label="Max Leverage" value={maxLev === null ? '--' : `${maxLev}x`} />
         <StatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
         <StatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
-        <StatItem label="APR x Max Lev" value={fmtPct(opp.annualized_gross_edge * maxLev)} mono />
+        <StatItem label="APR x Max Lev" value={maxLev === null ? '--' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
         <StatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
         <StatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
         <StatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
