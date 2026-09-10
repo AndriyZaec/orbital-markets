@@ -1,0 +1,245 @@
+package dataagent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
+	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
+)
+
+type Reader interface {
+	ReadAccount(context.Context, string) (AccountObservation, error)
+	ReadFunding(context.Context, string, time.Time, time.Time) ([]venue.FundingPayment, error)
+	LookupOrder(context.Context, string, string, string) (OrderStatus, error)
+}
+
+var _ Reader = (*Service)(nil)
+
+type AccountObservation struct {
+	Margin           asteraccount.MarginSummary
+	Positions        []asteraccount.Position
+	PositionMode     asteraccount.PositionMode
+	LeverageBrackets asteraccount.LeverageBrackets
+	ObservedAt       time.Time
+}
+
+type OrderStatus struct {
+	OrderID          string
+	ClientOrderID    string
+	Symbol           string
+	Status           string
+	ExecutedQuantity float64
+	AveragePrice     float64
+}
+
+type dataReader interface {
+	readAccount(context.Context, string, string, []byte) (AccountObservation, error)
+	readFunding(context.Context, string, string, []byte, time.Time, time.Time) ([]venue.FundingPayment, error)
+	lookupOrder(context.Context, string, string, []byte, string, string) (OrderStatus, error)
+}
+
+func (s *Service) ReadAccount(ctx context.Context, owner string) (AccountObservation, error) {
+	record, err := s.loadReadRecord(ctx, owner)
+	if err != nil {
+		return AccountObservation{}, err
+	}
+	defer clear(record.PrivateKey)
+	if s.reader == nil {
+		return AccountObservation{}, ErrUnavailable
+	}
+	return s.reader.readAccount(ctx, record.Owner, record.AgentAddress, record.PrivateKey)
+}
+
+func (s *Service) LookupOrder(ctx context.Context, owner, symbol, clientOrderID string) (OrderStatus, error) {
+	if !readSymbolPattern.MatchString(symbol) || !readClientIDPattern.MatchString(clientOrderID) {
+		return OrderStatus{}, ErrInvalidInput
+	}
+	record, err := s.loadReadRecord(ctx, owner)
+	if err != nil {
+		return OrderStatus{}, err
+	}
+	defer clear(record.PrivateKey)
+	if s.reader == nil {
+		return OrderStatus{}, ErrUnavailable
+	}
+	return s.reader.lookupOrder(ctx, record.Owner, record.AgentAddress, record.PrivateKey, symbol, clientOrderID)
+}
+
+func (s *Service) ReadFunding(ctx context.Context, owner string, since, until time.Time) ([]venue.FundingPayment, error) {
+	if since.IsZero() || until.IsZero() {
+		return nil, ErrInvalidInput
+	}
+	since = time.UnixMilli(since.UnixMilli()).UTC()
+	until = time.UnixMilli(until.UnixMilli()).UTC()
+	if !since.Before(until) || until.After(s.now().Add(time.Minute)) {
+		return nil, ErrInvalidInput
+	}
+	record, err := s.loadReadRecord(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(record.PrivateKey)
+	if s.reader == nil {
+		return nil, ErrUnavailable
+	}
+	return s.reader.readFunding(ctx, record.Owner, record.AgentAddress, record.PrivateKey, since, until)
+}
+
+func (s *Service) loadReadRecord(ctx context.Context, owner string) (Record, error) {
+	if !addressPattern.MatchString(owner) {
+		return Record{}, ErrInvalidInput
+	}
+	record, err := s.store.LoadApprovedByOwner(ctx, strings.ToLower(owner))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			status, statusErr := s.store.StatusByOwner(ctx, strings.ToLower(owner))
+			if errors.Is(statusErr, ErrNotFound) {
+				return Record{}, ErrNotApproved
+			}
+			if statusErr != nil {
+				return Record{}, ErrUnavailable
+			}
+			return Record{}, stateError(status.Status)
+		}
+		return Record{}, publicLoadError(err)
+	}
+	if record.RequestedExpiry <= s.now().UnixMilli() {
+		clear(record.PrivateKey)
+		return Record{}, ErrNotApproved
+	}
+	return record, nil
+}
+
+func (c *Client) readAccount(ctx context.Context, owner, agent string, privateKey []byte) (AccountObservation, error) {
+	observedAt := c.now().UTC()
+	read := func(path string, params []pair) ([]byte, error) {
+		body, err := c.signedGET(ctx, path, params, owner, agent, privateKey, c.nextNonce())
+		if err != nil {
+			return nil, fmt.Errorf("Aster %s read failed", endpointName(path))
+		}
+		return body, nil
+	}
+	modeBody, err := read("/fapi/v3/positionSide/dual", nil)
+	if err != nil {
+		return AccountObservation{}, err
+	}
+	mode, err := asteraccount.ParseSnapshotPart("get_position_mode", modeBody)
+	if err != nil {
+		return AccountObservation{}, fmt.Errorf("Aster position-mode response was invalid")
+	}
+	accountBody, err := read("/fapi/v3/accountWithJoinMargin", nil)
+	if err != nil {
+		return AccountObservation{}, err
+	}
+	margin, err := asteraccount.ParseSnapshotPart("get_account", accountBody)
+	if err != nil {
+		return AccountObservation{}, fmt.Errorf("Aster account response was invalid")
+	}
+	positionsBody, err := read("/fapi/v3/positionRisk", nil)
+	if err != nil {
+		return AccountObservation{}, err
+	}
+	positions, err := asteraccount.ParsePositions(positionsBody)
+	if err != nil {
+		return AccountObservation{}, fmt.Errorf("Aster position-risk response was invalid")
+	}
+	bracketsBody, err := read("/fapi/v3/leverageBracket", nil)
+	if err != nil {
+		return AccountObservation{}, err
+	}
+	brackets, err := asteraccount.ParseLeverageBrackets(bracketsBody, "")
+	if err != nil {
+		return AccountObservation{}, fmt.Errorf("Aster leverage-bracket response was invalid")
+	}
+	for _, position := range positions {
+		if len(brackets[position.Symbol]) == 0 {
+			return AccountObservation{}, fmt.Errorf("Aster leverage-bracket response was incomplete")
+		}
+	}
+	return AccountObservation{
+		Margin: *margin.Margin, Positions: positions, PositionMode: *mode.Mode,
+		LeverageBrackets: brackets, ObservedAt: observedAt,
+	}, nil
+}
+
+func (c *Client) lookupOrder(
+	ctx context.Context,
+	owner, agent string,
+	privateKey []byte,
+	symbol, clientOrderID string,
+) (OrderStatus, error) {
+	body, err := c.signedGET(ctx, "/fapi/v3/order", []pair{
+		{"symbol", symbol}, {"origClientOrderId", clientOrderID},
+	}, owner, agent, privateKey, c.nextNonce())
+	if err != nil {
+		return OrderStatus{}, fmt.Errorf("Aster exact-order read failed")
+	}
+	order, err := parseOrder(body, symbol, clientOrderID)
+	if err != nil {
+		return OrderStatus{}, fmt.Errorf("Aster exact-order response was invalid")
+	}
+	return order, nil
+}
+
+func (c *Client) readFunding(
+	ctx context.Context,
+	owner, agent string,
+	privateKey []byte,
+	since, until time.Time,
+) ([]venue.FundingPayment, error) {
+	const pageSize = 100
+	payments := make([]venue.FundingPayment, 0)
+	seen := make(map[string]bool)
+	pages := 0
+	for start := since.UTC(); !start.After(until); {
+		end := start.Add(incomeWindow)
+		if end.After(until) {
+			end = until.UTC()
+		}
+		for page := 1; ; page++ {
+			pages++
+			if pages > 100 {
+				return nil, fmt.Errorf("Aster funding pagination limit exceeded")
+			}
+			body, err := c.signedGET(ctx, "/fapi/v3/income", []pair{
+				{"incomeType", "FUNDING_FEE"}, {"startTime", strconv.FormatInt(start.UnixMilli(), 10)},
+				{"endTime", strconv.FormatInt(end.UnixMilli(), 10)}, {"limit", strconv.Itoa(pageSize)},
+				{"page", strconv.Itoa(page)},
+			}, owner, agent, privateKey, c.nextNonce())
+			if err != nil {
+				return nil, fmt.Errorf("Aster funding-income read failed")
+			}
+			pagePayments, err := asteraccount.ParseFundingPayments(body, owner, c.now())
+			if err != nil {
+				return nil, fmt.Errorf("Aster funding-income response was invalid")
+			}
+			if len(pagePayments) > pageSize {
+				return nil, fmt.Errorf("Aster funding-income response was invalid")
+			}
+			for _, payment := range pagePayments {
+				if payment.PaidAt.Before(start) || payment.PaidAt.After(end) || seen[payment.ExternalID] {
+					return nil, fmt.Errorf("Aster funding-income response was invalid")
+				}
+				seen[payment.ExternalID] = true
+				payments = append(payments, payment)
+			}
+			if len(pagePayments) < pageSize {
+				break
+			}
+		}
+		start = end.Add(time.Millisecond)
+	}
+	sort.Slice(payments, func(i, j int) bool {
+		if payments[i].PaidAt.Equal(payments[j].PaidAt) {
+			return payments[i].ExternalID < payments[j].ExternalID
+		}
+		return payments[i].PaidAt.Before(payments[j].PaidAt)
+	})
+	return payments, nil
+}

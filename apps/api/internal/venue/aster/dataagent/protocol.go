@@ -236,18 +236,23 @@ func validReadParams(path string, params []pair) bool {
 	case "/fapi/v3/agent", "/fapi/v3/accountWithJoinMargin", "/fapi/v3/positionRisk", "/fapi/v3/positionSide/dual":
 		return len(params) == 0
 	case "/fapi/v3/leverageBracket":
-		return len(params) == 1 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value)
+		return len(params) == 0 || len(params) == 1 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value)
 	case "/fapi/v3/order":
 		return len(params) == 2 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value) &&
 			params[1].key == "origClientOrderId" && readClientIDPattern.MatchString(params[1].value)
 	case "/fapi/v3/income":
-		if len(params) != 4 || params[0] != (pair{"incomeType", "FUNDING_FEE"}) ||
+		if (len(params) != 4 && len(params) != 5) || params[0] != (pair{"incomeType", "FUNDING_FEE"}) ||
 			params[1].key != "startTime" || params[2].key != "endTime" || params[3] != (pair{"limit", "100"}) {
 			return false
 		}
 		start, startErr := strconv.ParseInt(params[1].value, 10, 64)
 		end, endErr := strconv.ParseInt(params[2].value, 10, 64)
-		return startErr == nil && endErr == nil && start > 0 && end >= start && end-start <= incomeWindow.Milliseconds()
+		valid := startErr == nil && endErr == nil && start > 0 && end >= start && end-start <= incomeWindow.Milliseconds()
+		if len(params) == 4 {
+			return valid
+		}
+		page, pageErr := strconv.Atoi(params[4].value)
+		return valid && params[4].key == "page" && pageErr == nil && page >= 1 && page <= 100
 	default:
 		return false
 	}
@@ -392,6 +397,11 @@ func validateLeverageBrackets(body []byte, symbol string) error {
 }
 
 func validateOrder(body []byte, symbol, clientOrderID string) error {
+	_, err := parseOrder(body, symbol, clientOrderID)
+	return err
+}
+
+func parseOrder(body []byte, symbol, clientOrderID string) (OrderStatus, error) {
 	var response struct {
 		OrderID       json.RawMessage `json:"orderId"`
 		ClientOrderID string          `json:"clientOrderId"`
@@ -403,18 +413,23 @@ func validateOrder(body []byte, symbol, clientOrderID string) error {
 	if json.Unmarshal(body, &response) != nil || response.Symbol != symbol || response.ClientOrderID != clientOrderID ||
 		!validOrderStatus(response.Status) || !validNonNegativeDecimal(response.ExecutedQty) ||
 		!validNonNegativeDecimal(response.AvgPrice) {
-		return fmt.Errorf("invalid order response")
+		return OrderStatus{}, fmt.Errorf("invalid order response")
 	}
 	orderID := strings.Trim(string(response.OrderID), `"`)
 	if orderID == "" {
-		return fmt.Errorf("invalid order response")
+		return OrderStatus{}, fmt.Errorf("invalid order response")
 	}
 	for _, digit := range orderID {
 		if digit < '0' || digit > '9' {
-			return fmt.Errorf("invalid order response")
+			return OrderStatus{}, fmt.Errorf("invalid order response")
 		}
 	}
-	return nil
+	executed, _ := strconv.ParseFloat(response.ExecutedQty, 64)
+	average, _ := strconv.ParseFloat(response.AvgPrice, 64)
+	return OrderStatus{
+		OrderID: orderID, ClientOrderID: response.ClientOrderID, Symbol: response.Symbol,
+		Status: response.Status, ExecutedQuantity: executed, AveragePrice: average,
+	}, nil
 }
 
 func validOrderStatus(status string) bool {

@@ -62,6 +62,7 @@ type ExecutionAuthorizationChecker interface {
 type Service struct {
 	store     repository
 	venue     venueClient
+	reader    dataReader
 	execution ExecutionAuthorizationChecker
 	now       func() time.Time
 }
@@ -81,7 +82,8 @@ func NewService(store repository, venue venueClient, execution ExecutionAuthoriz
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: store, venue: venue, execution: execution, now: now}
+	reader, _ := venue.(dataReader)
+	return &Service{store: store, venue: venue, reader: reader, execution: execution, now: now}
 }
 
 func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (Prepared, error) {

@@ -135,7 +135,10 @@ func validatePrivateResponse(operation PrivateOperation, request *domain.Signing
 		}
 		return &asteraccount.Update{LeverageBrackets: brackets}, nil, nil
 	case GetIncome:
-		payments, err := parseIncomePayments(body, request.Account)
+		payments, err := asteraccount.ParseFundingPayments(body, request.Account, time.Now())
+		if err == nil && len(payments) >= 1000 {
+			return nil, nil, fmt.Errorf("income history requires pagination")
+		}
 		return nil, payments, err
 	case QueryOrder:
 		var response struct {
@@ -177,53 +180,6 @@ func validatePrivateResponse(operation PrivateOperation, request *domain.Signing
 		return nil, nil, fmt.Errorf("unsupported private operation")
 	}
 	return nil, nil, nil
-}
-
-func parseIncomePayments(body []byte, account string) ([]venue.FundingPayment, error) {
-	var rows []struct {
-		Symbol     string          `json:"symbol"`
-		IncomeType string          `json:"incomeType"`
-		Income     string          `json:"income"`
-		Asset      string          `json:"asset"`
-		Time       int64           `json:"time"`
-		TranID     json.RawMessage `json:"tranId"`
-	}
-	if err := json.Unmarshal(body, &rows); err != nil || rows == nil {
-		return nil, fmt.Errorf("invalid income history")
-	}
-	if len(rows) >= 1000 {
-		return nil, fmt.Errorf("income history requires pagination")
-	}
-	payments := make([]venue.FundingPayment, 0, len(rows))
-	seen := make(map[string]bool, len(rows))
-	for _, row := range rows {
-		amount, err := strconv.ParseFloat(row.Income, 64)
-		transactionID := strings.Trim(string(row.TranID), `"`)
-		paidAt := time.UnixMilli(row.Time).UTC()
-		if row.IncomeType != "FUNDING_FEE" || row.Asset != "USDT" ||
-			!privateSymbolPattern.MatchString(row.Symbol) || err != nil || math.IsNaN(amount) || math.IsInf(amount, 0) ||
-			!decimalDigits(transactionID) || seen[transactionID] || row.Time <= 0 || paidAt.After(time.Now().Add(time.Minute)) {
-			return nil, fmt.Errorf("invalid funding income row")
-		}
-		seen[transactionID] = true
-		payments = append(payments, venue.FundingPayment{
-			ExternalID: transactionID, Venue: "aster", Account: strings.ToLower(account),
-			Asset: strings.TrimSuffix(row.Symbol, "USDT"), MarketKey: row.Symbol, AmountUSD: amount, PaidAt: paidAt,
-		})
-	}
-	return payments, nil
-}
-
-func decimalDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, character := range value {
-		if character < '0' || character > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func validFiniteDecimal(value string) bool {
