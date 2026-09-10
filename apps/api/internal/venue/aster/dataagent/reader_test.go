@@ -39,12 +39,16 @@ func TestReaderReturnsOneCompleteAccountObservation(t *testing.T) {
 		return value
 	})
 	reader := NewService(store, client, nil, func() time.Time { return *now })
+	status, err := store.StatusByOwner(context.Background(), testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	observation, err := reader.ReadAccount(context.Background(), testOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !observation.PositionMode.OneWay || observation.Margin.Equity != 123.5 || len(observation.Positions) != 1 ||
+	if observation.DataAgent != status.AgentAddress || !observation.PositionMode.OneWay || observation.Margin.Equity != 123.5 || len(observation.Positions) != 1 ||
 		observation.Positions[0].Symbol != "2ZUSDT" || len(observation.LeverageBrackets["2ZUSDT"]) != 1 ||
 		!observation.ObservedAt.Equal(*now) {
 		t.Fatalf("observation = %+v", observation)

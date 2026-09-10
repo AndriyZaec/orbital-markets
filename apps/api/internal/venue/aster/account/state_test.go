@@ -5,6 +5,155 @@ import (
 	"time"
 )
 
+func TestAccountStateReplacesCompleteBackendObservationAtomically(t *testing.T) {
+	state := NewAccountState("0xABCD")
+	observedAt := time.Now().Add(-time.Second)
+	observation := Observation{
+		DataAgent:    "0xDATA",
+		Margin:       MarginSummary{CanTrade: true, Equity: 120, Available: 110},
+		Positions:    []Position{{Symbol: "BTCUSDT", Side: "long", Size: 1, Leverage: 5}},
+		PositionMode: PositionMode{OneWay: true},
+		LeverageBrackets: LeverageBrackets{"BTCUSDT": {{
+			InitialLeverage: 20, NotionalFloor: 0, NotionalCap: 100000,
+		}}},
+		ObservedAt: observedAt,
+	}
+
+	if err := state.ReplaceObservation("0xabcd", observation); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := state.snapshotAt(observedAt.Add(time.Second))
+	if !snapshot.Connected || snapshot.DataSource != AccountDataSourceBackend || snapshot.DataAgent != "0xdata" {
+		t.Fatalf("backend provenance = %+v", snapshot)
+	}
+	if snapshot.ExecutionAgent != "" || snapshot.LastUpdated != observedAt || snapshot.PositionsUpdatedAt != observedAt {
+		t.Fatalf("backend timestamps = %+v", snapshot)
+	}
+	if !snapshot.OneWayMode || !snapshot.CanTrade || snapshot.Equity != 120 || len(snapshot.Positions) != 1 {
+		t.Fatalf("backend observation = %+v", snapshot)
+	}
+	if snapshot.LeverageBySymbol["BTCUSDT"] != 5 || snapshot.LeverageBracketsUpdatedAt["BTCUSDT"] != observedAt {
+		t.Fatalf("backend leverage = %+v", snapshot)
+	}
+
+	observation.Positions[0].Size = 99
+	observation.LeverageBrackets["BTCUSDT"][0].InitialLeverage = 99
+	if current := state.snapshotAt(observedAt.Add(time.Second)); current.Positions[0].Size != 1 || current.LeverageBrackets["BTCUSDT"][0].InitialLeverage != 20 {
+		t.Fatal("backend observation exposed mutable input")
+	}
+}
+
+func TestAccountStateBackendObservationPreservesExecutionAgent(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	createdAt := time.Now().Add(-2 * time.Second)
+	positions := []Position{}
+	parts := []SnapshotPart{
+		{Mode: &PositionMode{OneWay: true}},
+		{Margin: &MarginSummary{CanTrade: true, Equity: 100, Available: 90}},
+		{Positions: &positions},
+	}
+	for i, part := range parts {
+		if err := state.ApplySnapshotPart("0xabcd", "0xexecution", "browser-1", createdAt, createdAt.Add(time.Duration(i+1)*time.Millisecond), part); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	observedAt := createdAt.Add(time.Second)
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata",
+		Margin:    MarginSummary{CanTrade: true, Equity: 120, Available: 110}, Positions: []Position{},
+		PositionMode: PositionMode{OneWay: true}, LeverageBrackets: LeverageBrackets{}, ObservedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := state.snapshotAt(observedAt.Add(time.Second))
+	if snapshot.ExecutionAgent != "0xexecution" || snapshot.DataAgent != "0xdata" || snapshot.DataSource != AccountDataSourceBackend {
+		t.Fatalf("agent identities were not separated: %+v", snapshot)
+	}
+}
+
+func TestAccountStateRejectsIncompleteOrOlderBackendObservation(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	observedAt := time.Now().Add(-time.Second)
+	complete := Observation{
+		DataAgent: "0xdata",
+		Margin:    MarginSummary{CanTrade: true, Equity: 120, Available: 110}, Positions: []Position{},
+		PositionMode: PositionMode{OneWay: true}, LeverageBrackets: LeverageBrackets{}, ObservedAt: observedAt,
+	}
+	if err := state.ReplaceObservation("0xabcd", complete); err != nil {
+		t.Fatal(err)
+	}
+
+	incomplete := complete
+	incomplete.Positions = nil
+	incomplete.ObservedAt = observedAt.Add(time.Second)
+	if err := state.ReplaceObservation("0xabcd", incomplete); err == nil {
+		t.Fatal("incomplete backend observation was accepted")
+	}
+	older := complete
+	older.Margin.Equity = 80
+	older.ObservedAt = observedAt.Add(-time.Second)
+	if err := state.ReplaceObservation("0xabcd", older); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := state.snapshotAt(observedAt.Add(2 * time.Second))
+	if snapshot.Equity != 120 || snapshot.LastUpdated != observedAt {
+		t.Fatalf("previous complete observation changed: %+v", snapshot)
+	}
+}
+
+func TestAccountStateBackendObservationRejectsBrowserOverwrite(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	observedAt := time.Now().Add(-time.Second)
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata",
+		Margin:    MarginSummary{CanTrade: true, Equity: 120, Available: 110}, Positions: []Position{},
+		PositionMode: PositionMode{OneWay: true}, LeverageBrackets: LeverageBrackets{}, ObservedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	newer := observedAt.Add(time.Second)
+	if err := state.ApplySnapshotPart("0xabcd", "0xexecution", "browser-1", newer, newer.Add(time.Millisecond), SnapshotPart{
+		Margin: &MarginSummary{CanTrade: true, Equity: 80, Available: 70},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.ApplyRefreshPart("0xabcd", "0xexecution", "refresh-1", newer, newer.Add(time.Millisecond), SnapshotPart{
+		Margin: &MarginSummary{CanTrade: true, Equity: 80, Available: 70},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.MarkUnavailable("0xabcd", "0xexecution", "browser read failed"); err != nil {
+		t.Fatal(err)
+	}
+	state.ApplyLeverageBrackets(LeverageBrackets{"BTCUSDT": {{InitialLeverage: 1}}}, newer)
+
+	snapshot := state.snapshotAt(newer.Add(time.Second))
+	if snapshot.DataSource != AccountDataSourceBackend || snapshot.DataAgent != "0xdata" || snapshot.Equity != 120 {
+		t.Fatalf("browser result overwrote backend observation: %+v", snapshot)
+	}
+	if len(snapshot.LeverageBrackets) != 0 || snapshot.UnavailableReason != "" {
+		t.Fatalf("browser metadata contaminated backend observation: %+v", snapshot)
+	}
+}
+
+func TestBackendObservationUsesExistingExecutionFreshnessLimit(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	observedAt := time.Now().Add(-accountStateMaxAge - time.Second)
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata",
+		Margin:    MarginSummary{CanTrade: true, Equity: 120, Available: 110}, Positions: []Position{},
+		PositionMode: PositionMode{OneWay: true}, LeverageBrackets: LeverageBrackets{}, ObservedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if blockers := ValidatePreTrade(state.Snapshot(), "BTCUSDT", 10, 2); len(blockers) != 1 || blockers[0] != "Aster account state is stale" {
+		t.Fatalf("stale backend observation blockers = %v", blockers)
+	}
+}
+
 func TestAccountStatePublishesOnlyCompleteCoherentSnapshot(t *testing.T) {
 	state := NewAccountState("0xABCD")
 	createdAt := time.Now().Add(-time.Second)

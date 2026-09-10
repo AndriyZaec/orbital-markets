@@ -9,9 +9,27 @@ import (
 
 const browserHeartbeatTTL = 6 * time.Minute
 
+type AccountDataSource string
+
+const (
+	AccountDataSourceBrowser AccountDataSource = "browser"
+	AccountDataSourceBackend AccountDataSource = "backend"
+)
+
+type Observation struct {
+	DataAgent        string
+	Margin           MarginSummary
+	Positions        []Position
+	PositionMode     PositionMode
+	LeverageBrackets LeverageBrackets
+	ObservedAt       time.Time
+}
+
 type AccountStateSnapshot struct {
 	Account                   string
-	Agent                     string
+	ExecutionAgent            string
+	DataAgent                 string
+	DataSource                AccountDataSource
 	SnapshotID                string
 	OneWayModeKnown           bool
 	OneWayMode                bool
@@ -32,7 +50,9 @@ type AccountStateSnapshot struct {
 type AccountState struct {
 	mu                        sync.RWMutex
 	account                   string
-	agent                     string
+	executionAgent            string
+	dataAgent                 string
+	dataSource                AccountDataSource
 	snapshotID                string
 	snapshotCreatedAt         time.Time
 	mode                      *PositionMode
@@ -88,12 +108,17 @@ func (s *AccountState) ApplySnapshotPart(
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.dataSource == AccountDataSourceBackend {
+		return nil
+	}
 	if snapshotID != s.snapshotID {
 		if (!s.snapshotCreatedAt.IsZero() && !createdAt.After(s.snapshotCreatedAt)) ||
 			(!s.refreshCreatedAt.IsZero() && !createdAt.After(s.refreshCreatedAt)) {
 			return nil
 		}
-		s.agent = agent
+		s.executionAgent = agent
+		s.dataAgent = ""
+		s.dataSource = AccountDataSourceBrowser
 		s.snapshotID = snapshotID
 		s.snapshotCreatedAt = createdAt
 		s.mode = nil
@@ -109,7 +134,7 @@ func (s *AccountState) ApplySnapshotPart(
 		s.refreshMarginUpdatedAt = time.Time{}
 		s.refreshPositionsUpdatedAt = time.Time{}
 		s.unavailableReason = ""
-	} else if agent != s.agent || !createdAt.Equal(s.snapshotCreatedAt) {
+	} else if agent != s.executionAgent || !createdAt.Equal(s.snapshotCreatedAt) {
 		return fmt.Errorf("Aster account snapshot generation mismatch")
 	}
 	if part.Mode != nil {
@@ -149,7 +174,10 @@ func (s *AccountState) ApplyRefreshPart(
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.mode == nil || agent != s.agent {
+	if s.dataSource == AccountDataSourceBackend {
+		return nil
+	}
+	if s.mode == nil || agent != s.executionAgent {
 		return fmt.Errorf("full Aster account snapshot required")
 	}
 	if refreshID != s.refreshID {
@@ -185,6 +213,8 @@ func (s *AccountState) ApplyRefreshPart(
 	s.positionsUpdatedAt = s.refreshPositionsUpdatedAt
 	s.snapshotID = s.refreshID
 	s.snapshotCreatedAt = s.refreshCreatedAt
+	s.dataAgent = ""
+	s.dataSource = AccountDataSourceBrowser
 	s.unavailableReason = ""
 	for _, position := range *s.positions {
 		s.leverageBySymbol[position.Symbol] = position.Leverage
@@ -205,7 +235,12 @@ func (s *AccountState) MarkUnavailable(account, agent, reason string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.agent = agent
+	if s.dataSource == AccountDataSourceBackend {
+		return nil
+	}
+	s.executionAgent = agent
+	s.dataAgent = ""
+	s.dataSource = AccountDataSourceBrowser
 	s.snapshotID = ""
 	s.snapshotCreatedAt = time.Time{}
 	s.mode = nil
@@ -230,12 +265,16 @@ func (s *AccountState) MarkUnavailable(account, agent, reason string) error {
 func (s *AccountState) ApplyLeverage(update LeverageUpdate) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Execution write confirmations remain valid after account reads move to the backend.
 	s.leverageBySymbol[update.Symbol] = update.Leverage
 }
 
 func (s *AccountState) ApplyLeverageBrackets(brackets LeverageBrackets, updatedAt time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.dataSource == AccountDataSourceBackend {
+		return
+	}
 	for symbol, tiers := range brackets {
 		if !updatedAt.After(s.leverageBracketsUpdatedAt[symbol]) {
 			continue
@@ -243,6 +282,55 @@ func (s *AccountState) ApplyLeverageBrackets(brackets LeverageBrackets, updatedA
 		s.leverageBrackets[symbol] = append([]LeverageBracket(nil), tiers...)
 		s.leverageBracketsUpdatedAt[symbol] = updatedAt
 	}
+}
+
+func (s *AccountState) ReplaceObservation(account string, observation Observation) error {
+	account = strings.ToLower(strings.TrimSpace(account))
+	dataAgent := strings.ToLower(strings.TrimSpace(observation.DataAgent))
+	if account == "" || account != s.account || dataAgent == "" || observation.ObservedAt.IsZero() ||
+		observation.Positions == nil || observation.LeverageBrackets == nil {
+		return fmt.Errorf("invalid complete Aster account observation")
+	}
+
+	positions := append([]Position(nil), observation.Positions...)
+	brackets := copyBrackets(observation.LeverageBrackets)
+	leverageBySymbol := make(map[string]float64, len(positions))
+	bracketsUpdatedAt := make(map[string]time.Time, len(brackets))
+	for _, position := range positions {
+		leverageBySymbol[position.Symbol] = position.Leverage
+	}
+	for symbol := range brackets {
+		bracketsUpdatedAt[symbol] = observation.ObservedAt
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.snapshotCreatedAt.IsZero() && !observation.ObservedAt.After(s.snapshotCreatedAt) {
+		return nil
+	}
+	mode := observation.PositionMode
+	margin := observation.Margin
+	s.dataAgent = dataAgent
+	s.dataSource = AccountDataSourceBackend
+	s.snapshotID = ""
+	s.snapshotCreatedAt = observation.ObservedAt
+	s.mode = &mode
+	s.margin = &margin
+	s.positions = &positions
+	s.modeUpdatedAt = observation.ObservedAt
+	s.marginUpdatedAt = observation.ObservedAt
+	s.positionsUpdatedAt = observation.ObservedAt
+	s.refreshID = ""
+	s.refreshCreatedAt = time.Time{}
+	s.refreshMargin = nil
+	s.refreshPositions = nil
+	s.refreshMarginUpdatedAt = time.Time{}
+	s.refreshPositionsUpdatedAt = time.Time{}
+	s.leverageBySymbol = leverageBySymbol
+	s.leverageBrackets = brackets
+	s.leverageBracketsUpdatedAt = bracketsUpdatedAt
+	s.unavailableReason = ""
+	return nil
 }
 
 func (s *AccountState) Snapshot() AccountStateSnapshot {
@@ -253,7 +341,8 @@ func (s *AccountState) snapshotAt(now time.Time) AccountStateSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snapshot := AccountStateSnapshot{
-		Account: s.account, Agent: s.agent, SnapshotID: s.snapshotID,
+		Account: s.account, ExecutionAgent: s.executionAgent, DataAgent: s.dataAgent,
+		DataSource: s.dataSource, SnapshotID: s.snapshotID,
 		LeverageBySymbol:          copyMap(s.leverageBySymbol),
 		LeverageBrackets:          copyBrackets(s.leverageBrackets),
 		LeverageBracketsUpdatedAt: copyTimeMap(s.leverageBracketsUpdatedAt),

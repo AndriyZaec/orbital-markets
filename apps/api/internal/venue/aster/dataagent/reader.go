@@ -21,13 +21,7 @@ type Reader interface {
 
 var _ Reader = (*Service)(nil)
 
-type AccountObservation struct {
-	Margin           asteraccount.MarginSummary
-	Positions        []asteraccount.Position
-	PositionMode     asteraccount.PositionMode
-	LeverageBrackets asteraccount.LeverageBrackets
-	ObservedAt       time.Time
-}
+type AccountObservation = asteraccount.Observation
 
 type OrderStatus struct {
 	OrderID          string
@@ -163,7 +157,7 @@ func (c *Client) readAccount(ctx context.Context, owner, agent string, privateKe
 		}
 	}
 	return AccountObservation{
-		Margin: *margin.Margin, Positions: positions, PositionMode: *mode.Mode,
+		DataAgent: agent, Margin: *margin.Margin, Positions: positions, PositionMode: *mode.Mode,
 		LeverageBrackets: brackets, ObservedAt: observedAt,
 	}, nil
 }

@@ -15,10 +15,10 @@ const (
 
 func ValidatePreTrade(snapshot AccountStateSnapshot, symbol string, marginRequired, leverage float64) []string {
 	if !snapshot.Connected {
-		return []string{"browser-assisted account state not connected"}
+		return []string{"Aster account state not connected"}
 	}
 	if snapshot.LastUpdated.IsZero() || time.Since(snapshot.LastUpdated) > accountStateMaxAge {
-		return []string{"browser-assisted account state is stale"}
+		return []string{"Aster account state is stale"}
 	}
 	var blockers []string
 	if !snapshot.OneWayModeKnown || !snapshot.OneWayMode {
