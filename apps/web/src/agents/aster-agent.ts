@@ -3,6 +3,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import builderConfig from '../../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
+import { buildAsterApproveAgentTypedData } from './aster-approve-agent.ts'
 import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 
@@ -67,49 +68,7 @@ export function buildAsterApproveAgentAction(
   }
 }
 
-export function buildAsterApproveAgentTypedData(action: AsterApproveAgentAction) {
-  return {
-    domain: {
-      name: 'AsterSignTransaction',
-      version: '1',
-      chainId: BigInt(ownerChainId),
-      verifyingContract: zeroAddress,
-    },
-    types: {
-      EIP712Domain: [
-        { name: 'name', type: 'string' },
-        { name: 'version', type: 'string' },
-        { name: 'chainId', type: 'uint256' },
-        { name: 'verifyingContract', type: 'address' },
-      ] as const,
-      ApproveAgent: [
-        { name: 'AgentName', type: 'string' },
-        { name: 'AgentAddress', type: 'string' },
-        { name: 'IpWhitelist', type: 'string' },
-        { name: 'Expired', type: 'uint256' },
-        { name: 'CanSpotTrade', type: 'bool' },
-        { name: 'CanPerpTrade', type: 'bool' },
-        { name: 'CanWithdraw', type: 'bool' },
-        { name: 'AsterChain', type: 'string' },
-        { name: 'User', type: 'string' },
-        { name: 'Nonce', type: 'uint256' },
-      ] as const,
-    },
-    primaryType: 'ApproveAgent' as const,
-    message: {
-      AgentName: action.agentName,
-      AgentAddress: action.agentAddress,
-      IpWhitelist: action.ipWhitelist,
-      Expired: BigInt(action.expired),
-      CanSpotTrade: action.canSpotTrade,
-      CanPerpTrade: action.canPerpTrade,
-      CanWithdraw: action.canWithdraw,
-      AsterChain: action.asterChain,
-      User: action.user,
-      Nonce: BigInt(action.nonce),
-    },
-  }
-}
+export { buildAsterApproveAgentTypedData }
 
 export function buildAsterApproveBuilderTypedData(action: AsterApproveAgentAction) {
   return {

@@ -11,9 +11,11 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
+	liveexecutor "github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
@@ -81,6 +83,15 @@ func main() {
 	telegram := buildTelegramIntegration(logger, sc, database)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	if masterKey, keyErr := dataagent.ParseMasterKey(os.Getenv("ASTER_DATA_AGENT_MASTER_KEY")); keyErr != nil {
+		logger.Warn("Aster data-agent probe disabled", "reason", keyErr)
+	} else if dataAgentStore, storeErr := dataagent.NewStore(database, masterKey); storeErr != nil {
+		logger.Warn("Aster data-agent probe disabled", "reason", storeErr)
+	} else {
+		srv.EnableAsterDataAgentProbe(dataagent.NewService(
+			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, logger), time.Now,
+		))
+	}
 	srv.EnableProductAnalytics(productAnalytics)
 	srv.EnableAnalyticsAccessToken(os.Getenv("ANALYTICS_ACCESS_TOKEN"))
 	if telegram != nil && telegram.links != nil {

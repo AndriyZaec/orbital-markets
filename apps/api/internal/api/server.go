@@ -37,6 +37,7 @@ type Server struct {
 	telegramLinks        TelegramLinker
 	productAnalytics     *analytics.Emitter
 	analyticsAccessToken string
+	asterDataAgent       AsterDataAgentProbe
 	metricsMu            sync.Mutex
 	metricsCache         *analytics.LiveMetrics
 	metricsCachedAt      time.Time
@@ -156,6 +157,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/aster/private/prepare", s.handleAsterPrivatePrepare)
 	s.mux.HandleFunc("POST /api/v1/live/aster/private/submit", s.handleAsterPrivateSubmit)
 	s.mux.HandleFunc("POST /api/v1/live/aster/account/prepare", s.handleAsterAccountPrepare)
+	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/prepare", s.handleAsterDataAgentPrepare)
+	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/validate", s.handleAsterDataAgentValidate)
+	s.mux.HandleFunc("GET /api/v1/live/aster/data-agent/status", s.handleAsterDataAgentStatus)
+	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/run", s.handleAsterDataAgentRun)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve", s.handleHyperliquidAgentApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve-builder-fee", s.handleHyperliquidBuilderFeeApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/bind", s.handlePacificaAgentBind)
