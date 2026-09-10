@@ -108,8 +108,21 @@ func TestClientRejectsEmptyAccountAndStringVenueError(t *testing.T) {
 func TestClientRejectsUnallowlistedEndpointsInvalidRedirectAndOversizedResponses(t *testing.T) {
 	privateKey, _ := hex.DecodeString("0123456789012345678901234567890123456789012345678901234567890123")
 	client := NewClient("http://example.invalid", nil, time.Now)
-	if _, err := client.signedGET(context.Background(), "/fapi/v3/order", nil, testOwner, testDataAgent, privateKey, 1); err == nil {
+	if _, err := client.signedGET(context.Background(), "/fapi/v3/leverage", nil, testOwner, testDataAgent, privateKey, 1); err == nil {
 		t.Fatal("unallowlisted endpoint was sent")
+	}
+	for _, request := range []struct {
+		path   string
+		params []pair
+	}{
+		{"/fapi/v3/positionSide/dual", []pair{{"symbol", "BTCUSDT"}}},
+		{"/fapi/v3/leverageBracket", nil},
+		{"/fapi/v3/order", []pair{{"symbol", "BTCUSDT"}, {"orderId", "123"}}},
+		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "later"}, {"endTime", "earlier"}, {"limit", "100"}}},
+	} {
+		if _, err := client.signedGET(context.Background(), request.path, request.params, testOwner, testDataAgent, privateKey, 1); err == nil {
+			t.Fatalf("unexpected parameters allowed for %s", request.path)
+		}
 	}
 	tests := []struct {
 		name    string
@@ -129,6 +142,85 @@ func TestClientRejectsUnallowlistedEndpointsInvalidRedirectAndOversizedResponses
 			report := client.Probe(context.Background(), testOwner, testDataAgent, testExecutionAgent, privateKey, 1_731_536_000_000)
 			if report.Success || report.Error == "" {
 				t.Fatalf("report = %+v", report)
+			}
+		})
+	}
+}
+
+func TestClientChecksRemainingCapabilitiesWithExactRequests(t *testing.T) {
+	privateKey, _ := hex.DecodeString("0123456789012345678901234567890123456789012345678901234567890123")
+	requests := make([]string, 0, 3)
+	venue := newReadVenue(t, func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.RequestURI())
+		writeSuccessfulReadResponse(w, r)
+	})
+	defer venue.Close()
+
+	client := NewClient(venue.URL, venue.Client(), func() time.Time { return time.UnixMilli(1_700_000_000_000) })
+	calls := []struct {
+		path   string
+		params []pair
+		valid  func([]byte) error
+	}{
+		{"/fapi/v3/positionSide/dual", nil, validatePositionMode},
+		{"/fapi/v3/leverageBracket", []pair{{"symbol", "BTCUSDT"}}, func(body []byte) error {
+			return validateLeverageBrackets(body, "BTCUSDT")
+		}},
+		{"/fapi/v3/order", []pair{{"symbol", "BTCUSDT"}, {"origClientOrderId", "orbital-order-1"}}, func(body []byte) error {
+			return validateOrder(body, "BTCUSDT", "orbital-order-1")
+		}},
+	}
+	for _, call := range calls {
+		body, err := client.signedGET(context.Background(), call.path, call.params, testOwner, testDataAgent, privateKey, client.nextNonce())
+		if err != nil {
+			t.Fatalf("%s request failed: %v", call.path, err)
+		}
+		if err := call.valid(body); err != nil {
+			t.Fatalf("%s response failed: %v", call.path, err)
+		}
+	}
+	wantPrefixes := []string{
+		"/fapi/v3/positionSide/dual?asterChain=Mainnet&user=" + testOwner + "&signer=" + testDataAgent + "&nonce=1700000000000000&signature=0x",
+		"/fapi/v3/leverageBracket?symbol=BTCUSDT&asterChain=Mainnet&user=" + testOwner + "&signer=" + testDataAgent + "&nonce=1700000000000001&signature=0x",
+		"/fapi/v3/order?symbol=BTCUSDT&origClientOrderId=orbital-order-1&asterChain=Mainnet&user=" + testOwner + "&signer=" + testDataAgent + "&nonce=1700000000000002&signature=0x",
+	}
+	if len(requests) != len(wantPrefixes) {
+		t.Fatalf("request count = %d", len(requests))
+	}
+	for index := range requests {
+		if !strings.HasPrefix(requests[index], wantPrefixes[index]) || len(requests[index]) != len(wantPrefixes[index])+130 {
+			t.Fatalf("request %d = %s", index, requests[index])
+		}
+	}
+}
+
+func TestClientRejectsInvalidCapabilityResponses(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		valid func([]byte) error
+	}{
+		{"position mode", `{}`, validatePositionMode},
+		{"leverage correlation", `{"symbol":"ETHUSDT","brackets":[{"initialLeverage":5,"notionalCap":100000,"notionalFloor":0}]}`, func(body []byte) error {
+			return validateLeverageBrackets(body, "BTCUSDT")
+		}},
+		{"order correlation", `{"orderId":123,"clientOrderId":"other-order","symbol":"BTCUSDT","status":"FILLED","executedQty":"1","avgPrice":"100"}`, func(body []byte) error {
+			return validateOrder(body, "BTCUSDT", "orbital-order-1")
+		}},
+		{"order id", `{"orderId":"bad","clientOrderId":"orbital-order-1","symbol":"BTCUSDT","status":"FILLED","executedQty":"1","avgPrice":"100"}`, func(body []byte) error {
+			return validateOrder(body, "BTCUSDT", "orbital-order-1")
+		}},
+		{"order status", `{"orderId":123,"clientOrderId":"orbital-order-1","symbol":"BTCUSDT","status":"UNKNOWN","executedQty":"1","avgPrice":"100"}`, func(body []byte) error {
+			return validateOrder(body, "BTCUSDT", "orbital-order-1")
+		}},
+		{"order quantity", `{"orderId":123,"clientOrderId":"orbital-order-1","symbol":"BTCUSDT","status":"FILLED","executedQty":"NaN","avgPrice":"100"}`, func(body []byte) error {
+			return validateOrder(body, "BTCUSDT", "orbital-order-1")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.valid([]byte(test.body)) == nil {
+				t.Fatal("invalid capability response accepted")
 			}
 		})
 	}
@@ -180,6 +272,12 @@ func writeSuccessfulReadResponse(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"canTrade":true,"totalMarginBalance":"123.5","availableBalance":"100.25","positions":[]}`)
 	case "/fapi/v3/positionRisk", "/fapi/v3/income":
 		fmt.Fprint(w, `[]`)
+	case "/fapi/v3/positionSide/dual":
+		fmt.Fprint(w, `{"dualSidePosition":false}`)
+	case "/fapi/v3/leverageBracket":
+		fmt.Fprint(w, `{"symbol":"BTCUSDT","brackets":[{"initialLeverage":5,"notionalCap":100000,"notionalFloor":0}]}`)
+	case "/fapi/v3/order":
+		fmt.Fprint(w, `{"orderId":123,"clientOrderId":"orbital-order-1","symbol":"BTCUSDT","status":"FILLED","executedQty":"1","avgPrice":"100"}`)
 	default:
 		http.Error(w, "unexpected", http.StatusNotFound)
 	}

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -27,10 +29,16 @@ const (
 	incomeWindow    = 7 * 24 * time.Hour
 )
 
-var readPaths = map[string]bool{
-	"/fapi/v3/agent": true, "/fapi/v3/accountWithJoinMargin": true,
-	"/fapi/v3/positionRisk": true, "/fapi/v3/income": true,
-}
+var (
+	readPaths = map[string]bool{
+		"/fapi/v3/agent": true, "/fapi/v3/accountWithJoinMargin": true,
+		"/fapi/v3/positionRisk": true, "/fapi/v3/income": true,
+		"/fapi/v3/positionSide/dual": true, "/fapi/v3/leverageBracket": true,
+		"/fapi/v3/order": true,
+	}
+	readSymbolPattern   = regexp.MustCompile(`^[A-Z0-9_]{1,32}$`)
+	readClientIDPattern = regexp.MustCompile(`^[.A-Z:/a-z0-9_-]{1,36}$`)
+)
 
 type EndpointReport struct {
 	Agent        bool `json:"agent"`
@@ -202,7 +210,7 @@ func (c *Client) Probe(ctx context.Context, owner, agent, executionAgent string,
 }
 
 func (c *Client) signedGET(ctx context.Context, path string, params []pair, owner, agent string, privateKey []byte, nonce int64) ([]byte, error) {
-	if !readPaths[path] || len(privateKey) != 32 {
+	if !readPaths[path] || !validReadParams(path, params) || len(privateKey) != 32 {
 		return nil, fmt.Errorf("Aster signed-read endpoint is not allowed")
 	}
 	params = append(append([]pair(nil), params...), pair{"asterChain", "Mainnet"}, pair{"user", strings.ToLower(owner)},
@@ -221,6 +229,28 @@ func (c *Client) signedGET(ctx context.Context, path string, params []pair, owne
 		return nil, fmt.Errorf("Aster signed read rejected")
 	}
 	return body, nil
+}
+
+func validReadParams(path string, params []pair) bool {
+	switch path {
+	case "/fapi/v3/agent", "/fapi/v3/accountWithJoinMargin", "/fapi/v3/positionRisk", "/fapi/v3/positionSide/dual":
+		return len(params) == 0
+	case "/fapi/v3/leverageBracket":
+		return len(params) == 1 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value)
+	case "/fapi/v3/order":
+		return len(params) == 2 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value) &&
+			params[1].key == "origClientOrderId" && readClientIDPattern.MatchString(params[1].value)
+	case "/fapi/v3/income":
+		if len(params) != 4 || params[0] != (pair{"incomeType", "FUNDING_FEE"}) ||
+			params[1].key != "startTime" || params[2].key != "endTime" || params[3] != (pair{"limit", "100"}) {
+			return false
+		}
+		start, startErr := strconv.ParseInt(params[1].value, 10, 64)
+		end, endErr := strconv.ParseInt(params[2].value, 10, 64)
+		return startErr == nil && endErr == nil && start > 0 && end >= start && end-start <= incomeWindow.Milliseconds()
+	default:
+		return false
+	}
 }
 
 func (c *Client) do(request *http.Request, limit int64) ([]byte, int, error) {
@@ -351,6 +381,56 @@ func validatePositions(body []byte) error {
 	return err
 }
 
+func validatePositionMode(body []byte) error {
+	_, err := asteraccount.ParseSnapshotPart("get_position_mode", body)
+	return err
+}
+
+func validateLeverageBrackets(body []byte, symbol string) error {
+	_, err := asteraccount.ParseLeverageBrackets(body, symbol)
+	return err
+}
+
+func validateOrder(body []byte, symbol, clientOrderID string) error {
+	var response struct {
+		OrderID       json.RawMessage `json:"orderId"`
+		ClientOrderID string          `json:"clientOrderId"`
+		Symbol        string          `json:"symbol"`
+		Status        string          `json:"status"`
+		ExecutedQty   string          `json:"executedQty"`
+		AvgPrice      string          `json:"avgPrice"`
+	}
+	if json.Unmarshal(body, &response) != nil || response.Symbol != symbol || response.ClientOrderID != clientOrderID ||
+		!validOrderStatus(response.Status) || !validNonNegativeDecimal(response.ExecutedQty) ||
+		!validNonNegativeDecimal(response.AvgPrice) {
+		return fmt.Errorf("invalid order response")
+	}
+	orderID := strings.Trim(string(response.OrderID), `"`)
+	if orderID == "" {
+		return fmt.Errorf("invalid order response")
+	}
+	for _, digit := range orderID {
+		if digit < '0' || digit > '9' {
+			return fmt.Errorf("invalid order response")
+		}
+	}
+	return nil
+}
+
+func validOrderStatus(status string) bool {
+	switch status {
+	case "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED":
+		return true
+	default:
+		return false
+	}
+}
+
+func validNonNegativeDecimal(value string) bool {
+	number, err := strconv.ParseFloat(value, 64)
+	return err == nil && number >= 0 && !math.IsInf(number, 0)
+}
+
 func venueResponseRejected(body []byte) bool {
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(body, &envelope) != nil {
@@ -397,6 +477,12 @@ func endpointName(path string) string {
 		return "position-risk"
 	case "/fapi/v3/income":
 		return "funding-income"
+	case "/fapi/v3/positionSide/dual":
+		return "position-mode"
+	case "/fapi/v3/leverageBracket":
+		return "leverage-bracket"
+	case "/fapi/v3/order":
+		return "exact-order"
 	default:
 		return "private"
 	}
