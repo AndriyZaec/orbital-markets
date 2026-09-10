@@ -222,14 +222,6 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     }
   }
 
-  const handleAsterDataAgentProbe = async () => {
-    try {
-      await tradingAgents.probeAsterDataAgent(() => !agentChangeBlockedRef.current)
-    } catch {
-      // The probe state carries the sanitized failure shown in the Aster card.
-    }
-  }
-
   const getReadiness = (venueId: string): VenueReadiness | null => {
     if (venueId === 'pacifica') return pacifica
     if (venueId === 'hyperliquid') return hyperliquid
@@ -364,15 +356,6 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   </div>
                 )}
 
-                {venue.id === 'aster' && (
-                  <AsterDataAgentProbe
-                    ready={readiness?.walletConnected === true && readiness.agentReady && !agentChangeBlocked}
-                    blocked={agentChangeBlocked}
-                    state={tradingAgents.asterDataAgentProbe}
-                    onRun={handleAsterDataAgentProbe}
-                  />
-                )}
-
                 {/* Action */}
                 <div className="flex items-center justify-end">
                   {readiness?.walletConnected ? (
@@ -386,7 +369,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                           {readiness.agentStatus === 'restoring'
                             ? 'Restoring authorization...'
                             : readiness.agentStatus === 'authorizing'
-                            ? 'Authorizing…'
+                            ? authorizationLabel(venue.id, tradingAgents.aster.authorizationStep)
                             : readiness.agentStatus === 'error' ? `Reauthorize ${venue.name}` : `Authorize ${venue.name}`}
                         </button>
                       )}
@@ -475,65 +458,11 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   )
 }
 
-function AsterDataAgentProbe({
-  ready,
-  blocked,
-  state,
-  onRun,
-}: {
-  ready: boolean
-  blocked: boolean
-  state: ReturnType<typeof useTradingAgents>['asterDataAgentProbe']
-  onRun: () => void
-}) {
-  const running = state.status === 'checking_status' || state.status === 'preparing' || state.status === 'wallet_signature'
-    || state.status === 'validating_reads'
-  const statusLabel = state.status === 'checking_status'
-    ? 'Checking status'
-    : state.status === 'wallet_signature'
-    ? 'Wallet signature'
-    : state.status === 'validating_reads'
-      ? 'Validating reads'
-      : state.status[0].toUpperCase() + state.status.slice(1)
-
-  return (
-    <div className="mb-2 rounded border border-blue-500/15 bg-blue-500/[0.03] px-2 py-2 text-[10px]">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="font-medium text-foreground">Backend read-only agent probe</p>
-          <p className={state.status === 'failure' ? 'text-red-400' : 'text-muted-foreground/70'}>
-            {blocked ? 'Blocked during active execution' : !ready ? 'Unavailable' : statusLabel}
-          </p>
-        </div>
-        <button
-          onClick={onRun}
-          disabled={!ready || running}
-          className="shrink-0 rounded bg-blue-600 px-2 py-1 font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {running ? statusLabel : 'Run probe'}
-        </button>
-      </div>
-      <p className="mt-2 text-amber-300/80">
-        Production mainnet: authorizes one backend-held read-only agent for one year and retains it after success.
-      </p>
-      {ready && state.status === 'failure' && state.error && (
-        <p className="mt-2 break-words text-red-400">{state.error}</p>
-      )}
-      {ready && state.status === 'success' && state.result && (
-        <div className="mt-2 space-y-1 border-t border-border/50 pt-2 text-muted-foreground">
-          <p className="font-mono text-foreground">{shortAddress(state.result.agent_address)}</p>
-          <p>Read only: read yes, spot no, perp no, withdraw no</p>
-          <p>Expires: {new Date(state.result.expired).toLocaleString()}</p>
-          <p>Endpoints: agent, account, positions, income passed</p>
-          <p>Execution agent preserved</p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function shortAddress(address: string): string {
-  return `${address.slice(0, 6)}...${address.slice(-4)}`
+function authorizationLabel(venue: VenueId, step?: 1 | 2 | 3): string {
+  if (venue !== 'aster' || !step) return 'Authorizing…'
+  if (step === 1) return '1/3 Builder code…'
+  if (step === 2) return '2/3 Read-only agent…'
+  return '3/3 Execution agent…'
 }
 
 // Centered modal for choosing which EVM wallet to connect. Uses the EIP-6963

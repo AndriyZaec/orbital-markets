@@ -7,9 +7,9 @@ import { bsc, mainnet } from 'wagmi/chains'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
 import {
-  runAsterDataAgentProbe,
+  authorizeAsterDataAgent,
+  prepareAsterDataAgentAuthorization,
   type AsterDataAgentApprovalTypedData,
-  type AsterDataAgentProbePhase,
 } from './aster-data-agent-probe.ts'
 import {
   asterBuilderAddress,
@@ -42,7 +42,7 @@ import {
   createTradingAgentStore,
   type TradingAgentStore,
 } from './storage.ts'
-import type { AsterDataAgentProbeState, TradingAgentState, Venue, WalletKind } from './types'
+import type { TradingAgentState, Venue, WalletKind } from './types'
 import { TradingAgentContext } from './TradingAgentContext'
 
 function missingState(venue: Venue, ownerAddress: string | null): TradingAgentState {
@@ -134,16 +134,12 @@ function TradingAgentSession({
   const [pacifica, setPacifica] = useState(() => initialState('pacifica', pacificaOwner))
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
   const [aster, setAster] = useState(() => initialState('aster', asterOwner))
-  const [asterDataAgentProbe, setAsterDataAgentProbe] = useState<AsterDataAgentProbeState>({
-    status: 'unavailable', result: null, error: null,
-  })
   const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
   const asterAccountRefresh = useRef<{
     key: string
     promise: Promise<'ready' | 'deposit_required'>
   } | null>(null)
-  const asterDataAgentProbeInFlight = useRef(false)
   const revokedPacificaAgents = useRef(new Set<string>())
   owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
 
@@ -188,10 +184,6 @@ function TradingAgentSession({
     void restore('aster', asterOwner, setAster)
     return () => { active = false }
   }, [asterOwner, hyperliquidOwner, pacificaOwner, storage])
-
-  useEffect(() => {
-    setAsterDataAgentProbe({ status: 'unavailable', result: null, error: null })
-  }, [aster.ownerAddress, aster.agentAddress])
 
   const authorize = async (venue: Venue) => {
     const setState = venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
@@ -299,12 +291,20 @@ function TradingAgentSession({
     if (!ownerStillCurrent('aster', ownerAddress, owners.current)) {
       throw new Error('Aster owner changed during agent authorization')
     }
+    const isCurrent = () => ownerStillCurrent('aster', ownerAddress, owners.current)
     return authorizeAsterAgent({
       storage,
       ownerAddress,
       signTypedData: signAsterTypedData,
       relay: (request) => relayAuthorization('/api/v1/live/agents/aster/approve', request),
-      ownerStillCurrent: () => ownerStillCurrent('aster', ownerAddress, owners.current),
+      prepareReadOnly: (executionAgent) => prepareAsterDataAgentAuthorization({
+        account: ownerAddress, executionAgent, isCurrent,
+      }),
+      authorizeReadOnly: (preparation, signature, executionAgent) => authorizeAsterDataAgent({
+        account: ownerAddress, executionAgent, preparation, signature, isCurrent,
+      }),
+      onSignatureStep: (authorizationStep) => setAster((current) => ({ ...current, authorizationStep })),
+      ownerStillCurrent: isCurrent,
     })
   }
 
@@ -487,52 +487,10 @@ function TradingAgentSession({
     }
   }
 
-  const probeAsterDataAgent = async (canProceed: () => boolean): Promise<void> => {
-    if (asterDataAgentProbeInFlight.current) {
-      throw new Error('Aster read-only probe is already running')
-    }
-    if (!canProceed() || !asterOwner || aster.status !== 'ready' || !aster.agentAddress) {
-      setAsterDataAgentProbe({ status: 'unavailable', result: null, error: null })
-      throw new Error('Aster execution authorization is not ready')
-    }
-    const ownerAddress = asterOwner
-    const executionAgent = aster.agentAddress
-    const isCurrent = async () => {
-      if (!canProceed()) return false
-      if (!ownerStillCurrent('aster', ownerAddress, owners.current)) return false
-      return (await storage.restore('aster', ownerAddress))
-        ?.agentAddress.toLowerCase() === executionAgent.toLowerCase()
-    }
-    const setPhase = (status: AsterDataAgentProbePhase) => {
-      setAsterDataAgentProbe({ status, result: null, error: null })
-    }
-
-    asterDataAgentProbeInFlight.current = true
-    try {
-      const result = await runAsterDataAgentProbe({
-        account: ownerAddress,
-        executionAgent,
-        switchChain: async (targetChainId) => {
-          if (chainId !== targetChainId) await switchToAuthorizationChain(targetChainId)
-        },
-        signTypedData: signAsterTypedData,
-        isCurrent,
-        onPhase: setPhase,
-      })
-      setAsterDataAgentProbe({ status: 'success', result, error: null })
-    } catch (error) {
-      const message = userErrorMessage(error, 'Aster read-only probe failed')
-      setAsterDataAgentProbe({ status: 'failure', result: null, error: message })
-      throw error
-    } finally {
-      asterDataAgentProbeInFlight.current = false
-    }
-  }
-
   return (
     <TradingAgentContext.Provider value={{
-      pacifica, hyperliquid, aster, asterDataAgentProbe, authorize, sign, requestAster,
-      refreshAsterAccount, probeAsterDataAgent, disconnectWallet,
+      pacifica, hyperliquid, aster, authorize, sign, requestAster,
+      refreshAsterAccount, disconnectWallet,
     }}>
       {children}
     </TradingAgentContext.Provider>

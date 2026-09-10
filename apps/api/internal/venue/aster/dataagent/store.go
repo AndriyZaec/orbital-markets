@@ -142,6 +142,10 @@ func (s *Store) LoadApprovedByOwner(ctx context.Context, owner string) (Record, 
 	return s.load(ctx, `owner_account = ? AND status = 'approved'`, strings.ToLower(owner))
 }
 
+func (s *Store) LoadByOwner(ctx context.Context, owner string) (Record, error) {
+	return s.load(ctx, `owner_account = ?`, strings.ToLower(owner))
+}
+
 func (s *Store) LoadMetadata(ctx context.Context, probeID string) (Record, error) {
 	return s.loadMetadata(ctx, `probe_id = ?`, probeID)
 }
@@ -183,6 +187,36 @@ func (s *Store) Transition(ctx context.Context, probeID string, from, to Status,
 		WHERE probe_id = ? AND status = ?`, to, approvedAt, publicError, probeID, from)
 	if err != nil {
 		return fmt.Errorf("transition Aster data-agent status: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		return errStateConflict
+	}
+	return nil
+}
+
+func (s *Store) SaveAcceptedAuthorization(ctx context.Context, record Record, from Status, at time.Time) error {
+	record.Owner = strings.ToLower(record.Owner)
+	record.ExecutionAgent = strings.ToLower(record.ExecutionAgent)
+	record.AgentAddress = strings.ToLower(record.AgentAddress)
+	if len(record.PrivateKey) != 32 {
+		return fmt.Errorf("invalid Aster data-agent key")
+	}
+	nonce := make([]byte, s.aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return fmt.Errorf("generate Aster data-agent encryption nonce: %w", err)
+	}
+	ciphertext := s.aead.Seal(nil, nonce, record.PrivateKey, recordAAD(record))
+	result, err := s.db.ExecContext(ctx, `UPDATE aster_data_agents SET
+		execution_agent = ?, key_nonce = ?, key_ciphertext = ?, approval_nonce = ?,
+		requested_expiry = ?, status = 'approved', approved_at = ?,
+		last_result_json = '', last_error = ''
+		WHERE probe_id = ? AND owner_account = ? AND agent_address = ? AND status = ?`,
+		record.ExecutionAgent, nonce, ciphertext, record.ApprovalNonce, record.RequestedExpiry,
+		at.UTC().Format(time.RFC3339Nano), record.ProbeID, record.Owner, record.AgentAddress, from,
+	)
+	if err != nil {
+		return fmt.Errorf("save accepted Aster data-agent authorization: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil || rows != 1 {

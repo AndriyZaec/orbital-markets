@@ -3,6 +3,11 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import builderConfig from '../../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
+import {
+  buildAsterDataAgentApprovalTypedData,
+  type AsterDataAgentApprovalTypedData,
+  type AsterDataAgentPreparation,
+} from './aster-data-agent-probe.ts'
 import { buildAsterApproveAgentTypedData } from './aster-approve-agent.ts'
 import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
@@ -109,12 +114,20 @@ export function buildAsterApproveBuilderTypedData(action: AsterApproveAgentActio
 export type AsterApprovalTypedData =
   | ReturnType<typeof buildAsterApproveAgentTypedData>
   | ReturnType<typeof buildAsterApproveBuilderTypedData>
+  | AsterDataAgentApprovalTypedData
 
 export async function authorizeAsterAgent(options: {
   storage: TradingAgentStore
   ownerAddress: string
   signTypedData: (typedData: AsterApprovalTypedData) => Promise<Hex>
   relay: (request: AsterApproveAgentRequest) => Promise<void>
+  prepareReadOnly: (executionAgent: Address) => Promise<AsterDataAgentPreparation>
+  authorizeReadOnly: (
+    preparation: AsterDataAgentPreparation,
+    signature: Hex,
+    executionAgent: Address,
+  ) => Promise<void>
+  onSignatureStep?: (step: 1 | 2 | 3) => void
   ownerStillCurrent?: () => boolean
   now?: () => number
 }): Promise<StoredTradingAgent> {
@@ -124,16 +137,26 @@ export async function authorizeAsterAgent(options: {
     generated.agentAddress,
     options.now?.() ?? Date.now(),
   )
+  const readOnly = await options.prepareReadOnly(generated.agentAddress)
+
+  options.onSignatureStep?.(1)
   const builderTypedData = buildAsterApproveBuilderTypedData(action)
   const builderSignature = await options.signTypedData(builderTypedData)
   await assertAsterOwnerSignature(builderTypedData, builderSignature, action.user)
 
+  options.onSignatureStep?.(2)
+  const readOnlyTypedData = buildAsterDataAgentApprovalTypedData(readOnly.approval)
+  const readOnlySignature = await options.signTypedData(readOnlyTypedData)
+  await assertAsterOwnerSignature(readOnlyTypedData, readOnlySignature, action.user)
+
+  options.onSignatureStep?.(3)
   const agentTypedData = buildAsterApproveAgentTypedData(action)
   const signature = await options.signTypedData(agentTypedData)
   await assertAsterOwnerSignature(agentTypedData, signature, action.user)
   if (options.ownerStillCurrent && !options.ownerStillCurrent()) {
     throw new Error('Aster owner changed during agent authorization')
   }
+  await options.authorizeReadOnly(readOnly, readOnlySignature, generated.agentAddress)
   await options.relay({ ...action, signature, builderSignature })
 
   const agent: StoredTradingAgent = {

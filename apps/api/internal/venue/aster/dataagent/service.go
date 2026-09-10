@@ -40,11 +40,13 @@ var (
 
 type repository interface {
 	SavePending(context.Context, Record, int64) error
+	LoadByOwner(context.Context, string) (Record, error)
 	LoadMetadata(context.Context, string) (Record, error)
 	LoadApprovedByOwner(context.Context, string) (Record, error)
 	StatusByOwner(context.Context, string) (ProbeStatus, error)
 	BeginSubmission(context.Context, string) (Record, error)
 	Transition(context.Context, string, Status, Status, string, time.Time) error
+	SaveAcceptedAuthorization(context.Context, Record, Status, time.Time) error
 	SaveResult(context.Context, string, Report) error
 }
 
@@ -87,8 +89,18 @@ func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (
 	if err != nil {
 		return Prepared{}, err
 	}
-	if err := s.requireLocalExecutionAgent(ctx, account, executionAgent); err != nil {
-		return Prepared{}, err
+	now := s.now()
+	existing, err := s.store.LoadByOwner(ctx, account)
+	if err == nil {
+		defer clear(existing.PrivateKey)
+		if existing.Status == StatusSubmitting || existing.Status == StatusUncertain {
+			return Prepared{}, stateError(existing.Status)
+		}
+		approval := newApproval(account, existing.AgentAddress, now)
+		return Prepared{ProbeID: existing.ProbeID, Approval: approval}, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Prepared{}, ErrUnavailable
 	}
 	privateKey, err := secp256k1.GeneratePrivateKeyFromRand(rand.Reader)
 	if err != nil {
@@ -97,12 +109,7 @@ func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (
 	defer privateKey.Zero()
 	serializedKey := privateKey.Serialize()
 	defer clear(serializedKey)
-	now := s.now()
-	approval := Approval{
-		User: account, Nonce: now.UnixMicro(), AgentName: agentName,
-		AgentAddress: addressFromPrivateKey(serializedKey), Expired: now.Add(agentLifetime).UnixMilli(),
-		AsterChain: "Mainnet", SignatureChainID: 56,
-	}
+	approval := newApproval(account, addressFromPrivateKey(serializedKey), now)
 	record := Record{
 		ProbeID: uuid.NewString(), Owner: account, ExecutionAgent: executionAgent,
 		AgentAddress: approval.AgentAddress, PrivateKey: serializedKey, ApprovalNonce: approval.Nonce,
@@ -115,6 +122,73 @@ func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (
 		return Prepared{}, ErrUnavailable
 	}
 	return Prepared{ProbeID: record.ProbeID, Approval: approval}, nil
+}
+
+// Authorize submits a read-only approval collected as part of the unified Aster
+// authorization flow. Existing credentials remain untouched until Aster accepts.
+func (s *Service) Authorize(
+	ctx context.Context,
+	probeID, signature, account, executionAgent string,
+	approval Approval,
+) error {
+	if probeID == "" || !signaturePattern.MatchString(signature) {
+		return ErrInvalidInput
+	}
+	account, executionAgent, err := normalizeAccounts(account, executionAgent)
+	if err != nil {
+		return err
+	}
+	record, err := s.store.LoadByOwner(ctx, account)
+	if err != nil {
+		return publicLoadError(err)
+	}
+	defer clear(record.PrivateKey)
+	if record.ProbeID != probeID || !validAuthorizationApproval(approval, record, account, s.now()) {
+		return ErrInvalidInput
+	}
+
+	storedApproval := approvalFromRecord(record)
+	if record.Status == StatusApproved && record.ExecutionAgent == executionAgent &&
+		approvalsEqual(approval, storedApproval) {
+		return nil
+	}
+	if record.Status == StatusPending && approvalsEqual(approval, storedApproval) {
+		submitting, err := s.store.BeginSubmission(ctx, probeID)
+		if err != nil {
+			return ErrConflict
+		}
+		if err := s.venue.Approve(ctx, approval, signature); err != nil {
+			return s.recordApprovalFailure(ctx, submitting, err, s.now())
+		}
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return s.store.Transition(persistCtx, probeID, StatusSubmitting, StatusApproved, "", s.now())
+	}
+
+	if record.Status != StatusApproved && record.Status != StatusRejected && record.Status != StatusPending {
+		return stateError(record.Status)
+	}
+	if err := s.venue.Approve(ctx, approval, signature); err != nil {
+		publicErr := publicApprovalError(err)
+		if errors.Is(publicErr, ErrUncertain) {
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if transitionErr := s.store.Transition(
+				persistCtx, record.ProbeID, record.Status, StatusUncertain, ErrUncertain.Error(), s.now(),
+			); transitionErr != nil {
+				return ErrUnavailable
+			}
+		}
+		return publicErr
+	}
+	record.ApprovalNonce = approval.Nonce
+	record.RequestedExpiry = approval.Expired
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := s.store.SaveAcceptedAuthorization(persistCtx, record, record.Status, s.now()); err != nil {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (s *Service) Validate(ctx context.Context, probeID, signature, account, executionAgent string) (Report, error) {
@@ -274,8 +348,41 @@ func stateError(status Status) error {
 }
 
 func approvalFromRecord(record Record) Approval {
+	return newApprovalAt(record.Owner, record.AgentAddress, record.ApprovalNonce, record.RequestedExpiry)
+}
+
+func newApproval(owner, agent string, now time.Time) Approval {
+	return newApprovalAt(owner, agent, now.UnixMicro(), now.Add(agentLifetime).UnixMilli())
+}
+
+func newApprovalAt(owner, agent string, nonce, expiry int64) Approval {
 	return Approval{
-		User: record.Owner, Nonce: record.ApprovalNonce, AgentName: agentName, AgentAddress: record.AgentAddress,
-		Expired: record.RequestedExpiry, AsterChain: "Mainnet", SignatureChainID: 56,
+		User: owner, Nonce: nonce, AgentName: agentName, AgentAddress: agent,
+		Expired: expiry, AsterChain: "Mainnet", SignatureChainID: 56,
+	}
+}
+
+func validAuthorizationApproval(approval Approval, record Record, owner string, now time.Time) bool {
+	issuedAt := time.UnixMicro(approval.Nonce)
+	return approval.User == owner && approval.AgentAddress == record.AgentAddress &&
+		approval.AgentName == agentName && approval.IPWhitelist == "" &&
+		!approval.CanSpotTrade && !approval.CanPerpTrade && !approval.CanWithdraw &&
+		approval.AsterChain == "Mainnet" && approval.SignatureChainID == 56 &&
+		approval.Expired == issuedAt.Add(agentLifetime).UnixMilli() &&
+		!issuedAt.After(now.Add(time.Second)) && now.Sub(issuedAt) <= approvalMaxAge
+}
+
+func approvalsEqual(left, right Approval) bool {
+	return left == right
+}
+
+func publicApprovalError(err error) error {
+	switch {
+	case errors.Is(err, ErrApprovalRejected):
+		return ErrRejected
+	case errors.Is(err, ErrApprovalNotSent):
+		return ErrNotSent
+	default:
+		return ErrUncertain
 	}
 }

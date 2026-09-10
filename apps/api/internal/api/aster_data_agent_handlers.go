@@ -14,9 +14,39 @@ const maxAsterDataAgentBody = 16 << 10
 
 type AsterDataAgentProbe interface {
 	Prepare(context.Context, string, string) (dataagent.Prepared, error)
+	Authorize(context.Context, string, string, string, string, dataagent.Approval) error
 	Validate(context.Context, string, string, string, string) (dataagent.Report, error)
 	Status(context.Context, string, string) (dataagent.ProbeStatus, error)
 	Run(context.Context, string, string) (dataagent.Report, error)
+}
+
+func (s *Server) handleAsterDataAgentAuthorize(w http.ResponseWriter, r *http.Request) {
+	if !s.asterDataAgentAvailable(w) {
+		return
+	}
+	var request struct {
+		ProbeID        string             `json:"probe_id"`
+		Signature      string             `json:"signature"`
+		Account        string             `json:"account"`
+		ExecutionAgent string             `json:"execution_agent"`
+		Approval       dataagent.Approval `json:"approval"`
+	}
+	if !decodeStrictJSON(w, r, &request) {
+		return
+	}
+	unlock, ok := s.lockAsterDataAgentOwner(w, r, request.Account)
+	if !ok {
+		return
+	}
+	defer unlock()
+	if err := s.asterDataAgent.Authorize(
+		r.Context(), request.ProbeID, request.Signature, request.Account,
+		request.ExecutionAgent, request.Approval,
+	); err != nil {
+		writeAsterDataAgentError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) EnableAsterDataAgentProbe(probe AsterDataAgentProbe) {

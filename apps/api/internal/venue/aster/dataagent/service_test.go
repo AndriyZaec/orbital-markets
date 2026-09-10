@@ -126,10 +126,161 @@ func TestServiceRetainsAmbiguousAndRejectedApprovalOutcomes(t *testing.T) {
 			if status.Status != test.want {
 				t.Fatalf("status = %s", status.Status)
 			}
-			if _, err := service.Prepare(context.Background(), testOwner, testExecutionAgent); !errors.Is(err, ErrConflict) {
-				t.Fatalf("terminal failure was replaceable: %v", err)
+			_, prepareErr := service.Prepare(context.Background(), testOwner, testExecutionAgent)
+			if test.want == StatusUncertain && !errors.Is(prepareErr, ErrUncertain) {
+				t.Fatalf("uncertain outcome was replaceable: %v", prepareErr)
+			}
+			if test.want == StatusRejected && prepareErr != nil {
+				t.Fatalf("rejected authorization was not repairable: %v", prepareErr)
 			}
 		})
+	}
+}
+
+func TestServicePreparesUnifiedAuthorizationBeforeExecutionAgentExists(t *testing.T) {
+	service, _, _ := newLifecycleService(t)
+	service.execution = fakeExecutionChecker{matches: false}
+	if _, err := service.Prepare(context.Background(), testOwner, testExecutionAgent); err != nil {
+		t.Fatalf("prepare required an existing execution agent: %v", err)
+	}
+}
+
+func TestServiceAllowsImmediateRetryAfterWalletCancellation(t *testing.T) {
+	service, _, now := newLifecycleService(t)
+	first := prepareProbe(t, service)
+	*now = now.Add(time.Second)
+	second, err := service.Prepare(context.Background(), testOwner, testRotatedExecutionAgent)
+	if err != nil {
+		t.Fatalf("retry prepare failed: %v", err)
+	}
+	if second.ProbeID != first.ProbeID || second.Approval.AgentAddress != first.Approval.AgentAddress ||
+		second.Approval.Nonce == first.Approval.Nonce {
+		t.Fatalf("retry did not reuse the unsubmitted credential: first = %+v, second = %+v", first, second)
+	}
+	if err := service.Authorize(
+		context.Background(), second.ProbeID, testSignature, testOwner,
+		testRotatedExecutionAgent, second.Approval,
+	); err != nil {
+		t.Fatalf("retry authorization failed: %v", err)
+	}
+}
+
+func TestServiceReauthorizationReusesReadOnlyCredentialAfterAcceptance(t *testing.T) {
+	service, store, now := newLifecycleService(t)
+	venue := &fakeVenue{report: successfulReport(now)}
+	service.venue = venue
+	first := prepareProbe(t, service)
+	if err := service.Authorize(
+		context.Background(), first.ProbeID, testSignature, testOwner, testExecutionAgent, first.Approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Authorize(
+		context.Background(), first.ProbeID, testSignature, testOwner, testExecutionAgent, first.Approval,
+	); err != nil || venue.approveCalls.Load() != 1 {
+		t.Fatalf("accepted authorization retry was not idempotent: calls = %d, err = %v", venue.approveCalls.Load(), err)
+	}
+	original, err := store.LoadByOwner(context.Background(), testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalKey := append([]byte(nil), original.PrivateKey...)
+	clear(original.PrivateKey)
+	*now = now.Add(time.Minute)
+
+	prepared, err := service.Prepare(context.Background(), testOwner, testRotatedExecutionAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Approval.AgentAddress != first.Approval.AgentAddress {
+		t.Fatalf("data-agent address changed: %s", prepared.Approval.AgentAddress)
+	}
+	before, _ := store.LoadByOwner(context.Background(), testOwner)
+	if before.ExecutionAgent != testExecutionAgent || before.RequestedExpiry != first.Approval.Expired {
+		t.Fatalf("prepare mutated approved credential: %+v", before)
+	}
+	clear(before.PrivateKey)
+
+	if err := service.Authorize(
+		context.Background(), prepared.ProbeID, testSignature, testOwner,
+		testRotatedExecutionAgent, prepared.Approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.LoadByOwner(context.Background(), testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(after.PrivateKey)
+	if after.ExecutionAgent != testExecutionAgent || after.RequestedExpiry != prepared.Approval.Expired ||
+		!bytes.Equal(after.PrivateKey, originalKey) || after.Status != StatusApproved {
+		t.Fatalf("reauthorized credential = %+v", after)
+	}
+}
+
+func TestServiceAmbiguousReauthorizationStopsFurtherRetries(t *testing.T) {
+	service, store, now := newLifecycleService(t)
+	venue := &fakeVenue{report: successfulReport(now)}
+	service.venue = venue
+	first := prepareProbe(t, service)
+	if err := service.Authorize(
+		context.Background(), first.ProbeID, testSignature, testOwner, testExecutionAgent, first.Approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	prepared, err := service.Prepare(context.Background(), testOwner, testRotatedExecutionAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	venue.approveErr = ErrApprovalAmbiguous
+	if err := service.Authorize(
+		context.Background(), prepared.ProbeID, testSignature, testOwner,
+		testRotatedExecutionAgent, prepared.Approval,
+	); !errors.Is(err, ErrUncertain) {
+		t.Fatalf("error = %v", err)
+	}
+	status, err := store.StatusByOwner(context.Background(), testOwner)
+	if err != nil || status.Status != StatusUncertain {
+		t.Fatalf("status = %+v, err = %v", status, err)
+	}
+	if _, err := service.Prepare(
+		context.Background(), testOwner, testRotatedExecutionAgent,
+	); !errors.Is(err, ErrUncertain) {
+		t.Fatalf("ambiguous authorization was retryable: %v", err)
+	}
+}
+
+func TestServiceRejectedReauthorizationPreservesApprovedCredential(t *testing.T) {
+	service, store, now := newLifecycleService(t)
+	venue := &fakeVenue{report: successfulReport(now)}
+	service.venue = venue
+	first := prepareProbe(t, service)
+	if err := service.Authorize(
+		context.Background(), first.ProbeID, testSignature, testOwner, testExecutionAgent, first.Approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	prepared, err := service.Prepare(context.Background(), testOwner, testRotatedExecutionAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	venue.approveErr = ErrApprovalRejected
+	if err := service.Authorize(
+		context.Background(), prepared.ProbeID, testSignature, testOwner,
+		testRotatedExecutionAgent, prepared.Approval,
+	); !errors.Is(err, ErrRejected) {
+		t.Fatalf("error = %v", err)
+	}
+	record, err := store.LoadByOwner(context.Background(), testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(record.PrivateKey)
+	if record.Status != StatusApproved || record.ExecutionAgent != testExecutionAgent ||
+		record.RequestedExpiry != first.Approval.Expired {
+		t.Fatalf("rejected reauthorization mutated approved credential: %+v", record)
 	}
 }
 

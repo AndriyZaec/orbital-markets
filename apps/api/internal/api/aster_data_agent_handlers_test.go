@@ -20,11 +20,16 @@ type fakeAsterDataAgentProbe struct {
 	executor  string
 	probeID   string
 	signature string
+	approval  dataagent.Approval
 }
 
 func (f *fakeAsterDataAgentProbe) Prepare(_ context.Context, account, executionAgent string) (dataagent.Prepared, error) {
 	f.account, f.executor = account, executionAgent
 	return f.prepared, f.err
+}
+func (f *fakeAsterDataAgentProbe) Authorize(_ context.Context, probeID, signature, account, executionAgent string, approval dataagent.Approval) error {
+	f.probeID, f.signature, f.account, f.executor, f.approval = probeID, signature, account, executionAgent, approval
+	return f.err
 }
 func (f *fakeAsterDataAgentProbe) Validate(_ context.Context, probeID, signature, account, executionAgent string) (dataagent.Report, error) {
 	f.probeID, f.signature, f.account, f.executor = probeID, signature, account, executionAgent
@@ -65,6 +70,18 @@ func TestAsterDataAgentValidateReturnsCapabilityReport(t *testing.T) {
 	assertNoSensitiveFields(t, response.Body.Bytes())
 }
 
+func TestAsterDataAgentAuthorizeContract(t *testing.T) {
+	body := `{"probe_id":"probe-1","signature":"` + testHTTPSignature +
+		`","account":"` + testHTTPAsterOwner + `","execution_agent":"` + testHTTPExecutionAgent +
+		`","approval":{"user":"` + testHTTPAsterOwner + `","nonce":1,"agentName":"OrbitalData","agentAddress":"` +
+		testHTTPDataAgent + `","ipWhitelist":"","expired":2,"canSpotTrade":false,"canPerpTrade":false,"canWithdraw":false,"asterChain":"Mainnet","signatureChainId":56}}`
+	fake := &fakeAsterDataAgentProbe{}
+	response := serveDataAgentRequest(t, fake, http.MethodPost, "/api/v1/live/aster/data-agent/authorize", body)
+	if response.Code != http.StatusNoContent || fake.probeID != "probe-1" || fake.approval.AgentAddress != testHTTPDataAgent {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAsterDataAgentStatusAndRunContracts(t *testing.T) {
 	fake := &fakeAsterDataAgentProbe{status: dataagent.ProbeStatus{
 		Status: dataagent.StatusApproved, AgentAddress: testHTTPDataAgent, RequestedExpiry: 2,
@@ -97,6 +114,7 @@ func TestAsterDataAgentEndpointsUnavailableWithoutMasterKey(t *testing.T) {
 	server := &Server{}
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodPost, "/api/v1/live/aster/data-agent/prepare", bytes.NewBufferString(`{}`)),
+		httptest.NewRequest(http.MethodPost, "/api/v1/live/aster/data-agent/authorize", bytes.NewBufferString(`{}`)),
 		httptest.NewRequest(http.MethodPost, "/api/v1/live/aster/data-agent/validate", bytes.NewBufferString(`{}`)),
 		httptest.NewRequest(http.MethodGet, "/api/v1/live/aster/data-agent/status", nil),
 		httptest.NewRequest(http.MethodPost, "/api/v1/live/aster/data-agent/run", bytes.NewBufferString(`{}`)),
@@ -109,6 +127,8 @@ func TestAsterDataAgentEndpointsUnavailableWithoutMasterKey(t *testing.T) {
 			server.handleAsterDataAgentRun(response, request)
 		case request.URL.Path[len(request.URL.Path)-7:] == "prepare":
 			server.handleAsterDataAgentPrepare(response, request)
+		case request.URL.Path[len(request.URL.Path)-9:] == "authorize":
+			server.handleAsterDataAgentAuthorize(response, request)
 		default:
 			server.handleAsterDataAgentValidate(response, request)
 		}
@@ -130,6 +150,8 @@ func serveDataAgentRequest(t *testing.T, fake *fakeAsterDataAgentProbe, method, 
 		server.handleAsterDataAgentPrepare(response, request)
 	case target == "/api/v1/live/aster/data-agent/validate":
 		server.handleAsterDataAgentValidate(response, request)
+	case target == "/api/v1/live/aster/data-agent/authorize":
+		server.handleAsterDataAgentAuthorize(response, request)
 	default:
 		server.handleAsterDataAgentRun(response, request)
 	}

@@ -155,6 +155,51 @@ export function buildAsterDataAgentApprovalTypedData(approval: AsterDataAgentApp
   return buildAsterApproveAgentTypedData(approval)
 }
 
+export async function prepareAsterDataAgentAuthorization(options: {
+  account: string
+  executionAgent: Address
+  isCurrent: () => boolean | Promise<boolean>
+}): Promise<AsterDataAgentPreparation> {
+  const response = await currentStep(options.isCurrent, () => apiFetch('/api/v1/live/aster/data-agent/prepare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: options.account, execution_agent: options.executionAgent }),
+  }))
+  if (!response.ok) {
+    throw await currentStep(options.isCurrent, () => apiResponseError(
+      response, 'Unable to prepare Aster read-only authorization.',
+    ))
+  }
+  return parseAsterDataAgentPreparation(
+    await currentStep(options.isCurrent, () => response.json()), options.account,
+  )
+}
+
+export async function authorizeAsterDataAgent(options: {
+  account: string
+  executionAgent: Address
+  preparation: AsterDataAgentPreparation
+  signature: Hex
+  isCurrent: () => boolean | Promise<boolean>
+}): Promise<void> {
+  const response = await currentStep(options.isCurrent, () => apiFetch('/api/v1/live/aster/data-agent/authorize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      probe_id: options.preparation.probe_id,
+      signature: options.signature,
+      account: options.account,
+      execution_agent: options.executionAgent,
+      approval: options.preparation.approval,
+    }),
+  }))
+  if (!response.ok) {
+    throw await currentStep(options.isCurrent, () => apiResponseError(
+      response, 'Unable to authorize Aster read-only access.',
+    ))
+  }
+}
+
 export async function runAsterDataAgentProbe(options: {
   account: string
   executionAgent: string

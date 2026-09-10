@@ -19,6 +19,7 @@ const ownerAddress = '0x14791697260E4c9A71f18484C9f997B308e59325'
 const ownerAccount = privateKeyToAccount('0x0123456789012345678901234567890123456789012345678901234567890123')
 const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111'
 const agentAddress = '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A'
+const dataAgentAddress = '0x3333333333333333333333333333333333333333'
 
 test('Aster management approvals use the MetaMask-compatible BSC domain', async () => {
   const action = buildAsterApproveAgentAction(ownerAddress, agentAddress, 1_748_970_123_456)
@@ -49,18 +50,33 @@ test('Aster management approvals use the MetaMask-compatible BSC domain', async 
 test('Aster authorization relays no private key and persists only after acceptance', async () => {
   const storage = new TestTradingAgentStore()
   let relayed = ''
+  const signatures: string[] = []
+  const submissions: string[] = []
   const now = Date.now()
   const agent = await authorizeAsterAgent({
     storage,
     ownerAddress,
     now: () => now,
-    signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
+    signTypedData: async (typedData) => {
+      signatures.push(typedData.primaryType === 'ApproveBuilder'
+        ? 'builder'
+        : typedData.message.CanPerpTrade ? 'execution' : 'read-only')
+      return ownerAccount.signTypedData(typedData)
+    },
+    prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, now),
+    authorizeReadOnly: async () => {
+      submissions.push('read-only')
+      assert.equal(storage.values.size, 0)
+    },
     relay: async (request) => {
+      submissions.push('execution')
       relayed = JSON.stringify(request)
       assert.equal(storage.values.size, 0)
     },
   })
 
+  assert.deepEqual(signatures, ['builder', 'read-only', 'execution'])
+  assert.deepEqual(submissions, ['read-only', 'execution'])
   assert.equal(relayed.includes(agent.privateKey), false)
   assert.equal(relayed.includes('private'), false)
   assert.equal((await storage.restore('aster', ownerAddress))?.agentAddress, agent.agentAddress)
@@ -72,11 +88,52 @@ test('Aster authorization does not relay after the owner changes', async () => {
     storage: new TestTradingAgentStore(),
     ownerAddress,
     signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
+    prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
+    authorizeReadOnly: async () => { relayed = true },
     ownerStillCurrent: () => false,
     relay: async () => { relayed = true },
   }), /owner changed/)
   assert.equal(relayed, false)
 })
+
+test('Aster authorization keeps the previous browser agent when execution approval fails', async () => {
+  const storage = new TestTradingAgentStore()
+  const previous = asterAgent()
+  await storage.save(previous)
+  let readOnlyAccepted = false
+
+  await assert.rejects(authorizeAsterAgent({
+    storage,
+    ownerAddress,
+    signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
+    prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
+    authorizeReadOnly: async () => { readOnlyAccepted = true },
+    relay: async () => { throw new Error('execution approval failed') },
+  }), /execution approval failed/)
+
+  assert.equal(readOnlyAccepted, true)
+  assert.equal((await storage.restore('aster', ownerAddress))?.agentAddress, previous.agentAddress)
+})
+
+function readOnlyPreparation(executionAgent: string, now: number) {
+  assert.match(executionAgent, /^0x[0-9a-fA-F]{40}$/)
+  return {
+    probe_id: 'authorization-1',
+    approval: {
+      user: ownerAddress,
+      nonce: now * 1000,
+      agentName: 'OrbitalData' as const,
+      agentAddress: dataAgentAddress,
+      ipWhitelist: '' as const,
+      expired: now + 365 * 24 * 60 * 60 * 1000,
+      canSpotTrade: false as const,
+      canPerpTrade: false as const,
+      canWithdraw: false as const,
+      asterChain: 'Mainnet' as const,
+      signatureChainId: 56 as const,
+    },
+  }
+}
 
 test('a local Aster agent signs the exact allowed IOC payload', async () => {
   const storage = new TestTradingAgentStore()
