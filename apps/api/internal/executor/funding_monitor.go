@@ -84,10 +84,14 @@ func (m *FundingMonitor) realized(ctx context.Context, position *LivePosition, s
 			return 0, false
 		}
 		m.attemptedAt[position.ID] = now
+		finalizing := force && position.State == string(ExecStateClosed)
 		for _, venueName := range []string{position.VenueA, position.VenueB} {
 			account := position.AccountBindings[venueName]
 			source, ok := m.sources[venueName]
-			if !ok || account == "" {
+			if !ok {
+				continue
+			}
+			if account == "" {
 				return 0, false
 			}
 			payments, err := source.FundingPayments(ctx, account, position.Asset, since, until)
@@ -99,16 +103,25 @@ func (m *FundingMonitor) realized(ctx context.Context, position *LivePosition, s
 				m.logger.Warn("funding monitor: persist payments", "err", err, "id", position.ID, "venue", venueName)
 				return 0, false
 			}
-		}
-		if err := m.store.RecordFundingSync(ctx, position.ID, false); err != nil {
-			m.logger.Warn("funding monitor: record sync", "err", err, "id", position.ID)
-			return 0, false
+			if err := m.store.RecordFundingVenueSync(ctx, position.ID, venueName, finalizing); err != nil {
+				m.logger.Warn("funding monitor: record venue sync", "err", err, "id", position.ID, "venue", venueName)
+				return 0, false
+			}
 		}
 		m.syncedAt[position.ID] = now
+	}
+	finalizing := force && position.State == string(ExecStateClosed)
+	complete, err := m.store.FundingVenueSyncComplete(ctx, position, finalizing)
+	if err != nil || !complete {
+		return 0, false
 	}
 	total, err := m.store.SumFundingPayments(ctx, position.ID)
 	if err != nil {
 		m.logger.Warn("funding monitor: sum payments", "err", err, "id", position.ID)
+		return 0, false
+	}
+	if err := m.store.RecordFundingSync(ctx, position.ID, false); err != nil {
+		m.logger.Warn("funding monitor: record sync", "err", err, "id", position.ID)
 		return 0, false
 	}
 	return total, true

@@ -705,6 +705,48 @@ func (s *Store) RecordFundingSync(ctx context.Context, positionID string, finali
 	return err
 }
 
+func (s *Store) ClaimAsterIncomeSync(ctx context.Context, account string, now time.Time) (bool, error) {
+	account = strings.ToLower(strings.TrimSpace(account))
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO aster_income_sync (account, attempted_at) VALUES (?, ?)
+		ON CONFLICT(account) DO UPDATE SET attempted_at = excluded.attempted_at
+		WHERE aster_income_sync.attempted_at <= ?`,
+		account, now.UnixMilli(), now.Add(-time.Hour).UnixMilli())
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) ListFundingPositionsByVenueAccount(ctx context.Context, venueName, account string) ([]LivePosition, error) {
+	return s.queryPositions(ctx, `
+		SELECT `+livePositionCols+` FROM live_positions
+		WHERE state IN ('open', 'closing', 'closed')
+		AND lower(json_extract(account_bindings_json, '$.' || ?)) = lower(?)
+		ORDER BY opened_at`, venueName, strings.TrimSpace(account))
+}
+
+func (s *Store) RecordFundingVenueSync(ctx context.Context, positionID, venueName string, finalized bool) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO live_funding_venue_sync (position_id, venue, synced_at, finalized)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(position_id, venue) DO UPDATE SET
+			synced_at = excluded.synced_at,
+			finalized = MAX(live_funding_venue_sync.finalized, excluded.finalized)`,
+		positionID, venueName, time.Now().UTC().Format(time.RFC3339Nano), boolToInt(finalized))
+	return err
+}
+
+func (s *Store) FundingVenueSyncComplete(ctx context.Context, position *LivePosition, finalized bool) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT venue) FROM live_funding_venue_sync
+		WHERE position_id = ? AND venue IN (?, ?) AND (? = 0 OR finalized = 1)`,
+		position.ID, position.VenueA, position.VenueB, boolToInt(finalized)).Scan(&count)
+	return count == 2, err
+}
+
 func (s *Store) ListUnfinalizedClosedPositions(ctx context.Context) ([]LivePosition, error) {
 	return s.queryPositions(ctx, `
 		SELECT `+livePositionCols+` FROM live_positions
@@ -731,6 +773,7 @@ type MonitorUpdate struct {
 	EntryBasis    float64
 	BasisChange   float64
 	PricePnL      float64
+	FundingPnL    float64
 	Leg1CurPrice  float64
 	Leg2CurPrice  float64
 	Leg1LiqPrice  float64
@@ -752,7 +795,9 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 			entry_basis = ?,
 			basis_change = ?,
 			price_pnl = ?,
-			total_pnl = ? + funding_pnl,
+			funding_pnl = CASE WHEN funding_pnl_source = 'realized' THEN funding_pnl ELSE ? END,
+			funding_pnl_source = CASE WHEN funding_pnl_source = 'realized' THEN funding_pnl_source ELSE 'estimated' END,
+			total_pnl = ? + CASE WHEN funding_pnl_source = 'realized' THEN funding_pnl ELSE ? END,
 			leg1_current_price = ?,
 			leg2_current_price = ?,
 			leg1_liq_price = ?,
@@ -770,7 +815,9 @@ func (s *Store) UpdateMonitoring(ctx context.Context, positionID string, m Monit
 		m.EntryBasis,
 		m.BasisChange,
 		m.PricePnL,
+		m.FundingPnL,
 		m.PricePnL,
+		m.FundingPnL,
 		m.Leg1CurPrice,
 		m.Leg2CurPrice,
 		m.Leg1LiqPrice,

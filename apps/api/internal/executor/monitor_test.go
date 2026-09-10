@@ -7,15 +7,22 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	appdb "github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
-type monitorMarketSource struct{}
+type monitorMarketSource struct {
+	first  venue.MarketData
+	second venue.MarketData
+}
 
-func (monitorMarketSource) FreshSnapshots(context.Context, string, string, string) (venue.MarketData, venue.MarketData, error) {
+func (s monitorMarketSource) FreshSnapshots(context.Context, string, string, string) (venue.MarketData, venue.MarketData, error) {
+	if s.first.Venue != "" && s.second.Venue != "" {
+		return s.first, s.second, nil
+	}
 	return venue.MarketData{Venue: "pacifica", MarkPrice: 100},
 		venue.MarketData{Venue: "hyperliquid", MarkPrice: 100}, nil
 }
@@ -131,5 +138,55 @@ func TestMonitorPersistsNativeVenueLiquidationPrices(t *testing.T) {
 	}
 	if leg1Price != 72 || leg2Price != 131 {
 		t.Fatalf("liquidation prices = %v / %v, want native 72 / 131", leg1Price, leg2Price)
+	}
+}
+
+func TestMonitorPersistsEstimatedFundingFromBothLegs(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "estimated-funding.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	openedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	if _, err := database.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_pacifica, account_hyperliquid, notional, leverage,
+			started_at, opened_at, updated_at
+		) VALUES ('position-1', 'plan-1', 'opp-1', 'SOL', 'pacifica', 'hyperliquid', 'open',
+			'sol-wallet', '0xwallet', 200, 2, ?, ?, ?);
+		INSERT INTO live_fills (
+			position_id, leg, venue, symbol, side, requested_amount, filled_amount,
+			avg_fill_price, fill_ratio, fee, accepted, filled, filled_at
+		) VALUES
+			('position-1', 1, 'pacifica', 'SOL', 'long', 2, 2, 100, 1, 0, 1, 1, ?),
+			('position-1', 2, 'hyperliquid', 'SOL', 'short', 2, 2, 100, 1, 0, 1, 1, ?)
+	`, openedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339),
+		openedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := NewStore(database, logger)
+	position, err := store.GetPosition(context.Background(), "position-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor := NewMonitor(logger, store, monitorMarketSource{
+		first:  venue.MarketData{Venue: "pacifica", MarkPrice: 100, FundingRate: 0.000002},
+		second: venue.MarketData{Venue: "hyperliquid", MarkPrice: 100, FundingRate: 0.000010},
+	}, nil)
+
+	monitor.evaluate(context.Background(), position)
+
+	var fundingPnL, totalPnL float64
+	var source string
+	if err := database.QueryRow(`
+		SELECT funding_pnl, funding_pnl_source, total_pnl
+		FROM live_positions WHERE id = 'position-1'
+	`).Scan(&fundingPnL, &source, &totalPnL); err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(fundingPnL-0.0016) > 0.00001 || math.Abs(totalPnL-fundingPnL) > 1e-9 || source != "estimated" {
+		t.Fatalf("funding PnL = %v, total = %v, source = %q; want about 0.0016 estimated", fundingPnL, totalPnL, source)
 	}
 }

@@ -319,7 +319,7 @@ function allowedAsterRequest(request: SigningRequest, agent: StoredTradingAgent)
 
 function isAsterPrivateAction(action: SigningRequest['action']): boolean {
   return action === 'get_position_mode' || action === 'get_account' || action === 'get_positions' ||
-    action === 'get_leverage_brackets' || action === 'query_order' || action === 'update_leverage' ||
+    action === 'get_leverage_brackets' || action === 'query_order' || action === 'get_income' || action === 'update_leverage' ||
     action === 'start_user_stream' || action === 'keepalive_user_stream' || action === 'close_user_stream'
 }
 
@@ -334,6 +334,7 @@ function validateAsterPrivateQuery(
     get_positions: { method: 'GET', path: '/fapi/v3/positionRisk' },
     get_leverage_brackets: { method: 'GET', path: '/fapi/v3/leverageBracket' },
     query_order: { method: 'GET', path: '/fapi/v3/order' },
+    get_income: { method: 'GET', path: '/fapi/v3/income' },
     update_leverage: { method: 'POST', path: '/fapi/v3/leverage' },
     start_user_stream: { method: 'POST', path: '/fapi/v3/listenKey' },
     keepalive_user_stream: { method: 'PUT', path: '/fapi/v3/listenKey' },
@@ -346,6 +347,8 @@ function validateAsterPrivateQuery(
     operationKeys = request.symbol ? ['symbol'] : []
   } else if (request.action === 'query_order') {
     operationKeys = ['symbol', 'origClientOrderId']
+  } else if (request.action === 'get_income') {
+    operationKeys = ['incomeType', 'limit']
   } else if (request.action === 'update_leverage') {
     operationKeys = ['symbol', 'leverage']
   }
@@ -367,6 +370,7 @@ function validateAsterPrivateQuery(
     query.get('user')?.toLowerCase() === request.account.toLowerCase() &&
     query.get('signer')?.toLowerCase() === agent.agentAddress.toLowerCase() &&
     validAsterNonce(query.get('nonce'), request) &&
+    (request.action !== 'get_income' || (query.get('incomeType') === 'FUNDING_FEE' && query.get('limit') === '1000')) &&
     (!operationKeys.includes('symbol') || (!!request.symbol && query.get('symbol') === request.symbol)) &&
     (request.action !== 'query_order' || (!!request.client_order_id && query.get('origClientOrderId') === request.client_order_id)) &&
     (request.action !== 'update_leverage' || (

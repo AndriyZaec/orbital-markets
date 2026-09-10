@@ -28,6 +28,7 @@ type FundingPayment struct {
 	Venue      string
 	Account    string
 	Asset      string
+	MarketKey  string
 	AmountUSD  float64
 	PaidAt     time.Time
 }

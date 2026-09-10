@@ -122,7 +122,7 @@ test('Aster signing rejects an agent authorized before builder attribution', asy
 test('Aster agent signs only allowlisted private account requests', async () => {
   const operations: SigningRequest['action'][] = [
     'get_position_mode', 'get_account', 'get_positions', 'get_leverage_brackets',
-    'query_order', 'update_leverage', 'start_user_stream', 'keepalive_user_stream', 'close_user_stream',
+    'query_order', 'get_income', 'update_leverage', 'start_user_stream', 'keepalive_user_stream', 'close_user_stream',
   ]
   for (const operation of operations) {
     const signed = await signAsterAgentRequest(asterPrivateSigningRequest(operation), asterAgent())
@@ -134,6 +134,14 @@ test('Aster agent rejects private request fields outside the operation policy', 
   const request = asterPrivateSigningRequest('get_account')
   const payload = request.unsigned_payload as { message: { msg: string } }
   payload.message.msg = `withdraw=true&${payload.message.msg}`
+  await assert.rejects(signAsterAgentRequest(request, asterAgent()), /not an allowed private request/)
+})
+
+test('Aster funding history request is fixed to the funding ledger', async () => {
+  const request = asterPrivateSigningRequest('get_income')
+  await signAsterAgentRequest(request, asterAgent())
+  const payload = request.unsigned_payload as { message: { msg: string } }
+  payload.message.msg = payload.message.msg.replace('incomeType=FUNDING_FEE', 'incomeType=COMMISSION')
   await assert.rejects(signAsterAgentRequest(request, asterAgent()), /not an allowed private request/)
 })
 
@@ -212,6 +220,7 @@ function asterPrivateSigningRequest(action: SigningRequest['action']): SigningRe
     get_positions: { method: 'GET', path: '/fapi/v3/positionRisk' },
     get_leverage_brackets: { method: 'GET', path: '/fapi/v3/leverageBracket' },
     query_order: { method: 'GET', path: '/fapi/v3/order' },
+    get_income: { method: 'GET', path: '/fapi/v3/income' },
     update_leverage: { method: 'POST', path: '/fapi/v3/leverage' },
     start_user_stream: { method: 'POST', path: '/fapi/v3/listenKey' },
     keepalive_user_stream: { method: 'PUT', path: '/fapi/v3/listenKey' },
@@ -228,6 +237,8 @@ function asterPrivateSigningRequest(action: SigningRequest['action']): SigningRe
     symbol = 'BTCUSDT'
     clientOrderID = 'client-order'
     operationQuery = `symbol=${symbol}&origClientOrderId=${clientOrderID}&`
+  } else if (action === 'get_income') {
+    operationQuery = 'incomeType=FUNDING_FEE&limit=1000&'
   } else if (action === 'update_leverage') {
     symbol = 'BTCUSDT'
     leverage = 5

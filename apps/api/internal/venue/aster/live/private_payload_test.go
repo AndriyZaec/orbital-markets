@@ -2,6 +2,7 @@ package live
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,5 +98,22 @@ func TestBuildAccountRefreshPayloadsOmitsPositionMode(t *testing.T) {
 		if request.SnapshotID != payloads.SnapshotID || request.Action != wantActions[i] {
 			t.Fatalf("request %d = %+v", i, request)
 		}
+	}
+}
+
+func TestBuildIncomePayloadIsRestrictedToFundingFees(t *testing.T) {
+	request, err := BuildPrivatePayload(PrivateRequestParams{Operation: GetIncome, User: testUser, Signer: testSigner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Action != string(GetIncome) {
+		t.Fatalf("action = %q", request.Action)
+	}
+	var payload AsterUnsignedOrder
+	if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(payload.Message.Msg, "incomeType=FUNDING_FEE&limit=1000&") {
+		t.Fatalf("income query = %q", payload.Message.Msg)
 	}
 }

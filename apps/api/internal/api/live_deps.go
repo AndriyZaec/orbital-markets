@@ -156,9 +156,13 @@ func (d *LiveDeps) liveModule(name string) (venue.LiveModule, error) {
 }
 
 func (d *LiveDeps) applyAsterPrivateResult(
+	ctx context.Context,
 	request *domain.SigningRequest,
 	result *asterlive.PrivateResult,
 ) (bool, error) {
+	if result != nil && result.FundingPayments != nil {
+		return d.applyAsterFundingPayments(ctx, request.Account, result)
+	}
 	if result == nil || (result.AccountUpdate == nil && !result.DepositRequired) {
 		return false, nil
 	}
@@ -175,6 +179,81 @@ func (d *LiveDeps) applyAsterPrivateResult(
 		return false, fmt.Errorf("invalid Aster account feed")
 	}
 	return feed.ApplyPrivateResult(request, result)
+}
+
+func (d *LiveDeps) applyAsterFundingPayments(ctx context.Context, account string, result *asterlive.PrivateResult) (bool, error) {
+	if d == nil || d.liveStore == nil {
+		return false, fmt.Errorf("live position store unavailable")
+	}
+	positions, err := d.liveStore.ListFundingPositionsByVenueAccount(ctx, "aster", account)
+	if err != nil {
+		return false, err
+	}
+	paymentsByPosition := make(map[string][]venue.FundingPayment)
+	for _, payment := range result.FundingPayments {
+		matches := make([]string, 0, 1)
+		for i := range positions {
+			position := &positions[i]
+			openedAt, parseErr := time.Parse(time.RFC3339, position.OpenedAt)
+			if parseErr != nil || payment.PaidAt.Before(openedAt) {
+				continue
+			}
+			if position.CompletedAt != "" {
+				completedAt, parseErr := time.Parse(time.RFC3339, position.CompletedAt)
+				if parseErr != nil || payment.PaidAt.After(completedAt) {
+					continue
+				}
+			}
+			fills, fillErr := d.liveStore.GetFills(ctx, position.ID)
+			if fillErr != nil {
+				return false, fillErr
+			}
+			for _, fill := range fills {
+				if fill.Venue == "aster" && fill.Filled && fill.Symbol == payment.MarketKey {
+					matches = append(matches, position.ID)
+					break
+				}
+			}
+		}
+		if len(matches) == 1 {
+			paymentsByPosition[matches[0]] = append(paymentsByPosition[matches[0]], payment)
+		} else if len(matches) > 1 {
+			return false, fmt.Errorf("Aster funding payment %s matches multiple positions", payment.ExternalID)
+		}
+	}
+	for i := range positions {
+		position := &positions[i]
+		openedAt, parseErr := time.Parse(time.RFC3339, position.OpenedAt)
+		if parseErr != nil || openedAt.Before(result.SubmittedAt.Add(-7*24*time.Hour)) {
+			continue
+		}
+		if err := d.liveStore.InsertFundingPayments(ctx, position.ID, paymentsByPosition[position.ID]); err != nil {
+			return false, err
+		}
+		finalized := false
+		if position.CompletedAt != "" {
+			completedAt, parseErr := time.Parse(time.RFC3339, position.CompletedAt)
+			finalized = parseErr == nil && result.RespondedAt.Sub(completedAt) >= 30*time.Second
+		}
+		if err := d.liveStore.RecordFundingVenueSync(ctx, position.ID, "aster", finalized); err != nil {
+			return false, err
+		}
+		complete, err := d.liveStore.FundingVenueSyncComplete(ctx, position, finalized)
+		if err != nil || !complete {
+			continue
+		}
+		total, err := d.liveStore.SumFundingPayments(ctx, position.ID)
+		if err != nil {
+			return false, err
+		}
+		if err := d.liveStore.UpdateRealizedFunding(ctx, position.ID, total); err != nil {
+			return false, err
+		}
+		if err := d.liveStore.RecordFundingSync(ctx, position.ID, finalized); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 type agentAuthorizationRegistry struct {

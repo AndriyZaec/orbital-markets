@@ -186,7 +186,7 @@ func TestLiveDepsResolvesAsterAccountLeverageCap(t *testing.T) {
 	}
 	lease.Release()
 	live := &LiveDeps{accounts: registry}
-	applied, err := live.applyAsterPrivateResult(&domain.SigningRequest{Account: account, CreatedAt: time.Now()}, &asterlive.PrivateResult{
+	applied, err := live.applyAsterPrivateResult(context.Background(), &domain.SigningRequest{Account: account, CreatedAt: time.Now()}, &asterlive.PrivateResult{
 		AccountUpdate: &asteraccount.Update{LeverageBrackets: asteraccount.LeverageBrackets{"MEMEUSDT": {
 			{InitialLeverage: 12, NotionalFloor: 0, NotionalCap: 10000},
 		}}},
@@ -229,7 +229,7 @@ func TestLiveDepsAppliesAsterDepositRequiredWithoutSnapshotUpdate(t *testing.T) 
 	lease.Release()
 	live := &LiveDeps{accounts: registry}
 
-	applied, err := live.applyAsterPrivateResult(&domain.SigningRequest{
+	applied, err := live.applyAsterPrivateResult(context.Background(), &domain.SigningRequest{
 		Account: account, Signer: "0x2222222222222222222222222222222222222222",
 	}, &asterlive.PrivateResult{DepositRequired: true})
 	if err != nil || !applied {

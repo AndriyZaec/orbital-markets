@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
 )
 
@@ -22,12 +23,13 @@ const (
 )
 
 type PrivateResult struct {
-	Operation       PrivateOperation     `json:"operation"`
-	Data            json.RawMessage      `json:"data"`
-	AccountUpdate   *asteraccount.Update `json:"-"`
-	DepositRequired bool                 `json:"deposit_required,omitempty"`
-	SubmittedAt     time.Time            `json:"submitted_at"`
-	RespondedAt     time.Time            `json:"responded_at"`
+	Operation       PrivateOperation       `json:"operation"`
+	Data            json.RawMessage        `json:"data"`
+	AccountUpdate   *asteraccount.Update   `json:"-"`
+	FundingPayments []venue.FundingPayment `json:"-"`
+	DepositRequired bool                   `json:"deposit_required,omitempty"`
+	SubmittedAt     time.Time              `json:"submitted_at"`
+	RespondedAt     time.Time              `json:"responded_at"`
 }
 
 func (c *Client) SubmitSignedPrivate(
@@ -91,13 +93,14 @@ func (c *Client) SubmitSignedPrivate(
 	if json.Unmarshal(responseBody, &venueError) == nil && venueError.Code != 0 && venueError.Code != http.StatusOK {
 		return nil, fmt.Errorf("submit Aster %s: %s", operation, formatAsterError(venueError.Code, venueError.Msg))
 	}
-	accountUpdate, err := validatePrivateResponse(operation, request, responseBody)
+	accountUpdate, fundingPayments, err := validatePrivateResponse(operation, request, responseBody)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid Aster %s response: %v", ErrSubmissionAmbiguous, operation, err)
 	}
 	return &PrivateResult{
 		Operation: operation, Data: append(json.RawMessage(nil), responseBody...), AccountUpdate: accountUpdate,
-		SubmittedAt: submittedAt, RespondedAt: time.Now(),
+		FundingPayments: fundingPayments,
+		SubmittedAt:     submittedAt, RespondedAt: time.Now(),
 	}, nil
 }
 
@@ -110,27 +113,30 @@ func isAccountSnapshotOperation(operation PrivateOperation) bool {
 	}
 }
 
-func validatePrivateResponse(operation PrivateOperation, request *domain.SigningRequest, body []byte) (*asteraccount.Update, error) {
+func validatePrivateResponse(operation PrivateOperation, request *domain.SigningRequest, body []byte) (*asteraccount.Update, []venue.FundingPayment, error) {
 	switch operation {
 	case GetPositionMode, GetAccount, GetPositions:
 		part, err := asteraccount.ParseSnapshotPart(string(operation), body)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if operation == GetPositions && request.Symbol != "" {
 			for _, position := range *part.Positions {
 				if position.Symbol != request.Symbol {
-					return nil, fmt.Errorf("position correlation mismatch")
+					return nil, nil, fmt.Errorf("position correlation mismatch")
 				}
 			}
 		}
-		return &asteraccount.Update{SnapshotPart: &part}, nil
+		return &asteraccount.Update{SnapshotPart: &part}, nil, nil
 	case GetLeverageBracket:
 		brackets, err := asteraccount.ParseLeverageBrackets(body, request.Symbol)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &asteraccount.Update{LeverageBrackets: brackets}, nil
+		return &asteraccount.Update{LeverageBrackets: brackets}, nil, nil
+	case GetIncome:
+		payments, err := parseIncomePayments(body, request.Account)
+		return nil, payments, err
 	case QueryOrder:
 		var response struct {
 			OrderID       json.RawMessage `json:"orderId"`
@@ -143,34 +149,81 @@ func validatePrivateResponse(operation PrivateOperation, request *domain.Signing
 		if json.Unmarshal(body, &response) != nil || response.ClientOrderID != request.ClientOrderID ||
 			response.Symbol != request.Symbol || !validOrderStatus(response.Status) ||
 			!validFiniteDecimal(response.ExecutedQty) || !validFiniteDecimal(response.AvgPrice) {
-			return nil, fmt.Errorf("order correlation mismatch")
+			return nil, nil, fmt.Errorf("order correlation mismatch")
 		}
 		if _, err := parseAsterOrderID(response.OrderID); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	case UpdateLeverage:
 		update, err := asteraccount.ParseLeverageUpdate(body)
 		if err != nil || update.Symbol != request.Symbol || update.Leverage != float64(request.Leverage) {
-			return nil, fmt.Errorf("leverage correlation mismatch")
+			return nil, nil, fmt.Errorf("leverage correlation mismatch")
 		}
-		return &asteraccount.Update{Leverage: &update}, nil
+		return &asteraccount.Update{Leverage: &update}, nil, nil
 	case StartUserStream:
 		var response struct {
 			ListenKey string `json:"listenKey"`
 		}
 		if json.Unmarshal(body, &response) != nil || len(response.ListenKey) < 16 || len(response.ListenKey) > 256 ||
 			strings.ContainsAny(response.ListenKey, "/?# \\") {
-			return nil, fmt.Errorf("invalid listen key")
+			return nil, nil, fmt.Errorf("invalid listen key")
 		}
 	case KeepaliveUserStream, CloseUserStream:
 		var response map[string]json.RawMessage
 		if json.Unmarshal(body, &response) != nil || response == nil {
-			return nil, fmt.Errorf("invalid stream response")
+			return nil, nil, fmt.Errorf("invalid stream response")
 		}
 	default:
-		return nil, fmt.Errorf("unsupported private operation")
+		return nil, nil, fmt.Errorf("unsupported private operation")
 	}
-	return nil, nil
+	return nil, nil, nil
+}
+
+func parseIncomePayments(body []byte, account string) ([]venue.FundingPayment, error) {
+	var rows []struct {
+		Symbol     string          `json:"symbol"`
+		IncomeType string          `json:"incomeType"`
+		Income     string          `json:"income"`
+		Asset      string          `json:"asset"`
+		Time       int64           `json:"time"`
+		TranID     json.RawMessage `json:"tranId"`
+	}
+	if err := json.Unmarshal(body, &rows); err != nil || rows == nil {
+		return nil, fmt.Errorf("invalid income history")
+	}
+	if len(rows) >= 1000 {
+		return nil, fmt.Errorf("income history requires pagination")
+	}
+	payments := make([]venue.FundingPayment, 0, len(rows))
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		amount, err := strconv.ParseFloat(row.Income, 64)
+		transactionID := strings.Trim(string(row.TranID), `"`)
+		paidAt := time.UnixMilli(row.Time).UTC()
+		if row.IncomeType != "FUNDING_FEE" || row.Asset != "USDT" ||
+			!privateSymbolPattern.MatchString(row.Symbol) || err != nil || math.IsNaN(amount) || math.IsInf(amount, 0) ||
+			!decimalDigits(transactionID) || seen[transactionID] || row.Time <= 0 || paidAt.After(time.Now().Add(time.Minute)) {
+			return nil, fmt.Errorf("invalid funding income row")
+		}
+		seen[transactionID] = true
+		payments = append(payments, venue.FundingPayment{
+			ExternalID: transactionID, Venue: "aster", Account: strings.ToLower(account),
+			Asset: strings.TrimSuffix(row.Symbol, "USDT"), MarketKey: row.Symbol, AmountUSD: amount, PaidAt: paidAt,
+		})
+	}
+	return payments, nil
+}
+
+func decimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func validFiniteDecimal(value string) bool {

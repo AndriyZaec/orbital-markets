@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
@@ -165,6 +166,19 @@ func (s *Server) handleAsterPrivateSubmit(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "Aster signing request was already consumed"})
 		return
 	}
+	if operation == asterlive.GetIncome {
+		claimed, claimErr := s.live.liveStore.ClaimAsterIncomeSync(r.Context(), request.Account, time.Now())
+		if claimErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to schedule Aster funding sync"})
+			return
+		}
+		if !claimed {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"request_id": signed.RequestID, "operation": operation, "data": []any{}, "state_applied": false,
+			})
+			return
+		}
+	}
 	result, err := s.live.asterPrivate.SubmitSignedPrivate(r.Context(), signed, request)
 	if err != nil {
 		if s.logger != nil {
@@ -185,7 +199,7 @@ func (s *Server) handleAsterPrivateSubmit(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	stateApplied, applyErr := s.live.applyAsterPrivateResult(request, result)
+	stateApplied, applyErr := s.live.applyAsterPrivateResult(r.Context(), request, result)
 	if applyErr != nil && s.logger != nil {
 		s.logger.Error("apply Aster private result", "operation", operation, "account", request.Account, "err", applyErr)
 	}

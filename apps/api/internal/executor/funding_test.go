@@ -234,11 +234,71 @@ func TestPriceAndFundingUpdatesRecomputeTotalAtomically(t *testing.T) {
 	}
 	store.UpdateMonitoring(context.Background(), "position-1", MonitorUpdate{PricePnL: -1.40})
 
-	var total float64
-	if err := database.QueryRow(`SELECT total_pnl FROM live_positions WHERE id = 'position-1'`).Scan(&total); err != nil {
+	var funding, total float64
+	var source string
+	if err := database.QueryRow(`
+		SELECT funding_pnl, funding_pnl_source, total_pnl
+		FROM live_positions WHERE id = 'position-1'
+	`).Scan(&funding, &source, &total); err != nil {
 		t.Fatal(err)
 	}
-	if math.Abs(total-(-0.05)) > 1e-9 {
-		t.Fatalf("total PnL = %v, want -0.05", total)
+	if funding != 1.35 || source != "realized" || math.Abs(total-(-0.05)) > 1e-9 {
+		t.Fatalf("funding PnL = %v (%s), total PnL = %v; want 1.35 realized and -0.05 total", funding, source, total)
+	}
+}
+
+func TestAsterIncomeSyncClaimIsAccountScopedAndHourly(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "income-claim.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	store := NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	now := time.Now().UTC()
+	claimed, err := store.ClaimAsterIncomeSync(context.Background(), "0xAbCd", now)
+	if err != nil || !claimed {
+		t.Fatalf("first claim = %v, err = %v", claimed, err)
+	}
+	claimed, err = store.ClaimAsterIncomeSync(context.Background(), "0xabcd", now.Add(59*time.Minute))
+	if err != nil || claimed {
+		t.Fatalf("early claim = %v, err = %v", claimed, err)
+	}
+	claimed, err = store.ClaimAsterIncomeSync(context.Background(), "0xabcd", now.Add(time.Hour))
+	if err != nil || !claimed {
+		t.Fatalf("hourly claim = %v, err = %v", claimed, err)
+	}
+}
+
+func TestRealizedFundingRequiresBothVenueSnapshots(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "venue-sync.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := database.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_bindings_json, account_bindings_key, notional, leverage, started_at, opened_at, updated_at
+		) VALUES ('position-1', 'plan-1', 'opp-1', 'SOL', 'aster', 'pacifica', 'open',
+			'{"aster":"0xabc","pacifica":"wallet"}', 'aster=0xabc|pacifica=wallet', 100, 2, ?, ?, ?)`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	position, err := store.GetPosition(context.Background(), "position-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordFundingVenueSync(context.Background(), position.ID, "aster", false); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := store.FundingVenueSyncComplete(context.Background(), position, false); err != nil || complete {
+		t.Fatalf("one venue complete = %v, err = %v", complete, err)
+	}
+	if err := store.RecordFundingVenueSync(context.Background(), position.ID, "pacifica", false); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := store.FundingVenueSyncComplete(context.Background(), position, false); err != nil || !complete {
+		t.Fatalf("both venues complete = %v, err = %v", complete, err)
 	}
 }

@@ -3,7 +3,7 @@ import type { SignedAction, SigningRequest } from '../types/signing.ts'
 
 export type AsterPrivateOperation = Extract<SigningRequest['action'],
   | 'get_position_mode' | 'get_account' | 'get_positions' | 'get_leverage_brackets'
-  | 'query_order' | 'update_leverage'
+  | 'query_order' | 'get_income' | 'update_leverage'
   | 'start_user_stream' | 'keepalive_user_stream' | 'close_user_stream'
 >
 

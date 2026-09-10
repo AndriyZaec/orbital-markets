@@ -21,6 +21,7 @@ const (
 	GetAccount           PrivateOperation = "get_account"
 	GetPositions         PrivateOperation = "get_positions"
 	GetLeverageBracket   PrivateOperation = "get_leverage_brackets"
+	GetIncome            PrivateOperation = "get_income"
 	QueryOrder           PrivateOperation = "query_order"
 	UpdateLeverage       PrivateOperation = "update_leverage"
 	StartUserStream      PrivateOperation = "start_user_stream"
@@ -51,7 +52,7 @@ type AsterPrivateSubmitMeta struct {
 func ParsePrivateOperation(value string) (PrivateOperation, bool) {
 	operation := PrivateOperation(value)
 	switch operation {
-	case GetPositionMode, GetAccount, GetPositions, GetLeverageBracket, QueryOrder,
+	case GetPositionMode, GetAccount, GetPositions, GetLeverageBracket, GetIncome, QueryOrder,
 		UpdateLeverage, StartUserStream, KeepaliveUserStream, CloseUserStream:
 		return operation, true
 	default:
@@ -151,6 +152,13 @@ func privateOperationSpec(params PrivateRequestParams) (string, string, []queryP
 			return "", "", nil, fmt.Errorf("invalid Aster leverage-bracket parameters")
 		}
 		return http.MethodGet, "/fapi/v3/leverageBracket", optionalSymbol(params.Symbol), nil
+	case GetIncome:
+		if err := requireNoPrivateParams(params); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/fapi/v3/income", []queryParameter{
+			{"incomeType", "FUNDING_FEE"}, {"limit", "1000"},
+		}, nil
 	case QueryOrder:
 		if !privateSymbolPattern.MatchString(params.Symbol) || !clientIDPattern.MatchString(params.ClientOrderID) || params.Leverage != 0 {
 			return "", "", nil, fmt.Errorf("invalid Aster order-query parameters")
