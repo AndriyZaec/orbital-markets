@@ -16,7 +16,7 @@ import (
 
 const (
 	infoURL      = "https://api.hyperliquid.xyz/info"
-	pollInterval = 5 * time.Second
+	pollInterval = 15 * time.Second
 )
 
 // Subscriber polls Hyperliquid's REST API to keep AccountState fresh.

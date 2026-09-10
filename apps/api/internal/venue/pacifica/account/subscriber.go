@@ -21,7 +21,7 @@ const (
 	accountRESTURL          = "https://api.pacifica.fi/api/v1/account"
 	positionsRESTURL        = "https://api.pacifica.fi/api/v1/positions"
 	reconnectDelay          = 5 * time.Second
-	snapshotRefreshInterval = 10 * time.Second
+	snapshotRefreshInterval = 15 * time.Second
 )
 
 // StreamHandler receives raw channel data for order/trade events.
