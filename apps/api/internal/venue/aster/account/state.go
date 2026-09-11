@@ -68,15 +68,22 @@ type AccountState struct {
 	refreshMarginUpdatedAt    time.Time
 	refreshPositionsUpdatedAt time.Time
 	leverageBySymbol          map[string]float64
+	confirmedLeverage         map[string]leverageConfirmation
 	leverageBrackets          LeverageBrackets
 	leverageBracketsUpdatedAt map[string]time.Time
 	unavailableReason         string
+}
+
+type leverageConfirmation struct {
+	leverage  float64
+	updatedAt time.Time
 }
 
 func NewAccountState(account string) *AccountState {
 	return &AccountState{
 		account:                   strings.ToLower(strings.TrimSpace(account)),
 		leverageBySymbol:          make(map[string]float64),
+		confirmedLeverage:         make(map[string]leverageConfirmation),
 		leverageBrackets:          make(LeverageBrackets),
 		leverageBracketsUpdatedAt: make(map[string]time.Time),
 	}
@@ -256,17 +263,22 @@ func (s *AccountState) MarkUnavailable(account, agent, reason string) error {
 	s.refreshMarginUpdatedAt = time.Time{}
 	s.refreshPositionsUpdatedAt = time.Time{}
 	s.leverageBySymbol = make(map[string]float64)
+	s.confirmedLeverage = make(map[string]leverageConfirmation)
 	s.leverageBrackets = make(LeverageBrackets)
 	s.leverageBracketsUpdatedAt = make(map[string]time.Time)
 	s.unavailableReason = strings.TrimSpace(reason)
 	return nil
 }
 
-func (s *AccountState) ApplyLeverage(update LeverageUpdate) {
+func (s *AccountState) ApplyLeverage(update LeverageUpdate, updatedAt time.Time) {
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Execution write confirmations remain valid after account reads move to the backend.
 	s.leverageBySymbol[update.Symbol] = update.Leverage
+	s.confirmedLeverage[update.Symbol] = leverageConfirmation{leverage: update.Leverage, updatedAt: updatedAt}
 }
 
 func (s *AccountState) ApplyLeverageBrackets(brackets LeverageBrackets, updatedAt time.Time) {
@@ -310,6 +322,14 @@ func (s *AccountState) ReplaceObservation(account string, observation Observatio
 	}
 	mode := observation.PositionMode
 	margin := observation.Margin
+	for symbol, confirmation := range s.confirmedLeverage {
+		_, active := leverageBySymbol[symbol]
+		if !active || confirmation.updatedAt.After(observation.ObservedAt) {
+			leverageBySymbol[symbol] = confirmation.leverage
+			continue
+		}
+		delete(s.confirmedLeverage, symbol)
+	}
 	s.dataAgent = dataAgent
 	s.dataSource = AccountDataSourceBackend
 	s.snapshotID = ""

@@ -1,8 +1,10 @@
 package dataagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +81,40 @@ func TestReaderReturnsNoPartialAccountObservation(t *testing.T) {
 	observation, err := reader.ReadAccount(context.Background(), testOwner)
 	if err == nil || !observation.ObservedAt.IsZero() || observation.Margin.Equity != 0 || len(observation.Positions) != 0 {
 		t.Fatalf("observation = %+v, error = %v", observation, err)
+	}
+}
+
+func TestReaderReportsUnreadableCredentialWithoutCallingAster(t *testing.T) {
+	store, now := approvedReaderService(t)
+	wrongKeyStore, err := NewStore(store.db, bytes.Repeat([]byte{0x7f}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	venue := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer venue.Close()
+	reader := NewService(wrongKeyStore, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+
+	if _, err := reader.ReadAccount(context.Background(), testOwner); !errors.Is(err, ErrCredentialUnreadable) {
+		t.Fatalf("read error = %v", err)
+	}
+	if called {
+		t.Fatal("Aster was called with an unreadable credential")
+	}
+}
+
+func TestReaderPreservesAsterReadRejection(t *testing.T) {
+	store, now := approvedReaderService(t)
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"code":-2015,"msg":"rejected"}`)
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+
+	if _, err := reader.ReadAccount(context.Background(), testOwner); !errors.Is(err, ErrReadRejected) {
+		t.Fatalf("read error = %v", err)
 	}
 }
 

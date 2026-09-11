@@ -115,6 +115,9 @@ func (c *Client) readAccount(ctx context.Context, owner, agent string, privateKe
 	read := func(path string, params []pair) ([]byte, error) {
 		body, err := c.signedGET(ctx, path, params, owner, agent, privateKey, c.nextNonce())
 		if err != nil {
+			if errors.Is(err, ErrReadRejected) {
+				return nil, ErrReadRejected
+			}
 			return nil, fmt.Errorf("Aster %s read failed", endpointName(path))
 		}
 		return body, nil

@@ -76,21 +76,26 @@ func main() {
 	go rollup.Run(ctx)
 	go monitor.Run(ctx)
 
+	var asterDataAgent *dataagent.Service
+	if masterKey, keyErr := dataagent.ParseMasterKey(os.Getenv("ASTER_DATA_AGENT_MASTER_KEY")); keyErr != nil {
+		logger.Warn("Aster data agent disabled", "reason", keyErr)
+	} else if dataAgentStore, storeErr := dataagent.NewStore(database, masterKey); storeErr != nil {
+		logger.Warn("Aster data agent disabled", "reason", storeErr)
+	} else {
+		asterDataAgent = dataagent.NewService(
+			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, logger), time.Now,
+		)
+	}
+
 	// Live execution deps (non-custodial signing flow)
-	liveDeps := startLive(ctx, logger, database, sc, pac, hl, ast)
+	liveDeps := startLive(ctx, logger, database, sc, pac, hl, ast, asterDataAgent)
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
-	if masterKey, keyErr := dataagent.ParseMasterKey(os.Getenv("ASTER_DATA_AGENT_MASTER_KEY")); keyErr != nil {
-		logger.Warn("Aster data-agent probe disabled", "reason", keyErr)
-	} else if dataAgentStore, storeErr := dataagent.NewStore(database, masterKey); storeErr != nil {
-		logger.Warn("Aster data-agent probe disabled", "reason", storeErr)
-	} else {
-		srv.EnableAsterDataAgentProbe(dataagent.NewService(
-			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, logger), time.Now,
-		))
+	if asterDataAgent != nil {
+		srv.EnableAsterDataAgentProbe(asterDataAgent)
 	}
 	srv.EnableProductAnalytics(productAnalytics)
 	srv.EnableAnalyticsAccessToken(os.Getenv("ANALYTICS_ACCESS_TOKEN"))

@@ -18,6 +18,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
@@ -95,6 +96,7 @@ func NewLiveDeps(
 	hlAssetMap hllive.AssetMap,
 	pacificaLotSizes pacificlive.LotSizeMap,
 	asterRules asterlive.OrderRuleMap,
+	asterReader dataagent.Reader,
 ) *LiveDeps {
 	asterClient := asterlive.NewDefaultClient(logger)
 	hlBuilder := hllive.OrbitalBuilderCode()
@@ -111,7 +113,9 @@ func NewLiveDeps(
 		panic(fmt.Sprintf("configure live venue modules: %v", err))
 	}
 	factories := map[string]accountFeedFactory{
-		"aster":       &asterAccountFeedFactory{client: asterClient},
+		"aster": &asterAccountFeedFactory{
+			client: asterClient, reader: asterReader, logger: logger, backendReads: true,
+		},
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
 		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
 	}

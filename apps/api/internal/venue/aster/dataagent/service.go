@@ -31,6 +31,8 @@ var (
 	ErrNotSent                = errors.New("Aster data-agent approval was not sent; probe stopped")
 	ErrUncertain              = errors.New("Aster data-agent approval outcome is uncertain; do not retry")
 	ErrNotApproved            = errors.New("Aster data-agent probe is not approved")
+	ErrCredentialUnreadable   = errors.New("Aster data-agent credential cannot be decrypted; restore ASTER_DATA_AGENT_MASTER_KEY")
+	ErrReadRejected           = errors.New("Aster rejected the data-agent read")
 	ErrExecutionAgentMismatch = errors.New("current local Aster execution-agent authorization does not match")
 	ErrUnavailable            = errors.New("Aster data-agent probe is temporarily unavailable")
 	ErrApprovalRejected       = errors.New("Aster approval rejected")
@@ -102,7 +104,7 @@ func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (
 		return Prepared{ProbeID: existing.ProbeID, Approval: approval}, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
-		return Prepared{}, ErrUnavailable
+		return Prepared{}, publicLoadError(err)
 	}
 	privateKey, err := secp256k1.GeneratePrivateKeyFromRand(rand.Reader)
 	if err != nil {
@@ -330,6 +332,9 @@ func normalizeAccounts(account, executionAgent string) (string, string, error) {
 func publicLoadError(err error) error {
 	if errors.Is(err, ErrNotFound) {
 		return ErrNotFound
+	}
+	if errors.Is(err, ErrCredentialUnreadable) {
+		return ErrCredentialUnreadable
 	}
 	return ErrUnavailable
 }

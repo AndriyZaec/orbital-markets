@@ -38,6 +38,13 @@ function fmtUsd(n: number | null): string {
   return `$${n.toFixed(2)}`
 }
 
+function fmtLastUpdated(value: string | null): string {
+  if (!value) return 'Refreshing'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Unknown'
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
 // Diagnostic pill state (label + colors). Copy is operator-friendly, not
 // adapter jargon: we say "Balance" not "balance stream", etc.
 type PillTone = 'ok' | 'pending' | 'off' | 'bad'
@@ -79,7 +86,7 @@ function balancePill(r: VenueReadiness): DiagnosticPill {
   // "data went stale after being fresh".
   if (r.streamReady && !r.accountFresh) return { label: 'Stale', tone: 'pending' }
   if (r.status === 'balance_pending' || r.balanceConnected || r.streamReady) {
-    return { label: 'Pending', tone: 'pending', loading: true }
+    return { label: 'Refreshing', tone: 'pending', loading: true }
   }
   return { label: 'Not connected', tone: 'off' }
 }
@@ -343,6 +350,14 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                         <span className="text-muted-foreground">Equity / Available</span>
                         <span className="font-mono text-foreground">
                           {fmtUsd(readiness.equity)} / {fmtUsd(readiness.available)}
+                        </span>
+                      </div>
+                    )}
+                    {readiness.walletConnected && !venue.preview && (
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-muted-foreground">Last update</span>
+                        <span className="font-mono text-muted-foreground">
+                          {fmtLastUpdated(readiness.lastUpdated)}
                         </span>
                       </div>
                     )}

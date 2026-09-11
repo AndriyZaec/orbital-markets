@@ -777,6 +777,9 @@ func liveAccountStatuses(accounts *liveAccountContext, freshness time.Duration) 
 }
 
 func accountStatus(accounts *liveAccountContext, venue string, freshness time.Duration) venueAccountStatus {
+	if venue == "aster" && freshness > admissionFreshness {
+		freshness = admissionFreshness
+	}
 	return buildVenueAccountStatusFromSnapshot(venue, accountSnapshot(accounts, venue), freshness)
 }
 
@@ -1221,7 +1224,7 @@ func (s *Server) freshVenueExposureFills(
 		if !ok {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
 		}
-		if venue != "aster" && feed.RefreshPositions(refreshCtx) != nil {
+		if feed.RefreshPositions(refreshCtx) != nil {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
 		}
 		snapshot := feed.Snapshot()
@@ -1350,14 +1353,8 @@ func (s *Server) inspectPositionVenueTruth(
 		if !ok {
 			return positionExposureUnknown, nil
 		}
-		if venue != "aster" {
-			if err := feed.RefreshPositions(reconcileCtx); err != nil {
-				s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
-				return positionExposureUnknown, nil
-			}
-		} else if snapshot := feed.Snapshot(); snapshot.PositionsUpdatedAt.IsZero() ||
-			time.Since(snapshot.PositionsUpdatedAt) > admissionFreshness {
-			s.logger.Warn("live position: Aster browser position snapshot stale", "id", position.ID)
+		if err := feed.RefreshPositions(reconcileCtx); err != nil {
+			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
 			return positionExposureUnknown, nil
 		}
 	}

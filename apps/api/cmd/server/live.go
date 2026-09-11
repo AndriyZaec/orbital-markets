@@ -10,6 +10,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
@@ -24,6 +25,7 @@ func startLive(
 	pac *pacifica.Adapter,
 	hl *hyperliquid.Adapter,
 	ast *aster.Adapter,
+	asterReader dataagent.Reader,
 ) *api.LiveDeps {
 	logger.Info("live execution: starting runtime")
 
@@ -32,7 +34,7 @@ func startLive(
 	// --- Live position store + monitor ---
 	liveStore := executor.NewStore(database, logger)
 	signingStore := domain.NewSigningRequestStore()
-	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast)
+	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader)
 	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)
 	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, map[string]venue.FundingHistory{
 		"pacifica":    pac,

@@ -2,13 +2,16 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	pacaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/account"
 )
@@ -17,6 +20,35 @@ type fakeAsterAccountClient struct {
 	order   *domain.SubmissionResult
 	private *asterlive.PrivateResult
 	fill    *asterlive.FillResult
+}
+
+type fakeAsterAccountReader struct {
+	mu    sync.Mutex
+	calls int
+	read  func(context.Context, string, int) (asteraccount.Observation, error)
+}
+
+func (f *fakeAsterAccountReader) ReadAccount(ctx context.Context, owner string) (asteraccount.Observation, error) {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+	return f.read(ctx, owner, call)
+}
+
+func (f *fakeAsterAccountReader) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func completeAsterObservation(observedAt time.Time) asteraccount.Observation {
+	return asteraccount.Observation{
+		DataAgent: "0x2222222222222222222222222222222222222222",
+		Margin:    asteraccount.MarginSummary{CanTrade: true, Equity: 120, Available: 110},
+		Positions: []asteraccount.Position{}, PositionMode: asteraccount.PositionMode{OneWay: true},
+		LeverageBrackets: asteraccount.LeverageBrackets{}, ObservedAt: observedAt,
+	}
 }
 
 func (f *fakeAsterAccountClient) SubmitSignedOrder(
@@ -132,6 +164,181 @@ func TestAsterAccountFeedSubmitsOrdersAndReturnsFill(t *testing.T) {
 	}
 	if !fill.Filled || fill.OrderID != "42" || fill.FilledAmount != 0.5 || fill.AvgFillPrice != 100 {
 		t.Fatalf("fill = %+v", fill)
+	}
+}
+
+func TestAsterAccountFeedPollsImmediatelyAndPeriodically(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := make(chan struct{}, 2)
+	reader := &fakeAsterAccountReader{read: func(_ context.Context, owner string, call int) (asteraccount.Observation, error) {
+		if owner != "0x1111111111111111111111111111111111111111" {
+			t.Fatalf("owner = %q", owner)
+		}
+		calls <- struct{}{}
+		return completeAsterObservation(time.Now().Add(time.Duration(call) * time.Millisecond)), nil
+	}}
+	factory := &asterAccountFeedFactory{reader: reader, pollInterval: 10 * time.Millisecond}
+	feed, err := factory.Start(ctx, "0x1111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case <-calls:
+		case <-time.After(time.Second):
+			t.Fatal("Aster account poll did not run")
+		}
+	}
+	if snapshot := feed.Snapshot(); !snapshot.Connected || snapshot.Equity != 120 {
+		t.Fatalf("polled snapshot = %+v", snapshot)
+	}
+}
+
+func TestAsterAccountFeedCoalescesExplicitRefresh(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	reader := &fakeAsterAccountReader{read: func(ctx context.Context, _ string, _ int) (asteraccount.Observation, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return asteraccount.Observation{}, ctx.Err()
+		case <-release:
+			return completeAsterObservation(time.Now()), nil
+		}
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	feed := &asterAccountFeed{
+		state:   asteraccount.NewAccountState("0x1111111111111111111111111111111111111111"),
+		account: "0x1111111111111111111111111111111111111111", reader: reader, ctx: ctx,
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- feed.RefreshPositions(context.Background()) }()
+	<-started
+	go func() { errs <- feed.RefreshPositions(context.Background()) }()
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reader.callCount() != 1 {
+		t.Fatalf("read calls = %d, want 1", reader.callCount())
+	}
+}
+
+func TestAsterAccountFeedKeepsLastSnapshotAfterRefreshFailure(t *testing.T) {
+	reader := &fakeAsterAccountReader{read: func(_ context.Context, _ string, call int) (asteraccount.Observation, error) {
+		if call == 1 {
+			return completeAsterObservation(time.Now()), nil
+		}
+		return asteraccount.Observation{}, errors.New("temporary read failure")
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	feed := &asterAccountFeed{
+		state:   asteraccount.NewAccountState("0x1111111111111111111111111111111111111111"),
+		account: "0x1111111111111111111111111111111111111111", reader: reader, ctx: ctx,
+	}
+	if err := feed.RefreshPositions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := feed.Snapshot()
+	if err := feed.RefreshPositions(context.Background()); err == nil {
+		t.Fatal("failed refresh returned no error")
+	}
+	after := feed.Snapshot()
+	if after.LastUpdated != before.LastUpdated || after.Equity != before.Equity || !after.Connected {
+		t.Fatalf("failed refresh changed snapshot: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestAsterAccountFeedReportsMissingReadAuthorization(t *testing.T) {
+	reader := &fakeAsterAccountReader{read: func(context.Context, string, int) (asteraccount.Observation, error) {
+		return asteraccount.Observation{}, dataagent.ErrNotApproved
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	feed := &asterAccountFeed{
+		state:   asteraccount.NewAccountState("0x1111111111111111111111111111111111111111"),
+		account: "0x1111111111111111111111111111111111111111", reader: reader, ctx: ctx,
+	}
+	if err := feed.RefreshPositions(context.Background()); !errors.Is(err, dataagent.ErrNotApproved) {
+		t.Fatalf("refresh error = %v", err)
+	}
+	if snapshot := feed.Snapshot(); snapshot.UnavailableReason != "Aster read authorization required" {
+		t.Fatalf("unavailable snapshot = %+v", snapshot)
+	}
+}
+
+func TestAsterAccountFeedReportsExpiredAuthorizationAfterSnapshotStales(t *testing.T) {
+	reader := &fakeAsterAccountReader{read: func(_ context.Context, _ string, call int) (asteraccount.Observation, error) {
+		if call == 1 {
+			return completeAsterObservation(time.Now().Add(-31 * time.Second)), nil
+		}
+		return asteraccount.Observation{}, dataagent.ErrNotApproved
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	feed := &asterAccountFeed{
+		state:   asteraccount.NewAccountState("0x1111111111111111111111111111111111111111"),
+		account: "0x1111111111111111111111111111111111111111", reader: reader, ctx: ctx, backendReads: true,
+	}
+	if err := feed.RefreshPositions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := feed.RefreshPositions(context.Background()); !errors.Is(err, dataagent.ErrNotApproved) {
+		t.Fatalf("refresh error = %v", err)
+	}
+	if snapshot := feed.Snapshot(); snapshot.UnavailableReason != "Aster read authorization required" {
+		t.Fatalf("expired authorization snapshot = %+v", snapshot)
+	}
+}
+
+func TestAsterAccountFeedDoesNotUseBrowserReadsAsBackendFallback(t *testing.T) {
+	feed := &asterAccountFeed{
+		state:        asteraccount.NewAccountState("0x1111111111111111111111111111111111111111"),
+		backendReads: true,
+	}
+	positions := []asteraccount.Position{{Symbol: "BTCUSDT", Side: "long", Size: 1}}
+	applied, err := feed.ApplyPrivateResult(&domain.SigningRequest{
+		Account: "0x1111111111111111111111111111111111111111", Signer: "0xexecution",
+		SnapshotID: "browser-1", CreatedAt: time.Now(),
+	}, &asterlive.PrivateResult{
+		AccountUpdate: &asteraccount.Update{SnapshotPart: &asteraccount.SnapshotPart{Positions: &positions}},
+		RespondedAt:   time.Now(),
+	})
+	if err != nil || !applied {
+		t.Fatalf("applied = %v, error = %v", applied, err)
+	}
+	if snapshot := feed.Snapshot(); len(snapshot.Positions) != 0 || !snapshot.LastUpdated.IsZero() ||
+		snapshot.UnavailableReason != "Aster backend account reader is not configured" {
+		t.Fatalf("browser read became backend fallback: %+v", snapshot)
+	}
+}
+
+func TestAsterAccountFeedCancelsInflightPoll(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	reader := &fakeAsterAccountReader{read: func(ctx context.Context, _ string, _ int) (asteraccount.Observation, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return asteraccount.Observation{}, ctx.Err()
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	factory := &asterAccountFeedFactory{reader: reader}
+	if _, err := factory.Start(ctx, "0x1111111111111111111111111111111111111111"); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight Aster account poll was not cancelled")
 	}
 }
 

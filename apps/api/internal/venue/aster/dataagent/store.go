@@ -264,11 +264,11 @@ func (s *Store) load(ctx context.Context, where string, args ...any) (Record, er
 		return Record{}, fmt.Errorf("load Aster data-agent probe: %w", err)
 	}
 	if version != keyVersion || len(nonce) != s.aead.NonceSize() {
-		return Record{}, fmt.Errorf("unsupported or invalid Aster data-agent ciphertext")
+		return Record{}, fmt.Errorf("%w: unsupported ciphertext", ErrCredentialUnreadable)
 	}
 	plaintext, err := s.aead.Open(nil, nonce, ciphertext, recordAAD(record))
 	if err != nil || len(plaintext) != 32 {
-		return Record{}, fmt.Errorf("authenticate Aster data-agent ciphertext")
+		return Record{}, fmt.Errorf("%w: authentication failed", ErrCredentialUnreadable)
 	}
 	record.PrivateKey = plaintext
 	if err := applyMutableMetadata(&record, approvedAt, lastResult); err != nil {

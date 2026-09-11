@@ -15,7 +15,7 @@ import (
 func TestNewLiveDepsRegistersAsterModule(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	deps := NewLiveDeps(ctx, slog.Default(), domain.NewSigningRequestStore(), nil, nil, nil, nil)
+	deps := NewLiveDeps(ctx, slog.Default(), domain.NewSigningRequestStore(), nil, nil, nil, nil, nil)
 	module, err := deps.liveModule("aster")
 	if err != nil {
 		t.Fatal(err)

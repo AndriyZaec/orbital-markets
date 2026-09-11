@@ -139,6 +139,32 @@ func TestAccountStateBackendObservationRejectsBrowserOverwrite(t *testing.T) {
 	}
 }
 
+func TestAccountStateBackendObservationPreservesExecutionLeverageConfirmation(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	observedAt := time.Now()
+	state.ApplyLeverage(LeverageUpdate{Symbol: "BTCUSDT", Leverage: 7}, observedAt.Add(time.Second))
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata", Margin: MarginSummary{CanTrade: true, Equity: 120, Available: 110},
+		Positions: []Position{}, PositionMode: PositionMode{OneWay: true},
+		LeverageBrackets: LeverageBrackets{}, ObservedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if leverage := state.Snapshot().LeverageBySymbol["BTCUSDT"]; leverage != 7 {
+		t.Fatalf("confirmed leverage = %v, want 7", leverage)
+	}
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata", Margin: MarginSummary{CanTrade: true, Equity: 120, Available: 110},
+		Positions: []Position{{Symbol: "BTCUSDT", Leverage: 3}}, PositionMode: PositionMode{OneWay: true},
+		LeverageBrackets: LeverageBrackets{"BTCUSDT": {}}, ObservedAt: observedAt.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if leverage := state.Snapshot().LeverageBySymbol["BTCUSDT"]; leverage != 3 {
+		t.Fatalf("newer observed leverage = %v, want 3", leverage)
+	}
+}
+
 func TestBackendObservationUsesExistingExecutionFreshnessLimit(t *testing.T) {
 	state := NewAccountState("0xabcd")
 	observedAt := time.Now().Add(-accountStateMaxAge - time.Second)
@@ -151,6 +177,9 @@ func TestBackendObservationUsesExistingExecutionFreshnessLimit(t *testing.T) {
 	}
 	if blockers := ValidatePreTrade(state.Snapshot(), "BTCUSDT", 10, 2); len(blockers) != 1 || blockers[0] != "Aster account state is stale" {
 		t.Fatalf("stale backend observation blockers = %v", blockers)
+	}
+	if snapshot := state.Snapshot(); !snapshot.Connected || snapshot.UnavailableReason != "" {
+		t.Fatalf("stale backend snapshot = %+v", snapshot)
 	}
 }
 

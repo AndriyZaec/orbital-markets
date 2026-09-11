@@ -222,11 +222,14 @@ func (c *Client) signedGET(ctx context.Context, path string, params []pair, owne
 		return nil, fmt.Errorf("build Aster signed read")
 	}
 	body, status, err := c.do(request, maxReadResponse)
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return nil, ErrReadRejected
+	}
 	if err != nil || status < 200 || status >= 300 {
 		return nil, fmt.Errorf("Aster signed read failed")
 	}
 	if venueResponseRejected(body) {
-		return nil, fmt.Errorf("Aster signed read rejected")
+		return nil, ErrReadRejected
 	}
 	return body, nil
 }

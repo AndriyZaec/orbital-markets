@@ -108,6 +108,12 @@ func TestAsterDataAgentReturnsSanitizedActionableErrors(t *testing.T) {
 	if response.Code != http.StatusConflict || !bytes.Contains(response.Body.Bytes(), []byte("uncertain")) || bytes.Contains(response.Body.Bytes(), []byte("signature")) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
+	fake.err = dataagent.ErrCredentialUnreadable
+	response = serveDataAgentRequest(t, fake, http.MethodPost, "/api/v1/live/aster/data-agent/validate",
+		`{"probe_id":"probe-1","signature":"`+testHTTPSignature+`","account":"`+testHTTPAsterOwner+`","execution_agent":"`+testHTTPExecutionAgent+`"}`)
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte("ASTER_DATA_AGENT_MASTER_KEY")) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 
 func TestAsterDataAgentEndpointsUnavailableWithoutMasterKey(t *testing.T) {

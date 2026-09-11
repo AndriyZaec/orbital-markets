@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hlaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/account"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
@@ -26,8 +29,21 @@ type asterAccountClient interface {
 	WaitForFill(context.Context, string, string) (*asterlive.FillResult, error)
 }
 
+type asterAccountReader interface {
+	ReadAccount(context.Context, string) (asteraccount.Observation, error)
+}
+
+const (
+	asterAccountPollInterval = 15 * time.Second
+	asterAccountReadTimeout  = 10 * time.Second
+)
+
 type asterAccountFeedFactory struct {
-	client asterAccountClient
+	client       asterAccountClient
+	reader       asterAccountReader
+	logger       *slog.Logger
+	pollInterval time.Duration
+	backendReads bool
 }
 
 func (f *asterAccountFeedFactory) Normalize(account string) (string, error) {
@@ -41,18 +57,50 @@ func (f *asterAccountFeedFactory) Normalize(account string) (string, error) {
 	return account, nil
 }
 
-func (f *asterAccountFeedFactory) Start(_ context.Context, account string) (liveAccountFeed, error) {
-	return &asterAccountFeed{state: asteraccount.NewAccountState(account), client: f.client}, nil
+func (f *asterAccountFeedFactory) Start(ctx context.Context, account string) (liveAccountFeed, error) {
+	feed := &asterAccountFeed{
+		state: asteraccount.NewAccountState(account), client: f.client,
+		account: account, reader: f.reader, logger: f.logger, ctx: ctx,
+		backendReads: f.backendReads || f.reader != nil,
+	}
+	if f.reader != nil {
+		interval := f.pollInterval
+		if interval <= 0 {
+			interval = asterAccountPollInterval
+		}
+		go feed.runAccountPolling(interval)
+	}
+	return feed, nil
 }
 
 type asterAccountFeed struct {
-	state  *asteraccount.AccountState
-	client asterAccountClient
+	state        *asteraccount.AccountState
+	client       asterAccountClient
+	account      string
+	reader       asterAccountReader
+	logger       *slog.Logger
+	ctx          context.Context
+	backendReads bool
+
+	refreshMu sync.Mutex
+	refresh   *asterAccountRefresh
+	lastRead  error
+}
+
+type asterAccountRefresh struct {
+	done chan struct{}
+	err  error
 }
 
 func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, result *asterlive.PrivateResult) (bool, error) {
 	if result == nil {
 		return false, nil
+	}
+	if f.backendReads {
+		if result.AccountUpdate != nil && result.AccountUpdate.Leverage != nil {
+			f.state.ApplyLeverage(*result.AccountUpdate.Leverage, result.RespondedAt)
+		}
+		return result.DepositRequired || result.AccountUpdate != nil, nil
 	}
 	if result.DepositRequired {
 		return true, f.state.MarkUnavailable(request.Account, request.Signer, "Aster account requires a deposit")
@@ -74,7 +122,7 @@ func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, re
 		}
 	}
 	if update.Leverage != nil {
-		f.state.ApplyLeverage(*update.Leverage)
+		f.state.ApplyLeverage(*update.Leverage, result.RespondedAt)
 	}
 	if update.LeverageBrackets != nil {
 		f.state.ApplyLeverageBrackets(update.LeverageBrackets, request.CreatedAt)
@@ -84,6 +132,19 @@ func (f *asterAccountFeed) ApplyPrivateResult(request *domain.SigningRequest, re
 
 func (f *asterAccountFeed) Snapshot() liveAccountSnapshot {
 	snapshot := f.state.Snapshot()
+	f.refreshMu.Lock()
+	lastRead := f.lastRead
+	f.refreshMu.Unlock()
+	unavailableReason := snapshot.UnavailableReason
+	backendStale := snapshot.DataSource == asteraccount.AccountDataSourceBackend &&
+		!snapshot.LastUpdated.IsZero() && time.Since(snapshot.LastUpdated) > admissionFreshness
+	if !snapshot.Connected || snapshot.LastUpdated.IsZero() || backendStale {
+		if unavailableReason == "" && f.backendReads && f.reader == nil {
+			unavailableReason = "Aster backend account reader is not configured"
+		} else if lastRead != nil && (snapshot.LastUpdated.IsZero() || (backendStale && asterReadAuthorizationFailed(lastRead))) {
+			unavailableReason = asterAccountReadReason(lastRead)
+		}
+	}
 	positions := make([]liveAccountPosition, 0, len(snapshot.Positions))
 	for _, position := range snapshot.Positions {
 		positions = append(positions, liveAccountPosition{
@@ -96,7 +157,7 @@ func (f *asterAccountFeed) Snapshot() liveAccountSnapshot {
 		LastUpdated: snapshot.LastUpdated, PositionsUpdatedAt: snapshot.PositionsUpdatedAt,
 		Equity: snapshot.Equity, Available: snapshot.Available,
 		Positions: positions, LeverageBySymbol: snapshot.LeverageBySymbol,
-		UnavailableReason: snapshot.UnavailableReason,
+		UnavailableReason: unavailableReason,
 	}
 }
 
@@ -108,8 +169,88 @@ func (f *asterAccountFeed) MaxLeverage(symbol string, notional float64) (int, bo
 	return asteraccount.FreshMaximumLeverage(f.state.Snapshot(), symbol, notional, time.Now())
 }
 
-func (f *asterAccountFeed) RefreshPositions(context.Context) error {
-	return fmt.Errorf("Aster position refresh requires an online browser signature")
+func (f *asterAccountFeed) RefreshPositions(ctx context.Context) error {
+	if f.reader == nil || f.ctx == nil {
+		return fmt.Errorf("Aster backend account reader not configured")
+	}
+	refresh := f.startAccountRefresh()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-refresh.done:
+		return refresh.err
+	}
+}
+
+func (f *asterAccountFeed) startAccountRefresh() *asterAccountRefresh {
+	f.refreshMu.Lock()
+	if f.refresh != nil {
+		refresh := f.refresh
+		f.refreshMu.Unlock()
+		return refresh
+	}
+	refresh := &asterAccountRefresh{done: make(chan struct{})}
+	f.refresh = refresh
+	f.refreshMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(f.ctx, asterAccountReadTimeout)
+		observation, err := f.reader.ReadAccount(ctx, f.account)
+		cancel()
+		if err == nil {
+			err = f.state.ReplaceObservation(f.account, observation)
+		}
+		f.refreshMu.Lock()
+		refresh.err = err
+		f.lastRead = err
+		if f.refresh == refresh {
+			f.refresh = nil
+		}
+		close(refresh.done)
+		f.refreshMu.Unlock()
+	}()
+	return refresh
+}
+
+func asterAccountReadReason(err error) string {
+	switch {
+	case errors.Is(err, dataagent.ErrNotApproved), errors.Is(err, dataagent.ErrRejected),
+		errors.Is(err, dataagent.ErrUncertain), errors.Is(err, dataagent.ErrStale):
+		return "Aster read authorization required"
+	case errors.Is(err, dataagent.ErrUnavailable):
+		return "Aster account reads unavailable"
+	case errors.Is(err, dataagent.ErrCredentialUnreadable):
+		return dataagent.ErrCredentialUnreadable.Error()
+	case errors.Is(err, dataagent.ErrReadRejected):
+		return "Aster account reads were rejected; reauthorize Aster"
+	default:
+		return "Aster account refresh failed"
+	}
+}
+
+func asterReadAuthorizationFailed(err error) bool {
+	return errors.Is(err, dataagent.ErrNotApproved) || errors.Is(err, dataagent.ErrRejected) ||
+		errors.Is(err, dataagent.ErrUncertain) || errors.Is(err, dataagent.ErrStale) ||
+		errors.Is(err, dataagent.ErrCredentialUnreadable) || errors.Is(err, dataagent.ErrReadRejected)
+}
+
+func (f *asterAccountFeed) runAccountPolling(interval time.Duration) {
+	refresh := func() {
+		if err := f.RefreshPositions(f.ctx); err != nil && f.ctx.Err() == nil && f.logger != nil {
+			f.logger.Warn("aster: account refresh failed", "err", err)
+		}
+	}
+	refresh()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-f.ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
 }
 
 func (f *asterAccountFeed) SubmitSigned(

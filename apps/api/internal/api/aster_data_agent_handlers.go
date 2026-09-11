@@ -187,6 +187,8 @@ func writeAsterDataAgentError(w http.ResponseWriter, err error) {
 		status, message = http.StatusConflict, err.Error()
 	case errors.Is(err, dataagent.ErrUnavailable):
 		status, message = http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, dataagent.ErrCredentialUnreadable):
+		status, message = http.StatusServiceUnavailable, err.Error()
 	}
 	writeJSON(w, status, map[string]string{"error": message})
 }
