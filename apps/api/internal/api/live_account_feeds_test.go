@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
@@ -26,6 +27,30 @@ type fakeAsterAccountReader struct {
 	mu    sync.Mutex
 	calls int
 	read  func(context.Context, string, int) (asteraccount.Observation, error)
+}
+
+type fakeAsterFundingReader struct {
+	mu    sync.Mutex
+	calls int
+	read  func(context.Context, string, time.Time, time.Time, int) ([]venue.FundingPayment, error)
+}
+
+func (f *fakeAsterFundingReader) ReadFunding(
+	ctx context.Context,
+	owner string,
+	since, until time.Time,
+) ([]venue.FundingPayment, error) {
+	f.mu.Lock()
+	f.calls++
+	call := f.calls
+	f.mu.Unlock()
+	return f.read(ctx, owner, since, until, call)
+}
+
+func (f *fakeAsterFundingReader) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 func (f *fakeAsterAccountReader) ReadAccount(ctx context.Context, owner string) (asteraccount.Observation, error) {
@@ -339,6 +364,121 @@ func TestAsterAccountFeedCancelsInflightPoll(t *testing.T) {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("in-flight Aster account poll was not cancelled")
+	}
+}
+
+func TestAsterFundingFeedPollsOncePerOwnerAndAppliesSuccessfulEmptyReads(t *testing.T) {
+	applied := make(chan struct{}, 2)
+	reader := &fakeAsterFundingReader{read: func(
+		_ context.Context, owner string, since, until time.Time, _ int,
+	) ([]venue.FundingPayment, error) {
+		if owner != "0x1111111111111111111111111111111111111111" {
+			t.Fatalf("owner = %q", owner)
+		}
+		if got := until.Sub(since); got != asterFundingReadLookback {
+			t.Fatalf("funding range = %v", got)
+		}
+		return []venue.FundingPayment{}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &asterAccountFeedFactory{
+			fundingReader: reader,
+			applyFunding: func(context.Context, string, []venue.FundingPayment, time.Time, time.Time) error {
+				applied <- struct{}{}
+				return nil
+			},
+			fundingPollInterval: 100 * time.Millisecond,
+		},
+	}, accountFeedRegistryConfig{})
+	first, err := registry.Acquire("aster", "0x1111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := registry.Acquire("aster", "0x1111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
+	defer second.Release()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-applied:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for Aster funding poll")
+		}
+	}
+	if calls := reader.callCount(); calls != 2 {
+		t.Fatalf("funding calls = %d, want one immediate and one periodic owner read", calls)
+	}
+}
+
+func TestAsterFundingFeedDoesNotApplyFailedReadAndRetries(t *testing.T) {
+	applied := make(chan struct{}, 1)
+	reader := &fakeAsterFundingReader{read: func(
+		_ context.Context, _ string, _ time.Time, _ time.Time, call int,
+	) ([]venue.FundingPayment, error) {
+		if call == 1 {
+			return nil, errors.New("temporary failure")
+		}
+		return []venue.FundingPayment{}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	factory := &asterAccountFeedFactory{
+		fundingReader: reader,
+		applyFunding: func(context.Context, string, []venue.FundingPayment, time.Time, time.Time) error {
+			applied <- struct{}{}
+			return nil
+		},
+		fundingPollInterval: 100 * time.Millisecond,
+	}
+	if _, err := factory.Start(ctx, "0x1111111111111111111111111111111111111111"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-applied:
+	case <-time.After(time.Second):
+		t.Fatal("successful retry did not apply funding")
+	}
+	if calls := reader.callCount(); calls != 2 {
+		t.Fatalf("funding calls = %d, want failed read and one retry", calls)
+	}
+}
+
+func TestAsterFundingFeedCoalescesRefreshAndCancelsWithFeed(t *testing.T) {
+	started := make(chan struct{})
+	reader := &fakeAsterFundingReader{read: func(
+		ctx context.Context, _ string, _ time.Time, _ time.Time, _ int,
+	) ([]venue.FundingPayment, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	feedCtx, cancelFeed := context.WithCancel(context.Background())
+	feed := &asterAccountFeed{
+		account:       "0x1111111111111111111111111111111111111111",
+		ctx:           feedCtx,
+		fundingReader: reader,
+		applyFunding: func(context.Context, string, []venue.FundingPayment, time.Time, time.Time) error {
+			t.Fatal("failed funding read was applied")
+			return nil
+		},
+	}
+	first := feed.startFundingRefresh()
+	<-started
+	second := feed.startFundingRefresh()
+	if first != second {
+		t.Fatal("concurrent funding refresh was not coalesced")
+	}
+	cancelFeed()
+	<-first.done
+	if !errors.Is(first.err, context.Canceled) {
+		t.Fatalf("refresh error = %v", first.err)
+	}
+	if calls := reader.callCount(); calls != 1 {
+		t.Fatalf("funding calls = %d, want one coalesced read", calls)
 	}
 }
 

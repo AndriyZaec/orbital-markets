@@ -21,6 +21,7 @@ func (s *Server) runLiveSessionRecovery() {
 	s.restoreLiveSessions()
 	s.reconcileClosingPositions()
 	s.reconcileOpenPositions()
+	s.refreshUnfinalizedAsterFunding()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -32,7 +33,52 @@ func (s *Server) runLiveSessionRecovery() {
 			s.cleanupExpiredLiveSessions()
 			s.reconcileClosingPositions()
 			s.reconcileOpenPositions()
+			s.refreshUnfinalizedAsterFunding()
 		}
+	}
+}
+
+type asterFundingRefresher interface {
+	RefreshFunding(context.Context) error
+}
+
+func (s *Server) refreshUnfinalizedAsterFunding() {
+	if s.live == nil || s.live.accounts == nil || s.liveStore == nil {
+		return
+	}
+	positions, err := s.liveStore.ListUnfinalizedClosedPositions(s.ctx)
+	if err != nil {
+		s.logger.Warn("Aster funding recovery: list positions", "err", err)
+		return
+	}
+	accounts := make(map[string]struct{})
+	for i := range positions {
+		if account := positions[i].AccountBindings["aster"]; account != "" {
+			accounts[account] = struct{}{}
+		}
+	}
+	for account := range accounts {
+		go s.refreshUnfinalizedAsterOwnerFunding(account)
+	}
+}
+
+func (s *Server) refreshUnfinalizedAsterOwnerFunding(account string) {
+	lease, err := s.live.accounts.AcquireRecovery("aster", account)
+	if err != nil {
+		s.logger.Warn("Aster funding recovery: acquire account feed", "err", err)
+		return
+	}
+	refresher, ok := lease.Feed().(asterFundingRefresher)
+	if !ok {
+		lease.Release()
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, asterFundingReadTimeout)
+	err = refresher.RefreshFunding(ctx)
+	cancel()
+	lease.Release()
+	if err != nil && s.ctx.Err() == nil {
+		s.logger.Warn("Aster funding recovery: refresh failed", "err", err)
 	}
 }
 

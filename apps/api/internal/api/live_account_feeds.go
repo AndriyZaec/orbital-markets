@@ -14,6 +14,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
@@ -33,17 +34,29 @@ type asterAccountReader interface {
 	ReadAccount(context.Context, string) (asteraccount.Observation, error)
 }
 
+type asterFundingReader interface {
+	ReadFunding(context.Context, string, time.Time, time.Time) ([]venue.FundingPayment, error)
+}
+
+type asterFundingApplier func(context.Context, string, []venue.FundingPayment, time.Time, time.Time) error
+
 const (
 	asterAccountPollInterval = 15 * time.Second
 	asterAccountReadTimeout  = 10 * time.Second
+	asterFundingPollInterval = time.Hour
+	asterFundingReadTimeout  = 30 * time.Second
+	asterFundingReadLookback = 7 * 24 * time.Hour
 )
 
 type asterAccountFeedFactory struct {
-	client       asterAccountClient
-	reader       asterAccountReader
-	logger       *slog.Logger
-	pollInterval time.Duration
-	backendReads bool
+	client              asterAccountClient
+	reader              asterAccountReader
+	fundingReader       asterFundingReader
+	applyFunding        asterFundingApplier
+	logger              *slog.Logger
+	pollInterval        time.Duration
+	fundingPollInterval time.Duration
+	backendReads        bool
 }
 
 func (f *asterAccountFeedFactory) Normalize(account string) (string, error) {
@@ -61,6 +74,7 @@ func (f *asterAccountFeedFactory) Start(ctx context.Context, account string) (li
 	feed := &asterAccountFeed{
 		state: asteraccount.NewAccountState(account), client: f.client,
 		account: account, reader: f.reader, logger: f.logger, ctx: ctx,
+		fundingReader: f.fundingReader, applyFunding: f.applyFunding,
 		backendReads: f.backendReads || f.reader != nil,
 	}
 	if f.reader != nil {
@@ -70,24 +84,41 @@ func (f *asterAccountFeedFactory) Start(ctx context.Context, account string) (li
 		}
 		go feed.runAccountPolling(interval)
 	}
+	if f.fundingReader != nil && f.applyFunding != nil {
+		interval := f.fundingPollInterval
+		if interval <= 0 {
+			interval = asterFundingPollInterval
+		}
+		go feed.runFundingPolling(interval)
+	}
 	return feed, nil
 }
 
 type asterAccountFeed struct {
-	state        *asteraccount.AccountState
-	client       asterAccountClient
-	account      string
-	reader       asterAccountReader
-	logger       *slog.Logger
-	ctx          context.Context
-	backendReads bool
+	state         *asteraccount.AccountState
+	client        asterAccountClient
+	account       string
+	reader        asterAccountReader
+	fundingReader asterFundingReader
+	applyFunding  asterFundingApplier
+	logger        *slog.Logger
+	ctx           context.Context
+	backendReads  bool
 
 	refreshMu sync.Mutex
 	refresh   *asterAccountRefresh
 	lastRead  error
+
+	fundingMu      sync.Mutex
+	fundingRefresh *asterFundingRefresh
 }
 
 type asterAccountRefresh struct {
+	done chan struct{}
+	err  error
+}
+
+type asterFundingRefresh struct {
 	done chan struct{}
 	err  error
 }
@@ -238,6 +269,69 @@ func (f *asterAccountFeed) runAccountPolling(interval time.Duration) {
 	refresh := func() {
 		if err := f.RefreshPositions(f.ctx); err != nil && f.ctx.Err() == nil && f.logger != nil {
 			f.logger.Warn("aster: account refresh failed", "err", err)
+		}
+	}
+	refresh()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-f.ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
+}
+
+func (f *asterAccountFeed) RefreshFunding(ctx context.Context) error {
+	if f.fundingReader == nil || f.applyFunding == nil || f.ctx == nil {
+		return fmt.Errorf("Aster backend funding reader not configured")
+	}
+	refresh := f.startFundingRefresh()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-refresh.done:
+		return refresh.err
+	}
+}
+
+func (f *asterAccountFeed) startFundingRefresh() *asterFundingRefresh {
+	f.fundingMu.Lock()
+	if f.fundingRefresh != nil {
+		refresh := f.fundingRefresh
+		f.fundingMu.Unlock()
+		return refresh
+	}
+	refresh := &asterFundingRefresh{done: make(chan struct{})}
+	f.fundingRefresh = refresh
+	f.fundingMu.Unlock()
+
+	go func() {
+		submittedAt := time.Now().UTC()
+		ctx, cancel := context.WithTimeout(f.ctx, asterFundingReadTimeout)
+		payments, err := f.fundingReader.ReadFunding(ctx, f.account, submittedAt.Add(-asterFundingReadLookback), submittedAt)
+		respondedAt := time.Now().UTC()
+		if err == nil {
+			err = f.applyFunding(ctx, f.account, payments, submittedAt, respondedAt)
+		}
+		cancel()
+		f.fundingMu.Lock()
+		refresh.err = err
+		if f.fundingRefresh == refresh {
+			f.fundingRefresh = nil
+		}
+		close(refresh.done)
+		f.fundingMu.Unlock()
+	}()
+	return refresh
+}
+
+func (f *asterAccountFeed) runFundingPolling(interval time.Duration) {
+	refresh := func() {
+		if err := f.RefreshFunding(f.ctx); err != nil && f.ctx.Err() == nil && f.logger != nil {
+			f.logger.Warn("aster: funding refresh failed", "err", err)
 		}
 	}
 	refresh()

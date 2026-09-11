@@ -6,7 +6,6 @@ const streamRetryDelayMs = 30_000
 const snapshotHeartbeatMs = 5 * 60_000
 const fullReconciliationMs = 10 * 60_000
 const leverageBracketsRefreshMs = 4 * 60_000
-const fundingIncomeRefreshMs = 60 * 60_000
 
 export function AsterAccountBridge({ children }: { children: ReactNode }) {
   const manager = useTradingAgentManager()
@@ -19,9 +18,6 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
   }))
   const refreshLeverageBrackets = useEffectEvent(() => manager.requestAster({
     operation: 'get_leverage_brackets',
-  }))
-  const requestFundingIncome = useEffectEvent(() => manager.requestAster({
-    operation: 'get_income',
   }))
   const closeUserStream = useEffectEvent(() => manager.requestAster({
     operation: 'close_user_stream',
@@ -44,23 +40,6 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
     let accountUnavailable = false
     let leverageBracketsUpdatedAt = 0
     let leverageBracketsAttemptedAt = 0
-    let fundingRunning = false
-    let fundingAttemptedAt = 0
-
-    const syncFundingIncome = async () => {
-      if (accountUnavailable || fundingRunning || Date.now() - fundingAttemptedAt < fundingIncomeRefreshMs) return
-      fundingRunning = true
-      fundingAttemptedAt = Date.now()
-      try {
-        await requestFundingIncome()
-      } catch {
-        // Funding estimates remain available until a later ledger sync succeeds.
-        fundingAttemptedAt = 0
-      } finally {
-        fundingRunning = false
-      }
-    }
-
     const updateLeverageBrackets = async () => {
       if (accountUnavailable || Date.now() - leverageBracketsUpdatedAt < leverageBracketsRefreshMs ||
         Date.now() - leverageBracketsAttemptedAt < streamRetryDelayMs) return
@@ -107,7 +86,6 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
           accountUnavailable = false
           streamRetryAvailable = true
           await updateLeverageBrackets()
-          void syncFundingIncome()
           if (recovered && active) void start()
         }
         return true
@@ -179,7 +157,6 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
     }, 0)
     const snapshotHeartbeat = window.setInterval(scheduleRefresh, snapshotHeartbeatMs)
     const leverageBracketsHeartbeat = window.setInterval(() => void updateLeverageBrackets(), leverageBracketsRefreshMs)
-    const fundingIncomeHeartbeat = window.setInterval(() => void syncFundingIncome(), fundingIncomeRefreshMs)
     const keepalive = window.setInterval(() => {
       if (accountUnavailable) return
       void keepaliveUserStream().catch(() => {
@@ -202,7 +179,6 @@ export function AsterAccountBridge({ children }: { children: ReactNode }) {
       window.clearTimeout(reconnectTimer)
       window.clearInterval(snapshotHeartbeat)
       window.clearInterval(leverageBracketsHeartbeat)
-      window.clearInterval(fundingIncomeHeartbeat)
       window.clearInterval(keepalive)
       const current = socket
       socket = null

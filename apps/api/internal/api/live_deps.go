@@ -112,16 +112,9 @@ func NewLiveDeps(
 	if err != nil {
 		panic(fmt.Sprintf("configure live venue modules: %v", err))
 	}
-	factories := map[string]accountFeedFactory{
-		"aster": &asterAccountFeedFactory{
-			client: asterClient, reader: asterReader, logger: logger, backendReads: true,
-		},
-		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
-		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
-	}
 	hlApprover := hllive.NewDefaultAgentApprover()
 	pacificaBuilderApprover := pacificlive.NewDefaultBuilderCodeApprover()
-	return &LiveDeps{
+	deps := &LiveDeps{
 		signingStore:                  signingStore,
 		liveStore:                     liveStore,
 		sessions:                      NewSessionManager(),
@@ -138,14 +131,23 @@ func NewLiveDeps(
 		pacificaBuilderApprover:       pacificaBuilderApprover,
 		pacificaBuilderApprovalReader: pacificaBuilderApprover,
 		agentAuthorizations:           newAgentAuthorizationRegistry(liveStore),
-		accounts: newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
-			IdleTTL:         defaultAccountFeedIdleTTL,
-			CleanupInterval: defaultAccountFeedCleanupInterval,
-			MaxFeeds:        defaultMaxAccountFeeds,
-			MaxPerVenue:     defaultMaxAccountFeedsPerVenue,
-			RecoveryReserve: defaultRecoveryAccountFeedReserve,
-		}),
 	}
+	factories := map[string]accountFeedFactory{
+		"aster": &asterAccountFeedFactory{
+			client: asterClient, reader: asterReader, fundingReader: asterReader,
+			applyFunding: deps.applyAsterFundingBatch, logger: logger, backendReads: true,
+		},
+		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
+		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
+	}
+	deps.accounts = newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
+		IdleTTL:         defaultAccountFeedIdleTTL,
+		CleanupInterval: defaultAccountFeedCleanupInterval,
+		MaxFeeds:        defaultMaxAccountFeeds,
+		MaxPerVenue:     defaultMaxAccountFeedsPerVenue,
+		RecoveryReserve: defaultRecoveryAccountFeedReserve,
+	})
+	return deps
 }
 
 func (d *LiveDeps) liveModule(name string) (venue.LiveModule, error) {
@@ -165,7 +167,9 @@ func (d *LiveDeps) applyAsterPrivateResult(
 	result *asterlive.PrivateResult,
 ) (bool, error) {
 	if result != nil && result.FundingPayments != nil {
-		return d.applyAsterFundingPayments(ctx, request.Account, result)
+		return true, d.applyAsterFundingBatch(
+			ctx, request.Account, result.FundingPayments, result.SubmittedAt, result.RespondedAt,
+		)
 	}
 	if result == nil || (result.AccountUpdate == nil && !result.DepositRequired) {
 		return false, nil
@@ -185,16 +189,22 @@ func (d *LiveDeps) applyAsterPrivateResult(
 	return feed.ApplyPrivateResult(request, result)
 }
 
-func (d *LiveDeps) applyAsterFundingPayments(ctx context.Context, account string, result *asterlive.PrivateResult) (bool, error) {
+func (d *LiveDeps) applyAsterFundingBatch(
+	ctx context.Context,
+	account string,
+	payments []venue.FundingPayment,
+	submittedAt time.Time,
+	respondedAt time.Time,
+) error {
 	if d == nil || d.liveStore == nil {
-		return false, fmt.Errorf("live position store unavailable")
+		return fmt.Errorf("live position store unavailable")
 	}
 	positions, err := d.liveStore.ListFundingPositionsByVenueAccount(ctx, "aster", account)
 	if err != nil {
-		return false, err
+		return err
 	}
 	paymentsByPosition := make(map[string][]venue.FundingPayment)
-	for _, payment := range result.FundingPayments {
+	for _, payment := range payments {
 		matches := make([]string, 0, 1)
 		for i := range positions {
 			position := &positions[i]
@@ -210,7 +220,7 @@ func (d *LiveDeps) applyAsterFundingPayments(ctx context.Context, account string
 			}
 			fills, fillErr := d.liveStore.GetFills(ctx, position.ID)
 			if fillErr != nil {
-				return false, fillErr
+				return fillErr
 			}
 			for _, fill := range fills {
 				if fill.Venue == "aster" && fill.Filled && fill.Symbol == payment.MarketKey {
@@ -222,25 +232,25 @@ func (d *LiveDeps) applyAsterFundingPayments(ctx context.Context, account string
 		if len(matches) == 1 {
 			paymentsByPosition[matches[0]] = append(paymentsByPosition[matches[0]], payment)
 		} else if len(matches) > 1 {
-			return false, fmt.Errorf("Aster funding payment %s matches multiple positions", payment.ExternalID)
+			return fmt.Errorf("Aster funding payment %s matches multiple positions", payment.ExternalID)
 		}
 	}
 	for i := range positions {
 		position := &positions[i]
 		openedAt, parseErr := time.Parse(time.RFC3339, position.OpenedAt)
-		if parseErr != nil || openedAt.Before(result.SubmittedAt.Add(-7*24*time.Hour)) {
+		if parseErr != nil || openedAt.Before(submittedAt.Add(-asterFundingReadLookback)) {
 			continue
 		}
 		if err := d.liveStore.InsertFundingPayments(ctx, position.ID, paymentsByPosition[position.ID]); err != nil {
-			return false, err
+			return err
 		}
 		finalized := false
 		if position.CompletedAt != "" {
 			completedAt, parseErr := time.Parse(time.RFC3339, position.CompletedAt)
-			finalized = parseErr == nil && result.RespondedAt.Sub(completedAt) >= 30*time.Second
+			finalized = parseErr == nil && respondedAt.Sub(completedAt) >= 30*time.Second
 		}
 		if err := d.liveStore.RecordFundingVenueSync(ctx, position.ID, "aster", finalized); err != nil {
-			return false, err
+			return err
 		}
 		complete, err := d.liveStore.FundingVenueSyncComplete(ctx, position, finalized)
 		if err != nil || !complete {
@@ -248,16 +258,16 @@ func (d *LiveDeps) applyAsterFundingPayments(ctx context.Context, account string
 		}
 		total, err := d.liveStore.SumFundingPayments(ctx, position.ID)
 		if err != nil {
-			return false, err
+			return err
 		}
 		if err := d.liveStore.UpdateRealizedFunding(ctx, position.ID, total); err != nil {
-			return false, err
+			return err
 		}
 		if err := d.liveStore.RecordFundingSync(ctx, position.ID, finalized); err != nil {
-			return false, err
+			return err
 		}
 	}
-	return true, nil
+	return nil
 }
 
 type agentAuthorizationRegistry struct {
