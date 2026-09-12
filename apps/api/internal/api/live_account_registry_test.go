@@ -13,22 +13,39 @@ import (
 )
 
 type fakeAccountFeed struct {
+	mu              sync.RWMutex
 	snapshot        liveAccountSnapshot
 	refreshSnapshot *liveAccountSnapshot
 	blockers        []string
 	submitResult    *domain.SubmissionResult
 	waitFill        *normFill
 	refreshErr      error
+	refreshes       atomic.Int64
+	refreshStarted  chan struct{}
+	refreshRelease  chan struct{}
 }
 
-func (f *fakeAccountFeed) Snapshot() liveAccountSnapshot        { return f.snapshot }
+func (f *fakeAccountFeed) Snapshot() liveAccountSnapshot {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.snapshot
+}
 func (f *fakeAccountFeed) PreTradeBlockers(domain.Leg) []string { return f.blockers }
 func (f *fakeAccountFeed) RefreshPositions(context.Context) error {
+	f.refreshes.Add(1)
+	if f.refreshStarted != nil {
+		close(f.refreshStarted)
+	}
+	if f.refreshRelease != nil {
+		<-f.refreshRelease
+	}
 	if f.refreshErr != nil {
 		return f.refreshErr
 	}
 	if f.refreshSnapshot != nil {
+		f.mu.Lock()
 		f.snapshot = *f.refreshSnapshot
+		f.mu.Unlock()
 	}
 	return nil
 }

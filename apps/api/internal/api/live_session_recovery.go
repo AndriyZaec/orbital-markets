@@ -483,6 +483,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 		originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
 	accountsLocked = false
 	unlockAccounts()
+	refreshRecoveryAccountState(ctx, session, needLeg2)
 	truthReady := s.waitForRecoveryAccountState(ctx, session, needLeg2)
 	unlockAccounts = accounts.Lock()
 	accountsLocked = true
@@ -538,6 +539,20 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	session.State = sessionState
 	detail := reason + "; leg-1 exposure reconciled from venue state" + unwindReasonSuffix(ur)
 	s.persistSession(s.ctx, session, persistState, detail)
+}
+
+func refreshRecoveryAccountState(ctx context.Context, session *LiveSession, needLeg2 bool) {
+	venues := []string{session.Leg1.venue}
+	if needLeg2 && session.Leg2.venue != session.Leg1.venue {
+		venues = append(venues, session.Leg2.venue)
+	}
+	for _, venueName := range venues {
+		feed, ok := session.accounts.Feed(venueName)
+		if !ok {
+			continue
+		}
+		go func() { _ = feed.RefreshPositions(ctx) }()
+	}
 }
 
 func (s *Server) reconcileSubmittedHedge(
