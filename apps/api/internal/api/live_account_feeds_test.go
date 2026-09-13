@@ -21,6 +21,7 @@ type fakeAsterAccountClient struct {
 	order   *domain.SubmissionResult
 	private *asterlive.PrivateResult
 	fill    *asterlive.FillResult
+	fillErr error
 }
 
 type fakeAsterAccountReader struct {
@@ -33,6 +34,17 @@ type fakeAsterFundingReader struct {
 	mu    sync.Mutex
 	calls int
 	read  func(context.Context, string, time.Time, time.Time, int) ([]venue.FundingPayment, error)
+}
+
+type fakeAsterOrderReader struct {
+	order dataagent.OrderStatus
+	err   error
+}
+
+func (f *fakeAsterOrderReader) LookupOrder(
+	context.Context, string, string, string,
+) (dataagent.OrderStatus, error) {
+	return f.order, f.err
 }
 
 func (f *fakeAsterFundingReader) ReadFunding(
@@ -89,7 +101,7 @@ func (f *fakeAsterAccountClient) SubmitSignedPrivate(
 }
 
 func (f *fakeAsterAccountClient) WaitForFill(context.Context, string, string) (*asterlive.FillResult, error) {
-	return f.fill, nil
+	return f.fill, f.fillErr
 }
 
 func TestVenueAccountNormalization(t *testing.T) {
@@ -189,6 +201,63 @@ func TestAsterAccountFeedSubmitsOrdersAndReturnsFill(t *testing.T) {
 	}
 	if !fill.Filled || fill.OrderID != "42" || fill.FilledAmount != 0.5 || fill.AvgFillPrice != 100 {
 		t.Fatalf("fill = %+v", fill)
+	}
+}
+
+func TestAsterAccountFeedLooksUpFillAfterProcessCacheMiss(t *testing.T) {
+	request := &domain.SigningRequest{
+		Venue: "aster", Account: "0xowner", Symbol: "SOLUSDT",
+		ClientOrderID: "client-id", Amount: 2,
+	}
+	feed := &asterAccountFeed{
+		state:  asteraccount.NewAccountState("0xowner"),
+		client: &fakeAsterAccountClient{fillErr: errors.New("cache miss")},
+		orderReader: &fakeAsterOrderReader{order: dataagent.OrderStatus{
+			OrderID: "42", ClientOrderID: "client-id", Symbol: "SOLUSDT",
+			Status: "EXPIRED", ExecutedQuantity: 0.75, AveragePrice: 100,
+		}},
+	}
+
+	fill, err := feed.WaitForFill(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fill.Filled || fill.Status != "partial_fill" || fill.OrderID != "42" ||
+		fill.FilledAmount != 0.75 || fill.AvgFillPrice != 100 {
+		t.Fatalf("exact fill = %+v", fill)
+	}
+}
+
+func TestAsterAccountFeedDoesNotTurnLookupFailureIntoZeroFill(t *testing.T) {
+	feed := &asterAccountFeed{
+		state:       asteraccount.NewAccountState("0xowner"),
+		client:      &fakeAsterAccountClient{fillErr: errors.New("cache miss")},
+		orderReader: &fakeAsterOrderReader{err: errors.New("read unavailable")},
+	}
+	fill, err := feed.WaitForFill(context.Background(), &domain.SigningRequest{
+		Venue: "aster", Account: "0xowner", Symbol: "SOLUSDT",
+		ClientOrderID: "client-id", Amount: 2,
+	})
+	if err == nil || fill != nil {
+		t.Fatalf("lookup failure = (%+v, %v), want uncertain error", fill, err)
+	}
+}
+
+func TestAsterAccountFeedRejectsNonterminalExactOrder(t *testing.T) {
+	feed := &asterAccountFeed{
+		state:  asteraccount.NewAccountState("0xowner"),
+		client: &fakeAsterAccountClient{fillErr: errors.New("cache miss")},
+		orderReader: &fakeAsterOrderReader{order: dataagent.OrderStatus{
+			OrderID: "42", ClientOrderID: "client-id", Symbol: "SOLUSDT",
+			Status: "PARTIALLY_FILLED", ExecutedQuantity: 0.75, AveragePrice: 100,
+		}},
+	}
+	fill, err := feed.WaitForFill(context.Background(), &domain.SigningRequest{
+		Venue: "aster", Account: "0xowner", Symbol: "SOLUSDT",
+		ClientOrderID: "client-id", Amount: 2,
+	})
+	if err == nil || fill != nil {
+		t.Fatalf("nonterminal order = (%+v, %v), want uncertain error", fill, err)
 	}
 }
 

@@ -25,7 +25,7 @@ func (m *LiveModule) Capabilities() venue.LiveCapabilities {
 		ClosePricePolicy:      venue.ClosePriceFromMarketBBO,
 		LeverageUpdate:        venue.LeverageUpdateRequired,
 		ConfirmLeverageChange: true,
-		ClientOrderLookup:     false,
+		ClientOrderLookup:     true,
 	}
 }
 

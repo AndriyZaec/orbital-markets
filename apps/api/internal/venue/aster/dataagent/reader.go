@@ -175,6 +175,12 @@ func (c *Client) lookupOrder(
 		{"symbol", symbol}, {"origClientOrderId", clientOrderID},
 	}, owner, agent, privateKey, c.nextNonce())
 	if err != nil {
+		if ctx.Err() != nil {
+			return OrderStatus{}, ctx.Err()
+		}
+		if errors.Is(err, ErrReadRejected) {
+			return OrderStatus{}, ErrReadRejected
+		}
 		return OrderStatus{}, fmt.Errorf("Aster exact-order read failed")
 	}
 	order, err := parseOrder(body, symbol, clientOrderID)

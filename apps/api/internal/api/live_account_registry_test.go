@@ -19,6 +19,7 @@ type fakeAccountFeed struct {
 	blockers        []string
 	submitResult    *domain.SubmissionResult
 	waitFill        *normFill
+	waitErr         error
 	refreshErr      error
 	refreshes       atomic.Int64
 	refreshStarted  chan struct{}
@@ -53,7 +54,7 @@ func (f *fakeAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *do
 	return f.submitResult, nil
 }
 func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error) {
-	return f.waitFill, nil
+	return f.waitFill, f.waitErr
 }
 
 func (f *fakeAccountFeed) WaitForLeverage(context.Context, string, float64) error { return nil }

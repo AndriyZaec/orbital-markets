@@ -38,6 +38,10 @@ type asterFundingReader interface {
 	ReadFunding(context.Context, string, time.Time, time.Time) ([]venue.FundingPayment, error)
 }
 
+type asterOrderReader interface {
+	LookupOrder(context.Context, string, string, string) (dataagent.OrderStatus, error)
+}
+
 type asterFundingApplier func(context.Context, string, []venue.FundingPayment, time.Time, time.Time) error
 
 const (
@@ -52,6 +56,7 @@ type asterAccountFeedFactory struct {
 	client              asterAccountClient
 	reader              asterAccountReader
 	fundingReader       asterFundingReader
+	orderReader         asterOrderReader
 	applyFunding        asterFundingApplier
 	logger              *slog.Logger
 	pollInterval        time.Duration
@@ -74,7 +79,7 @@ func (f *asterAccountFeedFactory) Start(ctx context.Context, account string) (li
 	feed := &asterAccountFeed{
 		state: asteraccount.NewAccountState(account), client: f.client,
 		account: account, reader: f.reader, logger: f.logger, ctx: ctx,
-		fundingReader: f.fundingReader, applyFunding: f.applyFunding,
+		fundingReader: f.fundingReader, orderReader: f.orderReader, applyFunding: f.applyFunding,
 		backendReads: f.backendReads || f.reader != nil,
 	}
 	if f.reader != nil {
@@ -100,6 +105,7 @@ type asterAccountFeed struct {
 	account       string
 	reader        asterAccountReader
 	fundingReader asterFundingReader
+	orderReader   asterOrderReader
 	applyFunding  asterFundingApplier
 	logger        *slog.Logger
 	ctx           context.Context
@@ -380,16 +386,64 @@ func (f *asterAccountFeed) SubmitSigned(
 }
 
 func (f *asterAccountFeed) WaitForFill(ctx context.Context, request *domain.SigningRequest) (*normFill, error) {
-	if f.client == nil {
-		return nil, fmt.Errorf("Aster live client not configured")
+	if request == nil {
+		return nil, fmt.Errorf("Aster fill request missing")
 	}
-	fill, err := f.client.WaitForFill(ctx, request.Account, request.ClientOrderID)
+	if f.client != nil {
+		fill, err := f.client.WaitForFill(ctx, request.Account, request.ClientOrderID)
+		if err == nil && fill != nil {
+			return &normFill{
+				FilledAmount: fill.FilledAmount, AvgFillPrice: fill.AvgFillPrice,
+				OrderID: fill.OrderID, Status: fill.Status, Filled: fill.Filled,
+			}, nil
+		}
+		if f.orderReader == nil {
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("Aster fill result unavailable for %s", request.ClientOrderID)
+		}
+	} else if f.orderReader == nil {
+		return nil, fmt.Errorf("Aster fill tracking not configured")
+	}
+	order, err := f.orderReader.LookupOrder(ctx, request.Account, request.Symbol, request.ClientOrderID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Aster exact-order lookup failed: %w", err)
+	}
+	return normFillFromAsterOrder(order, request)
+}
+
+func normFillFromAsterOrder(order dataagent.OrderStatus, request *domain.SigningRequest) (*normFill, error) {
+	if order.ClientOrderID != request.ClientOrderID || order.Symbol != request.Symbol ||
+		math.IsNaN(order.ExecutedQuantity) || math.IsInf(order.ExecutedQuantity, 0) || order.ExecutedQuantity < 0 ||
+		order.ExecutedQuantity > request.Amount || math.IsNaN(order.AveragePrice) ||
+		math.IsInf(order.AveragePrice, 0) || order.AveragePrice < 0 ||
+		order.ExecutedQuantity > 0 && order.AveragePrice == 0 {
+		return nil, fmt.Errorf("Aster exact-order response correlation mismatch")
+	}
+	status := strings.ToUpper(order.Status)
+	switch status {
+	case "FILLED":
+		if order.ExecutedQuantity != request.Amount || order.ExecutedQuantity == 0 {
+			return nil, fmt.Errorf("Aster exact-order filled quantity mismatch")
+		}
+	case "CANCELED", "EXPIRED":
+	case "REJECTED":
+		if order.ExecutedQuantity != 0 {
+			return nil, fmt.Errorf("Aster rejected order reports an execution")
+		}
+	case "NEW", "PARTIALLY_FILLED":
+		return nil, fmt.Errorf("Aster exact order is not terminal: %s", status)
+	default:
+		return nil, fmt.Errorf("Aster exact order has invalid status")
+	}
+	normalizedStatus := strings.ToLower(status)
+	if order.ExecutedQuantity > 0 && status != "FILLED" {
+		normalizedStatus = "partial_fill"
 	}
 	return &normFill{
-		FilledAmount: fill.FilledAmount, AvgFillPrice: fill.AvgFillPrice,
-		OrderID: fill.OrderID, Status: fill.Status, Filled: fill.Filled,
+		FilledAmount: order.ExecutedQuantity, AvgFillPrice: order.AveragePrice,
+		OrderID: order.OrderID, Status: normalizedStatus, Filled: order.ExecutedQuantity > 0,
 	}, nil
 }
 

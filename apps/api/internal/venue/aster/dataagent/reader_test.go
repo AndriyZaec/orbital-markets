@@ -162,6 +162,19 @@ func TestReaderLooksUpOneCorrelatedOrder(t *testing.T) {
 	}
 }
 
+func TestOrderLookupPreservesAsterReadRejection(t *testing.T) {
+	store, now := approvedReaderService(t)
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"code":-2013,"msg":"Order does not exist"}`)
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+
+	if _, err := reader.LookupOrder(context.Background(), testOwner, "2ZUSDT", "orbital-order-1"); !errors.Is(err, ErrReadRejected) {
+		t.Fatalf("lookup error = %v", err)
+	}
+}
+
 func TestReaderPaginatesFundingWithinBounds(t *testing.T) {
 	store, now := approvedReaderService(t)
 	since := now.Add(-2 * time.Hour)

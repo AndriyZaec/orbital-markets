@@ -61,7 +61,7 @@ func TestLiveModuleBuildsAsterSigningRequests(t *testing.T) {
 	capabilities := module.Capabilities()
 	if capabilities.ClosePricePolicy != venue.ClosePriceFromMarketBBO ||
 		capabilities.LeverageUpdate != venue.LeverageUpdateRequired ||
-		!capabilities.ConfirmLeverageChange || capabilities.ClientOrderLookup {
+		!capabilities.ConfirmLeverageChange || !capabilities.ClientOrderLookup {
 		t.Fatalf("capabilities = %+v", capabilities)
 	}
 }

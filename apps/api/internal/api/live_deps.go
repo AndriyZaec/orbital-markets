@@ -134,7 +134,7 @@ func NewLiveDeps(
 	}
 	factories := map[string]accountFeedFactory{
 		"aster": &asterAccountFeedFactory{
-			client: asterClient, reader: asterReader, fundingReader: asterReader,
+			client: asterClient, reader: asterReader, fundingReader: asterReader, orderReader: asterReader,
 			applyFunding: deps.applyAsterFundingBatch, logger: logger, backendReads: true,
 		},
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},

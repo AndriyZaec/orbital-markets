@@ -481,16 +481,35 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 
 	needLeg2 := originalState == sessAwaitingLeg2RetrySign ||
 		originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
+	orderEvidenceReady := make(chan recoveryOrderEvidence, 1)
+	go func() {
+		orderEvidenceReady <- s.reconcileAsterRecoveryOrders(ctx, session, originalState)
+	}()
 	accountsLocked = false
 	unlockAccounts()
 	refreshRecoveryAccountState(ctx, session, needLeg2)
 	truthReady := s.waitForRecoveryAccountState(ctx, session, needLeg2)
 	unlockAccounts = accounts.Lock()
 	accountsLocked = true
+	orderEvidence := <-orderEvidenceReady
+	if orderEvidence.detail != "" {
+		reason += "; " + orderEvidence.detail
+	}
 	leg1Size, leg1Price := currentVenuePosition(accounts, session.Leg1.venue, session.Leg1.symbol)
 	leg2Size, leg2Price := currentVenuePosition(accounts, session.Leg2.venue, session.Leg2.symbol)
 	leg1Delta := leg1Size - session.BaselineLeg1Size
 	leg2Delta := leg2Size - session.BaselineLeg2Size
+	if orderEvidence.leg1Known && !fillPresent(session.Leg1Fill) {
+		session.Leg1Fill = nil
+		session.Leg2Fill = nil
+		session.State = sessFailed
+		detail := reason + "; exact leg-1 order shows no fill"
+		if !truthReady {
+			detail += "; venue position state unavailable"
+		}
+		s.persistSession(s.ctx, session, executor.ExecStateFailed, detail)
+		return
+	}
 
 	if !truthReady {
 		leg1Amount := liveSessionLeg1Amount(session)
@@ -518,6 +537,9 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 
 	leg1Exposed := exposureMatches(session.Leg1.side, leg1Delta)
 	leg2Exposed := exposureMatches(session.Leg2.side, leg2Delta)
+	if orderEvidence.leg2Known && !fillPresent(session.Leg2Fill) {
+		leg2Exposed = false
+	}
 	if needLeg2 {
 		s.reconcileSubmittedHedge(session, reason, leg1Delta, leg2Delta, leg1Price, leg2Price, leg1Exposed, leg2Exposed)
 		return
@@ -539,6 +561,64 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	session.State = sessionState
 	detail := reason + "; leg-1 exposure reconciled from venue state" + unwindReasonSuffix(ur)
 	s.persistSession(s.ctx, session, persistState, detail)
+}
+
+type recoveryOrderEvidence struct {
+	leg1Known bool
+	leg2Known bool
+	detail    string
+}
+
+func (s *Server) reconcileAsterRecoveryOrders(
+	ctx context.Context,
+	session *LiveSession,
+	originalState sessionState,
+) recoveryOrderEvidence {
+	evidence := recoveryOrderEvidence{}
+	details := make([]string, 0, 2)
+	lookup := func(req *domain.SigningRequest) (*normFill, bool) {
+		if req == nil || req.Venue != "aster" {
+			return nil, false
+		}
+		fill, err := s.waitForLegFillForAccounts(ctx, req, session.accounts)
+		if err != nil || fill == nil {
+			details = append(details, "Aster exact-order lookup unavailable for "+req.ClientOrderID)
+			return nil, false
+		}
+		return fill, true
+	}
+
+	if originalState == sessLeg1Submitting || originalState == sessLeg1Submitted {
+		if fill, known := lookup(session.Leg1OpenReq); known {
+			session.Leg1Fill = fill
+			evidence.leg1Known = true
+		}
+	} else if session.Leg1Fill != nil {
+		evidence.leg1Known = true
+	}
+
+	if originalState == sessLeg2Submitting || originalState == sessLeg2Submitted {
+		request := session.Leg2OpenReq
+		if session.Leg2Attempts >= 2 && session.Leg2RetryReq != nil {
+			request = session.Leg2RetryReq
+		}
+		if fill, known := lookup(request); known {
+			if request == session.Leg2RetryReq && fillPresent(session.Leg2Fill) {
+				if fill.OrderID == "" || session.Leg2Fill.OrderID != fill.OrderID {
+					session.Leg2Fill = mergeNormFills(session.Leg2Fill, fill)
+				}
+			} else {
+				session.Leg2Fill = fill
+			}
+			evidence.leg2Known = true
+		}
+	}
+	evidence.detail = strings.Join(details, "; ")
+	return evidence
+}
+
+func fillPresent(fill *normFill) bool {
+	return fill != nil && fill.Filled && fill.FilledAmount > 0
 }
 
 func refreshRecoveryAccountState(ctx context.Context, session *LiveSession, needLeg2 bool) {
@@ -568,7 +648,9 @@ func (s *Server) reconcileSubmittedHedge(
 		return
 	}
 	if leg1Exposed && leg2Exposed {
-		mismatch := math.Abs(math.Abs(leg2Delta)-math.Abs(leg1Delta)) / math.Abs(leg1Delta)
+		fillMismatch := hedgeMismatch(fillAmount(session.Leg1Fill), fillAmount(session.Leg2Fill))
+		exposureMismatch := hedgeMismatch(math.Abs(leg1Delta), math.Abs(leg2Delta))
+		mismatch := math.Max(fillMismatch, exposureMismatch)
 		if mismatch <= maxHedgeMismatchPct {
 			session.State = sessOpen
 			s.persistSession(s.ctx, session, executor.ExecStateOpen, reason+"; both legs reconciled from venue state")
@@ -664,15 +746,13 @@ func exposureMatches(side domain.Side, delta float64) bool {
 }
 
 func (s *Server) ensureRecoveryFills(session *LiveSession, leg1Amount, leg2Amount, leg1Price, leg2Price float64) {
-	if leg1Amount > 0 {
-		session.Leg1Fill = &normFill{FilledAmount: leg1Amount, AvgFillPrice: leg1Price, Status: "reconciled", Filled: true}
-	} else {
-		session.Leg1Fill = nil
+	if session.Leg1Fill == nil {
+		if leg1Amount > 0 {
+			session.Leg1Fill = &normFill{FilledAmount: leg1Amount, AvgFillPrice: leg1Price, Status: "reconciled", Filled: true}
+		}
 	}
-	if leg2Amount > 0 {
+	if session.Leg2Fill == nil && leg2Amount > 0 {
 		session.Leg2Fill = &normFill{FilledAmount: leg2Amount, AvgFillPrice: leg2Price, Status: "reconciled", Filled: true}
-	} else {
-		session.Leg2Fill = nil
 	}
 }
 

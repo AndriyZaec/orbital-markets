@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
 func TestRecoveryExplicitlyRefreshesAsterAccountState(t *testing.T) {
@@ -90,6 +92,65 @@ func TestRecoveryStartsBothVenueRefreshesConcurrently(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatalf("%s refresh did not start while the other venue was blocked", venueName)
 		}
+	}
+}
+
+func TestRecoveryReconcilesAsterOrderAfterRestart(t *testing.T) {
+	feed := &fakeAccountFeed{waitFill: &normFill{
+		OrderID: "42", Status: "partial_fill", FilledAmount: 0.75, AvgFillPrice: 100, Filled: true,
+	}}
+	session, release := recoverySessionWithAsterFeed(t, feed, time.Now())
+	defer release()
+	session.Leg1OpenReq = &domain.SigningRequest{
+		Venue: "aster", Account: fundingTestAsterOwner, Symbol: "SOLUSDT",
+		ClientOrderID: "orbital-leg1", Amount: 1,
+	}
+
+	evidence := (&Server{}).reconcileAsterRecoveryOrders(context.Background(), session, sessLeg1Submitted)
+	if !evidence.leg1Known || evidence.detail != "" || session.Leg1Fill == nil ||
+		session.Leg1Fill.OrderID != "42" || session.Leg1Fill.FilledAmount != 0.75 {
+		t.Fatalf("recovery evidence = %+v, fill = %+v", evidence, session.Leg1Fill)
+	}
+}
+
+func TestRecoveryKeepsAsterLookupFailureUncertain(t *testing.T) {
+	feed := &fakeAccountFeed{waitErr: errors.New("read unavailable")}
+	session, release := recoverySessionWithAsterFeed(t, feed, time.Now())
+	defer release()
+	session.Leg1OpenReq = &domain.SigningRequest{
+		Venue: "aster", Account: fundingTestAsterOwner, Symbol: "SOLUSDT",
+		ClientOrderID: "orbital-leg1", Amount: 1,
+	}
+
+	evidence := (&Server{}).reconcileAsterRecoveryOrders(context.Background(), session, sessLeg1Submitting)
+	if evidence.leg1Known || evidence.detail == "" || session.Leg1Fill != nil {
+		t.Fatalf("recovery evidence = %+v, fill = %+v", evidence, session.Leg1Fill)
+	}
+}
+
+func TestRecoveryMergesAsterRetryOrderOnlyOnce(t *testing.T) {
+	feed := &fakeAccountFeed{waitFill: &normFill{
+		OrderID: "retry-order", Status: "filled", FilledAmount: 0.4, AvgFillPrice: 101, Filled: true,
+	}}
+	session, release := recoverySessionWithAsterFeed(t, feed, time.Now())
+	defer release()
+	session.Leg2 = legPlan{venue: "aster", symbol: "SOLUSDT"}
+	session.Leg1Fill = &normFill{FilledAmount: 1, AvgFillPrice: 100, Filled: true}
+	session.Leg2Fill = &normFill{OrderID: "open-order", FilledAmount: 0.6, AvgFillPrice: 100, Filled: true}
+	session.Leg2Attempts = 2
+	session.Leg2RetryReq = &domain.SigningRequest{
+		Venue: "aster", Account: fundingTestAsterOwner, Symbol: "SOLUSDT",
+		ClientOrderID: "orbital-leg2-retry", Amount: 0.4,
+	}
+
+	server := &Server{}
+	evidence := server.reconcileAsterRecoveryOrders(context.Background(), session, sessLeg2Submitted)
+	if !evidence.leg2Known || session.Leg2Fill.FilledAmount != 1 || session.Leg2Fill.OrderID != "retry-order" {
+		t.Fatalf("first retry recovery = %+v, fill = %+v", evidence, session.Leg2Fill)
+	}
+	server.reconcileAsterRecoveryOrders(context.Background(), session, sessLeg2Submitted)
+	if session.Leg2Fill.FilledAmount != 1 {
+		t.Fatalf("repeated retry recovery duplicated fill: %+v", session.Leg2Fill)
 	}
 }
 
