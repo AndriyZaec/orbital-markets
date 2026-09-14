@@ -146,7 +146,7 @@ The suggested notional is advisory, not a profitability guarantee. Users can ove
 - canonical hourly-normalized funding model
 - BBO-first liquidity model with OI as secondary context
 - SQLite-backed paper positions, live positions, sessions, and market history
-- browser-held signing; the API does not custody user private keys
+- browser-held financial-write signing; the API holds only Aster's delegated read-only credential and never user-wallet or execution-agent private keys
 
 ## Execution Semantics
 

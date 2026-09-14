@@ -10,18 +10,13 @@ import {
   authorizeAsterDataAgent,
   prepareAsterDataAgentAuthorization,
   type AsterDataAgentApprovalTypedData,
-} from './aster-data-agent-probe.ts'
+} from './aster-data-agent.ts'
 import {
   asterBuilderAddress,
   authorizeAsterAgent,
   type AsterApprovalTypedData,
   type AsterApproveAgentRequest,
 } from './aster-agent.ts'
-import {
-  refreshAsterAccountSnapshot,
-  runAsterPrivateRequest,
-  type AsterPrivateInput,
-} from './aster-private.ts'
 import {
   approveHyperliquidBuilderFee,
   authorizeHyperliquidAgent,
@@ -136,10 +131,6 @@ function TradingAgentSession({
   const [aster, setAster] = useState(() => initialState('aster', asterOwner))
   const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
-  const asterAccountRefresh = useRef<{
-    key: string
-    promise: Promise<'ready' | 'deposit_required'>
-  } | null>(null)
   const revokedPacificaAgents = useRef(new Set<string>())
   owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
 
@@ -437,60 +428,9 @@ function TradingAgentSession({
     }
   }
 
-  const requestAster = async <T,>(input: Omit<AsterPrivateInput, 'account' | 'agent'>): Promise<T> => {
-    if (!asterOwner || aster.status !== 'ready' || !aster.agentAddress) {
-      throw new Error('Aster authorization is not ready')
-    }
-    const ownerAddress = asterOwner
-    const agentAddress = aster.agentAddress
-    const requestStillCurrent = async () => {
-      if (!ownerStillCurrent('aster', ownerAddress, owners.current)) return false
-      return (await storage.restore('aster', ownerAddress))
-        ?.agentAddress.toLowerCase() === agentAddress.toLowerCase()
-    }
-    return runAsterPrivateRequest<T>(
-      { ...input, account: ownerAddress, agent: agentAddress },
-      sign,
-      requestStillCurrent,
-    )
-  }
-
-  const refreshAsterAccount = async (refreshOnly = false): Promise<'ready' | 'deposit_required'> => {
-    if (!asterOwner || aster.status !== 'ready' || !aster.agentAddress) {
-      throw new Error('Aster authorization is not ready')
-    }
-    const ownerAddress = asterOwner
-    const agentAddress = aster.agentAddress
-    const key = `${ownerAddress.toLowerCase()}:${agentAddress.toLowerCase()}:${refreshOnly ? 'refresh' : 'full'}`
-    const current = asterAccountRefresh.current
-    const accountKey = `${ownerAddress.toLowerCase()}:${agentAddress.toLowerCase()}:`
-    if (current?.key.startsWith(accountKey)) {
-      if (refreshOnly || current.key === key) return current.promise
-      try {
-        await current.promise
-      } catch {
-        // A pre-trade full refresh must still run after a failed background refresh.
-      }
-      return refreshAsterAccount(false)
-    }
-    const requestStillCurrent = async () => {
-      if (!ownerStillCurrent('aster', ownerAddress, owners.current)) return false
-      return (await storage.restore('aster', ownerAddress))
-        ?.agentAddress.toLowerCase() === agentAddress.toLowerCase()
-    }
-    const promise = refreshAsterAccountSnapshot(ownerAddress, agentAddress, sign, requestStillCurrent, refreshOnly)
-    asterAccountRefresh.current = { key, promise }
-    try {
-      return await promise
-    } finally {
-      if (asterAccountRefresh.current?.promise === promise) asterAccountRefresh.current = null
-    }
-  }
-
   return (
     <TradingAgentContext.Provider value={{
-      pacifica, hyperliquid, aster, authorize, sign, requestAster,
-      refreshAsterAccount, disconnectWallet,
+      pacifica, hyperliquid, aster, authorize, sign, disconnectWallet,
     }}>
       {children}
     </TradingAgentContext.Provider>

@@ -176,29 +176,25 @@ test('Aster signing rejects an agent authorized before builder attribution', asy
   await assert.rejects(signAsterAgentRequest(asterSigningRequest(), legacyAgent), /not an allowed IOC order/)
 })
 
-test('Aster agent signs only allowlisted private account requests', async () => {
-  const operations: SigningRequest['action'][] = [
-    'get_position_mode', 'get_account', 'get_positions', 'get_leverage_brackets',
-    'query_order', 'get_income', 'update_leverage', 'start_user_stream', 'keepalive_user_stream', 'close_user_stream',
-  ]
-  for (const operation of operations) {
-    const signed = await signAsterAgentRequest(asterPrivateSigningRequest(operation), asterAgent())
-    assert.match(signed.signature, /^0x[0-9a-f]{130}$/)
-  }
+test('Aster agent signs browser leverage updates', async () => {
+  const signed = await signAsterAgentRequest(asterLeverageSigningRequest(), asterAgent())
+  assert.match(signed.signature, /^0x[0-9a-f]{130}$/)
 })
 
-test('Aster agent rejects private request fields outside the operation policy', async () => {
-  const request = asterPrivateSigningRequest('get_account')
+test('Aster agent rejects leverage request fields outside the operation policy', async () => {
+  const request = asterLeverageSigningRequest()
   const payload = request.unsigned_payload as { message: { msg: string } }
   payload.message.msg = `withdraw=true&${payload.message.msg}`
   await assert.rejects(signAsterAgentRequest(request, asterAgent()), /not an allowed private request/)
 })
 
-test('Aster funding history request is fixed to the funding ledger', async () => {
-  const request = asterPrivateSigningRequest('get_income')
-  await signAsterAgentRequest(request, asterAgent())
-  const payload = request.unsigned_payload as { message: { msg: string } }
-  payload.message.msg = payload.message.msg.replace('incomeType=FUNDING_FEE', 'incomeType=COMMISSION')
+test('Aster agent rejects obsolete browser read requests', async () => {
+  const request = {
+    ...asterLeverageSigningRequest(),
+    action: 'get_account',
+    symbol: '',
+    leverage: undefined,
+  } as unknown as SigningRequest
   await assert.rejects(signAsterAgentRequest(request, asterAgent()), /not an allowed private request/)
 })
 
@@ -269,54 +265,24 @@ function asterSigningRequest(): SigningRequest {
   }
 }
 
-function asterPrivateSigningRequest(action: SigningRequest['action']): SigningRequest {
+function asterLeverageSigningRequest(): SigningRequest {
   const request = asterSigningRequest()
-  const routes: Partial<Record<SigningRequest['action'], { method: string; path: string }>> = {
-    get_position_mode: { method: 'GET', path: '/fapi/v3/positionSide/dual' },
-    get_account: { method: 'GET', path: '/fapi/v3/accountWithJoinMargin' },
-    get_positions: { method: 'GET', path: '/fapi/v3/positionRisk' },
-    get_leverage_brackets: { method: 'GET', path: '/fapi/v3/leverageBracket' },
-    query_order: { method: 'GET', path: '/fapi/v3/order' },
-    get_income: { method: 'GET', path: '/fapi/v3/income' },
-    update_leverage: { method: 'POST', path: '/fapi/v3/leverage' },
-    start_user_stream: { method: 'POST', path: '/fapi/v3/listenKey' },
-    keepalive_user_stream: { method: 'PUT', path: '/fapi/v3/listenKey' },
-    close_user_stream: { method: 'DELETE', path: '/fapi/v3/listenKey' },
-  }
-  let symbol = ''
-  let clientOrderID = ''
-  let leverage: number | undefined
-  let operationQuery = ''
-  if (action === 'get_positions' || action === 'get_leverage_brackets') {
-    symbol = 'BTCUSDT'
-    operationQuery = `symbol=${symbol}&`
-  } else if (action === 'query_order') {
-    symbol = 'BTCUSDT'
-    clientOrderID = 'client-order'
-    operationQuery = `symbol=${symbol}&origClientOrderId=${clientOrderID}&`
-  } else if (action === 'get_income') {
-    operationQuery = 'incomeType=FUNDING_FEE&limit=1000&'
-  } else if (action === 'update_leverage') {
-    symbol = 'BTCUSDT'
-    leverage = 5
-    operationQuery = `symbol=${symbol}&leverage=${leverage}&`
-  }
   return {
     ...request,
-    id: `aster-${action}-1`,
-    client_order_id: clientOrderID,
-    action,
-    symbol,
+    id: 'aster-update-leverage-1',
+    client_order_id: '',
+    action: 'update_leverage',
+    symbol: 'BTCUSDT',
     side: '',
     amount: 0,
     price: 0,
     reduce_only: false,
-    leverage,
+    leverage: 5,
     unsigned_payload: {
       ...(request.unsigned_payload as object),
-      message: { msg: operationQuery + privateAuthQuery() },
+      message: { msg: `symbol=BTCUSDT&leverage=5&${privateAuthQuery()}` },
     },
-    venue_metadata: routes[action],
+    venue_metadata: { method: 'POST', path: '/fapi/v3/leverage' },
   }
 }
 

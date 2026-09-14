@@ -280,7 +280,6 @@ export function OpportunityPanel({
       notional_bucket: notionalBucket(plan?.notional ?? notionalForPlan ?? opp.recommended_notional),
     })
     setShowLiveModal(true)
-    const asterLeg = [plan.leg_1, plan.leg_2].find((leg) => leg.venue.toLowerCase() === 'aster')
     executeLive({
       opportunityId: opp.id,
       asset: opp.asset,
@@ -288,7 +287,7 @@ export function OpportunityPanel({
       requestedNotional: plan.notional,
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       legs: intentLegs as [NonNullable<(typeof intentLegs)[number]>, NonNullable<(typeof intentLegs)[number]>],
-    }, asterLeg?.market_key ?? asterLeg?.asset)
+    })
   }
 
   const handleCloseLiveModal = () => {

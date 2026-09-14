@@ -232,10 +232,7 @@ function useLiveExecutionState() {
     return resp.json()
   }
 
-  const executeLive = useCallback(async (
-    intent: ExecutionIntent,
-    asterSymbol?: string,
-  ) => {
+  const executeLive = useCallback(async (intent: ExecutionIntent) => {
     const opportunityId = intent.opportunityId
     const leverage = intent.leverage
     const requestedNotional = intent.requestedNotional
@@ -266,12 +263,6 @@ function useLiveExecutionState() {
     const preparedAgents = Object.fromEntries(venues.map((venue) => [venue, agentByVenue[venue].agentAddress!]))
 
     try {
-      if (venues.includes('aster')) {
-        if (!asterSymbol) throw new Error('Aster market symbol is unavailable')
-        const accountStatus = await tradingAgents.refreshAsterAccount()
-        if (accountStatus === 'deposit_required') throw new Error('Aster account requires a deposit')
-        await tradingAgents.requestAster({ operation: 'get_leverage_brackets', symbol: asterSymbol })
-      }
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
       const prepResp = await apiFetch('/api/v1/live/prepare', {
         method: 'POST',

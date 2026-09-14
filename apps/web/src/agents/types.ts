@@ -1,5 +1,4 @@
 import type { SignedAction, SigningRequest } from '@/types/signing'
-import type { AsterPrivateInput } from './aster-private'
 
 export type Venue = 'hyperliquid' | 'pacifica' | 'aster'
 export type WalletKind = 'evm' | 'solana'
@@ -31,7 +30,5 @@ export interface TradingAgentManager {
   aster: TradingAgentState
   authorize(venue: Venue): Promise<void>
   sign(request: SigningRequest): Promise<SignedAction>
-  requestAster<T>(input: Omit<AsterPrivateInput, 'account' | 'agent'>): Promise<T>
-  refreshAsterAccount(refreshOnly?: boolean): Promise<'ready' | 'deposit_required'>
   disconnectWallet(wallet: WalletKind): Promise<void>
 }
