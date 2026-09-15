@@ -271,6 +271,25 @@ test('a local Pacifica agent rejects a payload side that differs from the reques
   await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
 })
 
+test('a local Pacifica agent caps open slippage without restricting recovery', async () => {
+  const open = pacificaSigningRequest()
+  open.unsigned_payload = { ...(open.unsigned_payload as object), slippage_percent: '1' }
+  await assert.rejects(signPacificaAgentRequest(open, pacificaAgent()), /not an allowed market order/)
+
+  const unwind = pacificaSigningRequest()
+  unwind.action = 'unwind'
+  unwind.reduce_only = true
+  unwind.unsigned_payload = {
+    ...(unwind.unsigned_payload as object),
+    reduce_only: true,
+    slippage_percent: '1',
+    builder_code: undefined,
+  }
+  const agent = pacificaAgent()
+  delete agent.builderCode
+  assert.equal((await signPacificaAgentRequest(unwind, agent)).signer_address, agentAddress)
+})
+
 test('a local Pacifica agent signs fee-free recovery but rejects fee-free normal close', async () => {
   const request = pacificaSigningRequest()
   const order = request.unsigned_payload as Record<string, unknown>

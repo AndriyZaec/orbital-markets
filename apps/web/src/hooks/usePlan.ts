@@ -116,6 +116,7 @@ export function usePlan(
       setPlan(data)
       setMaxLeverageResult({ key: requestKey ?? '', value: data.max_leverage })
       setError(null)
+      return data
     } catch (e) {
       if (signal?.aborted || requestId !== requestSequence.current) return
       setError(userErrorMessage(e, 'Unable to build an execution plan. Please try again.'))
@@ -163,7 +164,12 @@ export function usePlan(
     setMaxLeverageResult({ key: '', value: null })
   }, [])
 
-  return { plan, loading, error, maxLeverage, clear }
+  const refresh = useCallback(() => {
+    if (!opportunityId) return Promise.resolve(undefined)
+    return fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey)
+  }, [accountsKey, fetchPlan, leverage, opportunityId, planKey, requestedNotional])
+
+  return { plan, loading, error, maxLeverage, clear, refresh }
 }
 
 export type { ExecutionPlan, Leg, Bounds }

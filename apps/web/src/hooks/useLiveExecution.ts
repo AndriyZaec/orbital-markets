@@ -17,14 +17,17 @@ import type { Venue } from '@/agents/types'
 import { useTradingAgents } from './useTradingAgents'
 import {
   assertExecutionIntentRequest,
+  assertExecutionIntentRequests,
   assertPreparedExecutionIntent,
   areValidLeg1SigningRequests,
   executionFailurePhase,
   executionPhaseFromStatus,
+  ExecutionIntentRequestError,
   normalizeHyperliquidAddress,
   normalizePacificaAddress,
   type AdvanceStatus,
   type ExecutionIntent,
+  type ExecutionGuardFailure,
 } from '@/lib/live-execution-state'
 
 // Two-phase non-custodial open (Option A):
@@ -85,6 +88,7 @@ export interface LiveExecutionState {
   expiresAt: string | null
   currentVenue: string | null
   remainingExposure: RemainingExposure[]
+  guardFailure: ExecutionGuardFailure | null
 }
 
 const INITIAL_STATE: LiveExecutionState = {
@@ -109,6 +113,7 @@ const INITIAL_STATE: LiveExecutionState = {
   expiresAt: null,
   currentVenue: null,
   remainingExposure: [],
+  guardFailure: null,
 }
 
 interface PrepareResp {
@@ -360,16 +365,20 @@ function useLiveExecutionState() {
       // 2. Sign every prepare request up front. If any fails, submit nothing.
       let signedLeg1: SignedAction[]
       try {
+        assertExecutionIntentRequests(intent, leg1Requests, consumedRequestIdsRef.current)
         signedLeg1 = []
         for (const req of leg1Requests) {
-          signedLeg1.push(await signForIntent(req))
+          signedLeg1.push(await tradingAgents.sign(req))
         }
       } catch (e) {
         // Signing-failure rule: nothing submitted, abort cleanly.
         setState((s) => ({
           ...s,
           phase: 'failed',
-          error: `Leg 1 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+          error: e instanceof ExecutionIntentRequestError
+            ? `${e.message} Nothing was signed or submitted.`
+            : `Leg 1 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+          guardFailure: e instanceof ExecutionIntentRequestError ? e.kind : null,
         }))
         return
       }
@@ -479,6 +488,7 @@ function useLiveExecutionState() {
           ...s,
           phase: 'aborted',
           reason: `Leg 2 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+          guardFailure: e instanceof ExecutionIntentRequestError ? e.kind : null,
           unwound: abortResp?.unwound ?? false,
           unwindStatus: (abortResp?.unwind_status ?? 'unconfirmed') as UnwindStatus,
         }))
@@ -562,6 +572,9 @@ function useLiveExecutionState() {
             const abortResp = await abortRetry(message)
             if (!abortResp) return
             adv2 = { ...abortResp, reason: message }
+            if (e instanceof ExecutionIntentRequestError) {
+              setState((s) => ({ ...s, guardFailure: e.kind }))
+            }
           }
           if (signedRetry) {
             const changedAfterSign = detectAccountChange()

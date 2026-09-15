@@ -3,6 +3,7 @@ import type { LiveExecutionState, ExecutionPhase, LegFillView, UnwindStatus } fr
 import { recoveryPresentation, type RecoveryTone } from '@/lib/degraded-execution'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { AssetIcon } from '@/components/AssetIcon'
+import { executionGuardActionLabel } from '@/lib/live-execution-state'
 
 interface Props {
   state: LiveExecutionState
@@ -277,7 +278,9 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
                 onClick={terminalPresentation.action === 'retry' ? onRetry : onViewPositions}
                 className={`flex-1 py-2 rounded-lg text-xs font-medium text-white transition-colors ${terminalStyle.button}`}
               >
-                {terminalPresentation.actionLabel}
+                {terminalPresentation.action === 'retry' && state.guardFailure
+                  ? executionGuardActionLabel(state.guardFailure)
+                  : terminalPresentation.actionLabel}
               </button>
             )}
             <button

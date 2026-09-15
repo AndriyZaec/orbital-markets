@@ -5,11 +5,31 @@ export interface ExecutionIntent {
   asset: string
   leverage: number
   requestedNotional: number
+  approvedBaseAmount: number
+  maxSlippagePct: number
   expiresAt: string
   legs: readonly [
-    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell' },
-    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell' },
+    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell'; expectedPrice: number },
+    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell'; expectedPrice: number },
   ]
+}
+
+export type ExecutionGuardFailure = 'price_moved' | 'plan_mismatch'
+
+export class ExecutionIntentRequestError extends Error {
+  readonly kind: ExecutionGuardFailure
+
+  constructor(kind: ExecutionGuardFailure) {
+    super(kind === 'price_moved'
+      ? 'Market price moved beyond the allowed range.'
+      : 'Order details no longer match the approved plan.')
+    this.name = 'ExecutionIntentRequestError'
+    this.kind = kind
+  }
+}
+
+export function executionGuardActionLabel(kind: ExecutionGuardFailure): string {
+  return kind === 'price_moved' ? 'Refresh quote & retry' : 'Refresh plan & retry'
 }
 
 export function executionIntentSide(positionSide: 'long' | 'short'): 'buy' | 'sell' {
@@ -47,9 +67,33 @@ export function assertExecutionIntentRequest(
   consumedRequestIds: Set<string>,
   now = Date.now(),
 ): void {
+  assertExecutionIntentRequests(intent, [request], consumedRequestIds, now)
+}
+
+export function assertExecutionIntentRequests(
+  intent: ExecutionIntent,
+  requests: readonly SigningRequest[],
+  consumedRequestIds: Set<string>,
+  now = Date.now(),
+): void {
+  const batchIds = new Set<string>()
+  for (const request of requests) {
+    if (consumedRequestIds.has(request.id) || batchIds.has(request.id)) {
+      throw new Error('Signing request was already consumed')
+    }
+    assertExecutionIntentRequestValues(intent, request, now)
+    batchIds.add(request.id)
+  }
+  for (const id of batchIds) consumedRequestIds.add(id)
+}
+
+function assertExecutionIntentRequestValues(
+  intent: ExecutionIntent,
+  request: SigningRequest,
+  now: number,
+): void {
   const expiresAt = Date.parse(intent.expiresAt)
   if (!Number.isFinite(expiresAt) || now > expiresAt) throw new Error('Execution intent expired')
-  if (consumedRequestIds.has(request.id)) throw new Error('Signing request was already consumed')
 
   const leg = intent.legs.find((candidate) => candidate.venue === request.venue)
   let valid = Boolean(leg) && request.symbol.trim().toUpperCase() === leg?.symbol.trim().toUpperCase()
@@ -68,7 +112,28 @@ export function assertExecutionIntentRequest(
     valid = false
   }
   if (!valid) throw new Error('Signing request does not match the execution intent')
-  consumedRequestIds.add(request.id)
+
+  if (request.action !== 'open' && request.action !== 'unwind') return
+  if (!leg || !Number.isFinite(intent.requestedNotional) || intent.requestedNotional <= 0 ||
+    !Number.isFinite(intent.approvedBaseAmount) || intent.approvedBaseAmount <= 0 ||
+    !Number.isFinite(intent.maxSlippagePct) || intent.maxSlippagePct < 0 || intent.maxSlippagePct > 0.005 ||
+    intent.legs.some((candidate) => !Number.isFinite(candidate.expectedPrice) || candidate.expectedPrice <= 0) ||
+    !Number.isFinite(request.amount) || request.amount <= 0 ||
+    !Number.isFinite(request.price) || request.price <= 0) {
+    throw new ExecutionIntentRequestError('plan_mismatch')
+  }
+
+  // The backend uses one base amount for both venues. Bind it to the riskier
+  // leg shown in the approved plan, with room only for approved quote movement.
+  const maximumAmount = intent.approvedBaseAmount / (1 - intent.maxSlippagePct)
+  if (request.amount > maximumAmount) {
+    throw new ExecutionIntentRequestError('plan_mismatch')
+  }
+  // Open builders use 0.5% venue slippage. A 1% browser ceiling leaves room for
+  // venue tick normalization without allowing an unbounded API-provided price.
+  if (request.action === 'open' && Math.abs(request.price / leg.expectedPrice - 1) > 0.01) {
+    throw new ExecutionIntentRequestError('price_moved')
+  }
 }
 
 export type AdvanceStatus =

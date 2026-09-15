@@ -266,7 +266,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     (request.action === 'open' || order.reduce_only === true) &&
     Number.isFinite(slippage) &&
     slippage >= 0 &&
-    slippage <= 1 &&
+    slippage <= (request.action === 'open' ? 0.5 : 1) &&
     order?.client_order_id === request.client_order_id &&
     validPacificaBuilder(order?.builder_code, request.action, agent)
   if (!allowed) throw new Error('Pacifica payload is not an allowed market order')

@@ -174,7 +174,7 @@ export function OpportunityPanel({
   const canRequestPlan = mode !== 'live' ||
     !liveVenues.includes('aster') ||
     Boolean(asterReadiness.address)
-  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(
+  const { plan, loading: planLoading, error: planError, maxLeverage, refresh: refreshPlan } = usePlan(
     canRequestPlan ? opp.id : null,
     debouncedLeverageForPlan,
     debouncedNotionalForPlan,
@@ -256,16 +256,21 @@ export function OpportunityPanel({
     }
   }
 
-  const handleExecuteLive = () => {
-    if (!plan || plan.opportunity_id !== opp.id || plan.asset.toUpperCase() !== opp.asset.toUpperCase() ||
-      plan.leverage.leverage !== leverage) return
+  const executeLivePlan = (selectedPlan: NonNullable<typeof plan>) => {
+    if (selectedPlan.opportunity_id !== opp.id || selectedPlan.asset.toUpperCase() !== opp.asset.toUpperCase() ||
+      selectedPlan.leverage.leverage !== leverage) return
+    const approvedNotional = notionalForPlan ?? selectedPlan.notional
+    const plannedRiskierLeg = selectedPlan.leg_1.slippage >= selectedPlan.leg_2.slippage
+      ? selectedPlan.leg_1
+      : selectedPlan.leg_2
     const intentLegs = liveVenues.map((venue) => {
-      const leg = [plan.leg_1, plan.leg_2].find((candidate) => candidate.venue.toLowerCase() === venue)
+      const leg = [selectedPlan.leg_1, selectedPlan.leg_2].find((candidate) => candidate.venue.toLowerCase() === venue)
       if (!leg) return null
       return {
         venue,
         symbol: leg.market_key ?? opp.asset,
         side: executionIntentSide(leg.side),
+        expectedPrice: leg.expected_price,
       }
     })
     if (!intentLegs[0] || !intentLegs[1]) return
@@ -277,17 +282,28 @@ export function OpportunityPanel({
       asset: opp.asset,
       venue_pair: venuePair,
       risk_tier: opp.risk_tier,
-      notional_bucket: notionalBucket(plan?.notional ?? notionalForPlan ?? opp.recommended_notional),
+      notional_bucket: notionalBucket(selectedPlan.notional),
     })
     setShowLiveModal(true)
     executeLive({
       opportunityId: opp.id,
       asset: opp.asset,
       leverage,
-      requestedNotional: plan.notional,
+      requestedNotional: approvedNotional,
+      approvedBaseAmount: approvedNotional / plannedRiskierLeg.expected_price,
+      maxSlippagePct: selectedPlan.bounds.max_slippage_pct,
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       legs: intentLegs as [NonNullable<(typeof intentLegs)[number]>, NonNullable<(typeof intentLegs)[number]>],
     })
+  }
+
+  const handleExecuteLive = () => {
+    if (plan) executeLivePlan(plan)
+  }
+
+  const handleRetryLive = async () => {
+    const freshPlan = await refreshPlan()
+    if (freshPlan) executeLivePlan(freshPlan)
   }
 
   const handleCloseLiveModal = () => {
@@ -549,7 +565,7 @@ export function OpportunityPanel({
       {(showLiveModal || liveState.phase !== 'idle') && (
         <LiveExecutionModal
           state={liveState}
-          onRetry={handleExecuteLive}
+          onRetry={handleRetryLive}
           onClose={handleCloseLiveModal}
           onViewPositions={() => { handleCloseLiveModal(); onViewPositions?.() }}
         />
