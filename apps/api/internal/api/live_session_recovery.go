@@ -512,6 +512,12 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	}
 
 	if !truthReady {
+		if !orderEvidence.leg1Known || !fillPresent(session.Leg1Fill) {
+			session.State = sessDegraded
+			detail := reason + "; venue position and exact leg-1 order state unavailable, manual action required"
+			s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
+			return
+		}
 		leg1Amount := liveSessionLeg1Amount(session)
 		leg2Amount := 0.0
 		if needLeg2 {
