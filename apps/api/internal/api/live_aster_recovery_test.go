@@ -128,6 +128,20 @@ func TestRecoveryKeepsAsterLookupFailureUncertain(t *testing.T) {
 	}
 }
 
+func TestRecoveryRequiresConfirmedFillWithoutPositionTruth(t *testing.T) {
+	if hasConfirmedLeg1RecoveryFill(recoveryOrderEvidence{}, nil) {
+		t.Fatal("missing venue evidence allowed automatic recovery")
+	}
+	if hasConfirmedLeg1RecoveryFill(recoveryOrderEvidence{leg1Known: true}, &normFill{}) {
+		t.Fatal("confirmed no-fill allowed automatic recovery")
+	}
+	if !hasConfirmedLeg1RecoveryFill(recoveryOrderEvidence{leg1Known: true}, &normFill{
+		Filled: true, FilledAmount: 0.4,
+	}) {
+		t.Fatal("confirmed partial fill did not allow bounded recovery")
+	}
+}
+
 func TestRecoveryMergesAsterRetryOrderOnlyOnce(t *testing.T) {
 	feed := &fakeAccountFeed{waitFill: &normFill{
 		OrderID: "retry-order", Status: "filled", FilledAmount: 0.4, AvgFillPrice: 101, Filled: true,

@@ -512,7 +512,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	}
 
 	if !truthReady {
-		if !orderEvidence.leg1Known || !fillPresent(session.Leg1Fill) {
+		if !hasConfirmedLeg1RecoveryFill(orderEvidence, session.Leg1Fill) {
 			session.State = sessDegraded
 			detail := reason + "; venue position and exact leg-1 order state unavailable, manual action required"
 			s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
@@ -625,6 +625,10 @@ func (s *Server) reconcileAsterRecoveryOrders(
 
 func fillPresent(fill *normFill) bool {
 	return fill != nil && fill.Filled && fill.FilledAmount > 0
+}
+
+func hasConfirmedLeg1RecoveryFill(evidence recoveryOrderEvidence, fill *normFill) bool {
+	return evidence.leg1Known && fillPresent(fill)
 }
 
 func refreshRecoveryAccountState(ctx context.Context, session *LiveSession, needLeg2 bool) {
