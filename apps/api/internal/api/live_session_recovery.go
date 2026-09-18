@@ -513,9 +513,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 
 	if !truthReady {
 		if !hasConfirmedLeg1RecoveryFill(orderEvidence, session.Leg1Fill) {
-			session.State = sessDegraded
-			detail := reason + "; venue position and exact leg-1 order state unavailable, manual action required"
-			s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
+			s.degradeRecoveryWithoutEvidence(session, reason)
 			return
 		}
 		leg1Amount := liveSessionLeg1Amount(session)
@@ -629,6 +627,12 @@ func fillPresent(fill *normFill) bool {
 
 func hasConfirmedLeg1RecoveryFill(evidence recoveryOrderEvidence, fill *normFill) bool {
 	return evidence.leg1Known && fillPresent(fill)
+}
+
+func (s *Server) degradeRecoveryWithoutEvidence(session *LiveSession, reason string) {
+	session.State = sessDegraded
+	detail := reason + "; venue position and exact leg-1 order state unavailable, manual action required"
+	s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
 }
 
 func refreshRecoveryAccountState(ctx context.Context, session *LiveSession, needLeg2 bool) {

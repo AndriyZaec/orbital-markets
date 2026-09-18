@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 )
 
 func TestRecoveryExplicitlyRefreshesAsterAccountState(t *testing.T) {
@@ -139,6 +140,47 @@ func TestRecoveryRequiresConfirmedFillWithoutPositionTruth(t *testing.T) {
 		Filled: true, FilledAmount: 0.4,
 	}) {
 		t.Fatal("confirmed partial fill did not allow bounded recovery")
+	}
+}
+
+func TestRecoveryWithoutEvidencePersistsDurableDegradedState(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	server.live.sessions = NewSessionManager()
+	now := time.Now()
+	session := &LiveSession{
+		ID: "session-no-evidence",
+		Plan: &domain.ExecutionPlan{
+			ID: "position-no-evidence", OpportunityID: "opportunity-1", Asset: "SOL",
+			Notional: 10, Leverage: domain.ComputeLeverage(10, 2),
+			Leg1: domain.Leg{Venue: "pacifica"}, Leg2: domain.Leg{Venue: "hyperliquid"},
+		},
+		Leg1: legPlan{venue: "pacifica", symbol: "SOL", side: domain.SideLong},
+		Leg2: legPlan{venue: "hyperliquid", symbol: "SOL", side: domain.SideShort},
+		Bindings: liveVenueBindings{Accounts: map[string]string{
+			"pacifica": "sol-wallet", "hyperliquid": "0xwallet",
+		}},
+		State: sessLeg1Submitted, CreatedAt: now, UpdatedAt: now,
+	}
+	payload, err := marshalLiveSession(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.liveStore.UpsertDurableSession(context.Background(), executor.DurableSessionRecord{
+		ID: session.ID, State: string(session.State), Payload: payload,
+		AccountBindings: session.Bindings.Accounts, Asset: "SOL", HasExposure: true,
+		ExpiresAt: now.Add(time.Minute), CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server.degradeRecoveryWithoutEvidence(session, "recovery timed out")
+
+	record, err := server.liveStore.GetDurableSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.State != sessDegraded || record.State != string(sessDegraded) || !record.Terminal {
+		t.Fatalf("session state = %q, durable record = %+v", session.State, record)
 	}
 }
 
