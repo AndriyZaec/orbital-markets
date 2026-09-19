@@ -454,6 +454,12 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 		s.logger.Info("live recovery: session owned by another server", "session_id", session.ID)
 		return
 	}
+	var retryReason string
+	defer func() {
+		if retryReason != "" {
+			s.scheduleExposedSessionRetry(session, retryReason)
+		}
+	}()
 	accounts, err := s.live.acquireAccountContext(session.Bindings.Accounts, true)
 	if err != nil {
 		s.logger.Error("live recovery: account feeds unavailable", "err", err, "session_id", session.ID)
@@ -485,6 +491,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	go func() {
 		orderEvidenceReady <- s.reconcileAsterRecoveryOrders(ctx, session, originalState)
 	}()
+	mutationGeneration := accounts.mutationGeneration()
 	accountsLocked = false
 	unlockAccounts()
 	refreshRecoveryAccountState(ctx, session, needLeg2)
@@ -492,6 +499,10 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	unlockAccounts = accounts.Lock()
 	accountsLocked = true
 	orderEvidence := <-orderEvidenceReady
+	if accounts.mutatedSince(mutationGeneration) {
+		retryReason = reason + "; account operation overlapped recovery"
+		return
+	}
 	if orderEvidence.detail != "" {
 		reason += "; " + orderEvidence.detail
 	}
@@ -643,6 +654,19 @@ func (s *Server) degradeRecoveryWithoutEvidence(session *LiveSession, reason str
 	session.State = sessDegraded
 	detail := reason + "; venue position and exact leg-1 order state unavailable, manual action required"
 	s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
+}
+
+func (s *Server) scheduleExposedSessionRetry(session *LiveSession, reason string) {
+	retry := *session
+	retry.accounts = nil
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+		s.recoverExposedSession(&retry, reason)
+	}()
 }
 
 func refreshRecoveryAccountState(ctx context.Context, session *LiveSession, needLeg2 bool) {

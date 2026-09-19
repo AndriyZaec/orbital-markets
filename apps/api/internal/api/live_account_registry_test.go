@@ -59,6 +59,50 @@ func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (
 
 func (f *fakeAccountFeed) WaitForLeverage(context.Context, string, float64) error { return nil }
 
+func TestAccountSubmissionInvalidatesUnlockedRecoveryRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	feed := &fakeAccountFeed{submitResult: &domain.SubmissionResult{Accepted: true}}
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"venue": &fixedAccountFeedFactory{feed: feed},
+	}, accountFeedRegistryConfig{})
+	lease, err := registry.Acquire("venue", "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	accounts := &liveAccountContext{leases: map[string]*accountFeedLease{"venue": lease}}
+	unlockRecovery := accounts.Lock()
+	generation := accounts.mutationGeneration()
+	unlockRecovery()
+	server := &Server{live: &LiveDeps{accounts: registry}}
+	request := &domain.SigningRequest{Venue: "venue", Account: "account-a"}
+
+	operationDone := make(chan error, 1)
+	go func() {
+		unlockOperation := accounts.Lock()
+		defer unlockOperation()
+		_, err := server.submitSignedActionForAccounts(ctx, domain.SignedAction{
+			Venue: "venue", SignerAddress: "account-a",
+		}, request, accounts)
+		operationDone <- err
+	}()
+	select {
+	case err := <-operationDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("account submission waited for an unlocked recovery read")
+	}
+
+	unlockRecovery = accounts.Lock()
+	defer unlockRecovery()
+	if !accounts.mutatedSince(generation) {
+		t.Fatal("account submission did not invalidate an in-flight recovery read")
+	}
+}
+
 type fakeAccountFeedFactory struct {
 	starts           atomic.Int64
 	stops            atomic.Int64

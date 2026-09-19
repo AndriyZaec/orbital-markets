@@ -367,6 +367,29 @@ type liveAccountContext struct {
 	leases map[string]*accountFeedLease
 }
 
+func (c *liveAccountContext) mutationGeneration() map[string]uint64 {
+	generation := make(map[string]uint64, len(c.leases))
+	for venue, lease := range c.leases {
+		generation[venue] = lease.entry.mutations.Load()
+	}
+	return generation
+}
+
+func (c *liveAccountContext) mutatedSince(generation map[string]uint64) bool {
+	for venue, lease := range c.leases {
+		if lease.entry.mutations.Load() != generation[venue] {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *liveAccountContext) markMutation(venue string) {
+	if lease := c.leases[venue]; lease != nil {
+		lease.markMutation()
+	}
+}
+
 func (d *LiveDeps) acquireAccounts(pacificaAccount, hyperliquidAccount string) (*liveAccountContext, error) {
 	return d.acquireAccountContext(map[string]string{
 		"pacifica": pacificaAccount, "hyperliquid": hyperliquidAccount,

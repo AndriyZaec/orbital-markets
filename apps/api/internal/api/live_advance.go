@@ -700,6 +700,7 @@ func (s *Server) submitSignedAction(
 	defer lease.Release()
 	unlock := lockAccountFeeds(lease)
 	defer unlock()
+	lease.markMutation()
 	return s.submitSignedActionForFeed(ctx, signed, req, lease.Feed())
 }
 
@@ -713,6 +714,7 @@ func (s *Server) submitSignedActionForAccounts(
 	if !ok {
 		return nil, fmt.Errorf("unsupported venue: %s", req.Venue)
 	}
+	accounts.markMutation(req.Venue)
 	return s.submitSignedActionForFeed(ctx, signed, req, feed)
 }
 
