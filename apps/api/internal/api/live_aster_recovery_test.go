@@ -184,6 +184,16 @@ func TestRecoveryWithoutEvidencePersistsDurableDegradedState(t *testing.T) {
 	}
 }
 
+func TestRecoveryUnwindDoesNotExceedConfirmedPartialFill(t *testing.T) {
+	fill := &normFill{Filled: true, FilledAmount: 0.4}
+	if recoveryUnwindFitsConfirmedFill(&domain.SigningRequest{Amount: 1}, fill) {
+		t.Fatal("full-size signed unwind was allowed for a partial fill")
+	}
+	if !recoveryUnwindFitsConfirmedFill(&domain.SigningRequest{Amount: 0.4}, fill) {
+		t.Fatal("signed unwind matching the confirmed fill was rejected")
+	}
+}
+
 func TestRecoveryMergesAsterRetryOrderOnlyOnce(t *testing.T) {
 	feed := &fakeAccountFeed{waitFill: &normFill{
 		OrderID: "retry-order", Status: "filled", FilledAmount: 0.4, AvgFillPrice: 101, Filled: true,

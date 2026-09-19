@@ -516,6 +516,12 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 			s.degradeRecoveryWithoutEvidence(session, reason)
 			return
 		}
+		if !needLeg2 && !recoveryUnwindFitsConfirmedFill(session.ArmedUnwindReq, session.Leg1Fill) {
+			session.State = sessDegraded
+			detail := reason + "; signed unwind exceeds exact leg-1 fill, manual action required"
+			s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
+			return
+		}
 		leg1Amount := liveSessionLeg1Amount(session)
 		leg2Amount := 0.0
 		if needLeg2 {
@@ -627,6 +633,10 @@ func fillPresent(fill *normFill) bool {
 
 func hasConfirmedLeg1RecoveryFill(evidence recoveryOrderEvidence, fill *normFill) bool {
 	return evidence.leg1Known && fillPresent(fill)
+}
+
+func recoveryUnwindFitsConfirmedFill(request *domain.SigningRequest, fill *normFill) bool {
+	return request != nil && fillPresent(fill) && unwindFullyFilled(request.Amount, fill.FilledAmount)
 }
 
 func (s *Server) degradeRecoveryWithoutEvidence(session *LiveSession, reason string) {
