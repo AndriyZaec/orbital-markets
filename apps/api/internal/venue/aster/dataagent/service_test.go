@@ -20,6 +20,7 @@ type fakeVenue struct {
 	releaseApprove chan struct{}
 	afterApprove   func()
 	executionAgent string
+	activeAgent    string
 }
 
 func (f *fakeVenue) Approve(context.Context, Approval, string) error {
@@ -42,7 +43,30 @@ func (f *fakeVenue) Approve(context.Context, Approval, string) error {
 func (f *fakeVenue) Probe(_ context.Context, _, _, executionAgent string, _ []byte, _ int64) Report {
 	f.probeCalls.Add(1)
 	f.executionAgent = executionAgent
-	return f.report
+	report := f.report
+	if f.activeAgent != "" {
+		report.ExecutionAgentPreserved = executionAgent == f.activeAgent
+	}
+	return report
+}
+
+func TestServiceReconcilesAcceptedExecutionAgentWithoutLocalRegistration(t *testing.T) {
+	service, _, now := newLifecycleService(t)
+	venue := &fakeVenue{report: successfulReport(now), activeAgent: testRotatedExecutionAgent}
+	service.venue = venue
+	prepared := prepareProbe(t, service)
+	if err := service.Authorize(
+		context.Background(), prepared.ProbeID, testSignature, testOwner, testExecutionAgent, prepared.Approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	agent, err := service.ReconcileExecutionAgent(context.Background(), testOwner, []string{
+		testExecutionAgent, testRotatedExecutionAgent,
+	})
+	if err != nil || agent != testRotatedExecutionAgent || venue.probeCalls.Load() != 2 {
+		t.Fatalf("agent = %q probes = %d err = %v", agent, venue.probeCalls.Load(), err)
+	}
 }
 
 type fakeExecutionChecker struct {

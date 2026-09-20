@@ -72,7 +72,9 @@ test('Aster authorization relays no private key and persists only after acceptan
       submissions.push('execution')
       relayed = JSON.stringify(request)
       assert.equal(storage.values.size, 0)
+      return 'accepted'
     },
+    reconcile: async () => { throw new Error('reconciliation should not run') },
   })
 
   assert.deepEqual(signatures, ['builder', 'read-only', 'execution'])
@@ -91,7 +93,8 @@ test('Aster authorization does not relay after the owner changes', async () => {
     prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
     authorizeReadOnly: async () => { relayed = true },
     ownerStillCurrent: () => false,
-    relay: async () => { relayed = true },
+    relay: async () => { relayed = true; return 'accepted' },
+    reconcile: async () => { throw new Error('reconciliation should not run') },
   }), /owner changed/)
   assert.equal(relayed, false)
 })
@@ -109,10 +112,76 @@ test('Aster authorization keeps the previous browser agent when execution approv
     prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
     authorizeReadOnly: async () => { readOnlyAccepted = true },
     relay: async () => { throw new Error('execution approval failed') },
+    reconcile: async () => { throw new Error('reconciliation should not run') },
   }), /execution approval failed/)
 
   assert.equal(readOnlyAccepted, true)
   assert.equal((await storage.restore('aster', ownerAddress))?.agentAddress, previous.agentAddress)
+})
+
+test('Aster authorization recovers an accepted approval after the relay response is lost', async () => {
+  const storage = new TestTradingAgentStore()
+  const previous = asterAgent()
+  await storage.save(previous)
+
+  const agent = await authorizeAsterAgent({
+    storage,
+    ownerAddress,
+    signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
+    prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
+    authorizeReadOnly: async () => {},
+    relay: async () => {
+      assert.ok(await storage.loadPendingForSigning('aster', ownerAddress))
+      assert.equal((await storage.loadForSigning('aster', ownerAddress))?.agentAddress, previous.agentAddress)
+      return 'uncertain'
+    },
+    reconcile: async ([pending]) => pending!,
+  })
+
+  assert.notEqual(agent.agentAddress, previous.agentAddress)
+  assert.equal((await storage.loadForSigning('aster', ownerAddress))?.agentAddress, agent.agentAddress)
+  assert.equal(await storage.loadPendingForSigning('aster', ownerAddress), null)
+})
+
+test('Aster authorization retains the previous agent when reconciliation finds it active', async () => {
+  const storage = new TestTradingAgentStore()
+  const previous = asterAgent()
+  await storage.save(previous)
+
+  const agent = await authorizeAsterAgent({
+    storage,
+    ownerAddress,
+    signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
+    prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
+    authorizeReadOnly: async () => {},
+    relay: async () => 'uncertain',
+    reconcile: async () => previous.agentAddress,
+  })
+
+  assert.equal(agent.agentAddress, previous.agentAddress)
+  assert.equal((await storage.loadForSigning('aster', ownerAddress))?.agentAddress, previous.agentAddress)
+  assert.equal(await storage.loadPendingForSigning('aster', ownerAddress), null)
+})
+
+test('Aster authorization reconciles an existing pending agent without another wallet signature', async () => {
+  const storage = new TestTradingAgentStore()
+  const pending = asterAgent()
+  await storage.savePending(pending)
+  let signed = false
+
+  const agent = await authorizeAsterAgent({
+    storage,
+    ownerAddress,
+    signTypedData: async () => { signed = true; throw new Error('wallet should not be prompted') },
+    prepareReadOnly: async () => { throw new Error('new authorization should not start') },
+    authorizeReadOnly: async () => { throw new Error('new authorization should not start') },
+    relay: async () => { throw new Error('new authorization should not start') },
+    reconcile: async ([candidate]) => candidate!,
+  })
+
+  assert.equal(signed, false)
+  assert.equal(agent.agentAddress, pending.agentAddress)
+  assert.equal(await storage.loadPendingForSigning('aster', ownerAddress), null)
 })
 
 function readOnlyPreparation(executionAgent: string, now: number) {

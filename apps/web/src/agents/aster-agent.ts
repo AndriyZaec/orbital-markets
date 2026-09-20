@@ -120,7 +120,8 @@ export async function authorizeAsterAgent(options: {
   storage: TradingAgentStore
   ownerAddress: string
   signTypedData: (typedData: AsterApprovalTypedData) => Promise<Hex>
-  relay: (request: AsterApproveAgentRequest) => Promise<void>
+  relay: (request: AsterApproveAgentRequest) => Promise<'accepted' | 'uncertain'>
+  reconcile: (candidateAgentAddresses: string[]) => Promise<string>
   prepareReadOnly: (executionAgent: Address) => Promise<AsterDataAgentPreparation>
   authorizeReadOnly: (
     preparation: AsterDataAgentPreparation,
@@ -131,6 +132,8 @@ export async function authorizeAsterAgent(options: {
   ownerStillCurrent?: () => boolean
   now?: () => number
 }): Promise<StoredTradingAgent> {
+  const unresolved = await reconcilePendingAsterAgent(options)
+  if (unresolved) return unresolved
   const generated = generateAsterAgent()
   const action = buildAsterApproveAgentAction(
     options.ownerAddress,
@@ -156,9 +159,6 @@ export async function authorizeAsterAgent(options: {
   if (options.ownerStillCurrent && !options.ownerStillCurrent()) {
     throw new Error('Aster owner changed during agent authorization')
   }
-  await options.authorizeReadOnly(readOnly, readOnlySignature, generated.agentAddress)
-  await options.relay({ ...action, signature, builderSignature })
-
   const agent: StoredTradingAgent = {
     version: 2,
     venue: 'aster',
@@ -169,8 +169,44 @@ export async function authorizeAsterAgent(options: {
     expiresAt: new Date(action.expired).toISOString(),
     builderAddress: asterBuilderAddress,
   }
-  await options.storage.save(agent)
-  return agent
+  await options.storage.savePending(agent)
+  let outcome: 'accepted' | 'uncertain'
+  try {
+    await options.authorizeReadOnly(readOnly, readOnlySignature, generated.agentAddress)
+    outcome = await options.relay({ ...action, signature, builderSignature })
+  } catch (error) {
+    await options.storage.clearPending('aster', options.ownerAddress, agent.agentAddress)
+    throw error
+  }
+  if (outcome === 'accepted') {
+    await options.storage.promotePending(agent)
+    return agent
+  }
+
+  return (await reconcilePendingAsterAgent(options))!
+}
+
+export async function reconcilePendingAsterAgent(options: {
+  storage: TradingAgentStore
+  ownerAddress: string
+  reconcile: (candidateAgentAddresses: string[]) => Promise<string>
+}): Promise<StoredTradingAgent | null> {
+  const pending = await options.storage.loadPendingForSigning('aster', options.ownerAddress)
+  if (!pending) return null
+  const previous = await options.storage.loadForSigning('aster', options.ownerAddress)
+  const reconciledAddress = await options.reconcile([
+    pending.agentAddress,
+    ...(previous ? [previous.agentAddress] : []),
+  ])
+  if (reconciledAddress.toLowerCase() === pending.agentAddress.toLowerCase()) {
+    await options.storage.promotePending(pending)
+    return pending
+  }
+  if (previous && reconciledAddress.toLowerCase() === previous.agentAddress.toLowerCase()) {
+    await options.storage.clearPending('aster', options.ownerAddress, pending.agentAddress)
+    return previous
+  }
+  throw new Error('Aster agent authorization is still being verified')
 }
 
 async function assertAsterOwnerSignature(

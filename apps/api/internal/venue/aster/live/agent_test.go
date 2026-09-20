@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +54,87 @@ func TestAgentApproverRelaysWithoutPrivateKey(t *testing.T) {
 		!strings.HasPrefix(builderBody, "builder=0xe625a2d279815749c647daed24df41bc8dd14bfe&maxFeeRate=0.0002&builderName=OrbitalMarkets&asterChain=Mainnet&user=0x1111111111111111111111111111111111111111&nonce=") ||
 		!strings.Contains(builderBody, "&signatureChainId=56&signature=0x") {
 		t.Fatalf("agent body = %s, builder body = %s", agentBody, builderBody)
+	}
+}
+
+func TestAgentApproverTreatsAgentServerFailureAsAmbiguous(t *testing.T) {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/agent" {
+					response.WriteHeader(status)
+					return
+				}
+				_, _ = response.Write([]byte(`{"code":200,"msg":"success"}`))
+			}))
+			defer server.Close()
+
+			err := NewAgentApprover(server.URL+"/agent", server.URL+"/builder", server.Client()).
+				ApproveAgent(context.Background(), validApproveAgentRequest(time.Now()))
+			if !errors.Is(err, ErrSubmissionAmbiguous) {
+				t.Fatalf("error = %v, want ambiguous approval outcome", err)
+			}
+		})
+	}
+}
+
+func TestAgentApproverTreatsConnectionDropAfterAgentConsumptionAsAmbiguous(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/builder" {
+			_, _ = response.Write([]byte(`{"code":200,"msg":"success"}`))
+			return
+		}
+		if _, err := io.ReadAll(request.Body); err != nil {
+			t.Errorf("read consumed agent approval: %v", err)
+			return
+		}
+		connection, _, err := response.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack agent approval connection: %v", err)
+			return
+		}
+		_ = connection.Close()
+	}))
+	defer server.Close()
+
+	err := NewAgentApprover(server.URL+"/agent", server.URL+"/builder", server.Client()).
+		ApproveAgent(context.Background(), validApproveAgentRequest(time.Now()))
+	if !errors.Is(err, ErrSubmissionAmbiguous) {
+		t.Fatalf("error = %v, want ambiguous approval outcome", err)
+	}
+}
+
+func TestAgentApproverTreatsOversizedAgentSuccessAsAmbiguous(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body := `{"code":200,"msg":"success"}`
+		if request.URL.Path == "/agent" {
+			body += strings.Repeat(" ", maxApprovalResponse)
+		}
+		_, _ = response.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	err := NewAgentApprover(server.URL+"/agent", server.URL+"/builder", server.Client()).
+		ApproveAgent(context.Background(), validApproveAgentRequest(time.Now()))
+	if !errors.Is(err, ErrSubmissionAmbiguous) {
+		t.Fatalf("error = %v, want ambiguous approval outcome", err)
+	}
+}
+
+func TestAgentApproverTreatsAmbiguousBuilderApprovalAsAgentNotSent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/builder" {
+			response.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		t.Fatal("execution-agent approval must not be sent after an ambiguous builder approval")
+	}))
+	defer server.Close()
+
+	err := NewAgentApprover(server.URL+"/agent", server.URL+"/builder", server.Client()).
+		ApproveAgent(context.Background(), validApproveAgentRequest(time.Now()))
+	if !errors.Is(err, ErrSubmissionNotSent) {
+		t.Fatalf("error = %v, want execution-agent submission not sent", err)
 	}
 }
 

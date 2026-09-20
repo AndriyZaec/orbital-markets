@@ -249,6 +249,37 @@ func (s *Service) Run(ctx context.Context, account, executionAgent string) (Repo
 	return s.runApproved(ctx, account, executionAgent)
 }
 
+func (s *Service) ReconcileExecutionAgent(ctx context.Context, account string, candidates []string) (string, error) {
+	if len(candidates) == 0 || len(candidates) > 2 {
+		return "", ErrInvalidInput
+	}
+	account = strings.ToLower(strings.TrimSpace(account))
+	if !addressPattern.MatchString(account) {
+		return "", ErrInvalidInput
+	}
+	record, err := s.store.LoadApprovedByOwner(ctx, account)
+	if err != nil {
+		return "", publicLoadError(err)
+	}
+	defer clear(record.PrivateKey)
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		owner, candidate, err := normalizeAccounts(account, candidate)
+		if err != nil || owner != record.Owner {
+			return "", ErrInvalidInput
+		}
+		if _, duplicate := seen[candidate]; duplicate {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		report := s.venue.Probe(ctx, record.Owner, record.AgentAddress, candidate, record.PrivateKey, record.RequestedExpiry)
+		if report.ExecutionAgentPreserved {
+			return candidate, nil
+		}
+	}
+	return "", ErrExecutionAgentMismatch
+}
+
 func (s *Service) Status(ctx context.Context, account, executionAgent string) (ProbeStatus, error) {
 	account, executionAgent, err := normalizeAccounts(account, executionAgent)
 	if err != nil {

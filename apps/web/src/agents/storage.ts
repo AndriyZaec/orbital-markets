@@ -33,8 +33,12 @@ interface EncryptedTradingAgent {
 export interface TradingAgentStore {
   ready(): Promise<void>
   save(agent: StoredTradingAgent): Promise<void>
+  savePending(agent: StoredTradingAgent): Promise<void>
+  promotePending(agent: StoredTradingAgent): Promise<void>
   restore(venue: Venue, ownerAddress: string): Promise<Omit<StoredTradingAgent, 'privateKey'> | null>
   loadForSigning(venue: Venue, ownerAddress: string): Promise<StoredTradingAgent | null>
+  loadPendingForSigning(venue: Venue, ownerAddress: string): Promise<StoredTradingAgent | null>
+  clearPending(venue: Venue, ownerAddress: string, expectedAgentAddress: string): Promise<void>
   clear(venue: Venue, ownerAddress: string): Promise<void>
 }
 
@@ -60,6 +64,60 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
   }
 
   async save(agent: StoredTradingAgent): Promise<void> {
+    await this.saveAt(storageKey(agent.venue, agent.ownerAddress), agent)
+  }
+
+  async savePending(agent: StoredTradingAgent): Promise<void> {
+    const encrypted = await this.encryptAgent(agent)
+    const database = await this.database
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(agentStoreName, 'readwrite')
+      const store = transaction.objectStore(agentStoreName)
+      const key = pendingStorageKey(agent.venue, agent.ownerAddress)
+      const pending = store.get(key)
+      pending.onsuccess = () => {
+        if (pending.result) {
+          transaction.abort()
+          return
+        }
+        store.put(encrypted, key)
+      }
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error ?? new Error('Unable to save pending trading agent'))
+      transaction.onabort = () => reject(transaction.error ?? new Error('A pending trading agent already exists'))
+    })
+  }
+
+  private async saveAt(key: string, agent: StoredTradingAgent): Promise<void> {
+    const encrypted = await this.encryptAgent(agent)
+    const database = await this.database
+    await writeValue(database, agentStoreName, key, encrypted)
+  }
+
+  async promotePending(agent: StoredTradingAgent): Promise<void> {
+    const encrypted = await this.encryptAgent(agent)
+    const database = await this.database
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(agentStoreName, 'readwrite')
+      const store = transaction.objectStore(agentStoreName)
+      const pendingKey = pendingStorageKey(agent.venue, agent.ownerAddress)
+      const pending = store.get(pendingKey)
+      pending.onsuccess = () => {
+        if (!validEnvelope(pending.result, agent.venue, agent.ownerAddress) ||
+          pending.result.agentAddress.toLowerCase() !== agent.agentAddress.toLowerCase()) {
+          transaction.abort()
+          return
+        }
+        store.put(encrypted, storageKey(agent.venue, agent.ownerAddress))
+        store.delete(pendingKey)
+      }
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error ?? new Error('Unable to promote pending trading agent'))
+      transaction.onabort = () => reject(transaction.error ?? new Error('Pending trading agent promotion was aborted'))
+    })
+  }
+
+  private async encryptAgent(agent: StoredTradingAgent): Promise<EncryptedTradingAgent> {
     const normalized = normalizeAgent(agent)
     if (!validAgent(normalized) || !keyPairMatches(normalized)) {
       throw new Error('Trading agent is invalid')
@@ -79,14 +137,13 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
       masterKey,
       new TextEncoder().encode(verificationValue),
     )
-    const database = await this.database
-    await writeValue(database, agentStoreName, storageKey(normalized.venue, normalized.ownerAddress), {
+    return {
       ...envelope,
       iv,
       ciphertext: encryptedKey,
       verificationIv,
       verification: new Uint8Array(verification),
-    } satisfies EncryptedTradingAgent)
+    }
   }
 
   async restore(venue: Venue, ownerAddress: string): Promise<Omit<StoredTradingAgent, 'privateKey'> | null> {
@@ -131,7 +188,14 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
   }
 
   async loadForSigning(venue: Venue, ownerAddress: string): Promise<StoredTradingAgent | null> {
-    const key = storageKey(venue, ownerAddress)
+    return this.loadForSigningAt(storageKey(venue, ownerAddress), venue, ownerAddress)
+  }
+
+  async loadPendingForSigning(venue: Venue, ownerAddress: string): Promise<StoredTradingAgent | null> {
+    return this.loadForSigningAt(pendingStorageKey(venue, ownerAddress), venue, ownerAddress)
+  }
+
+  private async loadForSigningAt(key: string, venue: Venue, ownerAddress: string): Promise<StoredTradingAgent | null> {
     const database = await this.database
     const value = await readValue(database, agentStoreName, key)
     if (!value) return null
@@ -171,6 +235,25 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
   async clear(venue: Venue, ownerAddress: string): Promise<void> {
     const database = await this.database
     await deleteValue(database, agentStoreName, storageKey(venue, ownerAddress))
+  }
+
+  async clearPending(venue: Venue, ownerAddress: string, expectedAgentAddress: string): Promise<void> {
+    const database = await this.database
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(agentStoreName, 'readwrite')
+      const store = transaction.objectStore(agentStoreName)
+      const key = pendingStorageKey(venue, ownerAddress)
+      const pending = store.get(key)
+      pending.onsuccess = () => {
+        if (validEnvelope(pending.result, venue, ownerAddress) &&
+          pending.result.agentAddress.toLowerCase() === expectedAgentAddress.toLowerCase()) {
+          store.delete(key)
+        }
+      }
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error ?? new Error('Unable to clear pending trading agent'))
+      transaction.onabort = () => reject(transaction.error ?? new Error('Pending trading agent clear was aborted'))
+    })
   }
 
   private getMasterKey(): Promise<CryptoKey> {
@@ -214,6 +297,10 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
 
 export function storageKey(venue: Venue, ownerAddress: string): string {
   return `${venue}:${normalizeOwner(venue, ownerAddress)}`
+}
+
+function pendingStorageKey(venue: Venue, ownerAddress: string): string {
+  return `pending:${storageKey(venue, ownerAddress)}`
 }
 
 function normalizeAgent(agent: StoredTradingAgent): StoredTradingAgent {

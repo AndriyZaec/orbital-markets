@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,8 @@ const (
 )
 
 var ethereumSignaturePattern = regexp.MustCompile(`^0x[0-9a-fA-F]{130}$`)
+
+var ErrApprovalRejected = errors.New("Aster approval was rejected")
 
 type ApproveAgentRequest struct {
 	User             string `json:"user"`
@@ -119,6 +122,9 @@ func (a *AgentApprover) ApproveAgent(ctx context.Context, request ApproveAgentRe
 		{"signature", request.BuilderSignature},
 	})
 	if err := a.postApproval(ctx, a.builderEndpoint, builderQuery, "builder"); err != nil {
+		if errors.Is(err, ErrSubmissionNotSent) || errors.Is(err, ErrSubmissionAmbiguous) {
+			return fmt.Errorf("%w: Aster builder approval did not complete: %v", ErrSubmissionNotSent, err)
+		}
 		return err
 	}
 
@@ -142,27 +148,37 @@ func (a *AgentApprover) ApproveAgent(ctx context.Context, request ApproveAgentRe
 func (a *AgentApprover) postApproval(ctx context.Context, endpoint, body, kind string) error {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build Aster %s approval: %w", kind, err)
+		return fmt.Errorf("%w: build Aster %s approval: %v", ErrSubmissionNotSent, kind, err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := a.httpClient.Do(httpRequest)
 	if err != nil {
-		return fmt.Errorf("relay Aster %s approval: %w", kind, err)
+		return fmt.Errorf("%w: relay Aster %s approval: %v", ErrSubmissionAmbiguous, kind, err)
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxApprovalResponse))
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxApprovalResponse+1))
 	if err != nil {
-		return fmt.Errorf("read Aster %s approval response: %w", kind, err)
+		return fmt.Errorf("%w: read Aster %s approval response: %v", ErrSubmissionAmbiguous, kind, err)
+	}
+	if len(responseBody) > maxApprovalResponse {
+		return fmt.Errorf("%w: Aster %s approval response exceeds %d bytes", ErrSubmissionAmbiguous, kind, maxApprovalResponse)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("Aster %s approval returned HTTP %d: %s", kind, response.StatusCode, string(responseBody))
+		if response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests ||
+			response.StatusCode >= http.StatusInternalServerError {
+			return fmt.Errorf("%w: Aster %s approval returned HTTP %d", ErrSubmissionAmbiguous, kind, response.StatusCode)
+		}
+		return fmt.Errorf("%w: Aster %s approval returned HTTP %d: %s", ErrApprovalRejected, kind, response.StatusCode, string(responseBody))
 	}
 	var result struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 	}
-	if err := json.Unmarshal(responseBody, &result); err != nil || result.Code != http.StatusOK {
-		return fmt.Errorf("Aster %s approval rejected: %s", kind, string(responseBody))
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return fmt.Errorf("%w: decode Aster %s approval response", ErrSubmissionAmbiguous, kind)
+	}
+	if result.Code != http.StatusOK {
+		return fmt.Errorf("%w: Aster %s approval: %s", ErrApprovalRejected, kind, result.Msg)
 	}
 	return nil
 }

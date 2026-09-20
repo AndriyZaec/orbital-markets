@@ -44,6 +44,15 @@ func (f *fakeAsterDataAgentProbe) Run(_ context.Context, account, executionAgent
 	return f.report, f.err
 }
 
+func (f *fakeAsterDataAgentProbe) ReconcileExecutionAgent(_ context.Context, account string, candidates []string) (string, error) {
+	f.account = account
+	if len(candidates) == 0 {
+		return "", dataagent.ErrInvalidInput
+	}
+	f.executor = candidates[0]
+	return candidates[0], f.err
+}
+
 func TestAsterDataAgentPrepareContract(t *testing.T) {
 	fake := &fakeAsterDataAgentProbe{prepared: dataagent.Prepared{ProbeID: "probe-1", Approval: dataagent.Approval{
 		User: testHTTPAsterOwner, Nonce: 1, AgentName: "OrbitalData", AgentAddress: testHTTPDataAgent,

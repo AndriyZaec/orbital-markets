@@ -14,6 +14,7 @@ import {
 import {
   asterBuilderAddress,
   authorizeAsterAgent,
+  reconcilePendingAsterAgent,
   type AsterApprovalTypedData,
   type AsterApproveAgentRequest,
 } from './aster-agent.ts'
@@ -146,7 +147,14 @@ function TradingAgentSession({
       setState(initialState(venue, ownerAddress))
       if (!ownerAddress) return
       try {
-        let agent = await storage.restore(venue, ownerAddress)
+        let agent = venue === 'aster'
+          ? await withAgentLock('aster', ownerAddress, async () =>
+            await reconcilePendingAsterAgent({
+              storage,
+              ownerAddress,
+              reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
+            }) ?? await storage.restore('aster', ownerAddress))
+          : await storage.restore(venue, ownerAddress)
         const expectedBuilder = venue === 'hyperliquid'
           ? hyperliquidBuilderAddress
           : venue === 'aster' ? asterBuilderAddress : null
@@ -287,7 +295,8 @@ function TradingAgentSession({
       storage,
       ownerAddress,
       signTypedData: signAsterTypedData,
-      relay: (request) => relayAuthorization('/api/v1/live/agents/aster/approve', request),
+      relay: relayAsterAuthorization,
+      reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
       prepareReadOnly: (executionAgent) => prepareAsterDataAgentAuthorization({
         account: ownerAddress, executionAgent, isCurrent,
       }),
@@ -507,6 +516,38 @@ async function relayAuthorization(
   if (response.ok) return
   const body = await response.json().catch(() => null) as { error?: string } | null
   throw apiError(response.status, 'Unable to authorize the trading agent. Please try again.', body)
+}
+
+async function relayAsterAuthorization(request: AsterApproveAgentRequest): Promise<'accepted' | 'uncertain'> {
+  let response: Response
+  try {
+    response = await apiFetch('/api/v1/live/agents/aster/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    })
+  } catch {
+    return 'uncertain'
+  }
+  if (response.status === 202) return 'uncertain'
+  if (response.ok) return 'accepted'
+  const body = await response.json().catch(() => null) as { error?: string } | null
+  throw apiError(response.status, 'Unable to authorize the Aster trading agent. Please try again.', body)
+}
+
+async function reconcileAsterAuthorization(ownerAddress: string, candidates: string[]): Promise<string> {
+  const response = await apiFetch('/api/v1/live/agents/aster/reconcile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: ownerAddress, candidates }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null
+    throw apiError(response.status, 'Unable to verify Aster authorization. Please try again.', body)
+  }
+  const body = await response.json() as { agent_address?: unknown }
+  if (typeof body.agent_address !== 'string') throw new Error('Aster returned an invalid agent status')
+  return body.agent_address
 }
 
 async function hasApprovedPacificaBuilderCode(ownerAddress: string): Promise<boolean> {

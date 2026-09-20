@@ -81,15 +81,60 @@ func (s *Server) handleAsterAgentApprove(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.live.asterAgentApprover.ApproveAgent(r.Context(), request); err != nil {
-		s.logger.Warn("Aster agent approval rejected", "err", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Aster agent approval rejected"})
-		return
+		switch {
+		case errors.Is(err, asterlive.ErrSubmissionNotSent):
+			s.logger.Warn("Aster agent approval was not sent", "err", err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"status": "not_sent", "error": "Aster agent approval was not sent"})
+			return
+		case errors.Is(err, asterlive.ErrApprovalRejected):
+			s.logger.Warn("Aster agent approval rejected", "err", err)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"status": "rejected", "error": "Aster agent approval rejected"})
+			return
+		default:
+			s.logger.Warn("Aster agent approval outcome uncertain", "err", err)
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "uncertain"})
+			return
+		}
 	}
 	if err := s.live.recordAgentAuthorization(r.Context(), "aster", request.User, request.AgentAddress); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Aster agent approved but local registration failed; reauthorize"})
+		s.logger.Warn("Aster agent approved but local registration is uncertain", "err", err)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "uncertain"})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAsterAgentReconcile(w http.ResponseWriter, r *http.Request) {
+	if !s.asterDataAgentAvailable(w) || s.live == nil {
+		return
+	}
+	var request struct {
+		Account    string   `json:"account"`
+		Candidates []string `json:"candidates"`
+	}
+	if !decodeStrictJSON(w, r, &request) {
+		return
+	}
+	if len(request.Candidates) == 0 || len(request.Candidates) > 2 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "one or two Aster agent candidates required"})
+		return
+	}
+	unlockOwner, err := s.live.lockAgentOwner("aster", request.Account)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Aster owner is busy; retry verification"})
+		return
+	}
+	defer unlockOwner()
+	agent, err := s.asterDataAgent.ReconcileExecutionAgent(r.Context(), request.Account, request.Candidates)
+	if err != nil {
+		writeAsterDataAgentError(w, err)
+		return
+	}
+	if err := s.live.recordAgentAuthorization(r.Context(), "aster", request.Account, agent); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Aster agent verified but local registration failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"agent_address": agent})
 }
 
 func (s *Server) handleHyperliquidAgentApprove(w http.ResponseWriter, r *http.Request) {

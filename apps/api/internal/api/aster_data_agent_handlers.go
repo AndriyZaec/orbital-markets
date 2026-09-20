@@ -18,6 +18,7 @@ type AsterDataAgentProbe interface {
 	Validate(context.Context, string, string, string, string) (dataagent.Report, error)
 	Status(context.Context, string, string) (dataagent.ProbeStatus, error)
 	Run(context.Context, string, string) (dataagent.Report, error)
+	ReconcileExecutionAgent(context.Context, string, []string) (string, error)
 }
 
 func (s *Server) handleAsterDataAgentAuthorize(w http.ResponseWriter, r *http.Request) {

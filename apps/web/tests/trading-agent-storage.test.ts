@@ -4,6 +4,7 @@ import { webcrypto } from 'node:crypto'
 import bs58 from 'bs58'
 import { IDBFactory } from 'fake-indexeddb'
 import nacl from 'tweetnacl'
+import { privateKeyToAccount } from 'viem/accounts'
 
 import { createTradingAgentStore, storageKey } from '../src/agents/storage.ts'
 import type { StoredTradingAgent } from '../src/agents/types.ts'
@@ -26,6 +27,13 @@ const asterAgent: StoredTradingAgent = {
   expiresAt: '2099-08-10T12:00:00.000Z',
 }
 
+const replacementPrivateKey = '0x2222222222222222222222222222222222222222222222222222222222222222'
+const replacementAsterAgent: StoredTradingAgent = {
+  ...asterAgent,
+  agentAddress: privateKeyToAccount(replacementPrivateKey).address,
+  privateKey: replacementPrivateKey,
+}
+
 test('encrypted agents survive reopening without persisting plaintext keys', async () => {
   const indexedDB = new IDBFactory()
   const store = createTradingAgentStore(indexedDB, cryptography)
@@ -43,6 +51,41 @@ test('encrypted agents survive reopening without persisting plaintext keys', asy
   assert.deepEqual(
     await reopened.loadForSigning('hyperliquid', hyperliquidAgent.ownerAddress.toUpperCase()),
     { ...hyperliquidAgent, ownerAddress: hyperliquidAgent.ownerAddress.toLowerCase() },
+  )
+})
+
+test('pending Aster agent survives reload until approval is reconciled', async () => {
+  const indexedDB = new IDBFactory()
+  await createTradingAgentStore(indexedDB, cryptography).savePending(asterAgent)
+
+  const reopened = createTradingAgentStore(indexedDB, cryptography)
+  assert.deepEqual(
+    await reopened.loadPendingForSigning('aster', asterAgent.ownerAddress),
+    { ...asterAgent, ownerAddress: asterAgent.ownerAddress.toLowerCase() },
+  )
+  assert.equal(await reopened.loadForSigning('aster', asterAgent.ownerAddress), null)
+
+  await reopened.promotePending(asterAgent)
+  assert.equal(await reopened.loadPendingForSigning('aster', asterAgent.ownerAddress), null)
+  assert.deepEqual(
+    await reopened.loadForSigning('aster', asterAgent.ownerAddress),
+    { ...asterAgent, ownerAddress: asterAgent.ownerAddress.toLowerCase() },
+  )
+})
+
+test('concurrent Aster authorization cannot overwrite or clear an existing pending key', async () => {
+  const indexedDB = new IDBFactory()
+  const store = createTradingAgentStore(indexedDB, cryptography)
+  await store.savePending(asterAgent)
+  await assert.rejects(store.savePending(replacementAsterAgent), /already exists/)
+
+  await assert.rejects(store.promotePending(replacementAsterAgent), /aborted/)
+  await store.clearPending('aster', asterAgent.ownerAddress, replacementAsterAgent.agentAddress)
+
+  assert.equal(await store.loadForSigning('aster', asterAgent.ownerAddress), null)
+  assert.equal(
+    (await store.loadPendingForSigning('aster', asterAgent.ownerAddress))?.agentAddress,
+    asterAgent.agentAddress,
   )
 })
 
