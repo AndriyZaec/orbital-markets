@@ -85,7 +85,7 @@ func TestAsterFundingRecoveryRefreshesEachClosedOwnerOnce(t *testing.T) {
 	}
 }
 
-func TestApplyAsterFundingBatchPreservesDedupeAndFinalization(t *testing.T) {
+func TestApplyAsterFundingBatchAppliesCurrentPaymentToOldPositionWithoutClaimingCoverage(t *testing.T) {
 	server, database := newResidualExposureServer(t)
 	bindings := `{"aster":"` + fundingTestAsterOwner + `","pacifica":"sol-wallet"}`
 	if _, err := database.Exec(`
@@ -103,7 +103,7 @@ func TestApplyAsterFundingBatchPreservesDedupeAndFinalization(t *testing.T) {
 		)`, bindings, bindings); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.liveStore.RecordFundingVenueSync(context.Background(), "position-residual", "pacifica", true); err != nil {
+	if _, err := database.Exec(`UPDATE live_positions SET opened_at = '2026-06-22T12:00:00Z' WHERE id = 'position-residual'`); err != nil {
 		t.Fatal(err)
 	}
 	submittedAt := time.Date(2026, 7, 22, 12, 3, 0, 0, time.UTC)
@@ -124,19 +124,18 @@ func TestApplyAsterFundingBatchPreservesDedupeAndFinalization(t *testing.T) {
 	if err := apply(); err != nil {
 		t.Fatal(err)
 	}
-	var count, finalized int
-	var funding float64
-	var source string
+	var count int
+	var aggregate float64
+	var coveredThrough *int64
 	if err := database.QueryRow(`SELECT COUNT(*) FROM live_funding_payments WHERE position_id = 'position-residual'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.QueryRow(`SELECT funding_pnl, funding_pnl_source FROM live_positions WHERE id = 'position-residual'`).Scan(&funding, &source); err != nil {
+	if err := database.QueryRow(`
+		SELECT amount_usd, covered_through_ms FROM live_funding_coverage
+		WHERE position_id = 'position-residual' AND venue = 'aster'`).Scan(&aggregate, &coveredThrough); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.QueryRow(`SELECT finalized FROM live_funding_sync WHERE position_id = 'position-residual'`).Scan(&finalized); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 || funding != 1.25 || source != "realized" || finalized != 1 {
-		t.Fatalf("count = %d, funding = %v, source = %q, finalized = %d", count, funding, source, finalized)
+	if count != 1 || aggregate != 1.25 || coveredThrough != nil {
+		t.Fatalf("count = %d, aggregate = %v, covered through = %v", count, aggregate, coveredThrough)
 	}
 }

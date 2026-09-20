@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -36,13 +37,31 @@ func startLive(
 	signingStore := domain.NewSigningRequestStore()
 	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader)
 	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)
-	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, map[string]venue.FundingHistory{
+	fundingSources := map[string]venue.FundingHistory{
 		"pacifica":    pac,
 		"hyperliquid": hl,
-	})
+	}
+	if asterReader != nil {
+		fundingSources["aster"] = asterFundingHistory{reader: asterReader}
+	}
+	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, fundingSources)
 	go liveMonitor.Run(ctx)
 	go fundingMonitor.Run(ctx)
 
 	logger.Info("live execution: runtime ready (account streams start on wallet connect)")
 	return liveDeps
+}
+
+type asterFundingHistory struct {
+	reader dataagent.Reader
+}
+
+var _ venue.FundingHistory = asterFundingHistory{}
+
+func (history asterFundingHistory) FundingPayments(
+	ctx context.Context,
+	account, _ string,
+	since, until time.Time,
+) ([]venue.FundingPayment, error) {
+	return history.reader.ReadFunding(ctx, account, since, until)
 }

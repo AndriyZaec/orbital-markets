@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -151,6 +152,56 @@ func TestLiveAccountBindingsMigrationPreventsRollingBinarySessionDuplicates(t *t
 		)`)
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "unique constraint") {
 		t.Fatalf("old binary duplicate error = %v, want unique constraint", err)
+	}
+}
+
+func TestFundingCoverageMigrationBackfillsAndCompactsLegacyPayments(t *testing.T) {
+	database := openDatabaseAtMigration(t, 19)
+	_, err := database.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			notional, leverage, started_at, opened_at, updated_at
+		) VALUES
+			('position-open', 'plan-open', 'opportunity', 'SOL', 'aster', 'hyperliquid', 'open',
+			 10, 2, '2026-08-01T12:00:00Z', '2026-08-01T12:00:00Z', '2026-08-03T12:00:00Z'),
+			('position-closed', 'plan-closed', 'opportunity', 'SOL', 'aster', 'hyperliquid', 'closed',
+			 10, 2, '2026-08-01T12:00:00Z', '2026-08-01T12:00:00Z', '2026-08-03T12:00:00Z');
+		INSERT INTO live_funding_sync (position_id, synced_at, finalized)
+		VALUES ('position-closed', '2026-08-03T12:00:00Z', 1);
+		INSERT INTO live_funding_payments (
+			position_id, venue, account, external_id, asset, amount_usd, paid_at, created_at
+		) VALUES
+			('position-open', 'aster', '0xopen', 'open-payment', 'SOL', 1,
+			 '2026-08-03T12:00:00.123Z', '2026-08-03T12:01:00Z'),
+			('position-closed', 'aster', '0xclosed', 'closed-payment', 'SOL', 2,
+			 '2026-08-03T12:00:00.456Z', '2026-08-03T12:01:00Z')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(database, "migrations", 20); err != nil {
+		t.Fatal(err)
+	}
+	wantPaidAt, err := time.Parse(time.RFC3339Nano, "2026-08-03T12:00:00.123Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paidAtMS int64
+	if err := database.QueryRow(`
+		SELECT paid_at_ms FROM live_funding_payments WHERE position_id = 'position-open'
+	`).Scan(&paidAtMS); err != nil {
+		t.Fatal(err)
+	}
+	if paidAtMS != wantPaidAt.UnixMilli() {
+		t.Fatalf("backfilled paid_at_ms = %d, want %d", paidAtMS, wantPaidAt.UnixMilli())
+	}
+	var finalizedRows int
+	if err := database.QueryRow(`
+		SELECT COUNT(*) FROM live_funding_payments WHERE position_id = 'position-closed'
+	`).Scan(&finalizedRows); err != nil {
+		t.Fatal(err)
+	}
+	if finalizedRows != 0 {
+		t.Fatalf("finalized legacy payment rows = %d, want 0", finalizedRows)
 	}
 }
 

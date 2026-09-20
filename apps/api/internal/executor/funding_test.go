@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -28,7 +29,16 @@ func (f *fakeFundingHistory) FundingPayments(_ context.Context, account, _ strin
 	f.account = account
 	f.since = since
 	f.until = until
-	return f.payments, f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	payments := make([]venue.FundingPayment, 0, len(f.payments))
+	for _, payment := range f.payments {
+		if !payment.PaidAt.Before(since) && !payment.PaidAt.After(until) {
+			payments = append(payments, payment)
+		}
+	}
+	return payments, nil
 }
 
 func TestFundingUsesPersistedGenericVenueBindings(t *testing.T) {
@@ -209,6 +219,111 @@ func TestRealizedFundingSumsVenueLedgersWithoutDuplicates(t *testing.T) {
 	}
 	if fundingPnL != 0.01 || source != "realized" || finalized != 1 {
 		t.Fatalf("final funding = %v, source = %q, finalized = %d", fundingPnL, source, finalized)
+	}
+}
+
+func TestLongHeldFundingResumesCoverageAfterRestartAndCompactsRawRows(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "long-funding.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	openedAt := time.Now().UTC().Add(-45 * 24 * time.Hour).Truncate(time.Second)
+	target := openedAt.Add(45 * 24 * time.Hour)
+	if _, err := database.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_bindings_json, account_bindings_key, notional, leverage,
+			started_at, opened_at, updated_at
+		) VALUES ('position-long', 'plan-long', 'opp-long', 'SOL', 'aster', 'hyperliquid', 'open',
+			'{"aster":"0xaster","hyperliquid":"0xhyper"}',
+			'{"aster":"0xaster","hyperliquid":"0xhyper"}', 100, 2, ?, ?, ?)`,
+		openedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	payments := func(venueName, account, prefix string, amount float64) []venue.FundingPayment {
+		days := []float64{1, 6.5, 20, 30, 44}
+		result := make([]venue.FundingPayment, 0, len(days))
+		for index, day := range days {
+			result = append(result, venue.FundingPayment{
+				ExternalID: fmt.Sprintf("%s-%d", prefix, index), Venue: venueName, Account: account,
+				Asset: "SOL", AmountUSD: amount, PaidAt: openedAt.Add(time.Duration(day * float64(24*time.Hour))),
+			})
+		}
+		return result
+	}
+	aster := &fakeFundingHistory{payments: payments("aster", "0xaster", "aster", 0.2)}
+	hyperliquid := &fakeFundingHistory{payments: payments("hyperliquid", "0xhyper", "hyper", -0.1)}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := NewStore(database, logger)
+	position, err := store.GetPosition(context.Background(), "position-long")
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor := NewFundingMonitor(logger, store, map[string]venue.FundingHistory{
+		"aster": aster, "hyperliquid": hyperliquid,
+	})
+	if total, complete := monitor.realized(context.Background(), position, openedAt, target, true); complete || total != 0 {
+		t.Fatalf("first bounded pass total = %v, complete = %v", total, complete)
+	}
+
+	restartedStore := NewStore(database, logger)
+	restarted := NewFundingMonitor(logger, restartedStore, map[string]venue.FundingHistory{
+		"aster": aster, "hyperliquid": hyperliquid,
+	})
+	total, complete := restarted.realized(context.Background(), position, openedAt, target, true)
+	if !complete || math.Abs(total-0.5) > 1e-9 {
+		rows, queryErr := database.Query(`SELECT venue, covered_through_ms, amount_usd FROM live_funding_coverage WHERE position_id = 'position-long'`)
+		if queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		defer rows.Close()
+		var diagnostic []string
+		for rows.Next() {
+			var venueName string
+			var through int64
+			var amount float64
+			if err := rows.Scan(&venueName, &through, &amount); err != nil {
+				t.Fatal(err)
+			}
+			diagnostic = append(diagnostic, fmt.Sprintf("%s:%s:%v", venueName, time.UnixMilli(through), amount))
+		}
+		t.Fatalf("resumed total = %v, complete = %v, coverage = %v, target = %s", total, complete, diagnostic, target)
+	}
+	var coverageRows, rawRows int
+	var aggregate float64
+	if err := database.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(amount_usd), 0)
+		FROM live_funding_coverage WHERE position_id = 'position-long'`).Scan(&coverageRows, &aggregate); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`
+		SELECT COUNT(*) FROM live_funding_payments WHERE position_id = 'position-long'`).Scan(&rawRows); err != nil {
+		t.Fatal(err)
+	}
+	if coverageRows != 2 || math.Abs(aggregate-0.5) > 1e-9 || rawRows != 2 {
+		t.Fatalf("coverage rows = %d, aggregate = %v, raw rows = %d", coverageRows, aggregate, rawRows)
+	}
+	if total, complete, err := restartedStore.ReconcileFunding(context.Background(), position, target, true); err != nil || !complete || math.Abs(total-0.5) > 1e-9 {
+		t.Fatalf("finalized total = %v, complete = %v, err = %v", total, complete, err)
+	}
+	latePayment := venue.FundingPayment{
+		ExternalID: "aster-late", Venue: "aster", Account: "0xaster", Asset: "SOL",
+		AmountUSD: 99, PaidAt: openedAt.Add(44 * 24 * time.Hour),
+	}
+	if err := restartedStore.ApplyObservedFunding(
+		context.Background(), position.ID, "aster", "0xaster", position.Asset, openedAt, []venue.FundingPayment{latePayment},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`
+		SELECT COALESCE(SUM(amount_usd), 0),
+			(SELECT COUNT(*) FROM live_funding_payments WHERE position_id = 'position-long')
+		FROM live_funding_coverage WHERE position_id = 'position-long'`).Scan(&aggregate, &rawRows); err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(aggregate-0.5) > 1e-9 || rawRows != 0 {
+		t.Fatalf("post-finalization aggregate = %v, raw rows = %d", aggregate, rawRows)
 	}
 }
 

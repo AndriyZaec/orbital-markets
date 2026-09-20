@@ -685,6 +685,326 @@ func (s *Store) InsertFundingPayments(ctx context.Context, positionID string, pa
 	return tx.Commit()
 }
 
+const (
+	fundingHistoryWindow  = 7 * 24 * time.Hour
+	fundingHistoryOverlap = 24 * time.Hour
+	fundingRawRetention   = 7 * 24 * time.Hour
+)
+
+type FundingWindow struct {
+	Since time.Time
+	Until time.Time
+}
+
+func (s *Store) NextFundingWindow(
+	ctx context.Context,
+	positionID, venueName, account string,
+	openedAt, target time.Time,
+) (FundingWindow, bool, error) {
+	openedAt = openedAt.UTC().Truncate(time.Millisecond)
+	target = target.UTC().Truncate(time.Millisecond)
+	if positionID == "" || venueName == "" || account == "" || openedAt.IsZero() || target.Before(openedAt) {
+		return FundingWindow{}, false, fmt.Errorf("invalid funding coverage request")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return FundingWindow{}, false, err
+	}
+	defer tx.Rollback()
+	coverage, err := ensureFundingCoverage(ctx, tx, positionID, venueName, account, openedAt)
+	if err != nil {
+		return FundingWindow{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return FundingWindow{}, false, err
+	}
+	if coverage.coveredThrough.Valid && coverage.coveredThrough.Int64 >= target.UnixMilli() {
+		return FundingWindow{}, false, nil
+	}
+	since := openedAt
+	if coverage.coveredThrough.Valid {
+		since = time.UnixMilli(coverage.coveredThrough.Int64).UTC().Add(-fundingHistoryOverlap)
+		if since.Before(openedAt) {
+			since = openedAt
+		}
+	}
+	until := since.Add(fundingHistoryWindow)
+	if until.After(target) {
+		until = target
+	}
+	return FundingWindow{Since: since, Until: until}, true, nil
+}
+
+func (s *Store) ApplyFundingWindow(
+	ctx context.Context,
+	positionID, venueName, account, asset string,
+	openedAt time.Time,
+	window FundingWindow,
+	payments []venue.FundingPayment,
+) error {
+	openedAt = openedAt.UTC().Truncate(time.Millisecond)
+	window.Since = window.Since.UTC().Truncate(time.Millisecond)
+	window.Until = window.Until.UTC().Truncate(time.Millisecond)
+	if window.Since.Before(openedAt) || window.Until.Before(window.Since) || window.Until.Sub(window.Since) > fundingHistoryWindow {
+		return fmt.Errorf("invalid funding coverage window")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	coverage, err := ensureFundingCoverage(ctx, tx, positionID, venueName, account, openedAt)
+	if err != nil {
+		return err
+	}
+	if coverage.coveredThrough.Valid {
+		if window.Since.After(time.UnixMilli(coverage.coveredThrough.Int64).Add(time.Millisecond)) {
+			return fmt.Errorf("funding coverage window leaves a gap")
+		}
+	} else if !window.Since.Equal(openedAt) {
+		return fmt.Errorf("initial funding coverage must start at position open")
+	}
+	amount, count, err := insertFundingPaymentsTx(ctx, tx, positionID, venueName, account, asset, payments, &window)
+	if err != nil {
+		return err
+	}
+	coveredThrough := window.Until.UnixMilli()
+	if coverage.coveredThrough.Valid && coverage.coveredThrough.Int64 > coveredThrough {
+		coveredThrough = coverage.coveredThrough.Int64
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE live_funding_coverage
+		SET covered_through_ms = ?, amount_usd = amount_usd + ?,
+			payment_count = payment_count + ?, updated_at = ?
+		WHERE position_id = ? AND venue = ?`,
+		coveredThrough, amount, count, now, positionID, venueName); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM live_funding_payments
+		WHERE position_id = ? AND venue = ? AND paid_at_ms IS NOT NULL AND paid_at_ms < ?`,
+		positionID, venueName, coveredThrough-fundingRawRetention.Milliseconds()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ApplyObservedFunding(
+	ctx context.Context,
+	positionID, venueName, account, asset string,
+	openedAt time.Time,
+	payments []venue.FundingPayment,
+) error {
+	if len(payments) == 0 {
+		return nil
+	}
+	openedAt = openedAt.UTC().Truncate(time.Millisecond)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var finalized bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM live_funding_sync WHERE position_id = ? AND finalized = 1
+		)`, positionID).Scan(&finalized); err != nil {
+		return err
+	}
+	if finalized {
+		return tx.Commit()
+	}
+	coverage, err := ensureFundingCoverage(ctx, tx, positionID, venueName, account, openedAt)
+	if err != nil {
+		return err
+	}
+	amount, count, err := insertFundingPaymentsTx(ctx, tx, positionID, venueName, account, asset, payments, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE live_funding_coverage
+		SET amount_usd = amount_usd + ?, payment_count = payment_count + ?, updated_at = ?
+		WHERE position_id = ? AND venue = ?`,
+		amount, count, time.Now().UTC().Format(time.RFC3339Nano), positionID, venueName); err != nil {
+		return err
+	}
+	if coverage.coveredThrough.Valid {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM live_funding_payments
+			WHERE position_id = ? AND venue = ? AND paid_at_ms IS NOT NULL AND paid_at_ms < ?`,
+			positionID, venueName, coverage.coveredThrough.Int64-fundingRawRetention.Milliseconds()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ReconcileFunding(ctx context.Context, position *LivePosition, target time.Time, finalized bool) (float64, bool, error) {
+	if position == nil || position.ID == "" {
+		return 0, false, fmt.Errorf("position required")
+	}
+	openedAt, err := time.Parse(time.RFC3339, position.OpenedAt)
+	if err != nil {
+		return 0, false, err
+	}
+	target = target.UTC().Truncate(time.Millisecond)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback()
+	var count int
+	var total float64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(amount_usd), 0)
+		FROM live_funding_coverage
+		WHERE position_id = ? AND venue IN (?, ?)
+			AND coverage_start_ms <= ? AND covered_through_ms >= ?`,
+		position.ID, position.VenueA, position.VenueB, openedAt.UnixMilli(), target.UnixMilli()).Scan(&count, &total); err != nil {
+		return 0, false, err
+	}
+	if count != 2 {
+		if err := tx.Commit(); err != nil {
+			return 0, false, err
+		}
+		return 0, false, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE live_positions SET funding_pnl = ?, funding_pnl_source = 'realized',
+			total_pnl = price_pnl + ?, monitor_at = ?, updated_at = ?
+		WHERE id = ?`, total, total, now, now, position.ID); err != nil {
+		return 0, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO live_funding_sync (position_id, synced_at, finalized)
+		VALUES (?, ?, ?)
+		ON CONFLICT(position_id) DO UPDATE SET
+			synced_at = excluded.synced_at,
+			finalized = MAX(live_funding_sync.finalized, excluded.finalized)`,
+		position.ID, now, boolToInt(finalized)); err != nil {
+		return 0, false, err
+	}
+	if finalized {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM live_funding_payments WHERE position_id = ? AND paid_at_ms IS NOT NULL`, position.ID); err != nil {
+			return 0, false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	return total, true, nil
+}
+
+type fundingCoverage struct {
+	coveredThrough sql.NullInt64
+}
+
+func ensureFundingCoverage(
+	ctx context.Context,
+	tx *sql.Tx,
+	positionID, venueName, account string,
+	openedAt time.Time,
+) (fundingCoverage, error) {
+	venueName = strings.ToLower(strings.TrimSpace(venueName))
+	account = normalizeFundingAccount(venueName, account)
+	if venueName == "" || account == "" {
+		return fundingCoverage{}, fmt.Errorf("funding venue and account required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO live_funding_coverage (
+			position_id, venue, account, coverage_start_ms, amount_usd, payment_count, updated_at
+		)
+		SELECT ?, ?, ?, ?, COALESCE(SUM(amount_usd), 0), COUNT(*), ?
+		FROM live_funding_payments WHERE position_id = ? AND venue = ?
+		ON CONFLICT(position_id, venue) DO NOTHING`,
+		positionID, venueName, account, openedAt.UnixMilli(), now, positionID, venueName); err != nil {
+		return fundingCoverage{}, err
+	}
+	var coverage fundingCoverage
+	var storedAccount string
+	var coverageStart int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT account, coverage_start_ms, covered_through_ms
+		FROM live_funding_coverage WHERE position_id = ? AND venue = ?`,
+		positionID, venueName).Scan(&storedAccount, &coverageStart, &coverage.coveredThrough); err != nil {
+		return fundingCoverage{}, err
+	}
+	if normalizeFundingAccount(venueName, storedAccount) != account || coverageStart != openedAt.UnixMilli() {
+		return fundingCoverage{}, fmt.Errorf("funding coverage identity changed")
+	}
+	return coverage, nil
+}
+
+func insertFundingPaymentsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	positionID, venueName, account, asset string,
+	payments []venue.FundingPayment,
+	window *FundingWindow,
+) (float64, int, error) {
+	venueName = strings.ToLower(strings.TrimSpace(venueName))
+	account = normalizeFundingAccount(venueName, account)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var amount float64
+	var count int
+	for _, payment := range payments {
+		paymentAccount := normalizeFundingAccount(venueName, payment.Account)
+		paidAt := payment.PaidAt.UTC().Truncate(time.Millisecond)
+		if payment.ExternalID == "" || strings.ToLower(payment.Venue) != venueName || paymentAccount != account ||
+			payment.Asset != asset || paidAt.IsZero() || math.IsNaN(payment.AmountUSD) || math.IsInf(payment.AmountUSD, 0) ||
+			window != nil && (paidAt.Before(window.Since) || paidAt.After(window.Until)) {
+			return 0, 0, fmt.Errorf("invalid funding payment")
+		}
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO live_funding_payments (
+				position_id, venue, account, external_id, asset, amount_usd, paid_at, paid_at_ms, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(venue, account, external_id) DO NOTHING`,
+			positionID, venueName, account, payment.ExternalID, payment.Asset, payment.AmountUSD,
+			paidAt.Format(time.RFC3339Nano), paidAt.UnixMilli(), now)
+		if err != nil {
+			return 0, 0, err
+		}
+		inserted, err := result.RowsAffected()
+		if err != nil {
+			return 0, 0, err
+		}
+		if inserted == 1 {
+			amount += payment.AmountUSD
+			count++
+			continue
+		}
+		var existingPosition, existingAsset, existingPaidAt string
+		var existingAmount float64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT position_id, asset, amount_usd, paid_at FROM live_funding_payments
+			WHERE venue = ? AND account = ? AND external_id = ?`,
+			venueName, account, payment.ExternalID).Scan(
+			&existingPosition, &existingAsset, &existingAmount, &existingPaidAt,
+		); err != nil {
+			return 0, 0, err
+		}
+		if existingPosition != positionID || existingAsset != payment.Asset || existingAmount != payment.AmountUSD ||
+			existingPaidAt != paidAt.Format(time.RFC3339Nano) {
+			return 0, 0, fmt.Errorf("funding payment identity conflict")
+		}
+	}
+	return amount, count, nil
+}
+
+func normalizeFundingAccount(venueName, account string) string {
+	account = strings.TrimSpace(account)
+	if venueName == "aster" || venueName == "hyperliquid" {
+		return strings.ToLower(account)
+	}
+	return account
+}
+
 func (s *Store) SumFundingPayments(ctx context.Context, positionID string) (float64, error) {
 	var total float64
 	err := s.db.QueryRowContext(ctx, `
@@ -724,6 +1044,10 @@ func (s *Store) ListFundingPositionsByVenueAccount(ctx context.Context, venueNam
 		SELECT `+livePositionCols+` FROM live_positions
 		WHERE state IN ('open', 'closing', 'closed')
 		AND lower(json_extract(account_bindings_json, '$.' || ?)) = lower(?)
+		AND (state != 'closed' OR NOT EXISTS (
+			SELECT 1 FROM live_funding_sync funding
+			WHERE funding.position_id = live_positions.id AND funding.finalized = 1
+		))
 		ORDER BY opened_at`, venueName, strings.TrimSpace(account))
 }
 

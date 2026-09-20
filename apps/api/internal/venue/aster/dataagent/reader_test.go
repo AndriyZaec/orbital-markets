@@ -175,34 +175,35 @@ func TestOrderLookupPreservesAsterReadRejection(t *testing.T) {
 	}
 }
 
-func TestReaderPaginatesFundingWithinBounds(t *testing.T) {
+func TestReaderSplitsSaturatedFundingRangesAndMergesSorted(t *testing.T) {
 	store, now := approvedReaderService(t)
 	since := now.Add(-2 * time.Hour)
 	until := *now
-	pages := 0
+	mid := time.UnixMilli(since.UnixMilli() + (until.UnixMilli()-since.UnixMilli())/2).UTC()
+	type requestRange struct{ start, end int64 }
+	requests := make([]requestRange, 0, 3)
 	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pages++
 		query := r.URL.Query()
 		if r.URL.Path != "/fapi/v3/income" || r.Method != http.MethodGet || query.Get("incomeType") != "FUNDING_FEE" ||
-			query.Get("startTime") != fmt.Sprint(since.UnixMilli()) || query.Get("endTime") != fmt.Sprint(until.UnixMilli()) ||
-			query.Get("limit") != "100" || query.Get("page") != fmt.Sprint(pages) {
+			query.Get("limit") != "1000" || query.Has("page") {
 			t.Fatalf("request = %s %s", r.Method, r.URL.String())
 		}
-		count := 100
-		if pages == 2 {
-			count = 1
+		startMillis, _ := json.Number(query.Get("startTime")).Int64()
+		endMillis, _ := json.Number(query.Get("endTime")).Int64()
+		requests = append(requests, requestRange{startMillis, endMillis})
+		if len(requests) == 1 {
+			rows := make([]map[string]any, 1000)
+			for index := range rows {
+				rows[index] = fundingRow(fmt.Sprint(index+1000), since.Add(time.Duration(index)*time.Millisecond))
+			}
+			_ = json.NewEncoder(w).Encode(rows)
+			return
 		}
-		rows := make([]map[string]any, 0, count)
-		for index := range count {
-			id := (pages-1)*100 + index + 1
-			rows = append(rows, map[string]any{
-				"symbol": "2ZUSDT", "incomeType": "FUNDING_FEE", "income": "-0.01", "asset": "USDT",
-				"time": since.Add(time.Duration(id) * time.Millisecond).UnixMilli(), "tranId": fmt.Sprint(id),
-			})
+		if startMillis == since.UnixMilli() && endMillis == mid.UnixMilli() {
+			_ = json.NewEncoder(w).Encode([]map[string]any{fundingRow("2", mid)})
+			return
 		}
-		if err := json.NewEncoder(w).Encode(rows); err != nil {
-			t.Fatal(err)
-		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{fundingRow("1", mid.Add(time.Millisecond))})
 	}))
 	defer venue.Close()
 	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
@@ -211,9 +212,10 @@ func TestReaderPaginatesFundingWithinBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pages != 2 || len(payments) != 101 || payments[0].ExternalID != "1" || payments[100].ExternalID != "101" ||
+	wantRequests := []requestRange{{since.UnixMilli(), until.UnixMilli()}, {since.UnixMilli(), mid.UnixMilli()}, {mid.Add(time.Millisecond).UnixMilli(), until.UnixMilli()}}
+	if fmt.Sprint(requests) != fmt.Sprint(wantRequests) || len(payments) != 2 || payments[0].ExternalID != "2" || payments[1].ExternalID != "1" ||
 		payments[0].Account != testOwner || payments[0].Asset != "2Z" || payments[0].MarketKey != "2ZUSDT" {
-		t.Fatalf("pages = %d, payments = %+v", pages, payments)
+		t.Fatalf("requests = %v, payments = %+v", requests, payments)
 	}
 }
 
@@ -239,23 +241,67 @@ func TestReaderIncludesFundingAtWindowEnd(t *testing.T) {
 	}
 }
 
-func TestReaderRejectsOversizedFundingPage(t *testing.T) {
+func TestReaderRejectsInvalidFundingRangeResponses(t *testing.T) {
 	store, now := approvedReaderService(t)
-	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		rows := make([]map[string]any, 101)
-		for index := range rows {
-			rows[index] = map[string]any{
-				"symbol": "2ZUSDT", "incomeType": "FUNDING_FEE", "income": "1", "asset": "USDT",
-				"time": now.Add(-time.Minute).UnixMilli(), "tranId": fmt.Sprint(index + 1),
+	tests := []struct {
+		name string
+		rows []map[string]any
+	}{
+		{"out of window", []map[string]any{fundingRow("1", now.Add(time.Millisecond))}},
+		{"out of order", []map[string]any{fundingRow("1", now.Add(-time.Minute)), fundingRow("2", now.Add(-2*time.Minute))}},
+		{"duplicate IDs", []map[string]any{fundingRow("1", now.Add(-2*time.Minute)), fundingRow("1", now.Add(-time.Minute))}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(test.rows)
+			}))
+			defer venue.Close()
+			reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+			if _, err := reader.ReadFunding(context.Background(), testOwner, now.Add(-time.Hour), *now); err == nil {
+				t.Fatal("invalid funding response was accepted")
 			}
+		})
+	}
+}
+
+func TestReaderRejectsSaturatedSingleMillisecondRange(t *testing.T) {
+	_, now := approvedReaderService(t)
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		rows := make([]map[string]any, 1000)
+		for index := range rows {
+			rows[index] = fundingRow(fmt.Sprint(index+1), *now)
 		}
 		_ = json.NewEncoder(w).Encode(rows)
 	}))
 	defer venue.Close()
-	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+	client := NewClient(venue.URL, venue.Client(), func() time.Time { return *now })
+	if _, err := client.readFunding(context.Background(), testOwner, testDataAgent, bytes.Repeat([]byte{1}, 32), *now, *now); err == nil {
+		t.Fatal("saturated single-millisecond range was accepted")
+	}
+}
 
-	if _, err := reader.ReadFunding(context.Background(), testOwner, now.Add(-time.Hour), *now); err == nil {
-		t.Fatal("oversized funding page was accepted")
+func TestReaderBoundsTotalFundingRequests(t *testing.T) {
+	store, now := approvedReaderService(t)
+	requests := 0
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		fmt.Fprint(w, `[]`)
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+	if _, err := reader.ReadFunding(context.Background(), testOwner, now.Add(-701*24*time.Hour), *now); err == nil {
+		t.Fatal("funding request budget was not enforced")
+	}
+	if requests != 100 {
+		t.Fatalf("requests = %d, want 100", requests)
+	}
+}
+
+func fundingRow(id string, paidAt time.Time) map[string]any {
+	return map[string]any{
+		"symbol": "2ZUSDT", "incomeType": "FUNDING_FEE", "income": "-0.01", "asset": "USDT",
+		"time": paidAt.UnixMilli(), "tranId": id,
 	}
 }
 

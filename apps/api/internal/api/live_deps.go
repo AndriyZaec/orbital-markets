@@ -193,8 +193,8 @@ func (d *LiveDeps) applyAsterFundingBatch(
 	ctx context.Context,
 	account string,
 	payments []venue.FundingPayment,
-	submittedAt time.Time,
-	respondedAt time.Time,
+	_ time.Time,
+	_ time.Time,
 ) error {
 	if d == nil || d.liveStore == nil {
 		return fmt.Errorf("live position store unavailable")
@@ -238,32 +238,18 @@ func (d *LiveDeps) applyAsterFundingBatch(
 	for i := range positions {
 		position := &positions[i]
 		openedAt, parseErr := time.Parse(time.RFC3339, position.OpenedAt)
-		if parseErr != nil || openedAt.Before(submittedAt.Add(-asterFundingReadLookback)) {
+		if parseErr != nil {
 			continue
 		}
-		if err := d.liveStore.InsertFundingPayments(ctx, position.ID, paymentsByPosition[position.ID]); err != nil {
-			return err
-		}
-		finalized := false
-		if position.CompletedAt != "" {
-			completedAt, parseErr := time.Parse(time.RFC3339, position.CompletedAt)
-			finalized = parseErr == nil && respondedAt.Sub(completedAt) >= 30*time.Second
-		}
-		if err := d.liveStore.RecordFundingVenueSync(ctx, position.ID, "aster", finalized); err != nil {
-			return err
-		}
-		complete, err := d.liveStore.FundingVenueSyncComplete(ctx, position, finalized)
-		if err != nil || !complete {
-			continue
-		}
-		total, err := d.liveStore.SumFundingPayments(ctx, position.ID)
-		if err != nil {
-			return err
-		}
-		if err := d.liveStore.UpdateRealizedFunding(ctx, position.ID, total); err != nil {
-			return err
-		}
-		if err := d.liveStore.RecordFundingSync(ctx, position.ID, finalized); err != nil {
+		if err := d.liveStore.ApplyObservedFunding(
+			ctx,
+			position.ID,
+			"aster",
+			account,
+			position.Asset,
+			openedAt,
+			paymentsByPosition[position.ID],
+		); err != nil {
 			return err
 		}
 	}

@@ -173,7 +173,7 @@ func (c *Client) Probe(ctx context.Context, owner, agent, executionAgent string,
 		{path: "/fapi/v3/positionRisk", failure: "Aster position-risk response was invalid", valid: validatePositions, set: func() { report.Endpoints.PositionRisk = true }},
 		{path: "/fapi/v3/income", params: []pair{
 			{"incomeType", "FUNDING_FEE"}, {"startTime", strconv.FormatInt(now.Add(-incomeWindow).UnixMilli(), 10)},
-			{"endTime", strconv.FormatInt(now.UnixMilli(), 10)}, {"limit", "100"},
+			{"endTime", strconv.FormatInt(now.UnixMilli(), 10)}, {"limit", "1000"},
 		}, failure: "Aster funding-income response was invalid", valid: validateIncome, set: func() { report.Endpoints.Income = true }},
 	}
 	for _, item := range calls {
@@ -244,18 +244,13 @@ func validReadParams(path string, params []pair) bool {
 		return len(params) == 2 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value) &&
 			params[1].key == "origClientOrderId" && readClientIDPattern.MatchString(params[1].value)
 	case "/fapi/v3/income":
-		if (len(params) != 4 && len(params) != 5) || params[0] != (pair{"incomeType", "FUNDING_FEE"}) ||
-			params[1].key != "startTime" || params[2].key != "endTime" || params[3] != (pair{"limit", "100"}) {
+		if len(params) != 4 || params[0] != (pair{"incomeType", "FUNDING_FEE"}) ||
+			params[1].key != "startTime" || params[2].key != "endTime" || params[3] != (pair{"limit", "1000"}) {
 			return false
 		}
 		start, startErr := strconv.ParseInt(params[1].value, 10, 64)
 		end, endErr := strconv.ParseInt(params[2].value, 10, 64)
-		valid := startErr == nil && endErr == nil && start > 0 && end >= start && end-start <= incomeWindow.Milliseconds()
-		if len(params) == 4 {
-			return valid
-		}
-		page, pageErr := strconv.Atoi(params[4].value)
-		return valid && params[4].key == "page" && pageErr == nil && page >= 1 && page <= 100
+		return startErr == nil && endErr == nil && start > 0 && end >= start && end-start <= incomeWindow.Milliseconds()
 	default:
 		return false
 	}
@@ -474,7 +469,7 @@ func validateIncome(body []byte) error {
 	var rows []struct {
 		IncomeType string `json:"incomeType"`
 	}
-	if json.Unmarshal(body, &rows) != nil || rows == nil || len(rows) > 100 {
+	if json.Unmarshal(body, &rows) != nil || rows == nil || len(rows) > 1000 {
 		return fmt.Errorf("invalid income response")
 	}
 	for _, row := range rows {

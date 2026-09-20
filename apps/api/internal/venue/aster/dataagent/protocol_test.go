@@ -40,7 +40,7 @@ func TestClientSendsExactDeterministicSignedReadRequests(t *testing.T) {
 		"/fapi/v3/agent?asterChain=Mainnet&user=" + testOwner + "&signer=" + agent + "&nonce=1700000000000000&signature=0x8d917a8df3f14719a783abe95559d75a20c70dd8c4d53aee6f7771f59b0201085ed5dd17ebd47b08e66de9ddc3cf59109ba96a21fcefab653aebbd4fecd991771b",
 		"/fapi/v3/accountWithJoinMargin?asterChain=Mainnet&user=" + testOwner + "&signer=" + agent + "&nonce=1700000000000001&signature=0x5ec8a67a6c6fb3b863d7c202405440b0bfa0fcd7560d16edaf3e24a459f0bea406e75501e1218ebce552a1bd4cd448bbe1b86a11c3225a0f43a78fcc61f74e1d1b",
 		"/fapi/v3/positionRisk?asterChain=Mainnet&user=" + testOwner + "&signer=" + agent + "&nonce=1700000000000002&signature=0x3b0de5e84184dea02809491795ac63c2d85b31cc3bebad115e0b45518c9e274f737734050b92f2e5f80f1019af91410dd7ae6ae9d61e026f63c749130759fbaf1b",
-		"/fapi/v3/income?incomeType=FUNDING_FEE&startTime=1699395200000&endTime=1700000000000&limit=100&asterChain=Mainnet&user=" + testOwner + "&signer=" + agent + "&nonce=1700000000000003&signature=0x795ddb19f0ad80956f3daff273334a8d98d21b259ecf91b324b5321d20b9257004db13edd8d591a6e8ab24b671970549aecd565963a93ac7ed3fa84879d7c7d71c",
+		"/fapi/v3/income?incomeType=FUNDING_FEE&startTime=1699395200000&endTime=1700000000000&limit=1000&asterChain=Mainnet&user=" + testOwner + "&signer=" + agent + "&nonce=1700000000000003&signature=0xa1b2046704a37120eb111020274c647ebcd53d9ed415e8731a11b40b01644eba23b31404c4910d43353f1dc58010281a71722e84cb3670b4915f2bc1942bc7cd1c",
 	}
 	if len(requests) != len(want) {
 		t.Fatalf("request count = %d", len(requests))
@@ -118,7 +118,9 @@ func TestClientRejectsUnallowlistedEndpointsInvalidRedirectAndOversizedResponses
 		{"/fapi/v3/positionSide/dual", []pair{{"symbol", "BTCUSDT"}}},
 		{"/fapi/v3/leverageBracket", nil},
 		{"/fapi/v3/order", []pair{{"symbol", "BTCUSDT"}, {"orderId", "123"}}},
-		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "later"}, {"endTime", "earlier"}, {"limit", "100"}}},
+		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "later"}, {"endTime", "earlier"}, {"limit", "1000"}}},
+		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "1"}, {"endTime", "2"}, {"limit", "100"}}},
+		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "1"}, {"endTime", "2"}, {"limit", "1000"}, {"page", "1"}}},
 	} {
 		if _, err := client.signedGET(context.Background(), request.path, request.params, testOwner, testDataAgent, privateKey, 1); err == nil {
 			t.Fatalf("unexpected parameters allowed for %s", request.path)

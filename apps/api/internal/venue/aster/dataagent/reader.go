@@ -196,45 +196,62 @@ func (c *Client) readFunding(
 	privateKey []byte,
 	since, until time.Time,
 ) ([]venue.FundingPayment, error) {
-	const pageSize = 100
+	const (
+		requestLimit = 100
+		resultLimit  = 1000
+	)
 	payments := make([]venue.FundingPayment, 0)
 	seen := make(map[string]bool)
-	pages := 0
+	requests := 0
+	var readRange func(time.Time, time.Time) error
+	readRange = func(start, end time.Time) error {
+		requests++
+		if requests > requestLimit {
+			return fmt.Errorf("Aster funding request limit exceeded")
+		}
+		body, err := c.signedGET(ctx, "/fapi/v3/income", []pair{
+			{"incomeType", "FUNDING_FEE"}, {"startTime", strconv.FormatInt(start.UnixMilli(), 10)},
+			{"endTime", strconv.FormatInt(end.UnixMilli(), 10)}, {"limit", strconv.Itoa(resultLimit)},
+		}, owner, agent, privateKey, c.nextNonce())
+		if err != nil {
+			return fmt.Errorf("Aster funding-income read failed")
+		}
+		rangePayments, err := asteraccount.ParseFundingPayments(body, owner, c.now())
+		if err != nil || len(rangePayments) > resultLimit {
+			return fmt.Errorf("Aster funding-income response was invalid")
+		}
+		for index, payment := range rangePayments {
+			if payment.PaidAt.Before(start) || payment.PaidAt.After(end) ||
+				index > 0 && payment.PaidAt.Before(rangePayments[index-1].PaidAt) {
+				return fmt.Errorf("Aster funding-income response was invalid")
+			}
+		}
+		if len(rangePayments) == resultLimit {
+			if start.Equal(end) {
+				return fmt.Errorf("Aster funding-income range remained saturated")
+			}
+			mid := time.UnixMilli(start.UnixMilli() + (end.UnixMilli()-start.UnixMilli())/2).UTC()
+			if err := readRange(start, mid); err != nil {
+				return err
+			}
+			return readRange(mid.Add(time.Millisecond), end)
+		}
+		for _, payment := range rangePayments {
+			if seen[payment.ExternalID] {
+				return fmt.Errorf("Aster funding-income response was invalid")
+			}
+			seen[payment.ExternalID] = true
+			payments = append(payments, payment)
+		}
+		return nil
+	}
 	for start := since.UTC(); !start.After(until); {
 		end := start.Add(incomeWindow)
 		if end.After(until) {
 			end = until.UTC()
 		}
-		for page := 1; ; page++ {
-			pages++
-			if pages > 100 {
-				return nil, fmt.Errorf("Aster funding pagination limit exceeded")
-			}
-			body, err := c.signedGET(ctx, "/fapi/v3/income", []pair{
-				{"incomeType", "FUNDING_FEE"}, {"startTime", strconv.FormatInt(start.UnixMilli(), 10)},
-				{"endTime", strconv.FormatInt(end.UnixMilli(), 10)}, {"limit", strconv.Itoa(pageSize)},
-				{"page", strconv.Itoa(page)},
-			}, owner, agent, privateKey, c.nextNonce())
-			if err != nil {
-				return nil, fmt.Errorf("Aster funding-income read failed")
-			}
-			pagePayments, err := asteraccount.ParseFundingPayments(body, owner, c.now())
-			if err != nil {
-				return nil, fmt.Errorf("Aster funding-income response was invalid")
-			}
-			if len(pagePayments) > pageSize {
-				return nil, fmt.Errorf("Aster funding-income response was invalid")
-			}
-			for _, payment := range pagePayments {
-				if payment.PaidAt.Before(start) || payment.PaidAt.After(end) || seen[payment.ExternalID] {
-					return nil, fmt.Errorf("Aster funding-income response was invalid")
-				}
-				seen[payment.ExternalID] = true
-				payments = append(payments, payment)
-			}
-			if len(pagePayments) < pageSize {
-				break
-			}
+		if err := readRange(start, end); err != nil {
+			return nil, err
 		}
 		start = end.Add(time.Millisecond)
 	}
