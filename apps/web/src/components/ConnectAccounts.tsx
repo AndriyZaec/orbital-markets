@@ -4,9 +4,21 @@ import { useConnect as useEvmConnect } from 'wagmi'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
+import { useLivePositions } from '@/hooks/useLivePositions'
 import { useTelegramLink } from '@/hooks/useTelegramLink'
 import { trackAnalytics } from '@/lib/analytics'
+import { hasActiveLiveExposureForWallet } from '@/lib/live-events'
 import { venueMetadata } from '@/lib/venue-metadata'
+import type { WalletKind } from '@/agents/types'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import telegramLogo from '@/assets/telegram-logo.svg'
 
 // Static venue presentation. Runtime
@@ -112,6 +124,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const tradingAgents = useTradingAgents()
   const telegramLink = useTelegramLink()
   const { state: liveExecution } = useLiveExecution()
+  const { positions } = useLivePositions()
   const agentChangeBlocked = !['idle', 'open', 'degraded', 'aborted', 'failed'].includes(liveExecution.phase)
   const agentChangeBlockedRef = useRef(agentChangeBlocked)
 
@@ -134,6 +147,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   // Which venue's wallet picker modal is open. Overlay-style — matches how
   // the Solana wallet-adapter modal renders and keeps the venue card tidy.
   const [pickerOpen, setPickerOpen] = useState<VenueId | null>(null)
+  const [pendingDisconnect, setPendingDisconnect] = useState<WalletKind | null>(null)
   const previousWalletConnectedRef = useRef<Record<VenueId, boolean>>({
     pacifica: false,
     hyperliquid: false,
@@ -212,12 +226,27 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     setPickerOpen(null)
   }
 
-  const handleDisconnect = async (venueId: VenueId) => {
+  const disconnectWallet = async (wallet: WalletKind) => {
     try {
-      await tradingAgents.disconnectWallet(venueId === 'pacifica' ? 'solana' : 'evm')
+      await tradingAgents.disconnectWallet(wallet)
     } catch {
       // The authorization UI owns the failure state.
     }
+  }
+
+  const handleDisconnect = (venueId: VenueId) => {
+    const wallet = venueId === 'pacifica' ? 'solana' : 'evm'
+    if (hasActiveLiveExposureForWallet(positions, wallet)) {
+      setPendingDisconnect(wallet)
+      return
+    }
+    void disconnectWallet(wallet)
+  }
+
+  const confirmDisconnect = () => {
+    const wallet = pendingDisconnect
+    setPendingDisconnect(null)
+    if (wallet) void disconnectWallet(wallet)
   }
 
   const handleAuthorize = async (venue: VenueId) => {
@@ -400,7 +429,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                         </>
                       )}
                       <button
-                        onClick={() => void handleDisconnect(venue.id)}
+                        onClick={() => handleDisconnect(venue.id)}
                         disabled={disconnectBlocked}
                         className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
@@ -469,6 +498,27 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
           onClose={() => setPickerOpen(null)}
         />
       )}
+
+      <Dialog open={pendingDisconnect !== null} onOpenChange={(nextOpen) => {
+        if (!nextOpen) setPendingDisconnect(null)
+      }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Disconnect wallet?</DialogTitle>
+            <DialogDescription>
+              Orbital will stop managing your open positions. Reconnect and authorize again, or close them on the venue.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setPendingDisconnect(null)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={confirmDisconnect}>
+              Disconnect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

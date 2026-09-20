@@ -14,10 +14,19 @@ interface AccountChannel {
 const accountChannels = new Map<string, AccountChannel>()
 
 export function hasActiveLiveExposure(data: unknown): boolean {
-  return Array.isArray(data) && data.some((position) => {
-    if (!position || typeof position !== 'object' || !('state' in position)) return false
-    return position.state === 'pending' || position.state === 'open' || position.state === 'degraded' || position.state === 'closing'
-  })
+  return Array.isArray(data) && data.some(isActiveLivePosition)
+}
+
+export function hasActiveLiveExposureForWallet(data: unknown, wallet: 'evm' | 'solana'): boolean {
+  if (!Array.isArray(data)) return false
+  const venues = wallet === 'solana' ? ['pacifica'] : ['hyperliquid', 'aster']
+  return data.some((position) => isActiveLivePosition(position) && venues.some((venue) =>
+    position.venue_a === venue || position.venue_b === venue))
+}
+
+function isActiveLivePosition(position: unknown): position is Record<string, unknown> {
+  if (!position || typeof position !== 'object' || !('state' in position)) return false
+  return position.state === 'pending' || position.state === 'open' || position.state === 'degraded' || position.state === 'closing'
 }
 
 function liveEventsUrl(accounts: VenueAddressMap, sessionId?: string) {
