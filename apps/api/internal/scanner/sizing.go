@@ -20,7 +20,7 @@ const (
 )
 
 type SizingResult struct {
-	MaxAvailableNotional float64              // min OI, display context only
+	MaxAvailableNotional float64              // weaker venue's OI in quote notional, display context only
 	BestPriceCapacity    float64              // weaker executable-side BBO notional
 	RecommendedNotional  float64              // conservative share of BBO capacity
 	Liquidity            domain.LiquidityTier // observable BBO quality
@@ -51,7 +51,7 @@ func executionSideDepth(md venue.MarketData, side domain.Side) float64 {
 }
 
 func computeSizing(a, b venue.MarketData, direction domain.Direction) SizingResult {
-	minOI := math.Min(a.OpenInterest, b.OpenInterest)
+	minOI := math.Min(openInterestNotional(a), openInterestNotional(b))
 	longMarket, shortMarket := marketsForDirection(a, b, direction)
 	bestPriceCapacity := math.Min(
 		executionSideDepth(longMarket, domain.SideLong),
@@ -70,6 +70,17 @@ func computeSizing(a, b venue.MarketData, direction domain.Direction) SizingResu
 		RecommendedNotional:  bestPriceCapacity * suggestedBBOShare,
 		Liquidity:            classifyLiquidity(bestPriceCapacity),
 	}
+}
+
+func openInterestNotional(md venue.MarketData) float64 {
+	price := md.MarkPrice
+	if price <= 0 {
+		price = md.IndexPrice
+	}
+	if price <= 0 || md.OpenInterest <= 0 {
+		return 0
+	}
+	return md.OpenInterest * price
 }
 
 func marketsForDirection(a, b venue.MarketData, direction domain.Direction) (longMarket, shortMarket venue.MarketData) {
