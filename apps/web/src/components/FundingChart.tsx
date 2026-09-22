@@ -22,6 +22,7 @@ interface Props {
   onNotionalChange?: (value: number) => void
   feeEstimate: number
   slippageEstimate: number
+  showPotentialReturn?: boolean
 }
 
 type Timeframe = 'D' | 'W' | 'M'
@@ -79,6 +80,7 @@ export function FundingChart({
   onNotionalChange,
   feeEstimate,
   slippageEstimate,
+  showPotentialReturn = true,
 }: Props) {
   const [view, setView] = useState<ChartView>('funding')
   const [tf, setTf] = useState<Timeframe>('W')
@@ -123,9 +125,11 @@ export function FundingChart({
           <ChartTab active={view === 'funding'} onClick={() => changeView('funding')}>
             Funding Rates
           </ChartTab>
-          <ChartTab active={view === 'return'} onClick={() => changeView('return')}>
-            Potential Return
-          </ChartTab>
+          {showPotentialReturn && (
+            <ChartTab active={view === 'return'} onClick={() => changeView('return')}>
+              Potential Return
+            </ChartTab>
+          )}
         </div>
         <div className="mb-2 flex gap-0.5 rounded bg-white/[0.04] p-0.5">
           {(['D', 'W', 'M'] as Timeframe[]).map((timeframe) => (

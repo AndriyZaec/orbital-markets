@@ -59,6 +59,7 @@ export function useLivePositionDetail(positionId: string | null, venues: [Venue,
     queryKey: ['live-position-detail', positionId, liveAccountsKey(accounts)],
     enabled,
     staleTime: 5_000,
+    refetchInterval: enabled ? 5_000 : false,
     queryFn: async ({ signal }) => {
       const query = liveAccountsQuery(accounts)
       const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`, { signal })

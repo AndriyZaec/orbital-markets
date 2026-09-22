@@ -86,9 +86,10 @@ function VenueIcon({ venue }: { venue: string }) {
 interface LivePositionsProps {
   onConnectWallets?: () => void
   onSelectPosition?: (position: LivePosition | null) => void
+  selectedPositionId?: string | null
 }
 
-export function LivePositions({ onConnectWallets, onSelectPosition }: LivePositionsProps = {}) {
+export function LivePositions({ onConnectWallets, onSelectPosition, selectedPositionId = null }: LivePositionsProps = {}) {
   const { positions, loading, error, refetch } = useLivePositions()
   const { aggregate } = useVenueReadiness()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -109,16 +110,19 @@ export function LivePositions({ onConnectWallets, onSelectPosition }: LivePositi
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded' || p.state === 'pending' || p.state === 'closing')
   const closedPositions = positions.filter((p) => p.state === 'closed' || p.state === 'failed')
   const displayed = tab === 'open' ? openPositions : closedPositions
-  const selected = displayed.find((p) => p.id === selectedId) ?? null
+  const selected = closedPositions.find((p) => p.id === selectedId) ?? null
+  const selectedOpen = openPositions.find((p) => p.id === selectedPositionId) ?? null
 
   useEffect(() => {
-    if (selectedId !== null && selected === null) onSelectPosition?.(null)
-  }, [onSelectPosition, selected, selectedId])
+    if (!loading && selectedPositionId !== null && selectedOpen === null) onSelectPosition?.(null)
+  }, [loading, onSelectPosition, selectedOpen, selectedPositionId])
 
   const handlePositionClick = (position: LivePosition) => {
-    const opening = selectedId !== position.id
-    setSelectedId(opening ? position.id : null)
-    onSelectPosition?.(opening && tab === 'open' ? position : null)
+    if (tab === 'open') {
+      onSelectPosition?.(selectedPositionId === position.id ? null : position)
+      return
+    }
+    setSelectedId(selectedId === position.id ? null : position.id)
   }
 
   const handleTabChange = (nextTab: 'open' | 'closed') => {
@@ -336,7 +340,9 @@ export function LivePositions({ onConnectWallets, onSelectPosition }: LivePositi
                 return (
                   <TableRow
                     key={pos.id}
-                    className={`cursor-pointer transition-colors border-border hover:bg-white/[0.02] ${isDegraded ? 'border-l-2 border-l-orange-400/50' : ''}`}
+                    className={`cursor-pointer transition-colors border-border hover:bg-white/[0.02] ${
+                      (tab === 'open' ? selectedPositionId === pos.id : selectedId === pos.id) ? 'bg-white/[0.035]' : ''
+                    } ${isDegraded ? 'border-l-2 border-l-orange-400/50' : ''}`}
                     onClick={() => handlePositionClick(pos)}
                   >
                     <TableCell className="py-2">

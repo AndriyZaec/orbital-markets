@@ -25,12 +25,6 @@ function fmtPrice(n: number) {
   return '$' + n.toPrecision(4)
 }
 
-function fmtUsd(n: number) {
-  if (n >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2) + 'M'
-  if (n >= 1_000) return '$' + (n / 1_000).toFixed(2) + 'K'
-  return '$' + n.toFixed(2)
-}
-
 function fmtPct(n: number, decimals = 4) {
   return (n * 100).toFixed(decimals) + '%'
 }
@@ -45,6 +39,12 @@ function fmtTime(s: string | undefined) {
   if (!s) return '—'
   return new Date(s).toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+}
+
+function fmtEventTime(s: string) {
+  return new Date(s).toLocaleTimeString(undefined, {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
   })
 }
 
@@ -80,7 +80,31 @@ function needsAttention(state: string) {
 }
 
 export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props) {
-  const { data, loading, error: detailError, refetch } = useLivePositionDetail(pos.id, [pos.venue_a, pos.venue_b])
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+      <div className="h-[90vh] w-[580px] overflow-hidden rounded-lg border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} />
+      </div>
+    </div>
+  )
+}
+
+export function LivePositionPanel({ position: pos, onClose, onRefresh }: Props) {
+  return (
+    <aside className="flex h-full w-[360px] shrink-0 border-l border-border bg-card">
+      <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} compact />
+    </aside>
+  )
+}
+
+function LivePositionContent({ position, onDismiss, onRefresh, compact = false }: {
+  position: LivePosition
+  onDismiss: () => void
+  onRefresh?: () => void
+  compact?: boolean
+}) {
+  const { data, loading, error: detailError, refetch } = useLivePositionDetail(position.id, [position.venue_a, position.venue_b])
+  const pos = data?.position ?? position
   const fills = data?.fills ?? []
   const events = data?.events ?? []
   const [leg1Venue, leg2Venue] = monitoredLegVenues(fills, pos.venue_a, pos.venue_b)
@@ -111,25 +135,23 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
   const reason = reasonEvent?.detail
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50" onClick={onClose}>
-      <div
-        className="bg-card border border-border rounded-lg w-[580px] max-h-[90vh] overflow-y-auto shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-5 pt-5 pb-4 flex items-center justify-between border-b border-border">
-          <div className="flex items-center gap-3">
-            <AssetIcon asset={pos.asset} />
-            <h2 className="text-lg font-semibold text-foreground">{pos.asset}</h2>
-            <Badge variant="outline" className={`text-[11px] ${stateColor(pos.state)}`}>{pos.state}</Badge>
+    <div className="flex min-h-0 flex-1 flex-col">
+        {!compact && (
+          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+            <div className="flex items-center gap-3">
+              <AssetIcon asset={pos.asset} />
+              <h2 className="text-lg font-semibold text-foreground">{pos.asset}</h2>
+              <Badge variant="outline" className={`text-[11px] ${stateColor(pos.state)}`}>{pos.state}</Badge>
+            </div>
+            <button onClick={onDismiss} aria-label="Close position panel" className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-          </button>
-        </div>
+        )}
 
+        <div className="min-h-0 flex-1 overflow-y-auto">
         {/* Reason banner for non-open states */}
         {needsAttention(pos.state) && (
           <div className={`px-5 py-3 border-b ${
@@ -191,7 +213,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
         {pos.state === 'open' && (pos.leg1_current_price > 0 || pos.leg2_current_price > 0) && (
           <div className="px-5 py-4 border-b border-border">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Leg Status</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className={`grid gap-3 ${compact ? 'grid-cols-1' : 'grid-cols-2'}`}>
               <LegCard label="Leg 1" venue={leg1Venue} currentPrice={pos.leg1_current_price} liqPrice={pos.leg1_liq_price} liqDist={pos.leg1_liq_dist} liqRisk={pos.leg1_liq_risk} />
               <LegCard label="Leg 2" venue={leg2Venue} currentPrice={pos.leg2_current_price} liqPrice={pos.leg2_liq_price} liqDist={pos.leg2_liq_dist} liqRisk={pos.leg2_liq_risk} />
             </div>
@@ -202,7 +224,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
         {pos.state === 'open' && (pos.price_pnl !== 0 || pos.funding_pnl !== 0) && (
           <div className="px-5 py-4 border-b border-border">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
-            <div className="grid grid-cols-3 gap-4">
+            <div className={`grid gap-4 ${compact ? 'grid-cols-2' : 'grid-cols-3'}`}>
               <div><p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{formatSignedUsdPnL(pos.price_pnl)}</p></div>
               <div><p className="text-[10px] text-muted-foreground mb-0.5">{pos.funding_pnl_source === 'realized' ? 'Realized Funding' : 'Estimated Funding'}</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{formatSignedUsdPnL(pos.funding_pnl)}</p></div>
               <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{formatSignedUsdPnL(pos.total_pnl)}</p></div>
@@ -213,74 +235,85 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
         {/* Position Info */}
         <div className="px-5 py-4 border-b border-border">
           <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Position Info</p>
-          <div className="grid grid-cols-2 gap-y-3 gap-x-6">
-            <InfoItem label="Notional" value={fmtUsd(pos.notional)} />
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3">
             <InfoItem label="Leverage" value={`${pos.leverage}x`} />
-            <InfoItem label="Venues" value={`${pos.venue_a} / ${pos.venue_b}`} />
             {pos.hold_hours > 0 && <InfoItem label="Hold Time" value={fmtHours(pos.hold_hours)} />}
           </div>
         </div>
 
-        {/* Event Timeline */}
+        {/* Timestamps */}
+        <div className="px-5 py-4 border-b border-border">
+          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Timeline</p>
+          <div className={`grid gap-y-3 gap-x-6 ${compact ? 'grid-cols-1' : 'grid-cols-2'}`}>
+            <InfoItem label="Started" value={fmtTime(pos.started_at)} />
+            <InfoItem label="Opened" value={fmtTime(pos.opened_at)} />
+            <InfoItem label="Last Updated" value={fmtTime(pos.updated_at)} />
+            {pos.completed_at && <InfoItem label="Completed" value={fmtTime(pos.completed_at)} />}
+          </div>
+        </div>
+
+        {/* Operational log follows the higher-level position timeline. */}
         {events.length > 0 && (
-          <div className="px-5 py-4 border-b border-border">
+          <div className="px-5 py-4">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Event Timeline</p>
-            <div className="space-y-1.5">
+            <div className="flex flex-col gap-3">
               {events.map((ev) => (
                 <EventRow key={ev.id} event={ev} />
               ))}
             </div>
           </div>
         )}
+        </div>
 
-        {/* Close action */}
         {(canClose || isClosing || closeDone) && (
-          <div className="px-5 py-4 border-b border-border">
-            {/* Confirm prompt */}
+          <div
+            data-slot="position-close-cta"
+            className="shrink-0 border-t border-border bg-card px-5 py-4"
+          >
             {canClose && !confirmClose && !isClosing && !closeDone && (
-              <Button variant="destructive" size="sm" className="w-full" onClick={() => setConfirmClose(true)}>
+              <Button variant="destructive" size="lg" className="w-full font-medium" onClick={() => setConfirmClose(true)}>
                 {pos.state === 'open' ? 'Close Position' : 'Check & Close Venue Exposure'}
               </Button>
             )}
             {confirmClose && !isClosing && (
-              <div className="flex items-center gap-2">
-                <p className="text-[11px] text-muted-foreground flex-1">
+              <div className="flex flex-col gap-3">
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
                   {pos.state !== 'open'
                     ? 'Refresh both venues and close any position for this asset? This may include exposure opened outside Orbital.'
                     : 'Close both legs? Local authorization keys will sign each reduce-only order.'}
                 </p>
-                <Button variant="secondary" size="xs" onClick={() => setConfirmClose(false)}>Cancel</Button>
-                <Button variant="destructive" size="xs" onClick={handleClose}>Confirm</Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="secondary" size="lg" onClick={() => setConfirmClose(false)}>Cancel</Button>
+                  <Button variant="destructive" size="lg" onClick={handleClose}>Confirm</Button>
+                </div>
               </div>
             )}
-            {/* Progress */}
             {isClosing && (
-              <p className="text-[11px] text-yellow-400">
+              <p className="text-[11px] leading-relaxed text-yellow-400">
                 {liveClose.state.phase === 'preparing' ? (pos.state !== 'open' ? 'Checking venue state...' : 'Preparing close orders...') :
                   liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local authorization` :
-                 liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
-                 `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
+                  liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
+                  `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
               </p>
             )}
-            {/* Result */}
             {closeDone && liveClose.state.failed === 0 && (
-              <p className="text-[11px] text-green-400">
+              <p className="text-[11px] leading-relaxed text-green-400">
                 {liveClose.state.reconciled
                   ? 'Venue state verified; no remaining exposure was found.'
                   : 'Position closed with all leg fills confirmed.'}
               </p>
             )}
             {closeDone && liveClose.state.failed > 0 && (
-              <div className="text-[11px] space-y-1">
+              <div className="flex flex-col gap-1 text-[11px]">
                 <p className="text-yellow-400">{liveClose.state.succeeded} accepted, {liveClose.state.failed} failed</p>
-                {liveClose.state.outcomes.filter((outcome) => outcome.status === 'failed').map((outcome, i) => (
-                  <CloseFailure key={`${outcome.venue}-${outcome.symbol}-${i}`} outcome={outcome} />
+                {liveClose.state.outcomes.filter((outcome) => outcome.status === 'failed').map((outcome, index) => (
+                  <CloseFailure key={`${outcome.venue}-${outcome.symbol}-${index}`} outcome={outcome} />
                 ))}
               </div>
             )}
             {liveClose.state.phase === 'error' && (
-              <div className="space-y-2">
-                <p className="text-[11px] text-red-400">{liveClose.state.errors[0]}</p>
+              <div className="flex flex-col gap-2">
+                <p className="break-words text-[11px] leading-relaxed text-red-400">{liveClose.state.errors[0]}</p>
                 <div className="flex flex-wrap gap-2">
                   <VenueTradeLink venue={pos.venue_a} symbol={pos.asset} />
                   {pos.venue_b !== pos.venue_a && <VenueTradeLink venue={pos.venue_b} symbol={pos.asset} />}
@@ -289,19 +322,6 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props)
             )}
           </div>
         )}
-
-        {/* Timestamps */}
-        <div className="px-5 py-4">
-          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Timeline</p>
-          <div className="grid grid-cols-2 gap-y-3 gap-x-6">
-            <InfoItem label="Started" value={fmtTime(pos.started_at)} />
-            <InfoItem label="Opened" value={fmtTime(pos.opened_at)} />
-            <InfoItem label="Last Updated" value={fmtTime(pos.updated_at)} />
-            {pos.completed_at && <InfoItem label="Completed" value={fmtTime(pos.completed_at)} />}
-            {pos.monitor_at && <InfoItem label="Last Monitor" value={fmtTime(pos.monitor_at)} />}
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
@@ -334,6 +354,7 @@ function FillCard({ fill }: { fill: LiveFillDetail }) {
   const metadata = venueMetadata(fill.venue)
   const isGood = fill.filled
   const isBad = !fill.accepted || (fill.error && fill.error.length > 0)
+  const hasFillMismatch = fill.requested_amount > 0 && Math.abs(fill.filled_amount - fill.requested_amount) > fill.requested_amount * 0.0001
 
   return (
     <div className={`rounded-lg border px-3 py-2.5 ${
@@ -354,17 +375,11 @@ function FillCard({ fill }: { fill: LiveFillDetail }) {
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
         <span><span className="text-muted-foreground">Side: </span><span className={`font-medium ${fill.side === 'long' ? 'text-green-400' : 'text-red-400'}`}>{fill.side}</span></span>
         <span><span className="text-muted-foreground">Size: </span><span className="font-mono text-foreground">{fill.filled_amount > 0 ? fill.filled_amount.toPrecision(4) : '—'}</span></span>
-        <span><span className="text-muted-foreground">Req: </span><span className="font-mono text-foreground">{fill.requested_amount > 0 ? fill.requested_amount.toPrecision(4) : '—'}</span></span>
+        {hasFillMismatch && <span><span className="text-muted-foreground">Requested: </span><span className="font-mono text-foreground">{fill.requested_amount.toPrecision(4)}</span></span>}
         <span><span className="text-muted-foreground">Avg Price: </span><span className="font-mono text-foreground">{fill.avg_fill_price > 0 ? fmtPrice(fill.avg_fill_price) : '—'}</span></span>
-        <span><span className="text-muted-foreground">Fill: </span><span className="font-mono text-foreground">{fmtPct(fill.fill_ratio, 1)}</span></span>
+        {hasFillMismatch && <span><span className="text-muted-foreground">Filled: </span><span className="font-mono text-foreground">{fmtPct(fill.fill_ratio, 1)}</span></span>}
         {fill.fee > 0 && <span><span className="text-muted-foreground">Fee: </span><span className="font-mono text-foreground">${fill.fee.toFixed(4)}</span></span>}
       </div>
-      {fill.order_id && (
-        <p className="text-[9px] text-muted-foreground/50 font-mono mt-1 truncate">OID: {fill.order_id}</p>
-      )}
-      {fill.client_order_id && (
-        <p className="text-[9px] text-muted-foreground/50 font-mono truncate">CLOID: {fill.client_order_id}</p>
-      )}
       {fill.error && (
         <p className="text-[10px] text-red-400/70 mt-1">{fill.error}</p>
       )}
@@ -382,12 +397,14 @@ function EventRow({ event: ev }: { event: LiveEventDetail }) {
     .join(' ')
 
   return (
-    <div className="grid grid-cols-[130px_minmax(140px,0.8fr)_minmax(0,1.6fr)] items-start gap-x-3 gap-y-1 text-[10px] max-sm:grid-cols-[110px_minmax(0,1fr)]">
-      <span className="text-muted-foreground/60 font-mono">{fmtTime(ev.at)}</span>
-      <span className={`min-w-0 font-medium leading-relaxed ${
-        isComplete && isError ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-foreground'
-      }`}>{label}</span>
-      {ev.detail && <span className="min-w-0 text-muted-foreground leading-relaxed break-words max-sm:col-span-2 max-sm:pl-[110px]">{ev.detail}</span>}
+    <div className="min-w-0 text-[10px]">
+      <div className="flex min-w-0 items-baseline justify-between gap-3">
+        <span className={`min-w-0 font-medium leading-relaxed ${
+          isComplete && isError ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-foreground'
+        }`}>{label}</span>
+        <span className="shrink-0 whitespace-nowrap font-mono text-[9px] text-muted-foreground/60">{fmtEventTime(ev.at)}</span>
+      </div>
+      {ev.detail && <p className="mt-1 min-w-0 break-words leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{ev.detail}</p>}
     </div>
   )
 }
@@ -398,10 +415,12 @@ function LegCard({ label, venue, currentPrice, liqPrice, liqDist, liqRisk }: {
   const metadata = venueMetadata(venue)
   return (
     <div className="rounded-lg border border-border bg-white/[0.02] px-3 py-3">
-      <div className="flex items-center gap-2 mb-2.5">
+      <div className="flex items-center justify-between gap-3 mb-2.5">
         <span className="text-[10px] text-muted-foreground font-medium">{label}</span>
-        {metadata.logo && <img src={metadata.logo} alt={metadata.label} className="size-4 rounded-sm" />}
-        <span className="text-xs text-foreground">{metadata.label}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          {metadata.logo && <img src={metadata.logo} alt="" className="size-4 rounded-sm" />}
+          <span className="truncate text-xs text-foreground">{metadata.label}</span>
+        </div>
       </div>
       <div className="flex flex-col gap-1.5 text-[11px]">
         <div className="flex justify-between"><span className="text-muted-foreground">Price</span><span className="font-mono text-foreground">{fmtPrice(currentPrice)}</span></div>
@@ -420,9 +439,9 @@ function LegCard({ label, venue, currentPrice, liqPrice, liqDist, liqRisk }: {
 
 function InfoItem({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div>
+    <div className="min-w-0">
       <p className="text-[10px] text-muted-foreground">{label}</p>
-      <p className={`text-sm font-mono ${warn ? 'text-orange-400' : 'text-foreground'}`}>{value}</p>
+      <p className={`break-words text-sm font-mono [overflow-wrap:anywhere] ${warn ? 'text-orange-400' : 'text-foreground'}`}>{value}</p>
     </div>
   )
 }

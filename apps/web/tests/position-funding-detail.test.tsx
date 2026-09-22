@@ -2,19 +2,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PositionFundingDetail } from '../src/components/PositionFundingDetail'
+import { LivePositionPanel } from '../src/components/LivePositionDetail'
 import { LivePositions } from '../src/components/LivePositions'
 import type { LivePositionChartContext } from '../src/lib/position-chart-context'
 import type { LivePosition } from '../src/hooks/useLivePositions'
+import type { LiveEventDetail } from '../src/hooks/useLivePositionDetail'
 
 const mocks = vi.hoisted(() => ({
   chartContext: null as LivePositionChartContext | null,
   useHistory: vi.fn(),
   refetch: vi.fn(),
   positionsRefetch: vi.fn(),
+  closePosition: vi.fn(),
+  events: [] as LiveEventDetail[],
 }))
 
 vi.mock('@/hooks/useLivePositions', () => ({
-  useLivePositions: () => ({ positions: [position], loading: false, error: null, refetch: mocks.positionsRefetch }),
+  useLivePositions: () => ({ positions: [position, closedPosition], loading: false, error: null, refetch: mocks.positionsRefetch }),
 }))
 
 vi.mock('@/hooks/useVenueReadiness', () => ({
@@ -32,13 +36,19 @@ vi.mock('@/hooks/useKillSwitch', () => ({
   }),
 }))
 
-vi.mock('@/components/LivePositionDetail', () => ({
-  LivePositionDetail: ({ onClose }: { onClose: () => void }) => <button onClick={onClose}>Close position details</button>,
+vi.mock('@/hooks/useLiveClose', () => ({
+  useLiveClose: () => ({
+    state: {
+      phase: 'idle', submitted: 0, total: 0, failed: 0, succeeded: 0,
+      reconciled: false, outcomes: [], errors: [],
+    },
+    closePosition: mocks.closePosition,
+  }),
 }))
 
 vi.mock('@/hooks/useLivePositionDetail', () => ({
   useLivePositionDetail: () => ({
-    data: mocks.chartContext ? { position, fills: [], events: [], chart_context: mocks.chartContext } : null,
+    data: mocks.chartContext ? { position, fills: [], events: mocks.events, chart_context: mocks.chartContext } : null,
     loading: false,
     error: null,
     refetch: mocks.refetch,
@@ -82,6 +92,14 @@ const position: LivePosition = {
   updated_at: '2026-09-22T12:00:00Z',
 }
 
+const closedPosition: LivePosition = {
+  ...position,
+  id: 'pos-closed',
+  asset: 'SOL',
+  state: 'closed',
+  completed_at: '2026-09-22T13:00:00Z',
+}
+
 const availableContext: LivePositionChartContext = {
   available: true,
   asset: '2Z',
@@ -101,10 +119,12 @@ afterEach(() => {
   mocks.useHistory.mockReset()
   mocks.refetch.mockReset()
   mocks.positionsRefetch.mockReset()
+  mocks.closePosition.mockReset()
+  mocks.events = []
 })
 
 describe('position-backed funding chart', () => {
-  it('renders the persisted 2Z direction, history pair, and both chart views', async () => {
+  it('renders the persisted 2Z direction and history pair without a pre-trade return view', () => {
     mocks.chartContext = availableContext
     mocks.useHistory.mockReturnValue({
       data: [
@@ -119,13 +139,8 @@ describe('position-backed funding chart', () => {
 
     expect(screen.getByText('Long Aster / Short Pacifica')).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Funding Rates' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: 'Potential Return' })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'Potential Return' })).toBeNull()
     expect(mocks.useHistory).toHaveBeenCalledWith('2Z', 'aster', 'pacifica', '7d')
-
-    await userEvent.click(screen.getByRole('tab', { name: 'Potential Return' }))
-    expect(screen.getByText('Estimated costs')).toBeTruthy()
-    expect(screen.getByText('$0.05')).toBeTruthy()
-    expect(screen.getByText('$15 open')).toBeTruthy()
   })
 
   it('shows an explicit unavailable state without requesting history', () => {
@@ -141,17 +156,46 @@ describe('position-backed funding chart', () => {
     expect(screen.queryByRole('tab', { name: 'Funding Rates' })).toBeNull()
   })
 
-  it('keeps the selected position context when only the modal is closed', async () => {
+  it('uses controlled row selection for the open-position sidebar', async () => {
     const onSelectPosition = vi.fn()
-    render(<LivePositions onSelectPosition={onSelectPosition} />)
+    const view = render(<LivePositions onSelectPosition={onSelectPosition} />)
 
     await userEvent.click(screen.getByText('2Z'))
     expect(onSelectPosition).toHaveBeenLastCalledWith(position)
 
-    await userEvent.click(screen.getByRole('button', { name: 'Close position details' }))
-    expect(onSelectPosition).toHaveBeenCalledTimes(1)
-
-    await userEvent.click(screen.getByRole('button', { name: 'Closed' }))
+    view.rerender(<LivePositions onSelectPosition={onSelectPosition} selectedPositionId={position.id} />)
+    await userEvent.click(screen.getByText('2Z'))
     expect(onSelectPosition).toHaveBeenLastCalledWith(null)
   })
+
+  it('keeps closed-position details in a modal', async () => {
+    render(<LivePositions />)
+
+    await userEvent.click(screen.getByRole('button', { name: /^Closed/ }))
+    await userEvent.click(screen.getByText('SOL'))
+    expect(screen.getByRole('button', { name: 'Close position panel' })).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close position panel' }))
+    expect(screen.queryByRole('button', { name: 'Close position panel' })).toBeNull()
+  })
+
+  it('keeps the close CTA below the scrollable sidebar details', () => {
+    mocks.chartContext = availableContext
+    mocks.events = [{
+      id: 1,
+      position_id: position.id,
+      event: 'session_recovery_blocked',
+      state: 'degraded',
+      detail: 'A long operational event message that must wrap inside the narrow position sidebar.',
+      at: '2026-09-22T12:01:00Z',
+    }]
+    render(<LivePositionPanel position={position} onClose={() => {}} />)
+
+    const closeAction = screen.getByRole('button', { name: 'Close Position' })
+    const positionInfo = screen.getByText('Position Info')
+    expect(positionInfo.compareDocumentPosition(closeAction) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(closeAction.closest('[data-slot="position-close-cta"]')?.className).toContain('shrink-0')
+    expect(screen.getByText(/long operational event message/).className).toContain('break-words')
+  })
+
 })

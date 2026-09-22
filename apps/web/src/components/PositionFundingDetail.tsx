@@ -65,6 +65,7 @@ export function PositionFundingDetail({ position, onBack }: Props) {
               notional={chartContext.notional}
               feeEstimate={chartContext.fee_estimate}
               slippageEstimate={chartContext.slippage_estimate}
+              showPotentialReturn={false}
             />
           </>
         )}

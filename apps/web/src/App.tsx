@@ -23,6 +23,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
+import { LivePositionPanel } from '@/components/LivePositionDetail'
 import { PositionFundingDetail } from '@/components/PositionFundingDetail'
 import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
@@ -354,6 +355,7 @@ export default function App() {
                 <LivePositions
                   onConnectWallets={() => setShowAccounts(true)}
                   onSelectPosition={selectPosition}
+                  selectedPositionId={selectedPosition?.id}
                 />
               </div>
             </>
@@ -381,6 +383,13 @@ export default function App() {
             onExecute={handleExecutePaper}
             onViewPositions={closeOpportunity}
             onOpenAccounts={() => setShowAccounts(true)}
+          />
+        )}
+
+        {activeView === 'trade' && selectedPosition && (
+          <LivePositionPanel
+            position={selectedPosition}
+            onClose={() => setSelection(null)}
           />
         )}
 
