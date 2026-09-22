@@ -27,6 +27,7 @@ import { PositionFundingDetail } from '@/components/PositionFundingDetail'
 import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
+import { DetailStatItem, DetailVenueIcon } from '@/components/DetailStatItem'
 import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import type { LivePosition } from '@/hooks/useLivePositions'
@@ -776,15 +777,15 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
         </div>
       </div>
       <div className="px-5 py-2.5 flex items-center gap-6 border-b border-border shrink-0 overflow-x-auto">
-        <StatItem label="Long"><VenueIcon venue={longVenue} /></StatItem>
-        <StatItem label="Short"><VenueIcon venue={shortVenue} /></StatItem>
-        <StatItem label="Max Leverage" value={maxLev === null ? '--' : `${maxLev}x`} />
-        <StatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
-        <StatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
-        <StatItem label="APR x Max Lev" value={maxLev === null ? '--' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
-        <StatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
-        <StatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
-        <StatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
+        <DetailStatItem label="Long"><DetailVenueIcon venue={longVenue} /></DetailStatItem>
+        <DetailStatItem label="Short"><DetailVenueIcon venue={shortVenue} /></DetailStatItem>
+        <DetailStatItem label="Max Leverage" value={maxLev === null ? '--' : `${maxLev}x`} />
+        <DetailStatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
+        <DetailStatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
+        <DetailStatItem label="APR x Max Lev" value={maxLev === null ? '--' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
+        <DetailStatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
+        <DetailStatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
+        <DetailStatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
       </div>
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">
         <FundingChart
@@ -981,14 +982,14 @@ function PositionRoute({ longVenue, shortVenue }: { longVenue: string; shortVenu
   return (
     <div className="flex items-center gap-2">
       <div className="flex items-center gap-1.5">
-        <VenueIcon venue={longVenue} />
+        <DetailVenueIcon venue={longVenue} />
         <span className="text-[9px] font-medium uppercase tracking-wide text-emerald-400">Long</span>
       </div>
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 text-muted-foreground/40">
         <path d="M2 7h10M9 4l3 3-3 3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       <div className="flex items-center gap-1.5">
-        <VenueIcon venue={shortVenue} />
+        <DetailVenueIcon venue={shortVenue} />
         <span className="text-[9px] font-medium uppercase tracking-wide text-rose-400">Short</span>
       </div>
     </div>
@@ -1071,28 +1072,6 @@ function OpportunitySignalCell({ signal }: { signal: OpportunitySignal | null })
         <span className="mt-0.5 block whitespace-nowrap text-[10px] text-muted-foreground">{detail}</span>
       </span>
       <span className={`text-[20px] leading-none ${signal.status === 'persistent' ? 'signal-moon-glow' : 'opacity-80'}`} aria-hidden="true">{moon}</span>
-    </div>
-  )
-}
-
-function VenueIcon({ venue }: { venue: string }) {
-  const metadata = venueMetadata(venue)
-  return (
-    <span className="inline-flex size-7 items-center justify-center rounded border border-border bg-white/[0.04]" title={metadata.label}>
-      {metadata.logo
-        ? <img src={metadata.logo} alt={metadata.label} className="size-5" />
-        : <span className="text-[11px] font-bold text-muted-foreground">{metadata.shortLabel[0]}</span>}
-    </span>
-  )
-}
-
-function StatItem({ label, value, mono, negative, children }: {
-  label: string; value?: string; mono?: boolean; negative?: boolean; children?: React.ReactNode
-}) {
-  return (
-    <div className="shrink-0">
-      <p className="text-[10px] text-muted-foreground mb-0.5">{label}</p>
-      {children ?? <p className={`text-sm font-medium ${mono ? 'font-mono' : ''} ${negative ? 'text-red-400' : 'text-foreground'}`}>{value}</p>}
     </div>
   )
 }

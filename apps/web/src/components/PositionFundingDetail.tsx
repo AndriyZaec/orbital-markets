@@ -1,8 +1,9 @@
 import { AssetIcon } from '@/components/AssetIcon'
 import { FundingChart } from '@/components/FundingChart'
+import { DetailStatItem, DetailVenueIcon } from '@/components/DetailStatItem'
+import { Badge } from '@/components/ui/badge'
 import { useLivePositionDetail } from '@/hooks/useLivePositionDetail'
 import type { LivePosition } from '@/hooks/useLivePositions'
-import { venueMetadata } from '@/lib/venue-metadata'
 
 interface Props {
   position: LivePosition
@@ -28,15 +29,15 @@ export function PositionFundingDetail({ position, onBack }: Props) {
           </button>
           <AssetIcon asset={position.asset} />
           <h2 className="text-xl font-bold text-foreground">{position.asset}</h2>
-          <span className="rounded border border-blue-400/20 bg-blue-400/[0.07] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-blue-300">Open position</span>
+          <Badge variant="outline" className="text-[11px] text-green-400">Open</Badge>
         </div>
       </div>
 
       {chartContext?.available && longVenue && shortVenue && (
         <div className="px-5 py-2.5 flex items-center gap-6 border-b border-border shrink-0 overflow-x-auto text-xs">
-          <PositionLeg label="Long" venue={longVenue} />
-          <PositionLeg label="Short" venue={shortVenue} />
-          <div><p className="text-[10px] text-muted-foreground">Position size</p><p className="font-mono text-foreground">${chartContext.notional.toLocaleString()}</p></div>
+          <DetailStatItem label="Long"><DetailVenueIcon venue={longVenue} /></DetailStatItem>
+          <DetailStatItem label="Short"><DetailVenueIcon venue={shortVenue} /></DetailStatItem>
+          <DetailStatItem label="Position size" value={`$${chartContext.notional.toLocaleString()}`} mono />
         </div>
       )}
 
@@ -67,19 +68,6 @@ export function PositionFundingDetail({ position, onBack }: Props) {
             />
           </>
         )}
-      </div>
-    </div>
-  )
-}
-
-function PositionLeg({ label, venue }: { label: string; venue: string }) {
-  const metadata = venueMetadata(venue)
-  return (
-    <div>
-      <p className="text-[10px] text-muted-foreground">{label}</p>
-      <div className="flex items-center gap-1.5 text-foreground">
-        {metadata.logo && <img src={metadata.logo} alt="" className="size-4 rounded-sm" />}
-        <span>{metadata.label}</span>
       </div>
     </div>
   )
