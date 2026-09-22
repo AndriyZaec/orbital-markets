@@ -34,10 +34,11 @@ var (
 		"/fapi/v3/agent": true, "/fapi/v3/accountWithJoinMargin": true,
 		"/fapi/v3/positionRisk": true, "/fapi/v3/income": true,
 		"/fapi/v3/positionSide/dual": true, "/fapi/v3/leverageBracket": true,
-		"/fapi/v3/order": true,
+		"/fapi/v3/order": true, "/fapi/v3/userTrades": true,
 	}
 	readSymbolPattern   = regexp.MustCompile(`^[A-Z0-9_]{1,32}$`)
 	readClientIDPattern = regexp.MustCompile(`^[.A-Z:/a-z0-9_-]{1,36}$`)
+	readOrderIDPattern  = regexp.MustCompile(`^[0-9]{1,32}$`)
 )
 
 type EndpointReport struct {
@@ -243,6 +244,9 @@ func validReadParams(path string, params []pair) bool {
 	case "/fapi/v3/order":
 		return len(params) == 2 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value) &&
 			params[1].key == "origClientOrderId" && readClientIDPattern.MatchString(params[1].value)
+	case "/fapi/v3/userTrades":
+		return len(params) == 3 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value) &&
+			params[1].key == "orderId" && readOrderIDPattern.MatchString(params[1].value) && params[2] == (pair{"limit", "1000"})
 	case "/fapi/v3/income":
 		if len(params) != 4 || params[0] != (pair{"incomeType", "FUNDING_FEE"}) ||
 			params[1].key != "startTime" || params[2].key != "endTime" || params[3] != (pair{"limit", "1000"}) {
@@ -496,6 +500,8 @@ func endpointName(path string) string {
 		return "leverage-bracket"
 	case "/fapi/v3/order":
 		return "exact-order"
+	case "/fapi/v3/userTrades":
+		return "user-trades"
 	default:
 		return "private"
 	}

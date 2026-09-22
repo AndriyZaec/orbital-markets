@@ -6,7 +6,7 @@ import { LivePositionPanel } from '../src/components/LivePositionDetail'
 import { LivePositions } from '../src/components/LivePositions'
 import type { LivePositionChartContext } from '../src/lib/position-chart-context'
 import type { LivePosition } from '../src/hooks/useLivePositions'
-import type { LiveEventDetail } from '../src/hooks/useLivePositionDetail'
+import type { LiveEventDetail, LiveFillDetail } from '../src/hooks/useLivePositionDetail'
 
 const mocks = vi.hoisted(() => ({
   chartContext: null as LivePositionChartContext | null,
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   positionsRefetch: vi.fn(),
   closePosition: vi.fn(),
   events: [] as LiveEventDetail[],
+  fills: [] as LiveFillDetail[],
 }))
 
 vi.mock('@/hooks/useLivePositions', () => ({
@@ -48,7 +49,7 @@ vi.mock('@/hooks/useLiveClose', () => ({
 
 vi.mock('@/hooks/useLivePositionDetail', () => ({
   useLivePositionDetail: () => ({
-    data: mocks.chartContext ? { position, fills: [], events: mocks.events, chart_context: mocks.chartContext } : null,
+    data: mocks.chartContext ? { position, fills: mocks.fills, events: mocks.events, chart_context: mocks.chartContext } : null,
     loading: false,
     error: null,
     refetch: mocks.refetch,
@@ -121,6 +122,7 @@ afterEach(() => {
   mocks.positionsRefetch.mockReset()
   mocks.closePosition.mockReset()
   mocks.events = []
+  mocks.fills = []
 })
 
 describe('position-backed funding chart', () => {
@@ -198,4 +200,29 @@ describe('position-backed funding chart', () => {
     expect(screen.getByText(/long operational event message/).className).toContain('break-words')
   })
 
+  it('shows that an Aster fill did not report its fee', () => {
+    mocks.chartContext = availableContext
+    mocks.fills = [{
+      id: 1,
+      position_id: position.id,
+      leg: 1,
+      venue: 'aster',
+      symbol: position.asset,
+      side: 'long',
+      order_id: 'order-1',
+      client_order_id: 'client-1',
+      requested_amount: 10,
+      filled_amount: 10,
+      avg_fill_price: 0.05,
+      fill_ratio: 1,
+      fee: 0,
+      accepted: true,
+      filled: true,
+      filled_at: '2026-09-22T12:00:01Z',
+    }]
+
+    render(<LivePositionPanel position={position} onClose={() => {}} />)
+
+    expect(screen.getByText('Fee:').parentElement?.textContent).toBe('Fee: —')
+  })
 })

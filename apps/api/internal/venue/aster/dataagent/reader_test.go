@@ -143,11 +143,22 @@ func TestReaderRejectsAccountWithoutPositionLeverageBrackets(t *testing.T) {
 func TestReaderLooksUpOneCorrelatedOrder(t *testing.T) {
 	store, now := approvedReaderService(t)
 	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/fapi/v3/order" || r.URL.Query().Get("symbol") != "2ZUSDT" ||
-			r.URL.Query().Get("origClientOrderId") != "orbital-order-1" || r.Method != http.MethodGet {
+		switch r.URL.Path {
+		case "/fapi/v3/order":
+			if r.URL.Query().Get("symbol") != "2ZUSDT" ||
+				r.URL.Query().Get("origClientOrderId") != "orbital-order-1" || r.Method != http.MethodGet {
+				t.Fatalf("request = %s %s", r.Method, r.URL.String())
+			}
+			fmt.Fprint(w, `{"orderId":548991212,"clientOrderId":"orbital-order-1","symbol":"2ZUSDT","status":"FILLED","executedQty":"315","avgPrice":"0.04747"}`)
+		case "/fapi/v3/userTrades":
+			if r.URL.Query().Get("symbol") != "2ZUSDT" || r.URL.Query().Get("orderId") != "548991212" ||
+				r.URL.Query().Get("limit") != "1000" || r.Method != http.MethodGet {
+				t.Fatalf("request = %s %s", r.Method, r.URL.String())
+			}
+			fmt.Fprint(w, `[{"orderId":548991212,"symbol":"2ZUSDT","qty":"200","price":"0.04747","commission":"-0.004","commissionAsset":"USDT"},{"orderId":548991212,"symbol":"2ZUSDT","qty":"115","price":"0.04747","commission":"0.003","commissionAsset":"USDT"}]`)
+		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.String())
 		}
-		fmt.Fprint(w, `{"orderId":548991212,"clientOrderId":"orbital-order-1","symbol":"2ZUSDT","status":"FILLED","executedQty":"315","avgPrice":"0.04747"}`)
 	}))
 	defer venue.Close()
 	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
@@ -157,7 +168,7 @@ func TestReaderLooksUpOneCorrelatedOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	if order.OrderID != "548991212" || order.ClientOrderID != "orbital-order-1" || order.Symbol != "2ZUSDT" ||
-		order.Status != "FILLED" || order.ExecutedQuantity != 315 || order.AveragePrice != 0.04747 {
+		order.Status != "FILLED" || order.ExecutedQuantity != 315 || order.AveragePrice != 0.04747 || order.Fee != 0.007 {
 		t.Fatalf("order = %+v", order)
 	}
 }

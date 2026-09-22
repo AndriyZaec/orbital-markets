@@ -118,6 +118,8 @@ func TestClientRejectsUnallowlistedEndpointsInvalidRedirectAndOversizedResponses
 		{"/fapi/v3/positionSide/dual", []pair{{"symbol", "BTCUSDT"}}},
 		{"/fapi/v3/leverageBracket", nil},
 		{"/fapi/v3/order", []pair{{"symbol", "BTCUSDT"}, {"orderId", "123"}}},
+		{"/fapi/v3/userTrades", []pair{{"symbol", "BTCUSDT"}, {"origClientOrderId", "orbital-order-1"}}},
+		{"/fapi/v3/userTrades", []pair{{"symbol", "BTCUSDT"}, {"orderId", "123&limit=1000"}}},
 		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "later"}, {"endTime", "earlier"}, {"limit", "1000"}}},
 		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "1"}, {"endTime", "2"}, {"limit", "100"}}},
 		{"/fapi/v3/income", []pair{{"incomeType", "FUNDING_FEE"}, {"startTime", "1"}, {"endTime", "2"}, {"limit", "1000"}, {"page", "1"}}},

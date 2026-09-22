@@ -392,10 +392,20 @@ func (f *asterAccountFeed) WaitForFill(ctx context.Context, request *domain.Sign
 	if f.client != nil {
 		fill, err := f.client.WaitForFill(ctx, request.Account, request.ClientOrderID)
 		if err == nil && fill != nil {
-			return &normFill{
+			normalized := &normFill{
 				FilledAmount: fill.FilledAmount, AvgFillPrice: fill.AvgFillPrice,
 				OrderID: fill.OrderID, Status: fill.Status, Filled: fill.Filled,
-			}, nil
+			}
+			if f.orderReader != nil && fill.FilledAmount > 0 {
+				order, lookupErr := f.orderReader.LookupOrder(ctx, request.Account, request.Symbol, request.ClientOrderID)
+				exact, normalizeErr := normFillFromAsterOrder(order, request)
+				if lookupErr == nil && normalizeErr == nil && exact.OrderID == fill.OrderID &&
+					math.Abs(exact.FilledAmount-fill.FilledAmount) <= math.Max(1e-12, fill.FilledAmount*1e-9) &&
+					math.Abs(exact.AvgFillPrice-fill.AvgFillPrice) <= math.Max(1e-12, fill.AvgFillPrice*1e-9) {
+					normalized.Fee = exact.Fee
+				}
+			}
+			return normalized, nil
 		}
 		if f.orderReader == nil {
 			if err != nil {
@@ -443,7 +453,7 @@ func normFillFromAsterOrder(order dataagent.OrderStatus, request *domain.Signing
 	}
 	return &normFill{
 		FilledAmount: order.ExecutedQuantity, AvgFillPrice: order.AveragePrice,
-		OrderID: order.OrderID, Status: normalizedStatus, Filled: order.ExecutedQuantity > 0,
+		Fee: order.Fee, OrderID: order.OrderID, Status: normalizedStatus, Filled: order.ExecutedQuantity > 0,
 	}, nil
 }
 

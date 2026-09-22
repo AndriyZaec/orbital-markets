@@ -378,7 +378,7 @@ function FillCard({ fill }: { fill: LiveFillDetail }) {
         {hasFillMismatch && <span><span className="text-muted-foreground">Requested: </span><span className="font-mono text-foreground">{fill.requested_amount.toPrecision(4)}</span></span>}
         <span><span className="text-muted-foreground">Avg Price: </span><span className="font-mono text-foreground">{fill.avg_fill_price > 0 ? fmtPrice(fill.avg_fill_price) : '—'}</span></span>
         {hasFillMismatch && <span><span className="text-muted-foreground">Filled: </span><span className="font-mono text-foreground">{fmtPct(fill.fill_ratio, 1)}</span></span>}
-        {fill.fee > 0 && <span><span className="text-muted-foreground">Fee: </span><span className="font-mono text-foreground">${fill.fee.toFixed(4)}</span></span>}
+        <span><span className="text-muted-foreground">Fee: </span><span className="font-mono text-foreground">{fill.fee > 0 ? `$${fill.fee.toFixed(4)}` : '—'}</span></span>
       </div>
       {fill.error && (
         <p className="text-[10px] text-red-400/70 mt-1">{fill.error}</p>

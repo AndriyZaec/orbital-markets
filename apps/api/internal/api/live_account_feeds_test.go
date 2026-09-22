@@ -184,9 +184,16 @@ func TestAsterAccountFeedSubmitsOrdersAndReturnsFill(t *testing.T) {
 			FilledAmount: 0.5, AvgFillPrice: 100, Filled: true,
 		},
 	}
-	feed := &asterAccountFeed{state: asteraccount.NewAccountState("0xowner"), client: client}
+	feed := &asterAccountFeed{
+		state: asteraccount.NewAccountState("0xowner"), client: client,
+		orderReader: &fakeAsterOrderReader{order: dataagent.OrderStatus{
+			OrderID: "42", ClientOrderID: "client-id", Symbol: "SOLUSDT",
+			Status: "FILLED", ExecutedQuantity: 0.5, AveragePrice: 100, Fee: 0.007,
+		}},
+	}
 	request := &domain.SigningRequest{
-		Venue: "aster", Action: "open", Account: "0xowner", ClientOrderID: "client-id",
+		Venue: "aster", Action: "open", Account: "0xowner", Symbol: "SOLUSDT",
+		ClientOrderID: "client-id", Amount: 0.5,
 	}
 	result, err := feed.SubmitSigned(context.Background(), domain.SignedAction{}, request)
 	if err != nil {
@@ -199,7 +206,7 @@ func TestAsterAccountFeedSubmitsOrdersAndReturnsFill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !fill.Filled || fill.OrderID != "42" || fill.FilledAmount != 0.5 || fill.AvgFillPrice != 100 {
+	if !fill.Filled || fill.OrderID != "42" || fill.FilledAmount != 0.5 || fill.AvgFillPrice != 100 || fill.Fee != 0.007 {
 		t.Fatalf("fill = %+v", fill)
 	}
 }
@@ -214,7 +221,7 @@ func TestAsterAccountFeedLooksUpFillAfterProcessCacheMiss(t *testing.T) {
 		client: &fakeAsterAccountClient{fillErr: errors.New("cache miss")},
 		orderReader: &fakeAsterOrderReader{order: dataagent.OrderStatus{
 			OrderID: "42", ClientOrderID: "client-id", Symbol: "SOLUSDT",
-			Status: "EXPIRED", ExecutedQuantity: 0.75, AveragePrice: 100,
+			Status: "EXPIRED", ExecutedQuantity: 0.75, AveragePrice: 100, Fee: 0.006,
 		}},
 	}
 
@@ -223,7 +230,7 @@ func TestAsterAccountFeedLooksUpFillAfterProcessCacheMiss(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !fill.Filled || fill.Status != "partial_fill" || fill.OrderID != "42" ||
-		fill.FilledAmount != 0.75 || fill.AvgFillPrice != 100 {
+		fill.FilledAmount != 0.75 || fill.AvgFillPrice != 100 || fill.Fee != 0.006 {
 		t.Fatalf("exact fill = %+v", fill)
 	}
 }

@@ -2,8 +2,10 @@ package dataagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +32,7 @@ type OrderStatus struct {
 	Status           string
 	ExecutedQuantity float64
 	AveragePrice     float64
+	Fee              float64
 }
 
 type dataReader interface {
@@ -187,7 +190,48 @@ func (c *Client) lookupOrder(
 	if err != nil {
 		return OrderStatus{}, fmt.Errorf("Aster exact-order response was invalid")
 	}
+	if order.ExecutedQuantity > 0 {
+		tradesBody, readErr := c.signedGET(ctx, "/fapi/v3/userTrades", []pair{
+			{"symbol", symbol}, {"orderId", order.OrderID}, {"limit", "1000"},
+		}, owner, agent, privateKey, c.nextNonce())
+		if readErr == nil {
+			if fee, feeErr := parseOrderFee(tradesBody, symbol, order.OrderID, order.ExecutedQuantity); feeErr == nil {
+				order.Fee = fee
+			}
+		}
+	}
 	return order, nil
+}
+
+func parseOrderFee(body []byte, symbol, orderID string, executedQuantity float64) (float64, error) {
+	var trades []struct {
+		OrderID         json.RawMessage `json:"orderId"`
+		Symbol          string          `json:"symbol"`
+		Quantity        string          `json:"qty"`
+		Commission      string          `json:"commission"`
+		CommissionAsset string          `json:"commissionAsset"`
+	}
+	if err := json.Unmarshal(body, &trades); err != nil || len(trades) == 0 {
+		return 0, fmt.Errorf("invalid trades")
+	}
+	var quantity, fee float64
+	for _, trade := range trades {
+		tradeOrderID := strings.Trim(string(trade.OrderID), `"`)
+		tradeQuantity, quantityErr := strconv.ParseFloat(trade.Quantity, 64)
+		commission, commissionErr := strconv.ParseFloat(trade.Commission, 64)
+		if tradeOrderID != orderID || trade.Symbol != symbol || trade.CommissionAsset != "USDT" ||
+			quantityErr != nil || commissionErr != nil || tradeQuantity <= 0 ||
+			math.IsNaN(tradeQuantity) || math.IsInf(tradeQuantity, 0) ||
+			math.IsNaN(commission) || math.IsInf(commission, 0) {
+			return 0, fmt.Errorf("invalid trade")
+		}
+		quantity += tradeQuantity
+		fee += math.Abs(commission)
+	}
+	if math.Abs(quantity-executedQuantity) > math.Max(1e-12, executedQuantity*1e-9) {
+		return 0, fmt.Errorf("incomplete trades")
+	}
+	return fee, nil
 }
 
 func (c *Client) readFunding(
