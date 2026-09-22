@@ -32,7 +32,6 @@ import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/
 import { venueMetadata } from '@/lib/venue-metadata'
 import { enforceMinimumVenueSelection, matchesVenueFilter } from '@/lib/opportunity-filters'
 import { knownMaxLeverage } from '@/lib/leverage'
-import { cn } from '@/lib/utils'
 
 type View = 'trade' | 'portfolio'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
@@ -603,10 +602,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                     title={selectedVenues.length === 2 && selectedVenues.includes(venue)
                       ? 'At least two venues must stay selected'
                       : undefined}
-                    className={cn(
-                      'relative cursor-pointer text-foreground hover:bg-white/[0.03] aria-pressed:bg-transparent disabled:cursor-not-allowed disabled:opacity-100',
-                      selectedVenues.includes(venue) && 'nav-glass-active',
-                    )}
+                    className="cursor-pointer border border-transparent text-foreground hover:bg-white/[0.03] aria-pressed:border-white/[0.14] aria-pressed:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-100"
                   >
                     {metadata.logo && <img src={metadata.logo} alt="" className="size-3.5 rounded-sm" />}
                     {metadata.label}
