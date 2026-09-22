@@ -242,6 +242,38 @@ func (s *Store) GetDurableSession(ctx context.Context, id string) (DurableSessio
 	return record, err
 }
 
+// GetDurableSessionForPlan returns the latest session that persisted the given
+// execution plan. Terminal sessions remain available for position projections.
+func (s *Store) GetDurableSessionForPlan(ctx context.Context, planID string) (DurableSessionRecord, error) {
+	var record DurableSessionRecord
+	var payload, bindingsJSON, bindingsKey string
+	var hasExposure int64
+	var terminalAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, state, payload, account_pacifica, account_hyperliquid,
+			account_bindings_json, account_bindings_key, asset,
+			has_exposure, recovery_detail, terminal_at
+		FROM live_sessions
+		WHERE id = ? OR (
+			json_valid(payload) AND json_extract(payload, '$.plan.id') = ?
+		)
+		ORDER BY updated_at DESC
+		LIMIT 1`, planID, planID).Scan(
+		&record.ID, &record.State, &payload,
+		&record.AccountPacifica, &record.AccountHyperliquid, &bindingsJSON, &bindingsKey, &record.Asset,
+		&hasExposure, &record.RecoveryDetail, &terminalAt,
+	)
+	record.Payload = []byte(payload)
+	record.HasExposure = hasExposure != 0
+	record.Terminal = terminalAt.Valid
+	if err == nil {
+		record.AccountBindings, err = decodeAccountBindings(
+			bindingsJSON, bindingsKey, record.AccountPacifica, record.AccountHyperliquid,
+		)
+	}
+	return record, err
+}
+
 // FinishDurableSession keeps the journal row for audit while removing it from
 // the active recovery set.
 func (s *Store) FinishDurableSession(ctx context.Context, id, state, detail string) error {

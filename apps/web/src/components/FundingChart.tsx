@@ -17,9 +17,9 @@ interface Props {
   venueB: string
   direction: FundingDirection
   currentApr: number
-  recommendedNotional: number
+  recommendedNotional?: number
   notional: number
-  onNotionalChange: (value: number) => void
+  onNotionalChange?: (value: number) => void
   feeEstimate: number
   slippageEstimate: number
 }
@@ -83,7 +83,7 @@ export function FundingChart({
   const [view, setView] = useState<ChartView>('funding')
   const [tf, setTf] = useState<Timeframe>('W')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
-  const defaultNotional = Math.max(1, recommendedNotional || 10_000)
+  const defaultNotional = Math.max(1, recommendedNotional || selectedNotional || 10_000)
   const notional = selectedNotional > 0 ? selectedNotional : defaultNotional
   const { data, loading, error } = useHistory(asset, venueA, venueB, rangeMap[tf])
 
@@ -202,7 +202,7 @@ export function FundingChart({
               <div>
                 <p className="mb-1.5 text-right text-[10px] text-muted-foreground">Position size</p>
                 <div className="flex gap-1">
-                  {notionalOptions.map((value) => (
+                  {onNotionalChange ? notionalOptions.map((value) => (
                     <button
                       key={value}
                       onClick={() => onNotionalChange(value)}
@@ -214,7 +214,11 @@ export function FundingChart({
                     >
                       {formatNotional(value)}{value === defaultNotional ? ' rec.' : ''}
                     </button>
-                  ))}
+                  )) : (
+                    <span className="rounded border border-blue-400/30 bg-blue-400/10 px-2 py-1 text-[10px] font-mono text-blue-300">
+                      {formatNotional(notional)} open
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

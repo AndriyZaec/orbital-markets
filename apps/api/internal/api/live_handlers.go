@@ -988,11 +988,19 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 	if events == nil {
 		events = []executor.LiveEvent{}
 	}
+	var sessionPayload []byte
+	session, err := s.liveStore.GetDurableSessionForPlan(r.Context(), pos.PlanID)
+	if err == nil {
+		sessionPayload = session.Payload
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		s.logger.Error("live position: get durable plan", "err", err, "id", id, "plan_id", pos.PlanID)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"position": pos,
-		"fills":    fills,
-		"events":   events,
+		"position":      pos,
+		"fills":         fills,
+		"events":        events,
+		"chart_context": buildPositionChartContext(pos, fills, sessionPayload),
 	})
 }
 

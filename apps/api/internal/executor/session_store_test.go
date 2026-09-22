@@ -77,6 +77,35 @@ func TestDurableSessionLifecycleRetainsTerminalAuditRecord(t *testing.T) {
 	}
 }
 
+func TestGetDurableSessionForPlanFindsTerminalSessionPayload(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "plan-session.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	payload := []byte(`{"plan":{"id":"plan-2z"}}`)
+	if err := store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
+		ID: "session-2z", State: "complete", Payload: payload, Asset: "2Z",
+		AccountBindings: map[string]string{"aster": "0xowner", "pacifica": "sol-owner"},
+		ExpiresAt:       time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishDurableSession(ctx, "session-2z", "complete", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := store.GetDurableSessionForPlan(ctx, "plan-2z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ID != "session-2z" || !record.Terminal || string(record.Payload) != string(payload) {
+		t.Fatalf("record = %+v", record)
+	}
+}
+
 func TestDurableSessionsUseAnExactGenericBindingSlot(t *testing.T) {
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "generic-sessions.db"))
 	if err != nil {

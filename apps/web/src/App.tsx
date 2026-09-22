@@ -23,17 +23,22 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
+import { PositionFundingDetail } from '@/components/PositionFundingDetail'
 import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
+import type { LivePosition } from '@/hooks/useLivePositions'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { enforceMinimumVenueSelection, matchesVenueFilter } from '@/lib/opportunity-filters'
 import { knownMaxLeverage } from '@/lib/leverage'
 
 type View = 'trade' | 'portfolio'
+type TradeSelection =
+  | { kind: 'opportunity'; id: string }
+  | { kind: 'position'; position: LivePosition }
+  | null
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
@@ -134,7 +139,10 @@ export default function App() {
   const { aggregate: accountsAggregate, aster: asterReadiness } = useVenueReadiness()
   const opportunityAccounts = asterReadiness.address ? { aster: asterReadiness.address } : undefined
   const { opportunities, loading, error, lastUpdated } = useOpportunities(opportunityAccounts)
-  const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
+  const [selection, setSelection] = useState<TradeSelection>(() => {
+    const id = opportunityIdFromURL()
+    return id ? { kind: 'opportunity', id } : null
+  })
   const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
   // Header account status is driven by the same typed readiness layer used
@@ -145,6 +153,8 @@ export default function App() {
   const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
 
+  const selectedId = selection?.kind === 'opportunity' ? selection.id : null
+  const selectedPosition = selection?.kind === 'position' ? selection.position : null
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
   const suggestedNotionalInput = selected?.recommended_notional
     ? String(Math.round(selected.recommended_notional))
@@ -165,23 +175,21 @@ export default function App() {
     const url = new URL(window.location.href)
     url.searchParams.set('opportunity', id)
     window.history.pushState({ ...window.history.state, orbitalOpportunity: id }, '', url)
-    setSelectedId(id)
+    setSelection({ kind: 'opportunity', id })
   }, [])
 
-  const selectPositionOpportunity = useCallback((position: PositionOpportunityContext | null) => {
-    const opportunity = position ? findPositionOpportunity(opportunities, position) : null
-    if (opportunity) {
-      if (selectedId !== opportunity.id) selectOpportunity(opportunity.id)
+  const selectPosition = useCallback((position: LivePosition | null) => {
+    if (!position) {
+      setSelection((current) => current?.kind === 'position' ? null : current)
       return
     }
-    if (selectedId === null) return
     const url = new URL(window.location.href)
     url.searchParams.delete('opportunity')
     const historyState = { ...(window.history.state ?? {}) }
     delete historyState.orbitalOpportunity
     window.history.replaceState(historyState, '', url)
-    setSelectedId(null)
-  }, [opportunities, selectOpportunity, selectedId])
+    setSelection({ kind: 'position', position })
+  }, [])
 
   const closeOpportunity = useCallback(() => {
     if (window.history.state?.orbitalOpportunity === selectedId) {
@@ -191,12 +199,13 @@ export default function App() {
     const url = new URL(window.location.href)
     url.searchParams.delete('opportunity')
     window.history.replaceState(window.history.state, '', url)
-    setSelectedId(null)
+    setSelection(null)
   }, [selectedId])
 
   useEffect(() => {
     const handlePopState = () => {
-      setSelectedId(opportunityIdFromURL())
+      const id = opportunityIdFromURL()
+      setSelection(id ? { kind: 'opportunity', id } : null)
       setActiveView('trade')
     }
     window.addEventListener('popstate', handlePopState)
@@ -313,7 +322,12 @@ export default function App() {
           {activeView === 'trade' && (
             <>
               <div className="flex-1 flex flex-col min-h-0 bg-[#080b12]">
-                {selected ? (
+                {selectedPosition ? (
+                  <PositionFundingDetail
+                    position={selectedPosition}
+                    onBack={() => setSelection(null)}
+                  />
+                ) : selected ? (
                   <OpportunityDetail
                     opportunity={selected}
                     notional={projectionNotional}
@@ -338,7 +352,7 @@ export default function App() {
                 />
                 <LivePositions
                   onConnectWallets={() => setShowAccounts(true)}
-                  onOpenOpportunity={selectPositionOpportunity}
+                  onSelectPosition={selectPosition}
                 />
               </div>
             </>
@@ -355,7 +369,7 @@ export default function App() {
 
         </div>
 
-        {activeView === 'trade' && selected && (
+        {activeView === 'trade' && selected && !selectedPosition && (
           <OpportunityPanel
             opportunity={selected}
             lastUpdated={lastUpdated}

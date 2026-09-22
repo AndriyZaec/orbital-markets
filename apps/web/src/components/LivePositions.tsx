@@ -85,10 +85,10 @@ function VenueIcon({ venue }: { venue: string }) {
 
 interface LivePositionsProps {
   onConnectWallets?: () => void
-  onOpenOpportunity?: (position: LivePosition | null) => void
+  onSelectPosition?: (position: LivePosition | null) => void
 }
 
-export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePositionsProps = {}) {
+export function LivePositions({ onConnectWallets, onSelectPosition }: LivePositionsProps = {}) {
   const { positions, loading, error, refetch } = useLivePositions()
   const { aggregate } = useVenueReadiness()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -112,19 +112,19 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
   const selected = displayed.find((p) => p.id === selectedId) ?? null
 
   useEffect(() => {
-    if (selectedId !== null && selected === null) onOpenOpportunity?.(null)
-  }, [onOpenOpportunity, selected, selectedId])
+    if (selectedId !== null && selected === null) onSelectPosition?.(null)
+  }, [onSelectPosition, selected, selectedId])
 
   const handlePositionClick = (position: LivePosition) => {
     const opening = selectedId !== position.id
     setSelectedId(opening ? position.id : null)
-    onOpenOpportunity?.(opening && tab === 'open' ? position : null)
+    onSelectPosition?.(opening && tab === 'open' ? position : null)
   }
 
   const handleTabChange = (nextTab: 'open' | 'closed') => {
     setTab(nextTab)
     setSelectedId(null)
-    onOpenOpportunity?.(null)
+    onSelectPosition?.(null)
   }
 
   const closePositionDetail = () => {
