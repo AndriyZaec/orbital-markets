@@ -30,8 +30,9 @@ import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
 import { venueMetadata } from '@/lib/venue-metadata'
-import { matchesVenueFilter } from '@/lib/opportunity-filters'
+import { enforceMinimumVenueSelection, matchesVenueFilter } from '@/lib/opportunity-filters'
 import { knownMaxLeverage } from '@/lib/leverage'
+import { cn } from '@/lib/utils'
 
 type View = 'trade' | 'portfolio'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
@@ -580,35 +581,39 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
               )}
             </InputGroup>
           </div>
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
-              Venues
-            </span>
-            <div className="min-w-0 overflow-x-auto">
-              <ToggleGroup
-                multiple
-                value={selectedVenues}
-                onValueChange={setSelectedVenues}
-                variant="outline"
-                size="sm"
-                spacing={1}
-                aria-label="Filter opportunities by venues"
-              >
-                {FILTER_VENUES.map((venue) => {
-                  const metadata = venueMetadata(venue)
-                  return (
-                    <ToggleGroupItem
-                      key={venue}
-                      value={venue}
-                      aria-label={`${selectedVenues.includes(venue) ? 'Hide' : 'Show'} ${metadata.label} pairs`}
-                    >
-                      {metadata.logo && <img src={metadata.logo} alt="" className="size-3.5 rounded-sm" />}
-                      {metadata.label}
-                    </ToggleGroupItem>
-                  )
-                })}
-              </ToggleGroup>
-            </div>
+          <div className="min-w-0 overflow-x-auto">
+            <ToggleGroup
+              multiple
+              value={selectedVenues}
+              onValueChange={(next) => {
+                setSelectedVenues((current) => enforceMinimumVenueSelection(current, next))
+              }}
+              size="sm"
+              spacing={1}
+              aria-label="Filter opportunities by venues"
+            >
+              {FILTER_VENUES.map((venue) => {
+                const metadata = venueMetadata(venue)
+                return (
+                  <ToggleGroupItem
+                    key={venue}
+                    value={venue}
+                    disabled={selectedVenues.length === 2 && selectedVenues.includes(venue)}
+                    aria-label={`${selectedVenues.includes(venue) ? 'Hide' : 'Show'} ${metadata.label} pairs`}
+                    title={selectedVenues.length === 2 && selectedVenues.includes(venue)
+                      ? 'At least two venues must stay selected'
+                      : undefined}
+                    className={cn(
+                      'relative cursor-pointer text-foreground hover:bg-white/[0.03] aria-pressed:bg-transparent disabled:cursor-not-allowed disabled:opacity-100',
+                      selectedVenues.includes(venue) && 'nav-glass-active',
+                    )}
+                  >
+                    {metadata.logo && <img src={metadata.logo} alt="" className="size-3.5 rounded-sm" />}
+                    {metadata.label}
+                  </ToggleGroupItem>
+                )
+              })}
+            </ToggleGroup>
           </div>
         </div>
       </div>

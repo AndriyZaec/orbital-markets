@@ -8,3 +8,11 @@ export function matchesVenueFilter(venuePair: VenuePair, selectedVenues: readonl
   return selected.has(venuePair.venue_a.toLowerCase())
     && selected.has(venuePair.venue_b.toLowerCase())
 }
+
+export function enforceMinimumVenueSelection(
+  current: readonly string[],
+  next: readonly string[],
+  minimum = 2,
+) {
+  return [...(next.length >= minimum ? next : current)]
+}
