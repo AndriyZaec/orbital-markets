@@ -19,6 +19,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
@@ -29,11 +30,14 @@ import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { matchesVenueFilter } from '@/lib/opportunity-filters'
 import { knownMaxLeverage } from '@/lib/leverage'
 
 type View = 'trade' | 'portfolio'
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
+
+const FILTER_VENUES = ['pacifica', 'hyperliquid', 'aster'] as const
 
 // Per-venue raw funding rate (single funding period, signed).
 // venue_a / venue_b naming is opaque; we look up by venue name so columns
@@ -384,6 +388,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
 }) {
   const [sortField, setSortField] = useState<SortField>('apr')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [selectedVenues, setSelectedVenues] = useState<string[]>([...FILTER_VENUES])
   const [orderedIds, setOrderedIds] = useState<string[]>([])
   const orderRef = useRef<string[]>([])
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>())
@@ -407,11 +412,11 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
 
   const filtered = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    if (!normalizedQuery) return opportunities
     return opportunities.filter((opportunity) => (
-      opportunity.asset.toLowerCase().includes(normalizedQuery)
+      matchesVenueFilter(opportunity.venue_pair, selectedVenues)
+      && (!normalizedQuery || opportunity.asset.toLowerCase().includes(normalizedQuery))
     ))
-  }, [opportunities, query])
+  }, [opportunities, query, selectedVenues])
 
   const sorted = useMemo(() => {
     if (filtered.length === 0) return filtered
@@ -448,7 +453,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
   }, [applyOrder])
 
   const sortedIds = useMemo(() => sorted.map((opportunity) => opportunity.id), [sorted])
-  const controlsKey = `${sortField}\u0000${sortDir}\u0000${query.trim().toLowerCase()}`
+  const controlsKey = `${sortField}\u0000${sortDir}\u0000${query.trim().toLowerCase()}\u0000${selectedVenues.join(',')}`
   const previousControlsKey = useRef(controlsKey)
 
   useEffect(() => {
@@ -542,37 +547,69 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
           </span>
         </div>
       </div>
-      <div role="search" className="shrink-0 border-y border-border/70 bg-card/25 px-5 py-1.5">
-        <div className="w-full max-w-sm">
-          <label htmlFor="opportunity-search" className="sr-only">Search opportunities by asset</label>
-          <InputGroup className="h-8 rounded-md border-transparent bg-transparent shadow-none hover:bg-white/[0.02] focus-within:border-white/[0.08] focus-within:bg-white/[0.035]">
-            <InputGroupInput
-              id="opportunity-search"
-              type="search"
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') onQueryChange('')
-              }}
-              placeholder="Search assets..."
-              autoComplete="off"
-              className="text-sm [&::-webkit-search-cancel-button]:appearance-none"
-            />
-            <InputGroupAddon align="inline-start">
-              <SearchIcon />
-            </InputGroupAddon>
-            {query && (
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton
-                  aria-label="Clear asset search"
-                  onClick={() => onQueryChange('')}
-                  className="cursor-pointer text-muted-foreground"
-                >
-                  <XIcon />
-                </InputGroupButton>
+      <div role="search" className="shrink-0 border-y border-border/70 bg-card/25 px-5 py-2">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <div className="w-full md:max-w-xs">
+            <label htmlFor="opportunity-search" className="sr-only">Search opportunities by asset</label>
+            <InputGroup className="h-8 rounded-md border-transparent bg-transparent shadow-none hover:bg-white/[0.02] focus-within:border-white/[0.08] focus-within:bg-white/[0.035]">
+              <InputGroupInput
+                id="opportunity-search"
+                type="search"
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') onQueryChange('')
+                }}
+                placeholder="Search assets..."
+                autoComplete="off"
+                className="text-sm [&::-webkit-search-cancel-button]:appearance-none"
+              />
+              <InputGroupAddon align="inline-start">
+                <SearchIcon />
               </InputGroupAddon>
-            )}
-          </InputGroup>
+              {query && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    aria-label="Clear asset search"
+                    onClick={() => onQueryChange('')}
+                    className="cursor-pointer text-muted-foreground"
+                  >
+                    <XIcon />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
+              Venues
+            </span>
+            <div className="min-w-0 overflow-x-auto">
+              <ToggleGroup
+                multiple
+                value={selectedVenues}
+                onValueChange={setSelectedVenues}
+                variant="outline"
+                size="sm"
+                spacing={1}
+                aria-label="Filter opportunities by venues"
+              >
+                {FILTER_VENUES.map((venue) => {
+                  const metadata = venueMetadata(venue)
+                  return (
+                    <ToggleGroupItem
+                      key={venue}
+                      value={venue}
+                      aria-label={`${selectedVenues.includes(venue) ? 'Hide' : 'Show'} ${metadata.label} pairs`}
+                    >
+                      {metadata.logo && <img src={metadata.logo} alt="" className="size-3.5 rounded-sm" />}
+                      {metadata.label}
+                    </ToggleGroupItem>
+                  )
+                })}
+              </ToggleGroup>
+            </div>
+          </div>
         </div>
       </div>
       <div
@@ -596,7 +633,11 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
           <p className="text-muted-foreground text-sm px-5 py-6">No opportunities detected yet. Waiting for scan...</p>
         )}
         {!loading && !error && opportunities.length > 0 && displayed.length === 0 && (
-          <p className="text-muted-foreground text-sm px-5 py-6">No assets match "{query.trim()}".</p>
+          <p className="text-muted-foreground text-sm px-5 py-6">
+            {query.trim()
+              ? `No opportunities match “${query.trim()}” and the selected venues.`
+              : 'No opportunities match the selected venues.'}
+          </p>
         )}
         {!loading && displayed.length > 0 && (
           <Table className="min-w-[1080px]">
