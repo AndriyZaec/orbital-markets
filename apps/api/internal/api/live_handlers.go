@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1138,7 +1139,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
 			continue
 		}
-		cloid := fmt.Sprintf("close-%s-leg%d-%d", id[:8], fill.Leg, time.Now().UnixNano())
+		cloid := closeClientOrderID("close", id, fill.Leg, time.Now())
 		sigReq, err := s.buildCloseSigningRequestForBindings(r.Context(), fill, pos.Asset, cloid, bindings, false)
 		if err != nil {
 			s.logger.Error("live close: build close payload", "err", err, "id", id, "leg", fill.Leg)
@@ -1570,7 +1571,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				Amount float64 `json:"amount"`
 			}{fill.Leg, fill.Venue, fill.Symbol, fill.Side, fill.FilledAmount})
 
-			cloid := fmt.Sprintf("kill-%s-leg%d-%d", pos.ID[:8], fill.Leg, time.Now().UnixNano())
+			cloid := closeClientOrderID("kill", pos.ID, fill.Leg, time.Now())
 
 			sigReq, err := s.buildCloseSigningRequestForBindings(ctx, fill, pos.Asset, cloid, bindings, true)
 			if err != nil {
@@ -1619,6 +1620,11 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 }
 
 const maxCloseQuoteAge = 10 * time.Second
+
+func closeClientOrderID(action, positionID string, leg int, now time.Time) string {
+	positionHash := sha256.Sum256([]byte(positionID))
+	return fmt.Sprintf("%s-%x-l%d-%x", action, positionHash[:4], leg, now.UnixNano())
+}
 
 type closeMarketSource interface {
 	MarketSnapshot(context.Context, string, string) (venue.MarketData, error)

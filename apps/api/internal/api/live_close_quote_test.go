@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,19 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 )
+
+func TestCloseClientOrderIDsFitAsterConstraints(t *testing.T) {
+	positionID := "plan-fbdae6a2-6368-481f-bd9a-6180e0feff0e"
+	now := time.Unix(1790087764, 499000000)
+	allowed := regexp.MustCompile(`^[.A-Z:/a-z0-9_-]{1,36}$`)
+
+	for _, action := range []string{"close", "kill"} {
+		clientOrderID := closeClientOrderID(action, positionID, 1, now)
+		if !allowed.MatchString(clientOrderID) {
+			t.Fatalf("%s client order ID %q does not satisfy Aster constraints", action, clientOrderID)
+		}
+	}
+}
 
 type closeQuoteTestSource struct {
 	snapshot       venue.MarketData
