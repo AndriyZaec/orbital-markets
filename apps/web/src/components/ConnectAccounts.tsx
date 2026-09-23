@@ -485,7 +485,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <path d="M8 7v4M8 5.5v.01" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
           </svg>
           <p className="text-[10px] text-blue-300/50 leading-relaxed">
-            Authorization keys stay encrypted in this browser profile. Pacifica is revoked before disconnect; other venues are cleared locally.
+            Authorization keys stay encrypted in this browser profile.
           </p>
         </div>
       </div>
