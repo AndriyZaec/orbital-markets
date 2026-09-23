@@ -9,7 +9,7 @@ interface Props {
   state: LiveExecutionState
   onRetry: () => void
   onClose: () => void
-  onViewPositions: () => void
+  onViewPositions: (positionId: string | null) => void
 }
 
 const TERMINAL: ExecutionPhase[] = ['open', 'degraded', 'aborted', 'failed', 'recovering']
@@ -275,7 +275,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           <div className="px-5 py-4 border-t border-border flex gap-2">
             {terminalPresentation && terminalStyle && (
               <button
-                onClick={terminalPresentation.action === 'retry' ? onRetry : onViewPositions}
+                onClick={terminalPresentation.action === 'retry' ? onRetry : () => onViewPositions(state.positionId)}
                 className={`flex-1 py-2 rounded-lg text-xs font-medium text-white transition-colors ${terminalStyle.button}`}
               >
                 {terminalPresentation.action === 'retry' && state.guardFailure

@@ -145,6 +145,7 @@ export default function App() {
     const id = opportunityIdFromURL()
     return id ? { kind: 'opportunity', id } : null
   })
+  const [focusPositionId, setFocusPositionId] = useState<string | null>(null)
   const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
   // Header account status is driven by the same typed readiness layer used
@@ -185,6 +186,7 @@ export default function App() {
       setSelection((current) => current?.kind === 'position' ? null : current)
       return
     }
+    setFocusPositionId(null)
     const url = new URL(window.location.href)
     url.searchParams.delete('opportunity')
     const historyState = { ...(window.history.state ?? {}) }
@@ -356,6 +358,7 @@ export default function App() {
                   onConnectWallets={() => setShowAccounts(true)}
                   onSelectPosition={selectPosition}
                   selectedPositionId={selectedPosition?.id}
+                  focusPositionId={focusPositionId}
                 />
               </div>
             </>
@@ -381,7 +384,10 @@ export default function App() {
             onNotionalInputChange={setSelectedNotionalInput}
             onClose={closeOpportunity}
             onExecute={handleExecutePaper}
-            onViewPositions={closeOpportunity}
+            onViewPositions={(positionId) => {
+              if (positionId) setFocusPositionId(positionId)
+              else closeOpportunity()
+            }}
             onOpenAccounts={() => setShowAccounts(true)}
           />
         )}

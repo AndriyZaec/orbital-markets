@@ -25,7 +25,7 @@ interface Props {
     leverage: number,
     requestedNotional?: number,
   ) => Promise<void>
-  onViewPositions?: () => void
+  onViewPositions?: (positionId: string | null) => void
   onOpenAccounts?: () => void
 }
 
@@ -567,7 +567,7 @@ export function OpportunityPanel({
           state={liveState}
           onRetry={handleRetryLive}
           onClose={handleCloseLiveModal}
-          onViewPositions={() => { handleCloseLiveModal(); onViewPositions?.() }}
+          onViewPositions={(positionId) => { handleCloseLiveModal(); onViewPositions?.(positionId) }}
         />
       )}
     </div>

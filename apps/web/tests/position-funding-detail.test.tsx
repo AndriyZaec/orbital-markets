@@ -4,10 +4,12 @@ import userEvent from '@testing-library/user-event'
 import { PositionFundingDetail } from '../src/components/PositionFundingDetail'
 import { LivePositionPanel } from '../src/components/LivePositionDetail'
 import { LivePositions } from '../src/components/LivePositions'
+import { LiveExecutionModal } from '../src/components/LiveExecutionModal'
 import type { LivePositionChartContext } from '../src/lib/position-chart-context'
 import type { LivePosition } from '../src/hooks/useLivePositions'
 import type { LiveEventDetail, LiveFillDetail } from '../src/hooks/useLivePositionDetail'
 import type { CloseState } from '../src/hooks/useLiveClose'
+import type { LiveExecutionState } from '../src/hooks/useLiveExecution'
 
 const mocks = vi.hoisted(() => ({
   chartContext: null as LivePositionChartContext | null,
@@ -174,6 +176,44 @@ describe('position-backed funding chart', () => {
     view.rerender(<LivePositions onSelectPosition={onSelectPosition} selectedPositionId={position.id} />)
     await userEvent.click(screen.getByText('2Z'))
     expect(onSelectPosition).toHaveBeenLastCalledWith(null)
+  })
+
+  it('opens a newly created position requested by its execution id', () => {
+    const onSelectPosition = vi.fn()
+
+    render(
+      <LivePositions
+        onSelectPosition={onSelectPosition}
+        focusPositionId={position.id}
+      />,
+    )
+
+    expect(onSelectPosition).toHaveBeenCalledWith(position)
+  })
+
+  it('forwards the opened position id from the execution result', async () => {
+    const onViewPositions = vi.fn()
+    const state: LiveExecutionState = {
+      phase: 'open', asset: '2Z', sessionId: 'session-1', positionId: position.id,
+      accountPacifica: 'pacifica-account', accountHyperliquid: null,
+      accounts: { pacifica: 'pacifica-account', aster: 'aster-account' },
+      riskierVenue: 'aster', hedgeVenue: 'pacifica', leg1Requests: [], leg2Request: null,
+      leg1Fill: null, leg2Fill: null, mismatch: 0, unwound: false, unwindStatus: null,
+      error: null, reason: null, expiresAt: null, currentVenue: null,
+      remainingExposure: [], guardFailure: null,
+    }
+
+    render(
+      <LiveExecutionModal
+        state={state}
+        onRetry={() => {}}
+        onClose={() => {}}
+        onViewPositions={onViewPositions}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'View Position' }))
+    expect(onViewPositions).toHaveBeenCalledWith(position.id)
   })
 
   it('keeps closed-position details in a modal', async () => {
