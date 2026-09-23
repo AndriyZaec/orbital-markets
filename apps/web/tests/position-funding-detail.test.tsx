@@ -7,6 +7,7 @@ import { LivePositions } from '../src/components/LivePositions'
 import type { LivePositionChartContext } from '../src/lib/position-chart-context'
 import type { LivePosition } from '../src/hooks/useLivePositions'
 import type { LiveEventDetail, LiveFillDetail } from '../src/hooks/useLivePositionDetail'
+import type { CloseState } from '../src/hooks/useLiveClose'
 
 const mocks = vi.hoisted(() => ({
   chartContext: null as LivePositionChartContext | null,
@@ -16,6 +17,10 @@ const mocks = vi.hoisted(() => ({
   closePosition: vi.fn(),
   events: [] as LiveEventDetail[],
   fills: [] as LiveFillDetail[],
+  closeState: {
+    phase: 'idle', submitted: 0, total: 0, failed: 0, succeeded: 0,
+    reconciled: false, outcomes: [], errors: [],
+  } as CloseState,
 }))
 
 vi.mock('@/hooks/useLivePositions', () => ({
@@ -39,10 +44,7 @@ vi.mock('@/hooks/useKillSwitch', () => ({
 
 vi.mock('@/hooks/useLiveClose', () => ({
   useLiveClose: () => ({
-    state: {
-      phase: 'idle', submitted: 0, total: 0, failed: 0, succeeded: 0,
-      reconciled: false, outcomes: [], errors: [],
-    },
+    state: mocks.closeState,
     closePosition: mocks.closePosition,
   }),
 }))
@@ -123,6 +125,10 @@ afterEach(() => {
   mocks.closePosition.mockReset()
   mocks.events = []
   mocks.fills = []
+  mocks.closeState = {
+    phase: 'idle', submitted: 0, total: 0, failed: 0, succeeded: 0,
+    reconciled: false, outcomes: [], errors: [],
+  }
 })
 
 describe('position-backed funding chart', () => {
@@ -224,5 +230,24 @@ describe('position-backed funding chart', () => {
     render(<LivePositionPanel position={position} onClose={() => {}} />)
 
     expect(screen.getByText('Fee:').parentElement?.textContent).toBe('Fee: —')
+  })
+
+  it.each([
+    ['preparing', 0, 0, 'Preparing the close', 'Checking both venues and preparing the close orders.'],
+    ['signing', 0, 2, 'Authorizing close orders', 'Authorizing order 1 of 2.'],
+    ['submitting', 1, 2, 'Closing both legs', '1 of 2 close orders submitted.'],
+    ['confirming', 2, 2, 'Confirming the close', 'Waiting for both venues to report the final fills.'],
+  ] as const)('explains %s progress inside the CTA', (phase, submitted, total, title, detail) => {
+    mocks.chartContext = availableContext
+    mocks.closeState = {
+      phase, submitted, total, failed: 0, succeeded: submitted,
+      reconciled: false, outcomes: [], errors: [],
+    }
+
+    render(<LivePositionPanel position={position} onClose={() => {}} />)
+
+    expect(screen.getByText(title)).toBeTruthy()
+    expect(screen.getByText(detail)).toBeTruthy()
+    expect(screen.getByRole('progressbar', { name: 'Close position progress' })).toBeTruthy()
   })
 })

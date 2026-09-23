@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useLivePositionDetail, type LiveFillDetail, type LiveEventDetail } from '@/hooks/useLivePositionDetail'
-import { useLiveClose, type CloseOutcome } from '@/hooks/useLiveClose'
+import { useLiveClose, type CloseOutcome, type CloseState } from '@/hooks/useLiveClose'
 import { canRequestLiveClose, hasActionableRecordedFills } from '@/lib/degraded-execution'
 import { monitoredLegVenues } from '@/lib/live-position-monitoring'
 import { formatSignedUsdPnL } from '@/lib/pnl-format'
 import { venueTradeUrl } from '@/lib/venue-links'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
 import { AssetIcon } from '@/components/AssetIcon'
 import { ExternalLinkIcon } from 'lucide-react'
 import { venueMetadata } from '@/lib/venue-metadata'
@@ -79,6 +80,40 @@ function needsAttention(state: string) {
   return state === 'degraded' || state === 'failed' || state === 'closing'
 }
 
+function closeProgress(state: CloseState, positionState: string) {
+  const total = Math.max(state.total, 1)
+  switch (state.phase) {
+    case 'preparing':
+      return {
+        title: positionState === 'open' ? 'Preparing the close' : 'Checking venue exposure',
+        detail: positionState === 'open'
+          ? 'Checking both venues and preparing the close orders.'
+          : 'Refreshing both venues before closing any remaining exposure.',
+        progress: 12,
+      }
+    case 'signing':
+      return {
+        title: 'Authorizing close orders',
+        detail: `Authorizing order ${Math.min(state.submitted + 1, total)} of ${total}.`,
+        progress: 20 + (state.submitted / total) * 30,
+      }
+    case 'submitting':
+      return {
+        title: 'Closing both legs',
+        detail: `${state.submitted} of ${total} close orders submitted.`,
+        progress: 55 + (state.submitted / total) * 30,
+      }
+    case 'confirming':
+      return {
+        title: 'Confirming the close',
+        detail: 'Waiting for both venues to report the final fills.',
+        progress: 92,
+      }
+    default:
+      return null
+  }
+}
+
 export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
@@ -115,6 +150,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, compact = false }
   const canClose = canRequestLiveClose(pos.state, fills)
   const isClosing = liveClose.state.phase !== 'idle' && liveClose.state.phase !== 'done' && liveClose.state.phase !== 'error'
   const closeDone = liveClose.state.phase === 'done'
+  const closeProgressState = closeProgress(liveClose.state, pos.state)
 
   // Refresh the parent list once close tracking reaches a terminal UI state.
   useEffect(() => {
@@ -280,7 +316,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, compact = false }
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
                   {pos.state !== 'open'
                     ? 'Refresh both venues and close any position for this asset? This may include exposure opened outside Orbital.'
-                    : 'Close both legs? Local authorization keys will sign each reduce-only order.'}
+                    : 'Close both legs of this position?'}
                 </p>
                 <div className="grid grid-cols-2 gap-2">
                   <Button variant="secondary" size="lg" onClick={() => setConfirmClose(false)}>Cancel</Button>
@@ -288,13 +324,17 @@ function LivePositionContent({ position, onDismiss, onRefresh, compact = false }
                 </div>
               </div>
             )}
-            {isClosing && (
-              <p className="text-[11px] leading-relaxed text-yellow-400">
-                {liveClose.state.phase === 'preparing' ? (pos.state !== 'open' ? 'Checking venue state...' : 'Preparing close orders...') :
-                  liveClose.state.phase === 'signing' ? `Signing close order ${liveClose.state.submitted + 1} of ${liveClose.state.total} with local authorization` :
-                  liveClose.state.phase === 'confirming' ? 'Waiting for confirmed close fills...' :
-                  `Submitting ${liveClose.state.submitted + 1} of ${liveClose.state.total}...`}
-              </p>
+            {isClosing && closeProgressState && (
+              <div className="flex flex-col gap-3" role="status" aria-live="polite">
+                <div className="flex items-start gap-3">
+                  <span aria-hidden="true" className="mt-0.5 size-4 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">{closeProgressState.title}</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{closeProgressState.detail}</p>
+                  </div>
+                </div>
+                <Progress value={closeProgressState.progress} aria-label="Close position progress" className="gap-0" />
+              </div>
             )}
             {closeDone && liveClose.state.failed === 0 && (
               <p className="text-[11px] leading-relaxed text-green-400">
