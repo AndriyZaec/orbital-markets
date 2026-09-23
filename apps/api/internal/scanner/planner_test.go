@@ -44,6 +44,26 @@ func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
 	}
 }
 
+func TestScanExcludesMarketsWithoutOpenInterest(t *testing.T) {
+	now := time.Now()
+	active := leverageTestAdapter{name: "aster", data: []venue.MarketData{{
+		Venue: "aster", Asset: "AI", MarkPrice: 0.25, IndexPrice: 0.25,
+		FundingRate: 0.0002, BidPrice: 0.24, AskPrice: 0.26,
+		BidSize: 1000, AskSize: 1000, OpenInterest: 100000, Timestamp: now,
+	}}}
+	inactive := leverageTestAdapter{name: "hyperliquid", data: []venue.MarketData{{
+		Venue: "hyperliquid", Asset: "AI", MarkPrice: 0.125, IndexPrice: 0.125,
+		OpenInterest: 0, Timestamp: now,
+	}}}
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), active, inactive)
+
+	s.scan(context.Background())
+
+	if opportunities := s.Opportunities(); len(opportunities) != 0 {
+		t.Fatalf("opportunities = %+v, want zero-OI market excluded", opportunities)
+	}
+}
+
 func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	now := time.Now()
 	pac := leverageTestAdapter{name: "pacifica", data: []venue.MarketData{{
