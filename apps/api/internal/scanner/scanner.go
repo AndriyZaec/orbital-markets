@@ -160,6 +160,9 @@ func isValid(md venue.MarketData, now time.Time) bool {
 	if md.IndexPrice < minMarkPrice {
 		return false
 	}
+	if md.OpenInterest <= 0 {
+		return false
+	}
 	if !md.Timestamp.IsZero() && now.Sub(md.Timestamp) > maxSnapshotAge {
 		return false
 	}

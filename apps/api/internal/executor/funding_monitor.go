@@ -12,6 +12,7 @@ const (
 	fundingMonitorInterval   = 10 * time.Second
 	fundingSyncInterval      = time.Minute
 	fundingFinalizationDelay = 30 * time.Second
+	maxFundingWindowsPerSync = 4
 )
 
 type FundingMonitor struct {
@@ -19,6 +20,7 @@ type FundingMonitor struct {
 	sources                 map[string]venue.FundingHistory
 	attemptedAt             map[string]time.Time
 	syncedAt                map[string]time.Time
+	syncedTargets           map[string]time.Time
 	finalizationAttemptedAt map[string]time.Time
 	logger                  *slog.Logger
 }
@@ -28,6 +30,7 @@ func NewFundingMonitor(logger *slog.Logger, store *Store, sources map[string]ven
 		store: store, sources: sources,
 		attemptedAt:             make(map[string]time.Time),
 		syncedAt:                make(map[string]time.Time),
+		syncedTargets:           make(map[string]time.Time),
 		finalizationAttemptedAt: make(map[string]time.Time),
 		logger:                  logger,
 	}
@@ -63,13 +66,7 @@ func (m *FundingMonitor) syncOpen(ctx context.Context, position *LivePosition) {
 	if err != nil {
 		return
 	}
-	realized, ok := m.realized(ctx, position, openedAt, time.Now().UTC(), false)
-	if !ok {
-		return
-	}
-	if err := m.store.UpdateRealizedFunding(ctx, position.ID, realized); err != nil {
-		m.logger.Warn("funding monitor: update realized funding", "err", err, "id", position.ID)
-	}
+	m.realized(ctx, position, openedAt, time.Now().UTC(), false)
 }
 
 func (m *FundingMonitor) realized(ctx context.Context, position *LivePosition, since, until time.Time, force bool) (float64, bool) {
@@ -78,46 +75,56 @@ func (m *FundingMonitor) realized(ctx context.Context, position *LivePosition, s
 	}
 	now := time.Now().UTC()
 	lastSync := m.syncedAt[position.ID]
+	reconcileTarget := until
 	if force || lastSync.IsZero() || now.Sub(lastSync) >= fundingSyncInterval {
 		lastAttempt := m.attemptedAt[position.ID]
 		if !force && !lastAttempt.IsZero() && now.Sub(lastAttempt) < fundingSyncInterval {
 			return 0, false
 		}
 		m.attemptedAt[position.ID] = now
-		requests := []struct {
-			venue   string
-			account string
-		}{
-			{venue: "pacifica", account: position.AccountPacifica},
-			{venue: "hyperliquid", account: position.AccountHyperliquid},
-		}
-		for _, request := range requests {
-			source, ok := m.sources[request.venue]
-			if !ok || request.account == "" {
+		for _, venueName := range []string{position.VenueA, position.VenueB} {
+			account := position.AccountBindings[venueName]
+			source, ok := m.sources[venueName]
+			if !ok {
+				continue
+			}
+			if account == "" {
 				return 0, false
 			}
-			payments, err := source.FundingPayments(ctx, request.account, position.Asset, since, until)
-			if err != nil {
-				m.logger.Warn("funding monitor: fetch payments", "err", err, "id", position.ID, "venue", request.venue)
-				return 0, false
+			for range maxFundingWindowsPerSync {
+				window, needed, err := m.store.NextFundingWindow(ctx, position.ID, venueName, account, since, until)
+				if err != nil {
+					m.logger.Warn("funding monitor: plan history window", "err", err, "id", position.ID, "venue", venueName)
+					return 0, false
+				}
+				if !needed {
+					break
+				}
+				payments, err := source.FundingPayments(ctx, account, position.Asset, window.Since, window.Until)
+				if err != nil {
+					m.logger.Warn("funding monitor: fetch payments", "err", err, "id", position.ID, "venue", venueName)
+					return 0, false
+				}
+				if err := m.store.ApplyFundingWindow(
+					ctx, position.ID, venueName, account, position.Asset, since, window, payments,
+				); err != nil {
+					m.logger.Warn("funding monitor: persist history window", "err", err, "id", position.ID, "venue", venueName)
+					return 0, false
+				}
 			}
-			if err := m.store.InsertFundingPayments(ctx, position.ID, payments); err != nil {
-				m.logger.Warn("funding monitor: persist payments", "err", err, "id", position.ID, "venue", request.venue)
-				return 0, false
-			}
-		}
-		if err := m.store.RecordFundingSync(ctx, position.ID, false); err != nil {
-			m.logger.Warn("funding monitor: record sync", "err", err, "id", position.ID)
-			return 0, false
 		}
 		m.syncedAt[position.ID] = now
+		m.syncedTargets[position.ID] = until
+	} else if target, ok := m.syncedTargets[position.ID]; ok {
+		reconcileTarget = target
 	}
-	total, err := m.store.SumFundingPayments(ctx, position.ID)
+	finalizing := force && position.State == string(ExecStateClosed)
+	total, complete, err := m.store.ReconcileFunding(ctx, position, reconcileTarget, finalizing)
 	if err != nil {
-		m.logger.Warn("funding monitor: sum payments", "err", err, "id", position.ID)
+		m.logger.Warn("funding monitor: reconcile coverage", "err", err, "id", position.ID)
 		return 0, false
 	}
-	return total, true
+	return total, complete
 }
 
 func (m *FundingMonitor) finalizeClosed(ctx context.Context) {
@@ -138,16 +145,9 @@ func (m *FundingMonitor) finalizeClosed(ctx context.Context) {
 			continue
 		}
 		m.finalizationAttemptedAt[position.ID] = time.Now()
-		realized, ok := m.realized(ctx, position, openedAt, completedAt, true)
+		_, ok := m.realized(ctx, position, openedAt, completedAt, true)
 		if !ok {
 			continue
-		}
-		if err := m.store.UpdateRealizedFunding(ctx, position.ID, realized); err != nil {
-			m.logger.Warn("funding monitor: finalize value", "err", err, "id", position.ID)
-			continue
-		}
-		if err := m.store.RecordFundingSync(ctx, position.ID, true); err != nil {
-			m.logger.Warn("funding monitor: mark finalized", "err", err, "id", position.ID)
 		}
 	}
 }

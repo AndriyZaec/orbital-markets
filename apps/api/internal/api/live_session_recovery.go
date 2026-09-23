@@ -11,6 +11,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 const recoveryAccountTimeout = 20 * time.Second
@@ -20,6 +21,7 @@ func (s *Server) runLiveSessionRecovery() {
 	s.restoreLiveSessions()
 	s.reconcileClosingPositions()
 	s.reconcileOpenPositions()
+	s.refreshUnfinalizedAsterFunding()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -31,7 +33,52 @@ func (s *Server) runLiveSessionRecovery() {
 			s.cleanupExpiredLiveSessions()
 			s.reconcileClosingPositions()
 			s.reconcileOpenPositions()
+			s.refreshUnfinalizedAsterFunding()
 		}
+	}
+}
+
+type asterFundingRefresher interface {
+	RefreshFunding(context.Context) error
+}
+
+func (s *Server) refreshUnfinalizedAsterFunding() {
+	if s.live == nil || s.live.accounts == nil || s.liveStore == nil {
+		return
+	}
+	positions, err := s.liveStore.ListUnfinalizedClosedPositions(s.ctx)
+	if err != nil {
+		s.logger.Warn("Aster funding recovery: list positions", "err", err)
+		return
+	}
+	accounts := make(map[string]struct{})
+	for i := range positions {
+		if account := positions[i].AccountBindings["aster"]; account != "" {
+			accounts[account] = struct{}{}
+		}
+	}
+	for account := range accounts {
+		go s.refreshUnfinalizedAsterOwnerFunding(account)
+	}
+}
+
+func (s *Server) refreshUnfinalizedAsterOwnerFunding(account string) {
+	lease, err := s.live.accounts.AcquireRecovery("aster", account)
+	if err != nil {
+		s.logger.Warn("Aster funding recovery: acquire account feed", "err", err)
+		return
+	}
+	refresher, ok := lease.Feed().(asterFundingRefresher)
+	if !ok {
+		lease.Release()
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, asterFundingReadTimeout)
+	err = refresher.RefreshFunding(ctx)
+	cancel()
+	lease.Release()
+	if err != nil && s.ctx.Err() == nil {
+		s.logger.Warn("Aster funding recovery: refresh failed", "err", err)
 	}
 }
 
@@ -56,7 +103,14 @@ func (s *Server) reconcileOpenPositions() {
 		if !ready {
 			continue
 		}
-		if math.Abs(exposure["pacifica"]) <= 1e-9 && math.Abs(exposure["hyperliquid"]) <= 1e-9 {
+		flat := true
+		for _, venueName := range []string{position.VenueA, position.VenueB} {
+			if math.Abs(exposure[venueName]) > 1e-9 {
+				flat = false
+				break
+			}
+		}
+		if flat {
 			if _, err := s.markPositionClosedFromVenueTruth(s.ctx, position); err != nil {
 				s.logger.Warn("live exposure recovery: mark flat position closed", "err", err, "id", position.ID)
 			}
@@ -81,7 +135,7 @@ func (s *Server) reconcileOpenPositions() {
 }
 
 func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[string]float64, bool, error) {
-	accounts, err := s.live.acquireRecoveryAccounts(position.AccountPacifica, position.AccountHyperliquid)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -95,7 +149,11 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 		return nil, false, nil
 	}
 	exposure := make(map[string]float64, 2)
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
+	symbols, err := s.positionVenueSymbols(s.ctx, position.ID, position.Asset)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, venue := range []string{position.VenueA, position.VenueB} {
 		feed, ok := accounts.Feed(venue)
 		if !ok {
 			return nil, false, nil
@@ -106,7 +164,7 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 			return nil, false, nil
 		}
 		for _, accountPosition := range snapshot.Positions {
-			if strings.EqualFold(accountPosition.Symbol, position.Asset) {
+			if strings.EqualFold(accountPosition.Symbol, symbols[venue]) {
 				exposure[venue] = signedSize(accountPosition.Side, accountPosition.Size)
 				break
 			}
@@ -125,11 +183,7 @@ func cachedExposureMatchesFills(exposure map[string]float64, fills []executor.Li
 	if len(expected) != 2 {
 		return false
 	}
-	for _, venue := range []string{"pacifica", "hyperliquid"} {
-		expectedSize, ok := expected[venue]
-		if !ok {
-			return false
-		}
+	for venue, expectedSize := range expected {
 		tolerance := math.Max(math.Abs(expectedSize)*cachedExposureAmountTolerance, 1e-9)
 		if math.Abs(exposure[venue]-expectedSize) > tolerance {
 			return false
@@ -151,7 +205,7 @@ func (s *Server) reconcileClosingPositions() {
 		position := &positions[i]
 		ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
 		exposureState, err := s.inspectPositionAfterCloseActivity(
-			ctx, position, position.AccountPacifica, position.AccountHyperliquid,
+			ctx, position,
 		)
 		cancel()
 		if err != nil {
@@ -222,10 +276,7 @@ func (s *Server) restoreLiveSessions() {
 			if record.HasExposure {
 				detail := "invalid exposed session envelope: " + record.DecodeError
 				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-				_ = s.liveStore.UpsertRecoveryBlockedPosition(
-					s.ctx, record.ID, record.Asset,
-					record.AccountPacifica, record.AccountHyperliquid, detail,
-				)
+				s.surfaceRecoveryBlockedPosition(record, detail)
 			} else {
 				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", record.DecodeError)
 			}
@@ -237,24 +288,43 @@ func (s *Server) restoreLiveSessions() {
 			if record.HasExposure {
 				detail := "invalid exposed session payload: " + err.Error()
 				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
-				_ = s.liveStore.UpsertRecoveryBlockedPosition(
-					s.ctx, record.ID, record.Asset,
-					record.AccountPacifica, record.AccountHyperliquid, detail,
-				)
+				s.surfaceRecoveryBlockedPosition(record, detail)
 			} else {
 				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", err.Error())
 			}
 			continue
 		}
-		if _, err := s.liveStore.GetPosition(s.ctx, session.Plan.ID); err == nil {
-			claimed, claimErr := s.liveStore.ClaimDurableSession(s.ctx, session.ID, s.recoveryOwner, sessionRecoveryLease)
+		if err := validateDurableSessionOwnership(record, session); err != nil {
+			s.logger.Error("live recovery: session ownership mismatch", "err", err, "session_id", record.ID)
+			if record.HasExposure {
+				detail := "invalid exposed session ownership: " + err.Error()
+				_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
+				s.surfaceRecoveryBlockedPosition(record, detail)
+			} else {
+				s.finishSafeDurableSession(record.ID, "recovery_invalid_safe", err.Error())
+			}
+			continue
+		}
+		if _, err := s.liveStore.GetPositionForBindings(
+			s.ctx, session.Plan.ID, record.AccountBindings,
+		); err == nil {
+			claimed, claimErr := s.liveStore.ClaimDurableSession(s.ctx, record.ID, s.recoveryOwner, sessionRecoveryLease)
 			if claimErr == nil && claimed {
 				_ = s.liveStore.FinishDurableSessionOwned(
-					s.ctx, session.ID, s.recoveryOwner, "already_persisted", "position already persisted")
+					s.ctx, record.ID, s.recoveryOwner, "already_persisted", "position already persisted")
 			}
 			continue
 		} else if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.Error("live recovery: check position", "err", err, "session_id", session.ID)
+			s.logger.Error("live recovery: check position", "err", err, "session_id", record.ID)
+			continue
+		}
+		if _, err := s.liveStore.GetPosition(s.ctx, session.Plan.ID); err == nil {
+			detail := "position ID already belongs to another account pair"
+			_ = s.liveStore.FlagDurableSession(s.ctx, record.ID, "recovery_blocked", detail)
+			s.surfaceRecoveryBlockedPosition(record, detail)
+			continue
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Error("live recovery: check conflicting position", "err", err, "session_id", record.ID)
 			continue
 		}
 
@@ -271,7 +341,7 @@ func (s *Server) restoreLiveSessions() {
 				continue
 			}
 			if session.expired() || session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
-				session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil ||
+				!s.requiredLeverageRequestsPresent(session) ||
 				time.Now().After(session.Leg1OpenReq.ExpiresAt) || time.Now().After(session.Leg1UnwindReq.ExpiresAt) {
 				session.State = sessFailed
 				s.finishSafeDurableSession(session.ID, "expired_safe", "expired before any order submission")
@@ -279,8 +349,9 @@ func (s *Server) restoreLiveSessions() {
 			}
 			s.live.signingStore.Store(session.Leg1OpenReq)
 			s.live.signingStore.Store(session.Leg1UnwindReq)
-			s.live.signingStore.Store(session.PacificaLeverageReq)
-			s.live.signingStore.Store(session.HyperliquidLeverageReq)
+			for _, request := range session.leverageSigningRequests() {
+				s.live.signingStore.Store(request)
+			}
 			s.live.sessions.put(session)
 			s.logger.Info("live recovery: restored pre-exposure session", "session_id", session.ID)
 			continue
@@ -290,17 +361,47 @@ func (s *Server) restoreLiveSessions() {
 	}
 }
 
-func agentBoundLeg1Requests(session *LiveSession) bool {
-	if session == nil || session.AgentPacifica == "" || session.AgentHyperliquid == "" ||
-		session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil ||
-		session.PacificaLeverageReq == nil || session.HyperliquidLeverageReq == nil {
+func (s *Server) surfaceRecoveryBlockedPosition(record executor.DurableSessionRecord, detail string) {
+	bindings := durableRecordAccountBindings(record)
+	var err error
+	if len(bindings) == 0 {
+		err = s.liveStore.UpsertUnownedRecoveryBlockedPosition(s.ctx, record.ID, record.Asset, detail)
+	} else {
+		err = s.liveStore.UpsertRecoveryBlockedPositionForBindings(
+			s.ctx, record.ID, record.Asset, bindings, detail,
+		)
+	}
+	if err != nil {
+		s.logger.Error("live recovery: surface blocked position", "err", err, "session_id", record.ID)
+	}
+}
+
+func (s *Server) requiredLeverageRequestsPresent(session *LiveSession) bool {
+	if session == nil {
 		return false
 	}
-	for _, request := range []*domain.SigningRequest{
-		session.Leg1OpenReq, session.Leg1UnwindReq,
-		session.PacificaLeverageReq, session.HyperliquidLeverageReq,
-	} {
-		expected := signerForVenue(request.Venue, session.AgentPacifica, session.AgentHyperliquid)
+	for _, venueName := range session.venueNames() {
+		module, err := s.live.liveModule(venueName)
+		if err != nil || module.Capabilities().LeverageUpdate == venue.LeverageUpdateRequired && session.LeverageRequests[venueName] == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func agentBoundLeg1Requests(session *LiveSession) bool {
+	if session == nil || session.Leg1OpenReq == nil || session.Leg1UnwindReq == nil {
+		return false
+	}
+	for _, venueName := range session.venueNames() {
+		if session.Bindings.Agents[venueName] == "" {
+			return false
+		}
+	}
+	requests := []*domain.SigningRequest{session.Leg1OpenReq, session.Leg1UnwindReq}
+	requests = append(requests, session.leverageSigningRequests()...)
+	for _, request := range requests {
+		expected := session.Bindings.Agents[request.Venue]
 		if expected == "" || request.Signer == "" {
 			return false
 		}
@@ -353,14 +454,25 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 		s.logger.Info("live recovery: session owned by another server", "session_id", session.ID)
 		return
 	}
-	accounts, err := s.live.acquireRecoveryAccounts(session.AccountPacifica, session.AccountHyperliquid)
+	var retryReason string
+	defer func() {
+		if retryReason != "" {
+			s.scheduleExposedSessionRetry(session, retryReason)
+		}
+	}()
+	accounts, err := s.live.acquireAccountContext(session.Bindings.Accounts, true)
 	if err != nil {
 		s.logger.Error("live recovery: account feeds unavailable", "err", err, "session_id", session.ID)
 		return
 	}
 	defer accounts.Release()
 	unlockAccounts := accounts.Lock()
-	defer unlockAccounts()
+	accountsLocked := true
+	defer func() {
+		if accountsLocked {
+			unlockAccounts()
+		}
+	}()
 	session.accounts = accounts
 	defer func() { session.accounts = nil }()
 	s.live.sessions.put(session)
@@ -375,13 +487,52 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 
 	needLeg2 := originalState == sessAwaitingLeg2RetrySign ||
 		originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
+	orderEvidenceReady := make(chan recoveryOrderEvidence, 1)
+	go func() {
+		orderEvidenceReady <- s.reconcileAsterRecoveryOrders(ctx, session, originalState)
+	}()
+	mutationGeneration := accounts.mutationGeneration()
+	accountsLocked = false
+	unlockAccounts()
+	refreshRecoveryAccountState(ctx, session, needLeg2)
 	truthReady := s.waitForRecoveryAccountState(ctx, session, needLeg2)
+	unlockAccounts = accounts.Lock()
+	accountsLocked = true
+	orderEvidence := <-orderEvidenceReady
+	if accounts.mutatedSince(mutationGeneration) {
+		retryReason = reason + "; account operation overlapped recovery"
+		return
+	}
+	if orderEvidence.detail != "" {
+		reason += "; " + orderEvidence.detail
+	}
 	leg1Size, leg1Price := currentVenuePosition(accounts, session.Leg1.venue, session.Leg1.symbol)
 	leg2Size, leg2Price := currentVenuePosition(accounts, session.Leg2.venue, session.Leg2.symbol)
 	leg1Delta := leg1Size - session.BaselineLeg1Size
 	leg2Delta := leg2Size - session.BaselineLeg2Size
+	if orderEvidence.leg1Known && !fillPresent(session.Leg1Fill) {
+		session.Leg1Fill = nil
+		session.Leg2Fill = nil
+		session.State = sessFailed
+		detail := reason + "; exact leg-1 order shows no fill"
+		if !truthReady {
+			detail += "; venue position state unavailable"
+		}
+		s.persistSession(s.ctx, session, executor.ExecStateFailed, detail)
+		return
+	}
 
 	if !truthReady {
+		if !hasConfirmedLeg1RecoveryFill(orderEvidence, session.Leg1Fill) {
+			s.degradeRecoveryWithoutEvidence(session, reason)
+			return
+		}
+		if !needLeg2 && !recoveryUnwindFitsConfirmedFill(session.ArmedUnwindReq, session.Leg1Fill) {
+			session.State = sessDegraded
+			detail := reason + "; signed unwind exceeds exact leg-1 fill, manual action required"
+			s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
+			return
+		}
 		leg1Amount := liveSessionLeg1Amount(session)
 		leg2Amount := 0.0
 		if needLeg2 {
@@ -407,6 +558,9 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 
 	leg1Exposed := exposureMatches(session.Leg1.side, leg1Delta)
 	leg2Exposed := exposureMatches(session.Leg2.side, leg2Delta)
+	if orderEvidence.leg2Known && !fillPresent(session.Leg2Fill) {
+		leg2Exposed = false
+	}
 	if needLeg2 {
 		s.reconcileSubmittedHedge(session, reason, leg1Delta, leg2Delta, leg1Price, leg2Price, leg1Exposed, leg2Exposed)
 		return
@@ -430,6 +584,105 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	s.persistSession(s.ctx, session, persistState, detail)
 }
 
+type recoveryOrderEvidence struct {
+	leg1Known bool
+	leg2Known bool
+	detail    string
+}
+
+func (s *Server) reconcileAsterRecoveryOrders(
+	ctx context.Context,
+	session *LiveSession,
+	originalState sessionState,
+) recoveryOrderEvidence {
+	evidence := recoveryOrderEvidence{}
+	details := make([]string, 0, 2)
+	lookup := func(req *domain.SigningRequest) (*normFill, bool) {
+		if req == nil || req.Venue != "aster" {
+			return nil, false
+		}
+		fill, err := s.waitForLegFillForAccounts(ctx, req, session.accounts)
+		if err != nil || fill == nil {
+			details = append(details, "Aster exact-order lookup unavailable for "+req.ClientOrderID)
+			return nil, false
+		}
+		return fill, true
+	}
+
+	if originalState == sessLeg1Submitting || originalState == sessLeg1Submitted {
+		if fill, known := lookup(session.Leg1OpenReq); known {
+			session.Leg1Fill = fill
+			evidence.leg1Known = true
+		}
+	} else if session.Leg1Fill != nil {
+		evidence.leg1Known = true
+	}
+
+	if originalState == sessLeg2Submitting || originalState == sessLeg2Submitted {
+		request := session.Leg2OpenReq
+		if session.Leg2Attempts >= 2 && session.Leg2RetryReq != nil {
+			request = session.Leg2RetryReq
+		}
+		if fill, known := lookup(request); known {
+			if request == session.Leg2RetryReq && fillPresent(session.Leg2Fill) {
+				if fill.OrderID == "" || session.Leg2Fill.OrderID != fill.OrderID {
+					session.Leg2Fill = mergeNormFills(session.Leg2Fill, fill)
+				}
+			} else {
+				session.Leg2Fill = fill
+			}
+			evidence.leg2Known = true
+		}
+	}
+	evidence.detail = strings.Join(details, "; ")
+	return evidence
+}
+
+func fillPresent(fill *normFill) bool {
+	return fill != nil && fill.Filled && fill.FilledAmount > 0
+}
+
+func hasConfirmedLeg1RecoveryFill(evidence recoveryOrderEvidence, fill *normFill) bool {
+	return evidence.leg1Known && fillPresent(fill)
+}
+
+func recoveryUnwindFitsConfirmedFill(request *domain.SigningRequest, fill *normFill) bool {
+	return request != nil && fillPresent(fill) && unwindFullyFilled(request.Amount, fill.FilledAmount)
+}
+
+func (s *Server) degradeRecoveryWithoutEvidence(session *LiveSession, reason string) {
+	session.State = sessDegraded
+	detail := reason + "; venue position and exact leg-1 order state unavailable, manual action required"
+	s.persistSession(s.ctx, session, executor.ExecStateDegraded, detail)
+}
+
+func (s *Server) scheduleExposedSessionRetry(session *LiveSession, reason string) {
+	retry := *session
+	retry.accounts = nil
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+		s.recoverExposedSession(&retry, reason)
+	}()
+}
+
+func refreshRecoveryAccountState(ctx context.Context, session *LiveSession, needLeg2 bool) {
+	venues := []string{session.Leg1.venue}
+	if needLeg2 && session.Leg2.venue != session.Leg1.venue {
+		venues = append(venues, session.Leg2.venue)
+	}
+	for _, venueName := range venues {
+		feed, ok := session.accounts.Feed(venueName)
+		if !ok {
+			continue
+		}
+		go func() { _ = feed.RefreshPositions(ctx) }()
+	}
+}
+
 func (s *Server) reconcileSubmittedHedge(
 	session *LiveSession,
 	reason string,
@@ -443,7 +696,9 @@ func (s *Server) reconcileSubmittedHedge(
 		return
 	}
 	if leg1Exposed && leg2Exposed {
-		mismatch := math.Abs(math.Abs(leg2Delta)-math.Abs(leg1Delta)) / math.Abs(leg1Delta)
+		fillMismatch := hedgeMismatch(fillAmount(session.Leg1Fill), fillAmount(session.Leg2Fill))
+		exposureMismatch := hedgeMismatch(math.Abs(leg1Delta), math.Abs(leg2Delta))
+		mismatch := math.Max(fillMismatch, exposureMismatch)
 		if mismatch <= maxHedgeMismatchPct {
 			session.State = sessOpen
 			s.persistSession(s.ctx, session, executor.ExecStateOpen, reason+"; both legs reconciled from venue state")
@@ -539,15 +794,13 @@ func exposureMatches(side domain.Side, delta float64) bool {
 }
 
 func (s *Server) ensureRecoveryFills(session *LiveSession, leg1Amount, leg2Amount, leg1Price, leg2Price float64) {
-	if leg1Amount > 0 {
-		session.Leg1Fill = &normFill{FilledAmount: leg1Amount, AvgFillPrice: leg1Price, Status: "reconciled", Filled: true}
-	} else {
-		session.Leg1Fill = nil
+	if session.Leg1Fill == nil {
+		if leg1Amount > 0 {
+			session.Leg1Fill = &normFill{FilledAmount: leg1Amount, AvgFillPrice: leg1Price, Status: "reconciled", Filled: true}
+		}
 	}
-	if leg2Amount > 0 {
+	if session.Leg2Fill == nil && leg2Amount > 0 {
 		session.Leg2Fill = &normFill{FilledAmount: leg2Amount, AvgFillPrice: leg2Price, Status: "reconciled", Filled: true}
-	} else {
-		session.Leg2Fill = nil
 	}
 }
 

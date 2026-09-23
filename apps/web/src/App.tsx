@@ -19,21 +19,32 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
+import { LivePositionPanel } from '@/components/LivePositionDetail'
+import { PositionFundingDetail } from '@/components/PositionFundingDetail'
 import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { ConnectAccounts } from '@/components/ConnectAccounts'
+import { DetailStatItem, DetailVenueIcon } from '@/components/DetailStatItem'
 import { FundingChart } from '@/components/FundingChart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { findPositionOpportunity, type PositionOpportunityContext } from '@/lib/opportunity-context'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import type { LivePosition } from '@/hooks/useLivePositions'
+import { venueMetadata } from '@/lib/venue-metadata'
+import { enforceMinimumVenueSelection, matchesVenueFilter } from '@/lib/opportunity-filters'
+import { knownMaxLeverage } from '@/lib/leverage'
 
 type View = 'trade' | 'portfolio'
+type TradeSelection =
+  | { kind: 'opportunity'; id: string }
+  | { kind: 'position'; position: LivePosition }
+  | null
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
+
+const FILTER_VENUES = ['pacifica', 'hyperliquid', 'aster'] as const
 
 // Per-venue raw funding rate (single funding period, signed).
 // venue_a / venue_b naming is opaque; we look up by venue name so columns
@@ -64,7 +75,7 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
   switch (field) {
     case 'asset': return opp.asset
     case 'apr': return opp.annualized_gross_edge
-    case 'aprMaxLev': return opp.annualized_gross_edge * (opp.max_leverage || 1)
+    case 'aprMaxLev': return opp.max_leverage > 0 ? opp.annualized_gross_edge * opp.max_leverage : 0
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
     case 'capacity': return opp.best_price_capacity
@@ -127,19 +138,26 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>(() => (
     'trade'
   ))
-  const { opportunities, loading, error, lastUpdated } = useOpportunities()
-  const [selectedId, setSelectedId] = useState<string | null>(() => opportunityIdFromURL())
+  const { aggregate: accountsAggregate, aster: asterReadiness } = useVenueReadiness()
+  const opportunityAccounts = asterReadiness.address ? { aster: asterReadiness.address } : undefined
+  const { opportunities, loading, error, lastUpdated } = useOpportunities(opportunityAccounts)
+  const [selection, setSelection] = useState<TradeSelection>(() => {
+    const id = opportunityIdFromURL()
+    return id ? { kind: 'opportunity', id } : null
+  })
+  const [focusPositionId, setFocusPositionId] = useState<string | null>(null)
   const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
   // Header account status is driven by the same typed readiness layer used
   // by Connect Accounts and Execute Live — one source of truth for the
   // "is this trader actually ready to trade" signal.
-  const { aggregate: accountsAggregate } = useVenueReadiness()
   const tradingMode = 'live' as const
   // Matches useOpportunities' 60s poll interval — scanner refreshes every 60s.
   const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
 
+  const selectedId = selection?.kind === 'opportunity' ? selection.id : null
+  const selectedPosition = selection?.kind === 'position' ? selection.position : null
   const selected = opportunities.find((o) => o.id === selectedId) ?? null
   const suggestedNotionalInput = selected?.recommended_notional
     ? String(Math.round(selected.recommended_notional))
@@ -160,23 +178,22 @@ export default function App() {
     const url = new URL(window.location.href)
     url.searchParams.set('opportunity', id)
     window.history.pushState({ ...window.history.state, orbitalOpportunity: id }, '', url)
-    setSelectedId(id)
+    setSelection({ kind: 'opportunity', id })
   }, [])
 
-  const selectPositionOpportunity = useCallback((position: PositionOpportunityContext | null) => {
-    const opportunity = position ? findPositionOpportunity(opportunities, position) : null
-    if (opportunity) {
-      if (selectedId !== opportunity.id) selectOpportunity(opportunity.id)
+  const selectPosition = useCallback((position: LivePosition | null) => {
+    if (!position) {
+      setSelection((current) => current?.kind === 'position' ? null : current)
       return
     }
-    if (selectedId === null) return
+    setFocusPositionId(null)
     const url = new URL(window.location.href)
     url.searchParams.delete('opportunity')
     const historyState = { ...(window.history.state ?? {}) }
     delete historyState.orbitalOpportunity
     window.history.replaceState(historyState, '', url)
-    setSelectedId(null)
-  }, [opportunities, selectOpportunity, selectedId])
+    setSelection({ kind: 'position', position })
+  }, [])
 
   const closeOpportunity = useCallback(() => {
     if (window.history.state?.orbitalOpportunity === selectedId) {
@@ -186,12 +203,13 @@ export default function App() {
     const url = new URL(window.location.href)
     url.searchParams.delete('opportunity')
     window.history.replaceState(window.history.state, '', url)
-    setSelectedId(null)
+    setSelection(null)
   }, [selectedId])
 
   useEffect(() => {
     const handlePopState = () => {
-      setSelectedId(opportunityIdFromURL())
+      const id = opportunityIdFromURL()
+      setSelection(id ? { kind: 'opportunity', id } : null)
       setActiveView('trade')
     }
     window.addEventListener('popstate', handlePopState)
@@ -308,7 +326,12 @@ export default function App() {
           {activeView === 'trade' && (
             <>
               <div className="flex-1 flex flex-col min-h-0 bg-[#080b12]">
-                {selected ? (
+                {selectedPosition ? (
+                  <PositionFundingDetail
+                    position={selectedPosition}
+                    onBack={() => setSelection(null)}
+                  />
+                ) : selected ? (
                   <OpportunityDetail
                     opportunity={selected}
                     notional={projectionNotional}
@@ -333,7 +356,9 @@ export default function App() {
                 />
                 <LivePositions
                   onConnectWallets={() => setShowAccounts(true)}
-                  onOpenOpportunity={selectPositionOpportunity}
+                  onSelectPosition={selectPosition}
+                  selectedPositionId={selectedPosition?.id}
+                  focusPositionId={focusPositionId}
                 />
               </div>
             </>
@@ -350,7 +375,7 @@ export default function App() {
 
         </div>
 
-        {activeView === 'trade' && selected && (
+        {activeView === 'trade' && selected && !selectedPosition && (
           <OpportunityPanel
             opportunity={selected}
             lastUpdated={lastUpdated}
@@ -359,8 +384,18 @@ export default function App() {
             onNotionalInputChange={setSelectedNotionalInput}
             onClose={closeOpportunity}
             onExecute={handleExecutePaper}
-            onViewPositions={closeOpportunity}
+            onViewPositions={(positionId) => {
+              if (positionId) setFocusPositionId(positionId)
+              else closeOpportunity()
+            }}
             onOpenAccounts={() => setShowAccounts(true)}
+          />
+        )}
+
+        {activeView === 'trade' && selectedPosition && (
+          <LivePositionPanel
+            position={selectedPosition}
+            onClose={() => setSelection(null)}
           />
         )}
 
@@ -383,6 +418,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
 }) {
   const [sortField, setSortField] = useState<SortField>('apr')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [selectedVenues, setSelectedVenues] = useState<string[]>([...FILTER_VENUES])
   const [orderedIds, setOrderedIds] = useState<string[]>([])
   const orderRef = useRef<string[]>([])
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>())
@@ -406,11 +442,11 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
 
   const filtered = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    if (!normalizedQuery) return opportunities
     return opportunities.filter((opportunity) => (
-      opportunity.asset.toLowerCase().includes(normalizedQuery)
+      matchesVenueFilter(opportunity.venue_pair, selectedVenues)
+      && (!normalizedQuery || opportunity.asset.toLowerCase().includes(normalizedQuery))
     ))
-  }, [opportunities, query])
+  }, [opportunities, query, selectedVenues])
 
   const sorted = useMemo(() => {
     if (filtered.length === 0) return filtered
@@ -447,7 +483,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
   }, [applyOrder])
 
   const sortedIds = useMemo(() => sorted.map((opportunity) => opportunity.id), [sorted])
-  const controlsKey = `${sortField}\u0000${sortDir}\u0000${query.trim().toLowerCase()}`
+  const controlsKey = `${sortField}\u0000${sortDir}\u0000${query.trim().toLowerCase()}\u0000${selectedVenues.join(',')}`
   const previousControlsKey = useRef(controlsKey)
 
   useEffect(() => {
@@ -541,37 +577,70 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
           </span>
         </div>
       </div>
-      <div role="search" className="shrink-0 border-y border-border/70 bg-card/25 px-5 py-1.5">
-        <div className="w-full max-w-sm">
-          <label htmlFor="opportunity-search" className="sr-only">Search opportunities by asset</label>
-          <InputGroup className="h-8 rounded-md border-transparent bg-transparent shadow-none hover:bg-white/[0.02] focus-within:border-white/[0.08] focus-within:bg-white/[0.035]">
-            <InputGroupInput
-              id="opportunity-search"
-              type="search"
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') onQueryChange('')
-              }}
-              placeholder="Search assets..."
-              autoComplete="off"
-              className="text-sm [&::-webkit-search-cancel-button]:appearance-none"
-            />
-            <InputGroupAddon align="inline-start">
-              <SearchIcon />
-            </InputGroupAddon>
-            {query && (
-              <InputGroupAddon align="inline-end">
-                <InputGroupButton
-                  aria-label="Clear asset search"
-                  onClick={() => onQueryChange('')}
-                  className="cursor-pointer text-muted-foreground"
-                >
-                  <XIcon />
-                </InputGroupButton>
+      <div role="search" className="shrink-0 border-y border-border/70 bg-card/25 px-5 py-2">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <div className="w-full md:max-w-xs">
+            <label htmlFor="opportunity-search" className="sr-only">Search opportunities by asset</label>
+            <InputGroup className="h-8 rounded-md border-transparent bg-transparent shadow-none hover:bg-white/[0.02] focus-within:border-white/[0.08] focus-within:bg-white/[0.035]">
+              <InputGroupInput
+                id="opportunity-search"
+                type="search"
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') onQueryChange('')
+                }}
+                placeholder="Search assets..."
+                autoComplete="off"
+                className="text-sm [&::-webkit-search-cancel-button]:appearance-none"
+              />
+              <InputGroupAddon align="inline-start">
+                <SearchIcon />
               </InputGroupAddon>
-            )}
-          </InputGroup>
+              {query && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    aria-label="Clear asset search"
+                    onClick={() => onQueryChange('')}
+                    className="cursor-pointer text-muted-foreground"
+                  >
+                    <XIcon />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+          </div>
+          <div className="min-w-0 overflow-x-auto">
+            <ToggleGroup
+              multiple
+              value={selectedVenues}
+              onValueChange={(next) => {
+                setSelectedVenues((current) => enforceMinimumVenueSelection(current, next))
+              }}
+              size="sm"
+              spacing={1}
+              aria-label="Filter opportunities by venues"
+            >
+              {FILTER_VENUES.map((venue) => {
+                const metadata = venueMetadata(venue)
+                return (
+                  <ToggleGroupItem
+                    key={venue}
+                    value={venue}
+                    disabled={selectedVenues.length === 2 && selectedVenues.includes(venue)}
+                    aria-label={`${selectedVenues.includes(venue) ? 'Hide' : 'Show'} ${metadata.label} pairs`}
+                    title={selectedVenues.length === 2 && selectedVenues.includes(venue)
+                      ? 'At least two venues must stay selected'
+                      : undefined}
+                    className="cursor-pointer border border-transparent text-foreground hover:bg-white/[0.03] aria-pressed:border-white/[0.14] aria-pressed:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-100"
+                  >
+                    {metadata.logo && <img src={metadata.logo} alt="" className="size-3.5 rounded-sm" />}
+                    {metadata.label}
+                  </ToggleGroupItem>
+                )
+              })}
+            </ToggleGroup>
+          </div>
         </div>
       </div>
       <div
@@ -595,7 +664,11 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
           <p className="text-muted-foreground text-sm px-5 py-6">No opportunities detected yet. Waiting for scan...</p>
         )}
         {!loading && !error && opportunities.length > 0 && displayed.length === 0 && (
-          <p className="text-muted-foreground text-sm px-5 py-6">No assets match "{query.trim()}".</p>
+          <p className="text-muted-foreground text-sm px-5 py-6">
+            {query.trim()
+              ? `No opportunities match “${query.trim()}” and the selected venues.`
+              : 'No opportunities match the selected venues.'}
+          </p>
         )}
         {!loading && displayed.length > 0 && (
           <Table className="min-w-[1080px]">
@@ -617,7 +690,9 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 const isLongA = opp.direction === 'long_a_short_b'
                 const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
                 const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-                const maxLev = opp.max_leverage || 1
+                const venueA = venueMetadata(opp.venue_pair.venue_a)
+                const venueB = venueMetadata(opp.venue_pair.venue_b)
+                const maxLev = knownMaxLeverage(opp.max_leverage)
                 const apr = opp.annualized_gross_edge
 
                 return (
@@ -635,7 +710,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                         <AssetIcon asset={opp.asset} />
                         <div>
                           <p className="font-semibold text-foreground">{opp.asset}</p>
-                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev}x · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev === null ? '--' : `${maxLev}x`} · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
                         </div>
                       </div>
                     </TableCell>
@@ -643,8 +718,8 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <PositionRoute longVenue={longVenue} shortVenue={shortVenue} />
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
-                      <FundingRateLine label="PAC" value={fundingForVenue(opp, 'pacifica')} color="text-cyan-400" />
-                      <FundingRateLine label="HL" value={fundingForVenue(opp, 'hyperliquid')} color="text-violet-400" />
+                      <FundingRateLine label={venueA.shortLabel} value={opp.funding_rate_a} color={venueA.textColor} />
+                      <FundingRateLine label={venueB.shortLabel} value={opp.funding_rate_b} color={venueB.textColor} />
                     </TableCell>
                     <TableCell className="border-l border-white/[0.035] py-3 text-right font-mono text-foreground">
                       <MetricFlash value={Math.abs(opp.funding_spread)}>{fmtRate(Math.abs(opp.funding_spread))}</MetricFlash>
@@ -652,7 +727,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
                       <p className="font-semibold text-emerald-400"><MetricFlash value={apr}>{fmtPct(apr)}</MetricFlash></p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">{fmtPct(apr * maxLev)} at {maxLev}x</p>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">{maxLev === null ? '-- at --' : `${fmtPct(apr * maxLev)} at ${maxLev}x`}</p>
                     </TableCell>
                     <TableCell className="py-3 text-right">
                       <OpportunitySignalCell signal={opp.signal_7d} />
@@ -703,7 +778,7 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const maxLev = opp.max_leverage || 1
+  const maxLev = knownMaxLeverage(opp.max_leverage)
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -717,15 +792,15 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
         </div>
       </div>
       <div className="px-5 py-2.5 flex items-center gap-6 border-b border-border shrink-0 overflow-x-auto">
-        <StatItem label="Long"><VenueIcon venue={longVenue} /></StatItem>
-        <StatItem label="Short"><VenueIcon venue={shortVenue} /></StatItem>
-        <StatItem label="Max Leverage" value={`${maxLev}x`} />
-        <StatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
-        <StatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
-        <StatItem label="APR x Max Lev" value={fmtPct(opp.annualized_gross_edge * maxLev)} mono />
-        <StatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
-        <StatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
-        <StatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
+        <DetailStatItem label="Long"><DetailVenueIcon venue={longVenue} /></DetailStatItem>
+        <DetailStatItem label="Short"><DetailVenueIcon venue={shortVenue} /></DetailStatItem>
+        <DetailStatItem label="Max Leverage" value={maxLev === null ? '--' : `${maxLev}x`} />
+        <DetailStatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
+        <DetailStatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
+        <DetailStatItem label="APR x Max Lev" value={maxLev === null ? '--' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
+        <DetailStatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
+        <DetailStatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
+        <DetailStatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
       </div>
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">
         <FundingChart
@@ -770,7 +845,7 @@ function AccountsHeaderButton({
   onClick,
 }: {
   aggregate: {
-    allReady: boolean
+    tradingReady: boolean
     statusLabel: 'Ready' | 'Needs attention' | 'Not connected'
     blockingReasons: string[]
   }
@@ -778,7 +853,7 @@ function AccountsHeaderButton({
   onClick: () => void
 }) {
   const notConnected = aggregate.statusLabel === 'Not connected'
-  const ready = aggregate.allReady
+  const ready = aggregate.tradingReady
 
   const tone = open
     ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
@@ -922,14 +997,14 @@ function PositionRoute({ longVenue, shortVenue }: { longVenue: string; shortVenu
   return (
     <div className="flex items-center gap-2">
       <div className="flex items-center gap-1.5">
-        <VenueIcon venue={longVenue} />
+        <DetailVenueIcon venue={longVenue} />
         <span className="text-[9px] font-medium uppercase tracking-wide text-emerald-400">Long</span>
       </div>
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 text-muted-foreground/40">
         <path d="M2 7h10M9 4l3 3-3 3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       <div className="flex items-center gap-1.5">
-        <VenueIcon venue={shortVenue} />
+        <DetailVenueIcon venue={shortVenue} />
         <span className="text-[9px] font-medium uppercase tracking-wide text-rose-400">Short</span>
       </div>
     </div>
@@ -1012,28 +1087,6 @@ function OpportunitySignalCell({ signal }: { signal: OpportunitySignal | null })
         <span className="mt-0.5 block whitespace-nowrap text-[10px] text-muted-foreground">{detail}</span>
       </span>
       <span className={`text-[20px] leading-none ${signal.status === 'persistent' ? 'signal-moon-glow' : 'opacity-80'}`} aria-hidden="true">{moon}</span>
-    </div>
-  )
-}
-
-function VenueIcon({ venue }: { venue: string }) {
-  const v = venue.toLowerCase()
-  if (v === 'pacifica') {
-    return <span className="inline-flex items-center justify-center size-7 rounded bg-white/[0.04] border border-border" title="Pacifica"><img src={pacificaLogo} alt="Pacifica" className="size-5" /></span>
-  }
-  if (v === 'hyperliquid') {
-    return <span className="inline-flex items-center justify-center size-7 rounded bg-white/[0.04] border border-border" title="Hyperliquid"><img src={hlLogo} alt="Hyperliquid" className="size-5" /></span>
-  }
-  return <span className="inline-flex items-center justify-center size-7 rounded bg-white/[0.06] border border-border text-[11px] font-bold text-muted-foreground uppercase" title={venue}>{venue[0]}</span>
-}
-
-function StatItem({ label, value, mono, negative, children }: {
-  label: string; value?: string; mono?: boolean; negative?: boolean; children?: React.ReactNode
-}) {
-  return (
-    <div className="shrink-0">
-      <p className="text-[10px] text-muted-foreground mb-0.5">{label}</p>
-      {children ?? <p className={`text-sm font-medium ${mono ? 'font-mono' : ''} ${negative ? 'text-red-400' : 'text-foreground'}`}>{value}</p>}
     </div>
   )
 }

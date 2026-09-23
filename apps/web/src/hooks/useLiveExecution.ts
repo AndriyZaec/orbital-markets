@@ -10,15 +10,24 @@ import {
 } from 'react'
 import { apiError, apiFetch } from '@/lib/api'
 import { subscribeLiveSessionEvents } from '@/lib/live-events'
+import { liveAccountsQuery, liveVenueBindingsBody, type VenueAddressMap } from '@/lib/live-bindings'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction } from '@/types/signing'
+import type { Venue } from '@/agents/types'
 import { useTradingAgents } from './useTradingAgents'
 import {
+  assertExecutionIntentRequest,
+  assertExecutionIntentRequests,
+  assertPreparedExecutionIntent,
+  areValidLeg1SigningRequests,
   executionFailurePhase,
   executionPhaseFromStatus,
+  ExecutionIntentRequestError,
   normalizeHyperliquidAddress,
   normalizePacificaAddress,
   type AdvanceStatus,
+  type ExecutionIntent,
+  type ExecutionGuardFailure,
 } from '@/lib/live-execution-state'
 
 // Two-phase non-custodial open (Option A):
@@ -63,6 +72,7 @@ export interface LiveExecutionState {
   sessionId: string | null
   accountPacifica: string | null
   accountHyperliquid: string | null
+  accounts: VenueAddressMap
   riskierVenue: string | null
   hedgeVenue: string | null
   leg1Requests: SigningRequest[] // [open, unwind]
@@ -78,6 +88,7 @@ export interface LiveExecutionState {
   expiresAt: string | null
   currentVenue: string | null
   remainingExposure: RemainingExposure[]
+  guardFailure: ExecutionGuardFailure | null
 }
 
 const INITIAL_STATE: LiveExecutionState = {
@@ -86,6 +97,7 @@ const INITIAL_STATE: LiveExecutionState = {
   sessionId: null,
   accountPacifica: null,
   accountHyperliquid: null,
+  accounts: {},
   riskierVenue: null,
   hedgeVenue: null,
   leg1Requests: [],
@@ -101,6 +113,7 @@ const INITIAL_STATE: LiveExecutionState = {
   expiresAt: null,
   currentVenue: null,
   remainingExposure: [],
+  guardFailure: null,
 }
 
 interface PrepareResp {
@@ -109,7 +122,7 @@ interface PrepareResp {
   riskier_venue: string
   hedge_venue: string
   expires_at: string
-  signing_requests: SigningRequest[] // [two leverage updates, leg1 open, leg1 unwind]
+  signing_requests: SigningRequest[] // [optional leverage updates, leg1 open, leg1 unwind]
 }
 
 interface AdvanceResp {
@@ -131,22 +144,19 @@ const recoveryFallbackPollMs = 5_000
 
 function useLiveExecutionState() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
-  const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
   const tradingAgents = useTradingAgents()
 
   useEffect(() => {
-    if (state.phase !== 'recovering' || !state.sessionId ||
-      !state.accountPacifica || !state.accountHyperliquid) return
+    if (state.phase !== 'recovering' || !state.sessionId || Object.keys(state.accounts).length !== 2) return
 
     let cancelled = false
     let streamConnected = false
     let fallbackTimer = 0
     let deadlineTimer = 0
     const sessionId = state.sessionId
-    const query = new URLSearchParams({
-      account_pacifica: state.accountPacifica,
-      account_hyperliquid: state.accountHyperliquid,
-    })
+    const accounts = state.accounts
+    const query = liveAccountsQuery(accounts)
     const apply = (result: AdvanceResp) => {
       if (cancelled || result.status === 'recovering') return false
       setState((current) => ({
@@ -165,8 +175,7 @@ function useLiveExecutionState() {
     }
 
     const closeStream = subscribeLiveSessionEvents(
-      state.accountPacifica,
-      state.accountHyperliquid,
+      accounts,
       sessionId,
       (connected) => { streamConnected = connected },
       (data) => { if (apply(data as AdvanceResp)) closeStream() },
@@ -197,22 +206,29 @@ function useLiveExecutionState() {
       window.clearTimeout(fallbackTimer)
       window.clearTimeout(deadlineTimer)
     }
-  }, [state.phase, state.sessionId, state.accountPacifica, state.accountHyperliquid])
+  }, [state.phase, state.sessionId, state.accounts])
 
   // Live refs of the currently connected accounts. The executeLive async
   // callback is created once and closes over stale addresses; refs let us
   // read the LATEST connected accounts inside the flow without re-creating
   // the callback (which would cancel in-flight sessions).
-  const pacificaRef = useRef<string | null>(pacificaAddress)
-  const hyperliquidRef = useRef<string | null>(hyperliquidAddress)
-  useEffect(() => { pacificaRef.current = pacificaAddress }, [pacificaAddress])
-  useEffect(() => { hyperliquidRef.current = hyperliquidAddress }, [hyperliquidAddress])
+  const accountsRef = useRef<Record<Venue, string | null>>({
+    pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+  })
+  const executionInFlightRef = useRef(false)
+  const consumedRequestIdsRef = useRef(new Set<string>())
+  useEffect(() => {
+    accountsRef.current = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress }
+  }, [asterAddress, hyperliquidAddress, pacificaAddress])
 
-  const postAdvance = async (body: Record<string, unknown>): Promise<AdvanceResp> => {
+  const postAdvance = async (
+    accounts: VenueAddressMap,
+    body: Record<string, unknown>,
+  ): Promise<AdvanceResp> => {
     const resp = await apiFetch('/api/v1/live/advance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, ...liveVenueBindingsBody(accounts) }),
     })
     if (!resp.ok) {
       const b = await resp.json().catch(() => ({}))
@@ -221,24 +237,35 @@ function useLiveExecutionState() {
     return resp.json()
   }
 
-  const executeLive = useCallback(async (
-    opportunityId: string,
-    leverage: number,
-    requestedNotional?: number,
-  ) => {
-    if (!pacificaAddress || !hyperliquidAddress) {
+  const executeLive = useCallback(async (intent: ExecutionIntent) => {
+    const opportunityId = intent.opportunityId
+    const leverage = intent.leverage
+    const requestedNotional = intent.requestedNotional
+    const venues = intent.legs.map((leg) => leg.venue) as [Venue, Venue]
+    const authorityByVenue: Record<Venue, string | null> = {
+      pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+    }
+    const agentByVenue = {
+      pacifica: tradingAgents.pacifica,
+      hyperliquid: tradingAgents.hyperliquid,
+      aster: tradingAgents.aster,
+    }
+    if (venues[0] === venues[1] || venues.some((venue) => !authorityByVenue[venue])) {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Both venue accounts must be connected' })
       return
     }
-    if (tradingAgents.pacifica.status !== 'ready' || tradingAgents.hyperliquid.status !== 'ready' ||
-      !tradingAgents.pacifica.agentAddress || !tradingAgents.hyperliquid.agentAddress) {
+    if (venues.some((venue) => agentByVenue[venue].status !== 'ready' || !agentByVenue[venue].agentAddress)) {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Authorize both venues first' })
       return
     }
+    if (executionInFlightRef.current) return
+    executionInFlightRef.current = true
 
     setState({ ...INITIAL_STATE, phase: 'preparing' })
 
     let exposurePossible = false
+    const preparedAccounts = Object.fromEntries(venues.map((venue) => [venue, authorityByVenue[venue]!]))
+    const preparedAgents = Object.fromEntries(venues.map((venue) => [venue, agentByVenue[venue].agentAddress!]))
 
     try {
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
@@ -251,10 +278,10 @@ function useLiveExecutionState() {
           ...(typeof requestedNotional === 'number' && requestedNotional > 0
             ? { requested_notional: requestedNotional }
             : {}),
-          account_pacifica: pacificaAddress,
-          account_hyperliquid: hyperliquidAddress,
-          agent_pacifica: tradingAgents.pacifica.agentAddress,
-          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
+          ...liveVenueBindingsBody(
+            preparedAccounts,
+            preparedAgents,
+          ),
         }),
       })
       if (!prepResp.ok) {
@@ -271,27 +298,39 @@ function useLiveExecutionState() {
       }
       const prep: PrepareResp = await prepResp.json()
       const leg1Requests = prep.signing_requests || []
-      const leverageVenues = new Set(leg1Requests
-        .filter((request) => request.action === 'update_leverage')
-        .map((request) => request.venue))
-      if (leg1Requests.length !== 4 || leverageVenues.size !== 2 ||
-        !leg1Requests.some((request) => request.action === 'open') ||
-        !leg1Requests.some((request) => request.action === 'unwind' && request.reduce_only)) {
-        throw new Error('Expected two leverage updates plus leg-1 open and unwind requests')
+      assertPreparedExecutionIntent(intent, {
+        asset: prep.asset,
+        riskierVenue: prep.riskier_venue,
+        hedgeVenue: prep.hedge_venue,
+      })
+      if (!areValidLeg1SigningRequests(leg1Requests, prep.riskier_venue, prep.hedge_venue)) {
+        throw new Error('Expected valid leverage updates plus leg-1 open and unwind requests')
+      }
+      const signForIntent = async (request: SigningRequest): Promise<SignedAction> => {
+        assertExecutionIntentRequest(intent, request, consumedRequestIdsRef.current)
+        return tradingAgents.sign(request)
       }
 
       // Snapshot the accounts the session was prepared for. Any subsequent
       // wallet change must halt the flow (before leg 1) or trigger abort +
       // armed unwind (after leg 1). Comparisons are normalized (lowercased
       // for EVM, trimmed for Solana) so casing/whitespace doesn't false-flag.
-      const preparedPacifica = normalizePacificaAddress(pacificaAddress)
-      const preparedHyperliquid = normalizeHyperliquidAddress(hyperliquidAddress)
+      const normalizedAccounts = Object.fromEntries(venues.map((venue) => [
+        venue,
+        venue === 'pacifica'
+          ? normalizePacificaAddress(preparedAccounts[venue])
+          : normalizeHyperliquidAddress(preparedAccounts[venue]),
+      ]))
 
       const detectAccountChange = (): string | null => {
-        const nowPac = normalizePacificaAddress(pacificaRef.current)
-        const nowHl = normalizeHyperliquidAddress(hyperliquidRef.current)
-        if (nowPac !== preparedPacifica) return 'Pacifica'
-        if (nowHl !== preparedHyperliquid) return 'Hyperliquid'
+        for (const venue of venues) {
+          const current = venue === 'pacifica'
+            ? normalizePacificaAddress(accountsRef.current[venue])
+            : normalizeHyperliquidAddress(accountsRef.current[venue])
+          if (current !== normalizedAccounts[venue]) {
+            return venue === 'pacifica' ? 'Pacifica' : venue === 'aster' ? 'Aster' : 'Hyperliquid'
+          }
+        }
         return null
       }
 
@@ -302,6 +341,7 @@ function useLiveExecutionState() {
         sessionId: prep.session_id,
         accountPacifica: pacificaAddress,
         accountHyperliquid: hyperliquidAddress,
+        accounts: preparedAccounts,
         riskierVenue: prep.riskier_venue,
         hedgeVenue: prep.hedge_venue,
         leg1Requests,
@@ -322,9 +362,10 @@ function useLiveExecutionState() {
         }
       }
 
-      // 2. Sign BOTH leg-1 requests up front. If either fails, submit nothing.
+      // 2. Sign every prepare request up front. If any fails, submit nothing.
       let signedLeg1: SignedAction[]
       try {
+        assertExecutionIntentRequests(intent, leg1Requests, consumedRequestIdsRef.current)
         signedLeg1 = []
         for (const req of leg1Requests) {
           signedLeg1.push(await tradingAgents.sign(req))
@@ -334,7 +375,10 @@ function useLiveExecutionState() {
         setState((s) => ({
           ...s,
           phase: 'failed',
-          error: `Leg 1 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+          error: e instanceof ExecutionIntentRequestError
+            ? `${e.message} Nothing was signed or submitted.`
+            : `Leg 1 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+          guardFailure: e instanceof ExecutionIntentRequestError ? e.kind : null,
         }))
         return
       }
@@ -358,7 +402,7 @@ function useLiveExecutionState() {
       exposurePossible = true
       let adv1: AdvanceResp
       try {
-        adv1 = await postAdvance({ session_id: prep.session_id, signed_actions: signedLeg1 })
+        adv1 = await postAdvance(preparedAccounts, { session_id: prep.session_id, signed_actions: signedLeg1 })
       } catch (e) {
         setState((s) => ({
           ...s,
@@ -381,12 +425,27 @@ function useLiveExecutionState() {
         return
       }
 
+      const abortInvalidRequest = async (reason: string) => {
+        const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
+        setState((s) => ({
+          ...s,
+          phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'degraded',
+          reason: abortResp?.reason ?? (abortResp
+            ? `${reason}. Armed unwind fired.`
+            : `${reason}; abort failed. Manual action may be required.`),
+          unwound: abortResp?.unwound ?? false,
+          unwindStatus: (abortResp?.unwind_status ?? (abortResp ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+          remainingExposure: abortResp?.remaining_exposure ?? [],
+        }))
+      }
+
       // status === 'awaiting_leg2_sign'
       const leg2Reqs = adv1.signing_requests || []
-      if (leg2Reqs.length < 1) {
-        throw new Error('Expected leg-2 signing request from backend')
-      }
       const leg2Req = leg2Reqs[0]
+      if (!leg2Req || leg2Reqs.length !== 1 || leg2Req.venue !== prep.hedge_venue || leg2Req.action !== 'open') {
+        await abortInvalidRequest('Leg-2 signing request does not match the execution intent')
+        return
+      }
 
       setState((s) => ({
         ...s,
@@ -404,7 +463,7 @@ function useLiveExecutionState() {
       {
         const changed = detectAccountChange()
         if (changed) {
-          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
@@ -422,13 +481,14 @@ function useLiveExecutionState() {
       // 4. Sign leg 2. If it fails, tell the backend to abort -> fires armed unwind.
       let signedLeg2: SignedAction
       try {
-        signedLeg2 = await tradingAgents.sign(leg2Req)
+        signedLeg2 = await signForIntent(leg2Req)
       } catch (e) {
-        const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+        const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
         setState((s) => ({
           ...s,
           phase: 'aborted',
           reason: `Leg 2 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
+          guardFailure: e instanceof ExecutionIntentRequestError ? e.kind : null,
           unwound: abortResp?.unwound ?? false,
           unwindStatus: (abortResp?.unwind_status ?? 'unconfirmed') as UnwindStatus,
         }))
@@ -440,7 +500,7 @@ function useLiveExecutionState() {
       {
         const changed = detectAccountChange()
         if (changed) {
-          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
@@ -459,7 +519,7 @@ function useLiveExecutionState() {
       setState((s) => ({ ...s, phase: 'submitting_leg2' }))
       let adv2: AdvanceResp
       try {
-        adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedLeg2] })
+        adv2 = await postAdvance(preparedAccounts, { session_id: prep.session_id, signed_actions: [signedLeg2] })
       } catch (e) {
         setState((s) => ({
           ...s,
@@ -471,7 +531,11 @@ function useLiveExecutionState() {
 
       if (adv2.status === 'awaiting_leg2_retry_sign') {
         const retryReq = adv2.signing_requests?.[0]
-        if (!retryReq) throw new Error('Expected residual leg-2 retry signing request')
+        if (!retryReq || adv2.signing_requests?.length !== 1 ||
+          retryReq.venue !== prep.hedge_venue || retryReq.action !== 'open') {
+          await abortInvalidRequest('Residual leg-2 retry does not match the execution intent')
+          return
+        }
         setState((s) => ({
           ...s,
           phase: 'awaiting_leg2_retry',
@@ -483,7 +547,7 @@ function useLiveExecutionState() {
         }))
 
         const abortRetry = async (failureReason: string): Promise<AdvanceResp | null> => {
-          const abortResp = await postAdvance({ session_id: prep.session_id, abort: true }).catch(() => null)
+          const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
           if (!abortResp) {
             setState((s) => ({
               ...s,
@@ -502,12 +566,15 @@ function useLiveExecutionState() {
         } else {
           let signedRetry: SignedAction | null = null
           try {
-            signedRetry = await tradingAgents.sign(retryReq)
+            signedRetry = await signForIntent(retryReq)
           } catch (e) {
             const message = `Leg 2 retry signing failed: ${e instanceof Error ? e.message : 'unknown error'}`
             const abortResp = await abortRetry(message)
             if (!abortResp) return
             adv2 = { ...abortResp, reason: message }
+            if (e instanceof ExecutionIntentRequestError) {
+              setState((s) => ({ ...s, guardFailure: e.kind }))
+            }
           }
           if (signedRetry) {
             const changedAfterSign = detectAccountChange()
@@ -518,7 +585,7 @@ function useLiveExecutionState() {
             } else {
               setState((s) => ({ ...s, phase: 'submitting_leg2_retry' }))
               try {
-                adv2 = await postAdvance({ session_id: prep.session_id, signed_actions: [signedRetry] })
+                adv2 = await postAdvance(preparedAccounts, { session_id: prep.session_id, signed_actions: [signedRetry] })
               } catch (e) {
                 setState((s) => ({
                   ...s,
@@ -551,8 +618,10 @@ function useLiveExecutionState() {
           ? { reason: `Execution response is uncertain: ${e instanceof Error ? e.message : 'Unknown error'}` }
           : { error: e instanceof Error ? e.message : 'Unknown error' }),
       }))
+    } finally {
+      executionInFlightRef.current = false
     }
-  }, [pacificaAddress, hyperliquidAddress, tradingAgents])
+  }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL_STATE), [])
 

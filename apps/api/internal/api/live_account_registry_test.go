@@ -13,22 +13,40 @@ import (
 )
 
 type fakeAccountFeed struct {
+	mu              sync.RWMutex
 	snapshot        liveAccountSnapshot
 	refreshSnapshot *liveAccountSnapshot
 	blockers        []string
 	submitResult    *domain.SubmissionResult
 	waitFill        *normFill
+	waitErr         error
 	refreshErr      error
+	refreshes       atomic.Int64
+	refreshStarted  chan struct{}
+	refreshRelease  chan struct{}
 }
 
-func (f *fakeAccountFeed) Snapshot() liveAccountSnapshot        { return f.snapshot }
+func (f *fakeAccountFeed) Snapshot() liveAccountSnapshot {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.snapshot
+}
 func (f *fakeAccountFeed) PreTradeBlockers(domain.Leg) []string { return f.blockers }
 func (f *fakeAccountFeed) RefreshPositions(context.Context) error {
+	f.refreshes.Add(1)
+	if f.refreshStarted != nil {
+		close(f.refreshStarted)
+	}
+	if f.refreshRelease != nil {
+		<-f.refreshRelease
+	}
 	if f.refreshErr != nil {
 		return f.refreshErr
 	}
 	if f.refreshSnapshot != nil {
+		f.mu.Lock()
 		f.snapshot = *f.refreshSnapshot
+		f.mu.Unlock()
 	}
 	return nil
 }
@@ -36,10 +54,54 @@ func (f *fakeAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *do
 	return f.submitResult, nil
 }
 func (f *fakeAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error) {
-	return f.waitFill, nil
+	return f.waitFill, f.waitErr
 }
 
 func (f *fakeAccountFeed) WaitForLeverage(context.Context, string, float64) error { return nil }
+
+func TestAccountSubmissionInvalidatesUnlockedRecoveryRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	feed := &fakeAccountFeed{submitResult: &domain.SubmissionResult{Accepted: true}}
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"venue": &fixedAccountFeedFactory{feed: feed},
+	}, accountFeedRegistryConfig{})
+	lease, err := registry.Acquire("venue", "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	accounts := &liveAccountContext{leases: map[string]*accountFeedLease{"venue": lease}}
+	unlockRecovery := accounts.Lock()
+	generation := accounts.mutationGeneration()
+	unlockRecovery()
+	server := &Server{live: &LiveDeps{accounts: registry}}
+	request := &domain.SigningRequest{Venue: "venue", Account: "account-a"}
+
+	operationDone := make(chan error, 1)
+	go func() {
+		unlockOperation := accounts.Lock()
+		defer unlockOperation()
+		_, err := server.submitSignedActionForAccounts(ctx, domain.SignedAction{
+			Venue: "venue", SignerAddress: "account-a",
+		}, request, accounts)
+		operationDone <- err
+	}()
+	select {
+	case err := <-operationDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("account submission waited for an unlocked recovery read")
+	}
+
+	unlockRecovery = accounts.Lock()
+	defer unlockRecovery()
+	if !accounts.mutatedSince(generation) {
+		t.Fatal("account submission did not invalidate an in-flight recovery read")
+	}
+}
 
 type fakeAccountFeedFactory struct {
 	starts           atomic.Int64

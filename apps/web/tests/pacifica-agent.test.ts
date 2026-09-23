@@ -8,12 +8,13 @@ import {
   buildPacificaSigningMessage,
   pacificaBuilderCode,
   pacificaBuilderMaxFeeRate,
+  revokePacificaAgent,
   signPacificaAgentRequest,
 } from '../src/agents/pacifica-agent.ts'
-import { saveStoredTradingAgent, type StorageLike } from '../src/agents/storage.ts'
 import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
 import type { StoredTradingAgent } from '../src/agents/types.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
+import { TestTradingAgentStore } from './trading-agent-test-store.ts'
 
 const ownerAddress = 'FAe4sisG95oZ42w7buUn5qEE4TAnfTTFPiguZUHmhiF'
 const agentAddress = '3ogUn1GNXoASaRbxPNeVJnVv5rG4EPBtmQmX61jVorUe'
@@ -35,8 +36,8 @@ test('Pacifica bind_agent_wallet canonical bytes match the official fixture', ()
 })
 
 test('a local Pacifica agent signs the configured builder code', async () => {
-  const storage = new TestStorage()
-  saveStoredTradingAgent(storage, pacificaAgent())
+  const storage = new TestTradingAgentStore()
+  await storage.save(pacificaAgent())
   const signed = await signWithStoredTradingAgent(storage, pacificaSigningRequest())
 
   const request = pacificaSigningRequest()
@@ -54,6 +55,23 @@ test('a local Pacifica agent signs the configured builder code', async () => {
   assert.equal(signed.signature, bs58.encode(nacl.sign.detached(expectedMessage, keyPair.secretKey)))
   assert.equal(signed.signer_address, agentAddress)
   assert.equal(JSON.stringify(signed).includes(pacificaAgent().privateKey), false)
+})
+
+test('a local Pacifica agent accepts a native side in the signing request', async () => {
+  const request = pacificaSigningRequest()
+  request.side = 'ask'
+  request.unsigned_payload = { ...request.unsigned_payload as object, side: 'ask' }
+
+  const signed = await signPacificaAgentRequest(request, pacificaAgent())
+  assert.equal(signed.request_id, request.id)
+})
+
+test('the signing dispatcher rejects an unsupported venue before loading an agent', async () => {
+  const request = { ...pacificaSigningRequest(), venue: 'dydx' } as unknown as SigningRequest
+  await assert.rejects(
+    signWithStoredTradingAgent(new TestTradingAgentStore(), request),
+    /Unsupported signing venue: dydx/,
+  )
 })
 
 test('a local Pacifica agent signs only the prepared leverage update', async () => {
@@ -81,7 +99,7 @@ test('a local Pacifica agent signs only the prepared leverage update', async () 
 })
 
 test('Pacifica authorization relays no private key and persists only after binding', async () => {
-  const storage = new TestStorage()
+  const storage = new TestTradingAgentStore()
   let relayed = ''
   let builderRelayed = ''
   let now = 1_748_970_123_456
@@ -95,6 +113,9 @@ test('Pacifica authorization relays no private key and persists only after bindi
       relayed = JSON.stringify(request)
       assert.equal(storage.values.size, 0)
     },
+    relayRevocation: async () => undefined,
+    rememberPendingRevocation: () => undefined,
+    forgetPendingRevocation: () => undefined,
     relayBuilderApproval: async (request) => {
       builderRelayed = JSON.stringify(request)
       assert.equal(storage.values.size, 0)
@@ -118,7 +139,7 @@ test('Pacifica authorization relays no private key and persists only after bindi
 })
 
 test('Pacifica authorization skips an already-approved builder code', async () => {
-  const storage = new TestStorage()
+  const storage = new TestTradingAgentStore()
   let signatures = 0
   await authorizePacificaAgent({
     storage,
@@ -132,9 +153,104 @@ test('Pacifica authorization skips an already-approved builder code', async () =
       throw new Error('builder approval should be skipped')
     },
     relay: async () => undefined,
+    relayRevocation: async () => undefined,
+    rememberPendingRevocation: () => undefined,
+    forgetPendingRevocation: () => undefined,
   })
 
   assert.equal(signatures, 1)
+})
+
+test('Pacifica compensates with revoke when encrypted storage fails after binding', async () => {
+  const storage = new TestTradingAgentStore()
+  storage.save = async () => { throw new Error('IndexedDB unavailable') }
+  let revokedAgent = ''
+  let signatures = 0
+
+  await assert.rejects(
+    authorizePacificaAgent({
+      storage,
+      ownerAddress,
+      builderCodeApproved: async () => true,
+      signMessage: async () => {
+        signatures++
+        return new Uint8Array(64)
+      },
+      relayBuilderApproval: async () => undefined,
+      relay: async () => undefined,
+      relayRevocation: async (request) => { revokedAgent = request.agent_wallet },
+      rememberPendingRevocation: () => undefined,
+      forgetPendingRevocation: () => undefined,
+    }),
+    /IndexedDB unavailable/,
+  )
+
+  assert.equal(signatures, 2)
+  assert.notEqual(revokedAgent, '')
+})
+
+test('Pacifica retains a public cleanup handle when compensation fails', async () => {
+  const storage = new TestTradingAgentStore()
+  storage.save = async () => { throw new Error('IndexedDB unavailable') }
+  let pendingAgent = ''
+
+  await assert.rejects(
+    authorizePacificaAgent({
+      storage,
+      ownerAddress,
+      builderCodeApproved: async () => true,
+      signMessage: async () => new Uint8Array(64),
+      relayBuilderApproval: async () => undefined,
+      relay: async () => undefined,
+      relayRevocation: async () => { throw new Error('User rejected') },
+      rememberPendingRevocation: (agentAddress) => { pendingAgent = agentAddress },
+      forgetPendingRevocation: () => undefined,
+    }),
+    /could not be stored or revoked/,
+  )
+
+  assert.notEqual(pendingAgent, '')
+})
+
+test('Pacifica revocation signs and relays the official revoke_agent_wallet payload', async () => {
+  let signedMessage = ''
+  let relayed = ''
+  await revokePacificaAgent({
+    ownerAddress,
+    agentAddress,
+    now: () => 1_748_970_123_456,
+    signMessage: async (message) => {
+      signedMessage = new TextDecoder().decode(message)
+      return new Uint8Array(64)
+    },
+    relay: async (request) => { relayed = JSON.stringify(request) },
+  })
+
+  assert.equal(
+    signedMessage,
+    '{"data":{"agent_wallet":"3ogUn1GNXoASaRbxPNeVJnVv5rG4EPBtmQmX61jVorUe"},"expiry_window":30000,"timestamp":1748970123456,"type":"revoke_agent_wallet"}',
+  )
+  assert.deepEqual(JSON.parse(relayed), {
+    account: ownerAddress,
+    signature: bs58.encode(new Uint8Array(64)),
+    timestamp: 1_748_970_123_456,
+    expiry_window: 30_000,
+    agent_wallet: agentAddress,
+  })
+})
+
+test('Pacifica revocation rejects an invalid wallet signature before relay', async () => {
+  let relayed = false
+  await assert.rejects(
+    revokePacificaAgent({
+      ownerAddress,
+      agentAddress,
+      signMessage: async () => new Uint8Array(63),
+      relay: async () => { relayed = true },
+    }),
+    /Invalid Pacifica revocation signature/,
+  )
+  assert.equal(relayed, false)
 })
 
 test('a local Pacifica agent rejects non-order payloads', async () => {
@@ -147,6 +263,31 @@ test('a local Pacifica agent rejects an altered builder code', async () => {
   const request = pacificaSigningRequest()
   request.unsigned_payload = { ...(request.unsigned_payload as object), builder_code: 'otherbuilder' }
   await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
+})
+
+test('a local Pacifica agent rejects a payload side that differs from the request', async () => {
+  const request = pacificaSigningRequest()
+  request.unsigned_payload = { ...(request.unsigned_payload as object), side: 'ask' }
+  await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
+})
+
+test('a local Pacifica agent caps open slippage without restricting recovery', async () => {
+  const open = pacificaSigningRequest()
+  open.unsigned_payload = { ...(open.unsigned_payload as object), slippage_percent: '1' }
+  await assert.rejects(signPacificaAgentRequest(open, pacificaAgent()), /not an allowed market order/)
+
+  const unwind = pacificaSigningRequest()
+  unwind.action = 'unwind'
+  unwind.reduce_only = true
+  unwind.unsigned_payload = {
+    ...(unwind.unsigned_payload as object),
+    reduce_only: true,
+    slippage_percent: '1',
+    builder_code: undefined,
+  }
+  const agent = pacificaAgent()
+  delete agent.builderCode
+  assert.equal((await signPacificaAgentRequest(unwind, agent)).signer_address, agentAddress)
 })
 
 test('a local Pacifica agent signs fee-free recovery but rejects fee-free normal close', async () => {
@@ -169,7 +310,7 @@ test('a local Pacifica agent signs fee-free recovery but rejects fee-free normal
 function pacificaAgent(): StoredTradingAgent {
   const keyPair = nacl.sign.keyPair.fromSeed(Uint8Array.from({ length: 32 }, (_, index) => index + 32))
   return {
-    version: 1,
+    version: 2,
     venue: 'pacifica',
     ownerAddress,
     agentAddress: bs58.encode(keyPair.publicKey),
@@ -206,11 +347,4 @@ function pacificaSigningRequest(): SigningRequest {
     expires_at: '2099-08-10T12:00:00.000Z',
     created_at: '2026-08-10T12:00:00.000Z',
   }
-}
-
-class TestStorage implements StorageLike {
-  readonly values = new Map<string, string>()
-  getItem(key: string) { return this.values.get(key) ?? null }
-  setItem(key: string, value: string) { this.values.set(key, value) }
-  removeItem(key: string) { this.values.delete(key) }
 }

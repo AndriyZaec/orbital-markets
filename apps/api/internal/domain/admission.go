@@ -10,7 +10,7 @@ type LiveAdmissionResult struct {
 // the first constrained live execution scope.
 //
 // Rules:
-//  1. Venue pair must be Pacifica + Hyperliquid
+//  1. Venue pair must contain two supported live venues
 //  2. ExecutionStatus must be "executable"
 //  3. Liquidity must not be "toxic"
 //  4. RecommendedNotional must be > 0
@@ -21,7 +21,7 @@ func CheckLiveAdmission(opp Opportunity, leverage float64, pairMaxLeverage float
 	// 1. Venue pair
 	validPair := isAllowedVenuePair(opp.VenuePair)
 	if !validPair {
-		reasons = append(reasons, "venue pair not in live scope (requires pacifica + hyperliquid)")
+		reasons = append(reasons, "venue pair not in live scope")
 	}
 
 	// 2. Execution status
@@ -52,6 +52,11 @@ func CheckLiveAdmission(opp Opportunity, leverage float64, pairMaxLeverage float
 
 func isAllowedVenuePair(vp VenuePair) bool {
 	a, b := vp.VenueA, vp.VenueB
-	return (a == "pacifica" && b == "hyperliquid") ||
-		(a == "hyperliquid" && b == "pacifica")
+	if a == b {
+		return false
+	}
+	supported := func(venue string) bool {
+		return venue == "pacifica" || venue == "hyperliquid" || venue == "aster"
+	}
+	return supported(a) && supported(b)
 }

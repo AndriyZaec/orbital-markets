@@ -12,6 +12,7 @@ const (
 type Leg struct {
 	Venue         string  `json:"venue"`
 	Asset         string  `json:"asset"`
+	MarketKey     string  `json:"market_key,omitempty"`
 	Side          Side    `json:"side"`
 	ExpectedPrice float64 `json:"expected_price"`
 	Slippage      float64 `json:"slippage"`

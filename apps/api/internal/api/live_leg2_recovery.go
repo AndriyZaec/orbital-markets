@@ -13,7 +13,6 @@ import (
 
 const (
 	leg2RetrySigningWindow = 5 * time.Second
-	minimumRetryNotional   = 10.0
 )
 
 func mergeNormFills(first, second *normFill) *normFill {
@@ -77,17 +76,17 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 	clientOrderID := fmt.Sprintf("orbital-l2retry-%d", time.Now().UnixNano())
 	retryReq, err := s.buildOpenSigningRequest(
 		session.Leg2, remaining, clientOrderID,
-		session.AccountPacifica, session.AccountHyperliquid,
-		session.AgentPacifica, session.AgentHyperliquid,
+		session.venueBindings(),
 	)
 	if err != nil {
 		s.logger.Warn("live advance: retry payload build failed", "session_id", session.ID, "venue", session.Leg2.venue, "symbol", session.Leg2.symbol, "remaining", remaining, "err", err)
 		s.recoverInvalidHedge(w, ctx, session, fmt.Sprintf("%s; retry payload build failed: %s", reason, err))
 		return
 	}
-	if retryBelowMinimumNotional(retryReq.Venue, retryReq.Amount, retryReq.Price) {
+	minimumRetryNotional := s.minimumRetryNotional(retryReq.Venue)
+	if minimumRetryNotional > 0 && retryReq.Amount*retryReq.Price < minimumRetryNotional {
 		s.recoverInvalidHedge(w, ctx, session,
-			fmt.Sprintf("%s; normalized residual retry value $%.2f is below Hyperliquid minimum $%.2f", reason, retryReq.Amount*retryReq.Price, minimumRetryNotional))
+			fmt.Sprintf("%s; normalized residual retry value $%.2f is below %s minimum $%.2f", reason, retryReq.Amount*retryReq.Price, venueDisplayName(retryReq.Venue), minimumRetryNotional))
 		return
 	}
 	retryReq.ExpiresAt = time.Now().Add(leg2RetrySigningWindow)
@@ -116,8 +115,12 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 	})
 }
 
-func retryBelowMinimumNotional(venue string, amount, price float64) bool {
-	return venue == "hyperliquid" && amount*price < minimumRetryNotional
+func (s *Server) minimumRetryNotional(venueName string) float64 {
+	module, err := s.live.liveModule(venueName)
+	if err != nil {
+		return 0
+	}
+	return module.Capabilities().MinimumRetryNotional
 }
 
 func (s *Server) advanceLeg2Retry(
@@ -203,6 +206,17 @@ func (s *Server) completeHedgeOpen(w http.ResponseWriter, ctx context.Context, s
 	session.State = sessOpen
 	s.live.sessions.remove(session.ID)
 	positionID := s.persistSession(ctx, session, executor.ExecStateOpen)
+	if positionID == "" {
+		session.State = sessRecovering
+		reason := "hedge opened but terminal persistence is pending; reconciliation started"
+		s.logger.Error("live advance: hedge persistence pending", "session_id", session.ID, "mismatch", mismatch)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": session.ID, "status": string(sessRecovering),
+			"leg1_fill": fillView(session.Leg1Fill, 0), "leg2_fill": fillView(session.Leg2Fill, 0),
+			"mismatch": mismatch, "reason": reason,
+		})
+		return
+	}
 	s.logger.Info("live advance: hedge open", "session_id", session.ID, "mismatch", mismatch, "position_id", positionID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": session.ID, "status": string(sessOpen),
@@ -237,12 +251,19 @@ func (s *Server) recoverInvalidHedge(w http.ResponseWriter, ctx context.Context,
 	}
 	fullReason := reason + unwindReasonSuffix(unwind)
 	positionID := s.persistSession(ctx, session, state, fullReason)
+	if positionID == "" {
+		session.State = sessRecovering
+		fullReason += "; terminal persistence is pending; reconciliation started"
+	}
 	response := map[string]any{
 		"session_id": session.ID, "status": string(session.State),
 		"leg1_fill": fillView(session.Leg1Fill, 0), "leg2_fill": fillView(session.Leg2Fill, 0),
-		"mismatch": hedgeMismatch(fillAmount(session.Leg1Fill), fillAmount(session.Leg2Fill)),
-		"reason":   fullReason, "position_id": positionID,
+		"mismatch":           hedgeMismatch(fillAmount(session.Leg1Fill), fillAmount(session.Leg2Fill)),
+		"reason":             fullReason,
 		"remaining_exposure": remainingExposureView(session),
+	}
+	if positionID != "" {
+		response["position_id"] = positionID
 	}
 	for key, value := range unwindJSON(unwind) {
 		response[key] = value

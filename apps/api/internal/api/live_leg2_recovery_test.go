@@ -1,6 +1,18 @@
 package api
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
+	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
+	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
+)
 
 func TestMergeNormFillsCalculatesAggregateHedge(t *testing.T) {
 	first := &normFill{FilledAmount: 4, AvgFillPrice: 100, Fee: 0.4, Filled: true}
@@ -49,13 +61,52 @@ func TestUnwindConfirmationDoesNotHideResidualExposure(t *testing.T) {
 }
 
 func TestRetryMinimumAppliesOnlyToNormalizedHyperliquidNotional(t *testing.T) {
-	if !retryBelowMinimumNotional("hyperliquid", 0.099, 100) {
+	modules, err := venue.NewLiveModuleRegistry(
+		paclive.NewLiveModule(nil), hllive.NewLiveModule(nil),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{live: &LiveDeps{modules: modules}}
+	if minimum := server.minimumRetryNotional("hyperliquid"); 0.099*100 >= minimum {
 		t.Fatal("Hyperliquid retry below $10 should be suppressed")
 	}
-	if retryBelowMinimumNotional("hyperliquid", 0.1, 100) {
+	if minimum := server.minimumRetryNotional("hyperliquid"); 0.1*100 < minimum {
 		t.Fatal("Hyperliquid retry at $10 should be allowed")
 	}
-	if retryBelowMinimumNotional("pacifica", 0.01, 100) {
+	if minimum := server.minimumRetryNotional("pacifica"); minimum > 0 && 0.01*100 < minimum {
 		t.Fatal("Hyperliquid minimum must not suppress Pacifica retries")
+	}
+}
+
+func TestCompleteHedgeOpenReportsRecoveringWhenTerminalPersistenceFails(t *testing.T) {
+	server := &Server{
+		live:   &LiveDeps{sessions: NewSessionManager()},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	session := &LiveSession{
+		ID:   "session-1",
+		Plan: &domain.ExecutionPlan{ID: "position-1"},
+	}
+	recorder := httptest.NewRecorder()
+
+	server.completeHedgeOpen(recorder, context.Background(), session, 0)
+
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != string(sessRecovering) {
+		t.Fatalf("status = %v, want %s", response["status"], sessRecovering)
+	}
+	if _, exists := response["position_id"]; exists {
+		t.Fatalf("position_id must not be reported before terminal persistence: %v", response["position_id"])
+	}
+}
+
+func TestSigningClientOrderIDUsesVenueFacingIdentifier(t *testing.T) {
+	request := &domain.SigningRequest{ID: "signing-request", ClientOrderID: "venue-client-order"}
+	if got := signingClientOrderID(request, request.ID); got != request.ClientOrderID {
+		t.Fatalf("client order ID = %q, want %q", got, request.ClientOrderID)
 	}
 }

@@ -16,11 +16,12 @@ func (s *Server) handleLiveSessionStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	pacificaAccount, hyperliquidAccount, ok := liveAccountsFromQuery(w, r)
-	if !ok {
+	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
+	if err != nil || bindings.requireAccountPair() != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account bindings for both session venues required"})
 		return
 	}
-	response, err := s.liveSessionStatusSnapshot(r.Context(), id, pacificaAccount, hyperliquidAccount)
+	response, err := s.liveSessionStatusSnapshot(r.Context(), id, bindings.Accounts)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "live session not found"})
 		return
@@ -30,14 +31,14 @@ func (s *Server) handleLiveSessionStatus(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) liveSessionStatusSnapshot(
 	ctx context.Context,
-	id, pacificaAccount, hyperliquidAccount string,
+	id string, accounts map[string]string,
 ) (map[string]any, error) {
 	record, err := s.liveStore.GetDurableSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(record.AccountPacifica) != strings.TrimSpace(pacificaAccount) ||
-		!strings.EqualFold(strings.TrimSpace(record.AccountHyperliquid), strings.TrimSpace(hyperliquidAccount)) {
+	requestedBindings := liveVenueBindings{Accounts: accounts}
+	if !requestedBindings.matchesAccounts(durableRecordAccountBindings(record)) {
 		return nil, errors.New("live session account mismatch")
 	}
 
@@ -53,12 +54,10 @@ func (s *Server) liveSessionStatusSnapshot(
 	}
 
 	session, err := unmarshalLiveSession(record.Payload)
-	if err != nil || session.Plan == nil {
+	if err != nil || validateDurableSessionOwnership(record, session) != nil {
 		return response, nil
 	}
-	position, err := s.liveStore.GetPositionForAccounts(
-		ctx, session.Plan.ID, session.AccountPacifica, session.AccountHyperliquid,
-	)
+	position, err := s.liveStore.GetPositionForBindings(ctx, session.Plan.ID, record.AccountBindings)
 	if err != nil {
 		return response, nil
 	}

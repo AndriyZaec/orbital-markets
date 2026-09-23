@@ -4,6 +4,8 @@ import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
 import { waitForClosedPosition } from '@/lib/live-close'
+import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
+import type { Venue } from '@/agents/types'
 
 export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
 
@@ -40,11 +42,8 @@ const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 const closeConfirmationAttempts = 12
 const closeConfirmationPollMs = 2_000
 
-async function waitForClose(positionId: string, pacificaAccount: string, hyperliquidAccount: string): Promise<void> {
-	const query = new URLSearchParams({
-		account_pacifica: pacificaAccount,
-		account_hyperliquid: hyperliquidAccount,
-	})
+async function waitForClose(positionId: string, accounts: Record<string, string>): Promise<void> {
+  const query = liveAccountsQuery(accounts)
   await waitForClosedPosition({
     getPositionState: async () => {
       const resp = await apiFetch(`/api/v1/live/positions/${positionId}?${query}`)
@@ -62,26 +61,37 @@ async function waitForClose(positionId: string, pacificaAccount: string, hyperli
 
 export function useLiveClose() {
   const [state, setState] = useState<CloseState>(INITIAL)
-  const { pacificaAddress, hyperliquidAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
   const tradingAgents = useTradingAgents()
 
-  const closePosition = useCallback(async (positionId: string) => {
-    if (!pacificaAddress || !hyperliquidAddress) {
+  const closePosition = useCallback(async (
+    positionId: string,
+    venues: [Venue, Venue] = ['pacifica', 'hyperliquid'],
+  ) => {
+    const authorityByVenue: Record<Venue, string | null> = {
+      pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+    }
+    const agentByVenue = {
+      pacifica: tradingAgents.pacifica,
+      hyperliquid: tradingAgents.hyperliquid,
+      aster: tradingAgents.aster,
+    }
+    if (venues.some((venue) => !authorityByVenue[venue])) {
       setState({ ...INITIAL, phase: 'error', errors: ['Both venue accounts must be connected'] })
       return
     }
+    const accounts = Object.fromEntries(venues.map((venue) => [venue, authorityByVenue[venue]!]))
+    const agents = Object.fromEntries(venues.map((venue) => [venue, agentByVenue[venue].agentAddress ?? '']))
     setState({ ...INITIAL, phase: 'preparing' })
 
     try {
       const resp = await apiFetch(`/api/v1/live/close/${positionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account_pacifica: pacificaAddress,
-          account_hyperliquid: hyperliquidAddress,
-          agent_pacifica: tradingAgents.pacifica.agentAddress,
-          agent_hyperliquid: tradingAgents.hyperliquid.agentAddress,
-        }),
+        body: JSON.stringify(liveVenueBindingsBody(
+          accounts,
+          agents,
+        )),
       })
       if (!resp.ok) {
         const b = await resp.json().catch(() => ({}))
@@ -155,7 +165,7 @@ export function useLiveClose() {
       }
 
       setState(s => ({ ...s, phase: 'confirming' }))
-      await waitForClose(positionId, pacificaAddress, hyperliquidAddress)
+      await waitForClose(positionId, accounts)
       setState(s => ({ ...s, phase: 'done', succeeded: requests.length }))
     } catch (e) {
       setState(s => ({
@@ -164,7 +174,7 @@ export function useLiveClose() {
         errors: [e instanceof Error ? e.message : 'Unknown error'],
       }))
     }
-  }, [pacificaAddress, hyperliquidAddress, tradingAgents])
+  }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL), [])
 

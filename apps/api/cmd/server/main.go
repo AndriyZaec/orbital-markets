@@ -11,8 +11,11 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
+	liveexecutor "github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 )
@@ -44,8 +47,9 @@ func main() {
 
 	pac := pacifica.New(logger)
 	hl := hyperliquid.New(logger)
+	ast := aster.New(logger)
 
-	sc := scanner.New(logger, pac, hl)
+	sc := scanner.New(logger, pac, hl, ast)
 
 	// Snapshot recorder + retention janitor + rollup aggregator
 	recorder := db.NewRecorder(database, sc, logger)
@@ -65,19 +69,34 @@ func main() {
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
+	go ast.Run(ctx)
 	go sc.Run(ctx, 60*time.Second)
 	go recorder.Run(ctx)
 	go janitor.Run(ctx)
 	go rollup.Run(ctx)
 	go monitor.Run(ctx)
 
+	var asterDataAgent *dataagent.Service
+	if masterKey, keyErr := dataagent.ParseMasterKey(os.Getenv("ASTER_DATA_AGENT_MASTER_KEY")); keyErr != nil {
+		logger.Warn("Aster data agent disabled", "reason", keyErr)
+	} else if dataAgentStore, storeErr := dataagent.NewStore(database, masterKey); storeErr != nil {
+		logger.Warn("Aster data agent disabled", "reason", storeErr)
+	} else {
+		asterDataAgent = dataagent.NewService(
+			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, logger), time.Now,
+		)
+	}
+
 	// Live execution deps (non-custodial signing flow)
-	liveDeps := startLive(ctx, logger, database, sc, pac, hl)
+	liveDeps := startLive(ctx, logger, database, sc, pac, hl, ast, asterDataAgent)
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	if asterDataAgent != nil {
+		srv.EnableAsterDataAgentProbe(asterDataAgent)
+	}
 	srv.EnableProductAnalytics(productAnalytics)
 	srv.EnableAnalyticsAccessToken(os.Getenv("ANALYTICS_ACCESS_TOKEN"))
 	if telegram != nil && telegram.links != nil {

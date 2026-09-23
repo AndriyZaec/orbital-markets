@@ -4,7 +4,7 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui'
 import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets'
 import { clusterApiUrl } from '@solana/web3.js'
 import { WagmiProvider, createConfig, http } from 'wagmi'
-import { mainnet, arbitrum } from 'wagmi/chains'
+import { mainnet, arbitrum, bsc } from 'wagmi/chains'
 import { injected } from 'wagmi/connectors'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -13,11 +13,12 @@ import '@solana/wallet-adapter-react-ui/styles.css'
 const queryClient = new QueryClient()
 
 const wagmiConfig = createConfig({
-  chains: [mainnet, arbitrum],
+  chains: [mainnet, arbitrum, bsc],
   connectors: [injected()],
   transports: {
     [mainnet.id]: http(),
     [arbitrum.id]: http(),
+    [bsc.id]: http(),
   },
 })
 

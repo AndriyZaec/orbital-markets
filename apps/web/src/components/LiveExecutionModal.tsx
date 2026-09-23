@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { LiveExecutionState, ExecutionPhase, LegFillView, UnwindStatus } from '@/hooks/useLiveExecution'
 import { recoveryPresentation, type RecoveryTone } from '@/lib/degraded-execution'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import { venueMetadata } from '@/lib/venue-metadata'
 import { AssetIcon } from '@/components/AssetIcon'
+import { executionGuardActionLabel } from '@/lib/live-execution-state'
 
 interface Props {
   state: LiveExecutionState
   onRetry: () => void
   onClose: () => void
-  onViewPositions: () => void
+  onViewPositions: (positionId: string | null) => void
 }
 
 const TERMINAL: ExecutionPhase[] = ['open', 'degraded', 'aborted', 'failed', 'recovering']
@@ -83,13 +83,11 @@ const STATUS_STYLE: Record<LegStatus, { dot: string; text: string; label: string
   skipped: { dot: 'bg-zinc-600', text: 'text-muted-foreground', label: 'Not attempted' },
 }
 
-const venueLogos: Record<string, string> = { pacifica: pacificaLogo, hyperliquid: hlLogo }
-
 function LegCard({
   label, venue, status, amount, fill,
 }: { label: string; venue: string | null; status: LegStatus; amount?: number; fill?: LegFillView | null }) {
   const s = STATUS_STYLE[status]
-  const logo = venue ? venueLogos[venue] : undefined
+  const metadata = venue ? venueMetadata(venue) : null
   return (
     <div className={`rounded-lg border px-4 py-3 ${
       status === 'accepted' ? 'border-green-500/20 bg-green-500/[0.03]'
@@ -102,9 +100,9 @@ function LegCard({
     }`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          {logo && <img src={logo} alt={venue ?? ''} className="size-5 rounded-sm" />}
+          {metadata?.logo && <img src={metadata.logo} alt={metadata.label} className="size-5 rounded-sm" />}
           <span className="text-xs font-semibold text-foreground">{label}</span>
-          {venue && <span className="text-[10px] text-muted-foreground capitalize">{venue}</span>}
+          {metadata && <span className="text-[10px] text-muted-foreground">{metadata.label}</span>}
         </div>
         <div className="flex items-center gap-1.5">
           <div className={`size-1.5 rounded-full ${s.dot}`} />
@@ -238,7 +236,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           )}
 
           {/* Mismatch readout */}
-          {state.mismatch != null && (
+          {state.mismatch != null && state.phase !== 'failed' && state.phase !== 'aborted' && (
             <p className="text-[11px] text-muted-foreground text-center mb-3">
               Hedge mismatch: <span className="font-mono text-foreground">{(state.mismatch * 100).toFixed(2)}%</span>
             </p>
@@ -277,10 +275,12 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           <div className="px-5 py-4 border-t border-border flex gap-2">
             {terminalPresentation && terminalStyle && (
               <button
-                onClick={terminalPresentation.action === 'retry' ? onRetry : onViewPositions}
+                onClick={terminalPresentation.action === 'retry' ? onRetry : () => onViewPositions(state.positionId)}
                 className={`flex-1 py-2 rounded-lg text-xs font-medium text-white transition-colors ${terminalStyle.button}`}
               >
-                {terminalPresentation.actionLabel}
+                {terminalPresentation.action === 'retry' && state.guardFailure
+                  ? executionGuardActionLabel(state.guardFailure)
+                  : terminalPresentation.actionLabel}
               </button>
             )}
             <button

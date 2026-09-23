@@ -1,14 +1,16 @@
 export interface SigningRequest {
   id: string
+  snapshot_id?: string
   client_order_id: string
   position_id?: string
   leg?: number
-  venue: 'pacifica' | 'hyperliquid'
-  action: 'open' | 'close' | 'unwind' | 'emergency_close' | 'update_leverage'
+  venue: 'pacifica' | 'hyperliquid' | 'aster'
+  action:
+    | 'open' | 'close' | 'unwind' | 'emergency_close' | 'update_leverage'
   account: string
   signer?: string
   symbol: string
-  side: 'buy' | 'sell'
+  side: 'buy' | 'sell' | ''
   amount: number
   price: number
   reduce_only: boolean
@@ -43,8 +45,13 @@ export interface SubmissionResult {
 export interface PrepareRequest {
   opportunity_id: string
   leverage: number
-  account_pacifica: string
-  account_hyperliquid: string
+  requested_notional?: number
+  accounts: Record<string, string>
+  agents: Record<string, string>
+  account_pacifica?: string
+  account_hyperliquid?: string
+  agent_pacifica?: string
+  agent_hyperliquid?: string
 }
 
 export interface PrepareResponse {

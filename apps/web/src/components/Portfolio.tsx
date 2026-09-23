@@ -12,9 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
 import { portfolioPositionCategory } from '@/lib/portfolio-position'
+import { venueMetadata } from '@/lib/venue-metadata'
 import {
   portfolioPerformance,
   type PortfolioPerformance,
@@ -93,12 +92,12 @@ function categorize(p: LivePosition) {
 export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
   const { positions, loading: positionsLoading, error: positionsError } = useLivePositions()
   // One typed readiness layer, shared with the header and ConnectAccounts.
-  const { pacifica, hyperliquid, aggregate: readiness } = useVenueReadiness()
+  const { pacifica, hyperliquid, aster, aggregate: readiness } = useVenueReadiness()
   const [privateView, setPrivateView] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
   const [openedAt] = useState(() => Date.now())
-  const activityAccountKey = `${pacifica.address ?? ''}|${hyperliquid.address ?? ''}`
+  const activityAccountKey = `${pacifica.address ?? ''}|${hyperliquid.address ?? ''}|${aster.address ?? ''}`
   const [activitySnapshot, setActivitySnapshot] = useState<{
     accountKey: string
     positions: LivePosition[]
@@ -121,12 +120,12 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
     ? activitySnapshot.positions
     : []
 
-  // Sum only venues that actually report a value. If NEITHER venue has
+  // Sum only venues that actually report a value. If no venue has
   // reported equity, keep the tile as "--" rather than showing $0.00.
-  const equityValues = [pacifica.equity, hyperliquid.equity].filter(
+  const equityValues = [pacifica.equity, hyperliquid.equity, aster.equity].filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
-  const availableValues = [pacifica.available, hyperliquid.available].filter(
+  const availableValues = [pacifica.available, hyperliquid.available, aster.available].filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
   const totalEquity = equityValues.length > 0 ? equityValues.reduce((a, b) => a + b, 0) : null
@@ -265,7 +264,7 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
       <Section
         title="Connected Accounts"
         action={
-          !readiness.allReady && (
+          !readiness.tradingReady && (
             <button
               onClick={onConnectWallets}
               className="text-[12px] text-blue-400 hover:text-blue-300 transition-colors"
@@ -275,9 +274,10 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
           )
         }
       >
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <VenueCard readiness={pacifica} maskAmounts={privateView} />
           <VenueCard readiness={hyperliquid} maskAmounts={privateView} />
+          <VenueCard readiness={aster} maskAmounts={privateView} />
         </div>
       </Section>
 
@@ -754,21 +754,19 @@ const STATUS_VIEW: Record<
   agent_authorizing: { label: 'Authorizing',     color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   balance_pending:   { label: 'Pending',         color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   account_stale:     { label: 'Data stale',      color: 'text-yellow-400',       dot: 'bg-yellow-400' },
+  unavailable:       { label: 'Unavailable',     color: 'text-red-400',          dot: 'bg-red-400' },
   error:             { label: 'Error',           color: 'text-red-400',          dot: 'bg-red-400' },
-}
-
-const VENUE_LOGOS: Record<VenueReadiness['venue'], string> = {
-  pacifica: pacificaLogo,
-  hyperliquid: hlLogo,
 }
 
 const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
   pacifica: 'bg-[radial-gradient(circle_at_8%_0%,rgba(34,211,238,0.055),transparent_52%)]',
   hyperliquid: 'bg-[radial-gradient(circle_at_8%_0%,rgba(139,92,246,0.055),transparent_52%)]',
+  aster: 'bg-[radial-gradient(circle_at_8%_0%,rgba(245,158,11,0.055),transparent_52%)]',
 }
 
 function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; maskAmounts: boolean }) {
   const view = STATUS_VIEW[readiness.status]
+  const logo = venueMetadata(readiness.venue).logo
   // Show a real number only when we actually have one from the backend.
   // On disconnect (or before the first snapshot) equity/available are null;
   // render "--" rather than an ambiguous $0.00.
@@ -777,7 +775,7 @@ function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; mask
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="flex size-7 items-center justify-center rounded-md border border-border bg-white/[0.035]">
-            <img src={VENUE_LOGOS[readiness.venue]} alt="" className="size-5 object-contain" />
+            {logo ? <img src={logo} alt="" className="size-5 object-contain" /> : readiness.label[0]}
           </span>
           <span className="text-sm font-medium text-foreground">{readiness.label}</span>
         </div>

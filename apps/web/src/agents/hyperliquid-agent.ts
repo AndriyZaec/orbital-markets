@@ -5,7 +5,7 @@ import { encode } from '@msgpack/msgpack'
 import builderConfig from '../../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
-import { saveStoredTradingAgent, type StorageLike } from './storage.ts'
+import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
@@ -130,7 +130,7 @@ export function buildHyperliquidApproveBuilderFeeTypedData(action: HyperliquidAp
 }
 
 export async function authorizeHyperliquidAgent(options: {
-  storage: StorageLike
+  storage: TradingAgentStore
   ownerAddress: string
   chainId: number
   builderFeeApproved: (ownerAddress: string, builderAddress: string) => Promise<boolean>
@@ -170,7 +170,7 @@ export async function authorizeHyperliquidAgent(options: {
   })
 
   const agent: StoredTradingAgent = {
-    version: 1,
+    version: 2,
     venue: 'hyperliquid',
     ownerAddress: options.ownerAddress,
     agentAddress: generated.agentAddress,
@@ -178,7 +178,7 @@ export async function authorizeHyperliquidAgent(options: {
     authorizedAt: new Date(agentNonce).toISOString(),
     builderAddress: hyperliquidBuilderAddress,
   }
-  saveStoredTradingAgent(options.storage, agent)
+  await options.storage.save(agent)
   return agent
 }
 

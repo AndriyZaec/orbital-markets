@@ -12,8 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { PositionDetail } from '@/components/PositionDetail'
 import { AssetIcon } from '@/components/AssetIcon'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import { venueMetadata } from '@/lib/venue-metadata'
 
 function fmtPnL(n: number) {
   const sign = n >= 0 ? '+' : ''
@@ -70,12 +69,10 @@ function liqRiskStyle(risk: Fill['liq_risk']) {
   }
 }
 
-const venueLogos: Record<string, string> = { pacifica: pacificaLogo, hyperliquid: hlLogo }
-
 function VenueIcon({ venue }: { venue: string }) {
-  const logo = venueLogos[venue]
-  if (logo) return <img src={logo} alt={venue} className="size-4 rounded-sm" />
-  return <span className="text-[10px] text-muted-foreground uppercase">{venue.slice(0, 3)}</span>
+  const metadata = venueMetadata(venue)
+  if (metadata.logo) return <img src={metadata.logo} alt={metadata.label} className="size-4 rounded-sm" />
+  return <span className="text-[10px] text-muted-foreground">{metadata.shortLabel}</span>
 }
 
 export function PaperPositions() {

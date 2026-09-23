@@ -44,6 +44,26 @@ func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
 	}
 }
 
+func TestScanExcludesMarketsWithoutOpenInterest(t *testing.T) {
+	now := time.Now()
+	active := leverageTestAdapter{name: "aster", data: []venue.MarketData{{
+		Venue: "aster", Asset: "AI", MarkPrice: 0.25, IndexPrice: 0.25,
+		FundingRate: 0.0002, BidPrice: 0.24, AskPrice: 0.26,
+		BidSize: 1000, AskSize: 1000, OpenInterest: 100000, Timestamp: now,
+	}}}
+	inactive := leverageTestAdapter{name: "hyperliquid", data: []venue.MarketData{{
+		Venue: "hyperliquid", Asset: "AI", MarkPrice: 0.125, IndexPrice: 0.125,
+		OpenInterest: 0, Timestamp: now,
+	}}}
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), active, inactive)
+
+	s.scan(context.Background())
+
+	if opportunities := s.Opportunities(); len(opportunities) != 0 {
+		t.Fatalf("opportunities = %+v, want zero-OI market excluded", opportunities)
+	}
+}
+
 func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	now := time.Now()
 	pac := leverageTestAdapter{name: "pacifica", data: []venue.MarketData{{
@@ -127,6 +147,87 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	var leverageErr *LeverageRangeError
 	if !errors.As(err, &leverageErr) || leverageErr.PairMax != 10 {
 		t.Fatalf("BuildPlan(11x) error = %#v, want LeverageRangeError with pair max 10", err)
+	}
+}
+
+func TestBuildPlanPreservesVenueMarketKeys(t *testing.T) {
+	now := time.Now()
+	left := leverageTestAdapter{name: "left", data: []venue.MarketData{{
+		Venue: "left", Asset: "BTC", MarketKey: "BTC-PERP", MarkPrice: 100, IndexPrice: 100,
+		FundingRate: 0.001, BidPrice: 99, BidSize: 1000, AskPrice: 100, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 5, Timestamp: now,
+	}}}
+	right := leverageTestAdapter{name: "right", data: []venue.MarketData{{
+		Venue: "right", Asset: "BTC", MarketKey: "BTCUSDT", MarkPrice: 100, IndexPrice: 100,
+		FundingRate: -0.001, BidPrice: 99, BidSize: 1000, AskPrice: 100, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 5, Timestamp: now,
+	}}}
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), left, right)
+	s.scan(context.Background())
+	opportunities := s.Opportunities()
+	if len(opportunities) == 0 {
+		t.Fatal("expected BTC opportunity")
+	}
+	plan, err := s.BuildPlan(context.Background(), opportunities[0].ID, 2, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]string{plan.Leg1.Venue: plan.Leg1.MarketKey, plan.Leg2.Venue: plan.Leg2.MarketKey}
+	if keys["left"] != "BTC-PERP" || keys["right"] != "BTCUSDT" {
+		t.Fatalf("market keys = %+v", keys)
+	}
+}
+
+func TestBuildPlanUsesAccountLeverageCapForAsterMarket(t *testing.T) {
+	now := time.Now()
+	aster := leverageTestAdapter{name: "aster", data: []venue.MarketData{{
+		Venue: "aster", Asset: "MEME", MarketKey: "MEMEUSDT", MarkPrice: 0.01, IndexPrice: 0.01,
+		FundingRate: 0.001, BidPrice: 0.0099, BidSize: 1000, AskPrice: 0.0101, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 125, Timestamp: now,
+	}}}
+	pacifica := leverageTestAdapter{name: "pacifica", data: []venue.MarketData{{
+		Venue: "pacifica", Asset: "MEME", MarketKey: "MEME", MarkPrice: 0.01, IndexPrice: 0.01,
+		FundingRate: -0.001, BidPrice: 0.0099, BidSize: 1000, AskPrice: 0.0101, AskSize: 1000,
+		OpenInterest: 100000, MaxLeverage: 20, Timestamp: now,
+	}}}
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), aster, pacifica)
+	s.scan(context.Background())
+	opportunities := s.Opportunities()
+	if len(opportunities) != 1 {
+		t.Fatalf("opportunities = %d, want 1", len(opportunities))
+	}
+
+	resolverCalled := false
+	plan, err := s.BuildPlanWithLeverageCaps(
+		context.Background(), opportunities[0].ID, 10, 1500,
+		func(venueName, symbol string, notional float64) (int, bool) {
+			if venueName != "aster" {
+				return 0, false
+			}
+			resolverCalled = true
+			if symbol != "MEMEUSDT" || notional != 1500 {
+				t.Fatalf("resolver input = %s, %s, %v", venueName, symbol, notional)
+			}
+			return 10, true
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.MaxLeverage != 10 {
+		t.Fatalf("MaxLeverage = %d, want 10", plan.MaxLeverage)
+	}
+	if !resolverCalled {
+		t.Fatal("Aster leverage resolver was not called")
+	}
+	_, err = s.BuildPlanWithLeverageCaps(
+		context.Background(), opportunities[0].ID, 1, 1500,
+		func(venueName, _ string, _ float64) (int, bool) {
+			return 0, venueName == "aster"
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "maximum leverage unavailable") {
+		t.Fatalf("missing account cap error = %v", err)
 	}
 }
 

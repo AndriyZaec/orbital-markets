@@ -58,8 +58,9 @@ func CheckLiquidity(a, b venue.MarketData, annualizedEdge float64, now time.Time
 		}
 
 		// Signal 3: Depth suspiciously small relative to OI
-		if md.OpenInterest > 0 && topOfBook > 0 {
-			ratio := topOfBook / md.OpenInterest
+		openInterestUSD := openInterestNotional(md)
+		if openInterestUSD > 0 && topOfBook > 0 {
+			ratio := topOfBook / openInterestUSD
 			if ratio < minDepthToOIRatio {
 				reasons = append(reasons, fmt.Sprintf("%s: depth/OI ratio %.4f%% (below %.4f%%)", md.Venue, ratio*100, minDepthToOIRatio*100))
 			}

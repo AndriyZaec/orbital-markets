@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
-import { useVenueReadiness } from '@/hooks/useVenueReadiness'
+import { useVenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 import { AssetIcon } from '@/components/AssetIcon'
 import { trackAnalytics } from '@/lib/analytics'
+import { venueMetadata } from '@/lib/venue-metadata'
+import { knownMaxLeverage, reconcileLeverageSelection } from '@/lib/leverage'
+import { executionIntentSide } from '@/lib/live-execution-state'
 
 interface Props {
   opportunity: Opportunity
@@ -22,7 +25,7 @@ interface Props {
     leverage: number,
     requestedNotional?: number,
   ) => Promise<void>
-  onViewPositions?: () => void
+  onViewPositions?: (positionId: string | null) => void
   onOpenAccounts?: () => void
 }
 
@@ -61,9 +64,7 @@ function fmtLiqPrice(leg: { liquidation_price: number; leverage: number } | null
 // a positive balance. When disconnected (or before first snapshot) render
 // "--" so we don't misleadingly show $0.00.
 function venueLabel(venue: string): string {
-  if (venue.toLowerCase() === 'hyperliquid') return 'Hyperliquid'
-  if (venue.toLowerCase() === 'pacifica') return 'Pacifica'
-  return venue
+  return venueMetadata(venue).label
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -127,13 +128,15 @@ export function OpportunityPanel({
   const isLongA = opp.direction === 'long_a_short_b'
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
-  const opportunityMaxLev = opp.max_leverage || 1
+  const opportunityMaxLev = knownMaxLeverage(opp.max_leverage)
+  const initialLeverage = opportunityMaxLev ?? 1
   const venuePair = `${longVenue}_${shortVenue}`
+  const liveVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()] as [VenueId, VenueId]
 
-  const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: opportunityMaxLev })
+  const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: initialLeverage })
   const leverage = leverageSelection.opportunityId === opp.id
     ? leverageSelection.value
-    : opportunityMaxLev
+    : initialLeverage
   const setLeverage = (value: number) => setLeverageSelection({ opportunityId: opp.id, value })
   const [longOpen, setLongOpen] = useState(true)
   const [shortOpen, setShortOpen] = useState(true)
@@ -151,28 +154,51 @@ export function OpportunityPanel({
     leverage !== debouncedLeverageForPlan
 
   const [executing, setExecuting] = useState(false)
-  const { plan, loading: planLoading, error: planError, maxLeverage } = usePlan(
-    opp.id,
+  const {
+    pacifica: pacReadiness,
+    hyperliquid: hlReadiness,
+    aster: asterReadiness,
+    refreshBalances,
+  } = useVenueReadiness()
+  const readinessByVenue = {
+    pacifica: pacReadiness,
+    hyperliquid: hlReadiness,
+    aster: asterReadiness,
+  }
+  const selectedReadiness = liveVenues.map((venue) => readinessByVenue[venue])
+  const planAccounts = mode === 'live'
+    ? Object.fromEntries(selectedReadiness.flatMap((readiness) => readiness.address
+      ? [[readiness.venue, readiness.address]]
+      : []))
+    : undefined
+  const canRequestPlan = mode !== 'live' ||
+    !liveVenues.includes('aster') ||
+    Boolean(asterReadiness.address)
+  const { plan, loading: planLoading, error: planError, maxLeverage, refresh: refreshPlan } = usePlan(
+    canRequestPlan ? opp.id : null,
     debouncedLeverageForPlan,
     debouncedNotionalForPlan,
+    planAccounts,
   )
   const planUpdating = planLoading || planInputsPending
-  const maxLev = maxLeverage || opportunityMaxLev
+  const maxLev = maxLeverage ?? opportunityMaxLev
+  useEffect(() => {
+    if (maxLeverage === null) return
+    setLeverageSelection((current) => reconcileLeverageSelection(
+      current, opp.id, opportunityMaxLev, maxLeverage,
+    ))
+  }, [maxLeverage, opp.id, opportunityMaxLev])
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
-  const {
-    aggregate: readinessAggregate,
-    pacifica: pacReadiness,
-    hyperliquid: hlReadiness,
-    refreshBalances,
-  } = useVenueReadiness()
-  const isFullyReady = readinessAggregate.allReady
+  const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
+  const noSelectedWallets = selectedReadiness.every((readiness) => readiness.status === 'disconnected')
   const balanceByVenue = (venue: string): number | null => {
     const v = venue.toLowerCase()
     if (v === 'pacifica') return pacReadiness.available
     if (v === 'hyperliquid') return hlReadiness.available
+    if (v === 'aster') return asterReadiness.available
     return null
   }
 
@@ -230,7 +256,24 @@ export function OpportunityPanel({
     }
   }
 
-  const handleExecuteLive = () => {
+  const executeLivePlan = (selectedPlan: NonNullable<typeof plan>) => {
+    if (selectedPlan.opportunity_id !== opp.id || selectedPlan.asset.toUpperCase() !== opp.asset.toUpperCase() ||
+      selectedPlan.leverage.leverage !== leverage) return
+    const approvedNotional = notionalForPlan ?? selectedPlan.notional
+    const plannedRiskierLeg = selectedPlan.leg_1.slippage >= selectedPlan.leg_2.slippage
+      ? selectedPlan.leg_1
+      : selectedPlan.leg_2
+    const intentLegs = liveVenues.map((venue) => {
+      const leg = [selectedPlan.leg_1, selectedPlan.leg_2].find((candidate) => candidate.venue.toLowerCase() === venue)
+      if (!leg) return null
+      return {
+        venue,
+        symbol: leg.market_key ?? opp.asset,
+        side: executionIntentSide(leg.side),
+        expectedPrice: leg.expected_price,
+      }
+    })
+    if (!intentLegs[0] || !intentLegs[1]) return
     // Kick a balance refresh alongside the execute. Non-blocking: readiness
     // was already ready when the button enabled; this just tightens the
     // window between last-known-fresh and actual submission.
@@ -239,10 +282,28 @@ export function OpportunityPanel({
       asset: opp.asset,
       venue_pair: venuePair,
       risk_tier: opp.risk_tier,
-      notional_bucket: notionalBucket(plan?.notional ?? notionalForPlan ?? opp.recommended_notional),
+      notional_bucket: notionalBucket(selectedPlan.notional),
     })
     setShowLiveModal(true)
-    executeLive(opp.id, leverage, notionalForPlan)
+    executeLive({
+      opportunityId: opp.id,
+      asset: opp.asset,
+      leverage,
+      requestedNotional: approvedNotional,
+      approvedBaseAmount: approvedNotional / plannedRiskierLeg.expected_price,
+      maxSlippagePct: selectedPlan.bounds.max_slippage_pct,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      legs: intentLegs as [NonNullable<(typeof intentLegs)[number]>, NonNullable<(typeof intentLegs)[number]>],
+    })
+  }
+
+  const handleExecuteLive = () => {
+    if (plan) executeLivePlan(plan)
+  }
+
+  const handleRetryLive = async () => {
+    const freshPlan = await refreshPlan()
+    if (freshPlan) executeLivePlan(freshPlan)
   }
 
   const handleCloseLiveModal = () => {
@@ -312,7 +373,9 @@ export function OpportunityPanel({
           <div className="mb-2">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Leverage</span>
-              <span className="text-[11px] text-muted-foreground/70">Pair max {maxLev}x</span>
+              <span className="text-[11px] text-muted-foreground/70">
+                Pair max {maxLev === null ? '--' : `${maxLev}x`}
+              </span>
             </div>
             {plan && (
               <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70">
@@ -321,12 +384,14 @@ export function OpportunityPanel({
               </div>
             )}
           </div>
-          <LeverageRow
-            label={`${longVenue} + ${shortVenue}`}
-            value={leverage}
-            max={maxLev}
-            onChange={setLeverage}
-          />
+          {maxLev !== null && (
+            <LeverageRow
+              label={`${longVenue} + ${shortVenue}`}
+              value={leverage}
+              max={maxLev}
+              onChange={setLeverage}
+            />
+          )}
         </div>
 
         {/* Entry Type */}
@@ -410,7 +475,7 @@ export function OpportunityPanel({
 
       {/* Action */}
       <div className="px-5 py-4 border-t border-border">
-        {planError && (
+        {canRequestPlan && planError && (
           <p className="text-[11px] text-red-400 mb-2">Plan error: {planError}</p>
         )}
         <div className="flex items-center gap-1.5 mb-3">
@@ -489,7 +554,7 @@ export function OpportunityPanel({
             >
               {isFullyReady
                 ? hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
-                : readinessAggregate.statusLabel === 'Not connected'
+                : noSelectedWallets
                   ? 'Connect Wallets to Go Live'
                   : 'Accounts Not Ready'}
             </Button>
@@ -500,9 +565,9 @@ export function OpportunityPanel({
       {(showLiveModal || liveState.phase !== 'idle') && (
         <LiveExecutionModal
           state={liveState}
-          onRetry={handleExecuteLive}
+          onRetry={handleRetryLive}
           onClose={handleCloseLiveModal}
-          onViewPositions={() => { handleCloseLiveModal(); onViewPositions?.() }}
+          onViewPositions={(positionId) => { handleCloseLiveModal(); onViewPositions?.(positionId) }}
         />
       )}
     </div>

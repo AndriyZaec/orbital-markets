@@ -1,4 +1,5 @@
 import { apiUrl } from './api.ts'
+import { liveAccountsKey, liveAccountsQuery, type VenueAddressMap } from './live-bindings.ts'
 
 export type LiveAccountEvent =
   | { type: 'connected' | 'disconnected' }
@@ -13,30 +14,51 @@ interface AccountChannel {
 const accountChannels = new Map<string, AccountChannel>()
 
 export function hasActiveLiveExposure(data: unknown): boolean {
-  return Array.isArray(data) && data.some((position) => {
-    if (!position || typeof position !== 'object' || !('state' in position)) return false
-    return position.state === 'open' || position.state === 'degraded' || position.state === 'closing'
-  })
+  return Array.isArray(data) && data.some(isActiveLivePosition)
 }
 
-function liveEventsUrl(pacificaAccount: string, hyperliquidAccount: string, sessionId?: string) {
-  const query = new URLSearchParams({
-    account_pacifica: pacificaAccount,
-    account_hyperliquid: hyperliquidAccount,
-  })
-  if (sessionId) query.set('session_id', sessionId)
+export function hasActiveLiveExposureForWallet(data: unknown, wallet: 'evm' | 'solana'): boolean {
+  if (!Array.isArray(data)) return false
+  const venues = wallet === 'solana' ? ['pacifica'] : ['hyperliquid', 'aster']
+  return data.some((position) => isActiveLivePosition(position) && venues.some((venue) =>
+    position.venue_a === venue || position.venue_b === venue))
+}
+
+function isActiveLivePosition(position: unknown): position is Record<string, unknown> {
+  if (!position || typeof position !== 'object' || !('state' in position)) return false
+  return position.state === 'pending' || position.state === 'open' || position.state === 'degraded' || position.state === 'closing'
+}
+
+function liveEventsUrl(accounts: VenueAddressMap, sessionId?: string) {
+  const query = liveAccountsQuery(accounts, sessionId ? { session_id: sessionId } : {})
   return apiUrl(`/api/v1/live/events?${query}`)
 }
 
+function liveAccountEventsUrl(accounts: VenueAddressMap) {
+  return apiUrl(`/api/v1/live/accounts/events?${liveAccountsQuery(accounts)}`)
+}
+
 export function subscribeLiveAccountEvents(
-  pacificaAccount: string,
-  hyperliquidAccount: string,
+  accounts: VenueAddressMap,
   listener: (event: LiveAccountEvent) => void,
 ): () => void {
-  const key = `${pacificaAccount}|${hyperliquidAccount.toLowerCase()}`
+  return subscribeLiveEventSource(
+    `pair:${liveAccountsKey(accounts)}`,
+    liveEventsUrl(accounts),
+    ['balances', 'positions'],
+    listener,
+  )
+}
+
+function subscribeLiveEventSource(
+  key: string,
+  url: string,
+  eventTypes: Array<'balances' | 'positions'>,
+  listener: (event: LiveAccountEvent) => void,
+): () => void {
   let channel = accountChannels.get(key)
   if (!channel) {
-    const source = new EventSource(liveEventsUrl(pacificaAccount, hyperliquidAccount), { withCredentials: true })
+    const source = new EventSource(url, { withCredentials: true })
     channel = { source, listeners: new Set(), connected: false }
     accountChannels.set(key, channel)
     const dispatch = (event: LiveAccountEvent) => {
@@ -50,7 +72,7 @@ export function subscribeLiveAccountEvents(
       channel!.connected = false
       dispatch({ type: 'disconnected' })
     }
-    for (const type of ['balances', 'positions'] as const) {
+    for (const type of eventTypes) {
       source.addEventListener(type, (message) => {
         try {
           dispatch({ type, data: JSON.parse((message as MessageEvent).data) })
@@ -72,14 +94,25 @@ export function subscribeLiveAccountEvents(
   }
 }
 
+export function subscribeLiveAccountUpdates(
+  accounts: VenueAddressMap,
+  listener: (event: LiveAccountEvent) => void,
+): () => void {
+  return subscribeLiveEventSource(
+    `accounts:${liveAccountsKey(accounts)}`,
+    liveAccountEventsUrl(accounts),
+    ['balances'],
+    listener,
+  )
+}
+
 export function subscribeLiveSessionEvents(
-  pacificaAccount: string,
-  hyperliquidAccount: string,
+  accounts: VenueAddressMap,
   sessionId: string,
   onConnection: (connected: boolean) => void,
   onSession: (data: unknown) => void,
 ): () => void {
-  const source = new EventSource(liveEventsUrl(pacificaAccount, hyperliquidAccount, sessionId), {
+  const source = new EventSource(liveEventsUrl(accounts, sessionId), {
     withCredentials: true,
   })
   source.onopen = () => onConnection(true)

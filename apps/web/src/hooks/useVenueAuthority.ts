@@ -33,15 +33,22 @@ export function useVenueAuthority() {
     return { venue: 'hyperliquid', readiness: 'ready', address: evmAccount.address, signerType: 'evm', error: null }
   }, [evmAccount.isConnected, evmAccount.address])
 
-  const venueAuthorities = useMemo(() => [pacifica, hyperliquid], [pacifica, hyperliquid])
-  const isFullyReady = pacifica.readiness === 'ready' && hyperliquid.readiness === 'ready'
+  const aster = useMemo<VenueAuthority>(() => {
+    if (!evmAccount.isConnected || !evmAccount.address) {
+      return { venue: 'aster', readiness: 'not_connected', address: null, signerType: null, error: null }
+    }
+    return { venue: 'aster', readiness: 'ready', address: evmAccount.address, signerType: 'evm', error: null }
+  }, [evmAccount.isConnected, evmAccount.address])
+
+  const venueAuthorities = useMemo(() => [pacifica, hyperliquid, aster], [pacifica, hyperliquid, aster])
 
   return {
     venueAuthorities,
     pacifica,
     hyperliquid,
-    isFullyReady,
+    aster,
     pacificaAddress: pacifica.address,
     hyperliquidAddress: hyperliquid.address,
+    asterAddress: aster.address,
   }
 }

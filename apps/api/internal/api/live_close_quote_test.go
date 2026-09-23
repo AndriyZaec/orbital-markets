@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,12 +14,29 @@ import (
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 )
 
-type closeQuoteTestSource struct {
-	snapshot venue.MarketData
-	err      error
+func TestCloseClientOrderIDsFitAsterConstraints(t *testing.T) {
+	positionID := "plan-fbdae6a2-6368-481f-bd9a-6180e0feff0e"
+	now := time.Unix(1790087764, 499000000)
+	allowed := regexp.MustCompile(`^[.A-Z:/a-z0-9_-]{1,36}$`)
+
+	for _, action := range []string{"close", "kill"} {
+		clientOrderID := closeClientOrderID(action, positionID, 1, now)
+		if !allowed.MatchString(clientOrderID) {
+			t.Fatalf("%s client order ID %q does not satisfy Aster constraints", action, clientOrderID)
+		}
+	}
 }
 
-func (s closeQuoteTestSource) MarketSnapshot(context.Context, string, string) (venue.MarketData, error) {
+type closeQuoteTestSource struct {
+	snapshot       venue.MarketData
+	err            error
+	requestedAsset *string
+}
+
+func (s closeQuoteTestSource) MarketSnapshot(_ context.Context, _, asset string) (venue.MarketData, error) {
+	if s.requestedAsset != nil {
+		*s.requestedAsset = asset
+	}
 	return s.snapshot, s.err
 }
 
@@ -28,12 +46,16 @@ func (closeQuoteTestAssetMap) AssetIndex(string) (int, bool)   { return 213, tru
 func (closeQuoteTestAssetMap) SizeDecimals(string) (int, bool) { return 0, true }
 
 func TestHyperliquidCloseUsesFreshExecutableSideBBO(t *testing.T) {
+	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := &Server{
 		closeMarkets: closeQuoteTestSource{snapshot: venue.MarketData{
 			Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, BidSize: 500,
 			AskPrice: 0.0537, AskSize: 500, Timestamp: time.Now(),
 		}},
-		live: &LiveDeps{hlAssetMap: closeQuoteTestAssetMap{}},
+		live: &LiveDeps{modules: modules},
 	}
 
 	request, err := server.buildCloseSigningRequest(
@@ -57,15 +79,19 @@ func TestHyperliquidCloseUsesFreshExecutableSideBBO(t *testing.T) {
 }
 
 func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
+	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := &Server{
 		closeMarkets: closeQuoteTestSource{snapshot: venue.MarketData{
 			Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, BidSize: 500,
 			AskPrice: 0.0537, AskSize: 500, Timestamp: time.Now().Add(-time.Minute),
 		}},
-		live: &LiveDeps{hlAssetMap: closeQuoteTestAssetMap{}},
+		live: &LiveDeps{modules: modules},
 	}
 
-	_, err := server.buildCloseSigningRequest(
+	_, err = server.buildCloseSigningRequest(
 		context.Background(),
 		executor.LiveFill{Venue: "hyperliquid", Symbol: "2Z", Side: string(domain.SideLong), FilledAmount: 265, AvgFillPrice: 0.0566},
 		"close-order", "pacifica-owner", "hl-owner", "pacifica-agent", "hl-agent",
@@ -76,12 +102,16 @@ func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
 }
 
 func TestHyperliquidShortCloseUsesCurrentAsk(t *testing.T) {
+	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := &Server{
 		closeMarkets: closeQuoteTestSource{snapshot: venue.MarketData{
 			Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, BidSize: 500,
 			AskPrice: 0.0537, AskSize: 500, Timestamp: time.Now(),
 		}},
-		live: &LiveDeps{hlAssetMap: closeQuoteTestAssetMap{}},
+		live: &LiveDeps{modules: modules},
 	}
 
 	request, err := server.buildCloseSigningRequest(

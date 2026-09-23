@@ -161,6 +161,11 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 			update.HoldHours = time.Since(openedAt).Hours()
 		}
 	}
+	update.FundingPnL = estimatedLegFundingPnL(
+		leg1Side, leg1Snap.FundingRate, update.Leg1CurPrice, leg1.FilledAmount, update.HoldHours,
+	) + estimatedLegFundingPnL(
+		leg2Side, leg2Snap.FundingRate, update.Leg2CurPrice, leg2.FilledAmount, update.HoldHours,
+	)
 
 	// Persist
 	m.store.UpdateMonitoring(ctx, pos.ID, update)
@@ -203,6 +208,17 @@ func legPricePnL(side domain.Side, entryPrice, markPrice, baseAmount float64) fl
 		return (entryPrice - markPrice) * baseAmount
 	}
 	return (markPrice - entryPrice) * baseAmount
+}
+
+func estimatedLegFundingPnL(side domain.Side, hourlyRate, markPrice, baseAmount, hours float64) float64 {
+	payment := hourlyRate * markPrice * baseAmount * hours
+	if side == domain.SideLong {
+		return -payment
+	}
+	if side == domain.SideShort {
+		return payment
+	}
+	return 0
 }
 
 func monitoredLiquidationPrice(nativePrice, entryPrice float64, side domain.Side, leverage float64) float64 {

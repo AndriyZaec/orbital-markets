@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +37,7 @@ type Server struct {
 	telegramLinks        TelegramLinker
 	productAnalytics     *analytics.Emitter
 	analyticsAccessToken string
+	asterDataAgent       AsterDataAgentProbe
 	metricsMu            sync.Mutex
 	metricsCache         *analytics.LiveMetrics
 	metricsCachedAt      time.Time
@@ -144,15 +146,27 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/live/sessions/", s.handleLiveSessionStatus)
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
 	s.mux.HandleFunc("GET /api/v1/live/balances", s.handleLiveBalances)
+	s.mux.HandleFunc("GET /api/v1/live/accounts/events", s.handleLiveAccountEvents)
 	s.mux.HandleFunc("GET /api/v1/live/events", s.handleLiveEvents)
 	s.mux.HandleFunc("POST /api/v1/live/accounts/ensure", s.handleLiveAccountsEnsure)
 	s.mux.HandleFunc("GET /api/v1/live/positions", s.handleLivePositions)
 	s.mux.HandleFunc("GET /api/v1/live/positions/", s.handleLivePosition)
 	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
 	s.mux.HandleFunc("POST /api/v1/live/kill", s.handleLiveKill)
+	s.mux.HandleFunc("POST /api/v1/live/agents/aster/approve", s.handleAsterAgentApprove)
+	s.mux.HandleFunc("POST /api/v1/live/agents/aster/reconcile", s.handleAsterAgentReconcile)
+	s.mux.HandleFunc("POST /api/v1/live/aster/private/prepare", s.handleAsterPrivatePrepare)
+	s.mux.HandleFunc("POST /api/v1/live/aster/private/submit", s.handleAsterPrivateSubmit)
+	s.mux.HandleFunc("POST /api/v1/live/aster/account/prepare", s.handleAsterAccountPrepare)
+	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/prepare", s.handleAsterDataAgentPrepare)
+	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/authorize", s.handleAsterDataAgentAuthorize)
+	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/validate", s.handleAsterDataAgentValidate)
+	s.mux.HandleFunc("GET /api/v1/live/aster/data-agent/status", s.handleAsterDataAgentStatus)
+	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/run", s.handleAsterDataAgentRun)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve", s.handleHyperliquidAgentApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve-builder-fee", s.handleHyperliquidBuilderFeeApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/bind", s.handlePacificaAgentBind)
+	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/revoke", s.handlePacificaAgentRevoke)
 	s.mux.HandleFunc("POST /api/v1/live/agents/pacifica/approve-builder-code", s.handlePacificaBuilderCodeApprove)
 	s.mux.HandleFunc("GET /api/v1/live/agents/pacifica/builder-code-approval", s.handlePacificaBuilderCodeApproval)
 }
@@ -176,6 +190,11 @@ const (
 )
 
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
+	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	limit := opportunitiesDefaultLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -186,6 +205,33 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	opps := s.scanner.Opportunities()
+	if resolveLeverageCap := s.live.accountLeverageResolver(bindings.Accounts); resolveLeverageCap != nil {
+		type marketLeverage struct {
+			marketKey string
+			maximum   int
+		}
+		markets := make(map[string]marketLeverage)
+		for _, snapshot := range s.scanner.MarketData(r.Context()) {
+			key := strings.ToLower(snapshot.Venue) + "\x00" + strings.ToUpper(snapshot.Asset)
+			markets[key] = marketLeverage{marketKey: snapshot.MarketKey, maximum: snapshot.MaxLeverage}
+		}
+		for i := range opps {
+			keyA := strings.ToLower(opps[i].VenuePair.VenueA) + "\x00" + strings.ToUpper(opps[i].Asset)
+			keyB := strings.ToLower(opps[i].VenuePair.VenueB) + "\x00" + strings.ToUpper(opps[i].Asset)
+			marketA, foundA := markets[keyA]
+			marketB, foundB := markets[keyB]
+			if !foundA || !foundB {
+				continue
+			}
+			if maximum, found := resolveLeverageCap(opps[i].VenuePair.VenueA, marketA.marketKey, opps[i].RecommendedNotional); found {
+				marketA.maximum = maximum
+			}
+			if maximum, found := resolveLeverageCap(opps[i].VenuePair.VenueB, marketB.marketKey, opps[i].RecommendedNotional); found {
+				marketB.maximum = maximum
+			}
+			opps[i].MaxLeverage = min(marketA.maximum, marketB.maximum)
+		}
+	}
 	responses, err := s.opportunitiesWithSignals(r.Context(), opps)
 	if err != nil {
 		s.logger.Warn("opportunities: load 7d signals", "err", err)
@@ -199,9 +245,10 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OpportunityID     string   `json:"opportunity_id"`
-		Leverage          float64  `json:"leverage"`
-		RequestedNotional *float64 `json:"requested_notional,omitempty"`
+		OpportunityID     string              `json:"opportunity_id"`
+		Leverage          float64             `json:"leverage"`
+		RequestedNotional *float64            `json:"requested_notional,omitempty"`
+		Accounts          uniqueVenueBindings `json:"accounts,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -220,7 +267,15 @@ func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 	if req.RequestedNotional != nil {
 		notional = *req.RequestedNotional
 	}
-	plan, err := s.scanner.BuildPlan(r.Context(), req.OpportunityID, req.Leverage, notional)
+	accounts, err := normalizeVenueBindings("accounts", req.Accounts)
+	if err != nil || (liveVenueBindings{Accounts: accounts}).requireAccountsWithin(supportedLiveVenues) != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid account bindings"})
+		return
+	}
+	plan, err := s.scanner.BuildPlanWithLeverageCaps(
+		r.Context(), req.OpportunityID, req.Leverage, notional,
+		s.live.accountLeverageResolver(accounts),
+	)
 	if err != nil {
 		s.logger.Error("build plan", "err", err)
 		writePlanError(w, http.StatusUnprocessableEntity, err)

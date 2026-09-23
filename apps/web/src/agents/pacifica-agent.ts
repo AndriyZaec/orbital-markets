@@ -3,10 +3,11 @@ import nacl from 'tweetnacl'
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
 import builderConfig from '../../../api/internal/venue/pacifica/live/builder_config.json' with { type: 'json' }
-import { saveStoredTradingAgent, type StorageLike } from './storage.ts'
+import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 
 const bindExpiryWindow = 30_000
+const revokeExpiryWindow = 30_000
 const builderApprovalExpiryWindow = 30_000
 const maxOrderExpiryWindow = 120_000
 
@@ -29,6 +30,14 @@ export interface PacificaApproveBuilderCodeRequest {
   expiry_window: number
   builder_code: string
   max_fee_rate: string
+}
+
+export interface PacificaRevokeAgentRequest {
+  account: string
+  signature: string
+  timestamp: number
+  expiry_window: number
+  agent_wallet: string
 }
 
 export function generatePacificaAgent(): { privateKey: string; agentAddress: string } {
@@ -55,12 +64,15 @@ export function buildPacificaSigningMessage(
 }
 
 export async function authorizePacificaAgent(options: {
-  storage: StorageLike
+  storage: TradingAgentStore
   ownerAddress: string
   signMessage: (message: Uint8Array) => Promise<Uint8Array>
   builderCodeApproved: (ownerAddress: string) => Promise<boolean>
   relay: (request: PacificaBindAgentRequest) => Promise<void>
+  relayRevocation: (request: PacificaRevokeAgentRequest) => Promise<void>
   relayBuilderApproval: (request: PacificaApproveBuilderCodeRequest) => Promise<void>
+  rememberPendingRevocation: (agentAddress: string) => void
+  forgetPendingRevocation: (agentAddress: string) => void
   now?: () => number
 }): Promise<StoredTradingAgent> {
   if (!await options.builderCodeApproved(options.ownerAddress)) {
@@ -97,7 +109,7 @@ export async function authorizePacificaAgent(options: {
   })
 
   const agent: StoredTradingAgent = {
-    version: 1,
+    version: 2,
     venue: 'pacifica',
     ownerAddress: options.ownerAddress,
     agentAddress: generated.agentAddress,
@@ -105,8 +117,47 @@ export async function authorizePacificaAgent(options: {
     authorizedAt: new Date(bindTimestamp).toISOString(),
     builderCode: pacificaBuilderCode,
   }
-  saveStoredTradingAgent(options.storage, agent)
+  try {
+    await options.storage.save(agent)
+  } catch (storageError) {
+    options.rememberPendingRevocation(generated.agentAddress)
+    try {
+      await revokePacificaAgent({
+        ownerAddress: options.ownerAddress,
+        agentAddress: generated.agentAddress,
+        signMessage: options.signMessage,
+        relay: options.relayRevocation,
+        now: options.now,
+      })
+      options.forgetPendingRevocation(generated.agentAddress)
+    } catch {
+      throw new Error(`Pacifica authorized agent ${generated.agentAddress} that could not be stored or revoked`)
+    }
+    throw storageError
+  }
   return agent
+}
+
+export async function revokePacificaAgent(options: {
+  ownerAddress: string
+  agentAddress: string
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>
+  relay: (request: PacificaRevokeAgentRequest) => Promise<void>
+  now?: () => number
+}): Promise<void> {
+  const timestamp = options.now?.() ?? Date.now()
+  const message = buildPacificaSigningMessage('revoke_agent_wallet', timestamp, revokeExpiryWindow, {
+    agent_wallet: options.agentAddress,
+  })
+  const signature = await options.signMessage(message)
+  if (signature.length !== nacl.sign.signatureLength) throw new Error('Invalid Pacifica revocation signature')
+  await options.relay({
+    account: options.ownerAddress,
+    signature: bs58.encode(signature),
+    timestamp,
+    expiry_window: revokeExpiryWindow,
+    agent_wallet: options.agentAddress,
+  })
 }
 
 export async function signPacificaAgentRequest(
@@ -194,6 +245,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
   const order = request.unsigned_payload as Partial<PacificaOrder> | null
   const amount = Number(order?.amount)
   const slippage = Number(order?.slippage_percent)
+  const expectedSide = request.side === 'buy' ? 'bid' : request.side === 'sell' ? 'ask' : request.side
   const allowed =
     request.venue === 'pacifica' &&
     agent.venue === 'pacifica' &&
@@ -206,7 +258,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     (order?.expiry_window ?? 0) > 0 &&
     (order?.expiry_window ?? 0) <= maxOrderExpiryWindow &&
     order?.symbol === request.symbol &&
-    (order?.side === 'bid' || order?.side === 'ask') &&
+    (expectedSide === 'bid' || expectedSide === 'ask') && order?.side === expectedSide &&
     Number.isFinite(amount) &&
     amount > 0 &&
     Math.abs(amount - request.amount) < 1e-12 &&
@@ -214,7 +266,7 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     (request.action === 'open' || order.reduce_only === true) &&
     Number.isFinite(slippage) &&
     slippage >= 0 &&
-    slippage <= 1 &&
+    slippage <= (request.action === 'open' ? 0.5 : 1) &&
     order?.client_order_id === request.client_order_id &&
     validPacificaBuilder(order?.builder_code, request.action, agent)
   if (!allowed) throw new Error('Pacifica payload is not an allowed market order')

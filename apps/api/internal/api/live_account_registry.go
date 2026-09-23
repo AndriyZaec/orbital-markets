@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -32,6 +33,7 @@ type liveAccountSnapshot struct {
 	Available          float64
 	Positions          []liveAccountPosition
 	LeverageBySymbol   map[string]float64
+	UnavailableReason  string
 }
 
 // liveAccountFeed hides venue-specific account state, submission, and fill tracking.
@@ -75,6 +77,7 @@ type accountFeedEntry struct {
 	refs      int
 	lastUsed  time.Time
 	operation sync.Mutex
+	mutations atomic.Uint64
 }
 
 type accountFeedRegistry struct {
@@ -115,6 +118,12 @@ func (l *accountFeedLease) Feed() liveAccountFeed {
 
 func (l *accountFeedLease) Key() string {
 	return l.entry.key.String()
+}
+
+func (l *accountFeedLease) markMutation() {
+	if l != nil && l.entry != nil {
+		l.entry.mutations.Add(1)
+	}
 }
 
 func (l *accountFeedLease) Release() {

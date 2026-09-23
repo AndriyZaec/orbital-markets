@@ -7,6 +7,7 @@ type LiqRiskLevel = 'safe' | 'elevated' | 'warning' | 'critical' | ''
 interface Leg {
   venue: string
   asset: string
+  market_key?: string
   side: 'long' | 'short'
   expected_price: number
   slippage: number
@@ -61,19 +62,25 @@ export function usePlan(
   opportunityId: string | null,
   leverage: number = 1,
   requestedNotional?: number,
+  accounts?: Record<string, string>,
 ) {
   const [plan, setPlan] = useState<ExecutionPlan | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [maxLeverage, setMaxLeverage] = useState<number | null>(null)
+  const [maxLeverageResult, setMaxLeverageResult] = useState<{ key: string; value: number | null }>({ key: '', value: null })
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const requestSequence = useRef(0)
   const pageVisible = usePageVisibility()
+  const accountsKey = JSON.stringify(Object.entries(accounts ?? {}).sort(([left], [right]) => left.localeCompare(right)))
+  const planKey = JSON.stringify([opportunityId, requestedNotional ?? null, accountsKey])
+  const maxLeverage = maxLeverageResult.key === planKey ? maxLeverageResult.value : null
 
   const fetchPlan = useCallback(async (
     oppId: string,
     selectedLeverage: number,
     notional?: number,
+    serializedAccounts?: string,
+    requestKey?: string,
     signal?: AbortSignal,
   ) => {
     const requestId = ++requestSequence.current
@@ -86,6 +93,8 @@ export function usePlan(
       if (typeof notional === 'number' && notional > 0) {
         body.requested_notional = notional
       }
+      const accountEntries = JSON.parse(serializedAccounts ?? '[]') as [string, string][]
+      if (accountEntries.length > 0) body.accounts = Object.fromEntries(accountEntries)
       const resp = await apiFetch('/api/v1/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -96,15 +105,18 @@ export function usePlan(
         const body: { error?: string; pair_max_leverage?: number } = await resp.json().catch(() => ({}))
         if (signal?.aborted || requestId !== requestSequence.current) return
         if (typeof body.pair_max_leverage === 'number') {
-          setMaxLeverage(body.pair_max_leverage)
+          setMaxLeverageResult({ key: requestKey ?? '', value: body.pair_max_leverage })
+        } else {
+          setMaxLeverageResult({ key: requestKey ?? '', value: null })
         }
         throw apiError(resp.status, 'Unable to build an execution plan. Please try again.', body)
       }
       const data: ExecutionPlan = await resp.json()
       if (signal?.aborted || requestId !== requestSequence.current) return
       setPlan(data)
-      setMaxLeverage(data.max_leverage)
+      setMaxLeverageResult({ key: requestKey ?? '', value: data.max_leverage })
       setError(null)
+      return data
     } catch (e) {
       if (signal?.aborted || requestId !== requestSequence.current) return
       setError(userErrorMessage(e, 'Unable to build an execution plan. Please try again.'))
@@ -122,7 +134,7 @@ export function usePlan(
       const resetId = window.setTimeout(() => {
         setPlan(null)
         setError(null)
-        setMaxLeverage(null)
+        setMaxLeverageResult({ key: '', value: null })
       }, 0)
       return () => window.clearTimeout(resetId)
     }
@@ -130,12 +142,12 @@ export function usePlan(
 
     const controller = new AbortController()
     const initialId = window.setTimeout(
-      () => fetchPlan(opportunityId, leverage, requestedNotional, controller.signal),
+      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal),
       0,
     )
 
     intervalRef.current = setInterval(
-      () => fetchPlan(opportunityId, leverage, requestedNotional, controller.signal),
+      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal),
       10_000,
     )
     return () => {
@@ -143,16 +155,21 @@ export function usePlan(
       window.clearTimeout(initialId)
       if (intervalRef.current) window.clearInterval(intervalRef.current)
     }
-  }, [opportunityId, leverage, requestedNotional, fetchPlan, pageVisible])
+  }, [opportunityId, leverage, requestedNotional, accountsKey, planKey, fetchPlan, pageVisible])
 
   const clear = useCallback(() => {
     requestSequence.current++
     setPlan(null)
     setError(null)
-    setMaxLeverage(null)
+    setMaxLeverageResult({ key: '', value: null })
   }, [])
 
-  return { plan, loading, error, maxLeverage, clear }
+  const refresh = useCallback(() => {
+    if (!opportunityId) return Promise.resolve(undefined)
+    return fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey)
+  }, [accountsKey, fetchPlan, leverage, opportunityId, planKey, requestedNotional])
+
+  return { plan, loading, error, maxLeverage, clear, refresh }
 }
 
 export type { ExecutionPlan, Leg, Bounds }

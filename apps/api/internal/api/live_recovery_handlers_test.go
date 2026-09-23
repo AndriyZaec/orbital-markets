@@ -17,6 +17,7 @@ import (
 	appdb "github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
 )
 
@@ -366,6 +367,44 @@ func TestLiveEventsEmitsInitialAccountSnapshots(t *testing.T) {
 	}
 }
 
+func TestLiveAccountEventsEmitsAllRequestedAccounts(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	registryCtx, cancelRegistry := context.WithCancel(context.Background())
+	t.Cleanup(cancelRegistry)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {Venue: "pacifica", Account: "sol-wallet", LastUpdated: updatedAt},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", LastUpdated: updatedAt},
+		}},
+		"aster": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xaster": {Venue: "aster", Account: "0xaster", LastUpdated: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+
+	requestCtx, cancelRequest := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelRequest()
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/live/accounts/events?accounts%5Bpacifica%5D=sol-wallet&accounts%5Bhyperliquid%5D=0xwallet&accounts%5Baster%5D=0xaster", nil,
+	).WithContext(requestCtx)
+	response := httptest.NewRecorder()
+	server.handleLiveAccountEvents(response, request)
+
+	if response.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("content type = %q", response.Header().Get("Content-Type"))
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "event: balances\n") || !strings.Contains(body, `"pacifica"`) ||
+		!strings.Contains(body, `"hyperliquid"`) || !strings.Contains(body, `"aster"`) {
+		t.Fatalf("stream body = %q, want all requested account balances", body)
+	}
+	if strings.Contains(body, "event: positions\n") || strings.Contains(body, "event: session\n") {
+		t.Fatalf("stream body = %q, account stream must not emit pair events", body)
+	}
+}
+
 func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{
@@ -410,6 +449,43 @@ func TestKillSwitchReturnsExactRemainingExposure(t *testing.T) {
 	}
 	if unsigned.BuilderCode != "" {
 		t.Fatalf("emergency close builder code = %q", unsigned.BuilderCode)
+	}
+}
+
+func TestKillSwitchUsesFreshVenueExposureForDegradedPosition(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	registryCtx, cancelRegistry := context.WithCancel(context.Background())
+	t.Cleanup(cancelRegistry)
+	updatedAt := time.Now()
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"sol-wallet": {
+				Venue: "pacifica", Account: "sol-wallet", PositionsUpdatedAt: updatedAt,
+				Positions: []liveAccountPosition{{Symbol: "SOL", Side: "long", Size: 1}},
+			},
+		}},
+		"hyperliquid": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xwallet": {Venue: "hyperliquid", Account: "0xwallet", PositionsUpdatedAt: updatedAt},
+		}},
+	}, accountFeedRegistryConfig{})
+	request := httptest.NewRequest("POST", "/api/v1/live/kill", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
+	}))
+	response := httptest.NewRecorder()
+
+	server.handleLiveKill(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		SigningRequests []domain.SigningRequest `json:"signing_requests"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.SigningRequests) != 1 || body.SigningRequests[0].Amount != 1 {
+		t.Fatalf("signing requests = %+v, want fresh residual amount 1", body.SigningRequests)
 	}
 }
 
@@ -526,8 +602,11 @@ func TestLiveSessionStatusReturnsTerminalRecoveryOutcome(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	now := time.Now()
 	payload, err := marshalLiveSession(&LiveSession{
-		ID: "session-recovered", Plan: &domain.ExecutionPlan{ID: "position-residual"},
-		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
+		ID: "session-recovered", Plan: &domain.ExecutionPlan{ID: "position-residual", Asset: "SOL"},
+		Leg1: legPlan{venue: "pacifica"}, Leg2: legPlan{venue: "hyperliquid"},
+		Bindings: liveVenueBindings{Accounts: map[string]string{
+			"pacifica": "sol-wallet", "hyperliquid": "0xwallet",
+		}},
 		CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
@@ -577,8 +656,11 @@ func TestLiveSessionStatusRejectsAnotherAccountPair(t *testing.T) {
 	server, _ := newResidualExposureServer(t)
 	now := time.Now()
 	payload, err := marshalLiveSession(&LiveSession{
-		ID: "session-private", Plan: &domain.ExecutionPlan{ID: "position-residual"},
-		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
+		ID: "session-private", Plan: &domain.ExecutionPlan{ID: "position-residual", Asset: "SOL"},
+		Leg1: legPlan{venue: "pacifica"}, Leg2: legPlan{venue: "hyperliquid"},
+		Bindings: liveVenueBindings{Accounts: map[string]string{
+			"pacifica": "sol-wallet", "hyperliquid": "0xwallet",
+		}},
 		CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
@@ -743,9 +825,13 @@ func newResidualExposureServer(t *testing.T) (*Server, *sql.DB) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	liveStore := executor.NewStore(database, logger)
+	modules, err := venue.NewLiveModuleRegistry(pacificlive.NewLiveModule(recoveryTestLotSizes{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	live := &LiveDeps{
 		liveStore: liveStore, signingStore: domain.NewSigningRequestStore(),
-		pacificaLotSizes: recoveryTestLotSizes{},
+		modules: modules,
 	}
 	return &Server{ctx: context.Background(), liveStore: liveStore, live: live, logger: logger}, database
 }

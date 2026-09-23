@@ -25,7 +25,24 @@ func NewSigningRequestStore() *SigningRequestStore {
 func (s *SigningRequestStore) Store(req *SigningRequest) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	for id, pending := range s.requests {
+		if now.After(pending.ExpiresAt) {
+			delete(s.requests, id)
+		}
+	}
+	if now.After(req.ExpiresAt) {
+		return
+	}
 	s.requests[req.ID] = req
+}
+
+// Validate checks a signed action without consuming it. Callers use this to
+// perform authorization and operation checks before the one-shot consume.
+func (s *SigningRequestStore) Validate(signed SignedAction) (*SigningRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.validateLocked(signed, false)
 }
 
 // ValidateAndConsume atomically validates a signed action against a stored
@@ -34,7 +51,10 @@ func (s *SigningRequestStore) Store(req *SigningRequest) {
 func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.validateLocked(signed, true)
+}
 
+func (s *SigningRequestStore) validateLocked(signed SignedAction, consume bool) (*SigningRequest, error) {
 	req, exists := s.requests[signed.RequestID]
 	if !exists {
 		return nil, fmt.Errorf("unknown request id: %s", signed.RequestID)
@@ -78,8 +98,9 @@ func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningR
 		return nil, fmt.Errorf("empty signer address")
 	}
 
-	// Consume atomically — no second submit possible
-	delete(s.requests, signed.RequestID)
+	if consume {
+		delete(s.requests, signed.RequestID)
+	}
 
 	return req, nil
 }
@@ -87,7 +108,7 @@ func (s *SigningRequestStore) ValidateAndConsume(signed SignedAction) (*SigningR
 func signingAccountMatches(venue, expected, actual string) bool {
 	expected = strings.TrimSpace(expected)
 	actual = strings.TrimSpace(actual)
-	if venue == "hyperliquid" {
+	if venue == "hyperliquid" || venue == "aster" {
 		return strings.EqualFold(expected, actual)
 	}
 	return expected == actual

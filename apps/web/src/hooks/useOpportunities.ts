@@ -43,18 +43,23 @@ interface Opportunity {
 // Default poll matches the backend scanner's 60s refresh cadence. Polling
 // faster just moves the same data around; a manual refetch is still available
 // on the returned object for user-triggered refreshes.
-export function useOpportunities(pollInterval = 60_000) {
+export function useOpportunities(accounts?: Record<string, string>, pollInterval = 60_000) {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const pageVisible = usePageVisibility()
   const requestSequence = useRef(0)
+  const accountsKey = JSON.stringify(Object.entries(accounts ?? {}).sort(([left], [right]) => left.localeCompare(right)))
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
     const request = ++requestSequence.current
     try {
-      const resp = await apiFetch('/api/v1/opportunities', { signal })
+      const params = new URLSearchParams()
+      const accountEntries = JSON.parse(accountsKey) as [string, string][]
+      for (const [venue, account] of accountEntries) params.set(`accounts[${venue}]`, account)
+      const query = params.toString()
+      const resp = await apiFetch(`/api/v1/opportunities${query ? `?${query}` : ''}`, { signal })
       if (!resp.ok) throw await apiResponseError(resp, 'Unable to load opportunities. Please try again.')
       const data: Opportunity[] = await resp.json()
       if (signal?.aborted || request !== requestSequence.current) return
@@ -67,7 +72,7 @@ export function useOpportunities(pollInterval = 60_000) {
     } finally {
       if (!signal?.aborted && request === requestSequence.current) setLoading(false)
     }
-  }, [])
+  }, [accountsKey])
 
   useEffect(() => {
     if (!pageVisible) return

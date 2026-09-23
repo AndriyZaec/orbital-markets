@@ -65,3 +65,17 @@ func TestParseAccountStateFallsBackToPerpSummary(t *testing.T) {
 		t.Fatalf("Withdrawable = %v, want 95", margin.Withdrawable)
 	}
 }
+
+func TestParseAccountStateRejectsMalformedAndNonFiniteNumbers(t *testing.T) {
+	spotRaw := []byte(`{"balances": []}`)
+	for name, perpRaw := range map[string][]byte{
+		"non-finite equity":  []byte(`{"marginSummary":{"accountValue":"NaN","totalMarginUsed":"0"},"withdrawable":"0","assetPositions":[]}`),
+		"malformed position": []byte(`{"marginSummary":{"accountValue":"1","totalMarginUsed":"0"},"withdrawable":"1","assetPositions":[{"position":{"coin":"BTC","szi":"wat"}}]}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := parseAccountState(perpRaw, spotRaw); err == nil {
+				t.Fatal("expected invalid numeric account state error")
+			}
+		})
+	}
+}

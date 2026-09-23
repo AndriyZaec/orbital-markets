@@ -1,6 +1,12 @@
 package api
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
+	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
+	paclive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
+)
 
 type liveAmountTestAssetMap struct {
 	decimals int
@@ -17,10 +23,14 @@ func (m liveAmountTestLotSizes) LotSize(symbol string) (string, bool) {
 }
 
 func TestNormalizeLiveHedgeAmountUsesPrecisionSupportedByBothVenues(t *testing.T) {
-	server := &Server{live: &LiveDeps{
-		hlAssetMap:       liveAmountTestAssetMap{decimals: 0},
-		pacificaLotSizes: liveAmountTestLotSizes{"LIT": "0.1"},
-	}}
+	modules, err := venue.NewLiveModuleRegistry(
+		paclive.NewLiveModule(liveAmountTestLotSizes{"LIT": "0.1"}),
+		hllive.NewLiveModule(liveAmountTestAssetMap{decimals: 0}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{live: &LiveDeps{modules: modules}}
 	pacifica := legPlan{venue: "pacifica", symbol: "LIT"}
 	hyperliquid := legPlan{venue: "hyperliquid", symbol: "LIT"}
 

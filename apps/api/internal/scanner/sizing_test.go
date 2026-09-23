@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"testing"
+	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
@@ -70,6 +71,31 @@ func TestComputeSizingUsesEntryExecutableSides(t *testing.T) {
 	}
 	if longB.RecommendedNotional != 5 {
 		t.Fatalf("long-B suggested size = %v, want 5", longB.RecommendedNotional)
+	}
+}
+
+func TestComputeSizingReportsOpenInterestAsComparableUSDNotional(t *testing.T) {
+	a := venue.MarketData{MarkPrice: 100_000, OpenInterest: 1}
+	b := venue.MarketData{MarkPrice: 99_000, OpenInterest: 10}
+
+	sizing := computeSizing(a, b, domain.DirectionLongA)
+	if sizing.MaxAvailableNotional != 100_000 {
+		t.Fatalf("available notional = %v, want 100000 from the weaker venue's USD open interest", sizing.MaxAvailableNotional)
+	}
+}
+
+func TestLiquidityCheckComparesDepthWithUSDOpenInterest(t *testing.T) {
+	market := venue.MarketData{
+		Venue:        "test",
+		MarkPrice:    100_000,
+		BidSize:      50,
+		AskSize:      50,
+		OpenInterest: 10,
+	}
+
+	check := CheckLiquidity(market, market, 0, time.Now())
+	if !check.Suspect {
+		t.Fatal("liquidity check did not flag $50 depth against $1m open interest")
 	}
 }
 

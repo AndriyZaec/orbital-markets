@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +79,101 @@ func TestLiveBalancesReturnEachMatchingWalletPair(t *testing.T) {
 
 	assertBalancePair(t, server, "pacifica-a", "0xAaA", 46.16, 99.60)
 	assertBalancePair(t, server, "pacifica-b", "0xBbB", 21, 55)
+}
+
+func TestLiveAccountHandlersAcceptVenueMaps(t *testing.T) {
+	server := newAccountScopedBalanceServer(t, map[string]liveAccountSnapshot{
+		"pacifica-a": connectedSnapshot("pacifica", "pacifica-a", 46.16, 40),
+	}, map[string]liveAccountSnapshot{
+		"0xaaa": connectedSnapshot("hyperliquid", "0xaaa", 99.60, 99.60),
+	})
+
+	ensure := httptest.NewRequest(http.MethodPost, "/api/v1/live/accounts/ensure", strings.NewReader(
+		`{"accounts":{"pacifica":"pacifica-a","hyperliquid":"0xAaA"}}`,
+	))
+	ensureResponse := httptest.NewRecorder()
+	server.handleLiveAccountsEnsure(ensureResponse, ensure)
+	if ensureResponse.Code != http.StatusOK {
+		t.Fatalf("ensure status = %d body = %s", ensureResponse.Code, ensureResponse.Body.String())
+	}
+
+	query := url.Values{
+		"accounts[pacifica]":    {"pacifica-a"},
+		"accounts[hyperliquid]": {"0xAaA"},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?"+query.Encode(), nil)
+	response := httptest.NewRecorder()
+	server.handleLiveBalances(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("balances status = %d body = %s", response.Code, response.Body.String())
+	}
+	var balances map[string]venueAccountStatus
+	if err := json.Unmarshal(response.Body.Bytes(), &balances); err != nil {
+		t.Fatal(err)
+	}
+	if balances["pacifica"].Equity != 46.16 || balances["hyperliquid"].Equity != 99.60 {
+		t.Fatalf("unexpected map-bound balances: %+v", balances)
+	}
+}
+
+func TestLiveBalancesReturnAsterAccountState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xabc": connectedSnapshot("aster", "0xabc", 75, 60),
+		}},
+	}, accountFeedRegistryConfig{})
+	server := &Server{live: &LiveDeps{accounts: registry}}
+	accounts, err := server.live.acquireAccountContext(map[string]string{"aster": "0xabc"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts.Release()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?accounts%5Baster%5D=0xAbC", nil)
+	response := httptest.NewRecorder()
+
+	server.handleLiveBalances(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var balances map[string]venueAccountStatus
+	if err := json.Unmarshal(response.Body.Bytes(), &balances); err != nil {
+		t.Fatal(err)
+	}
+	if balances["aster"].Equity != 75 || !balances["aster"].Fresh {
+		t.Fatalf("unexpected Aster balance: %+v", balances["aster"])
+	}
+}
+
+func TestLiveBalancesReportsUnavailableAsterAccount(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &fakeAccountFeedFactory{snapshots: map[string]liveAccountSnapshot{
+			"0xabc": {Venue: "aster", Account: "0xabc", UnavailableReason: "Aster account requires a deposit"},
+		}},
+	}, accountFeedRegistryConfig{})
+	lease, err := registry.Acquire("aster", "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	server := &Server{live: &LiveDeps{accounts: registry}}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/balances?accounts%5Baster%5D=0xabc", nil)
+	response := httptest.NewRecorder()
+
+	server.handleLiveBalances(response, request)
+
+	var balances map[string]venueAccountStatus
+	if err := json.Unmarshal(response.Body.Bytes(), &balances); err != nil {
+		t.Fatal(err)
+	}
+	aster := balances["aster"]
+	if !aster.Unavailable || aster.Connected || aster.StreamReady || aster.Reason != "Aster account requires a deposit" {
+		t.Fatalf("unexpected Aster status: %+v", aster)
+	}
 }
 
 func assertBalancePair(t *testing.T, server *Server, pacifica, hyperliquid string, pacEquity, hlEquity float64) {

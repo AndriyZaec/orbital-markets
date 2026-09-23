@@ -18,6 +18,8 @@ type LeverageRangeError struct {
 	PairMax   int
 }
 
+type LeverageCapResolver func(venueName, symbol string, notional float64) (int, bool)
+
 func (e *LeverageRangeError) Error() string {
 	return fmt.Sprintf(
 		"leverage %.1fx outside supported range (minimum %.0fx, pair maximum %dx)",
@@ -37,6 +39,16 @@ func (s *Scanner) BuildPlan(
 	opportunityID string,
 	leverage float64,
 	requestedNotional float64,
+) (*domain.ExecutionPlan, error) {
+	return s.BuildPlanWithLeverageCaps(ctx, opportunityID, leverage, requestedNotional, nil)
+}
+
+func (s *Scanner) BuildPlanWithLeverageCaps(
+	ctx context.Context,
+	opportunityID string,
+	leverage float64,
+	requestedNotional float64,
+	resolveLeverageCap LeverageCapResolver,
 ) (*domain.ExecutionPlan, error) {
 	// Find the opportunity
 	opp := s.FindOpportunity(opportunityID)
@@ -59,7 +71,21 @@ func (s *Scanner) BuildPlan(
 	if err != nil {
 		return nil, fmt.Errorf("fetch fresh data: %w", err)
 	}
-	pairMaxLeverage := minLeverage(snapA.MaxLeverage, snapB.MaxLeverage)
+	notional := opp.RecommendedNotional
+	if requestedNotional > 0 {
+		notional = requestedNotional
+	}
+	maxLeverageA := snapA.MaxLeverage
+	maxLeverageB := snapB.MaxLeverage
+	if resolveLeverageCap != nil {
+		if maximum, found := resolveLeverageCap(snapA.Venue, snapA.MarketKey, notional); found {
+			maxLeverageA = maximum
+		}
+		if maximum, found := resolveLeverageCap(snapB.Venue, snapB.MarketKey, notional); found {
+			maxLeverageB = maximum
+		}
+	}
+	pairMaxLeverage := minLeverage(maxLeverageA, maxLeverageB)
 	if pairMaxLeverage <= 0 {
 		return nil, fmt.Errorf("maximum leverage unavailable for %s venue pair", opp.Asset)
 	}
@@ -79,10 +105,6 @@ func (s *Scanner) BuildPlan(
 		longSnap = snapB
 		shortSnap = snapA
 	}
-	notional := opp.RecommendedNotional
-	if requestedNotional > 0 {
-		notional = requestedNotional
-	}
 	bestPriceCapacity := min(
 		executionSideDepth(longSnap, domain.SideLong),
 		executionSideDepth(shortSnap, domain.SideShort),
@@ -92,6 +114,7 @@ func (s *Scanner) BuildPlan(
 	leg1 := domain.Leg{
 		Venue:         longSnap.Venue,
 		Asset:         longSnap.Asset,
+		MarketKey:     longSnap.MarketKey,
 		Side:          domain.SideLong,
 		ExpectedPrice: longSnap.AskPrice, // buy at ask
 		Slippage:      estimateExecutionSlippage(longSnap, domain.SideLong, notional),
@@ -101,6 +124,7 @@ func (s *Scanner) BuildPlan(
 	leg2 := domain.Leg{
 		Venue:         shortSnap.Venue,
 		Asset:         shortSnap.Asset,
+		MarketKey:     shortSnap.MarketKey,
 		Side:          domain.SideShort,
 		ExpectedPrice: shortSnap.BidPrice, // sell at bid
 		Slippage:      estimateExecutionSlippage(shortSnap, domain.SideShort, notional),

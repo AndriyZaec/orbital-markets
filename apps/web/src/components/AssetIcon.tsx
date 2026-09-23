@@ -1,10 +1,5 @@
 import { useState } from 'react'
-
-const HYPERLIQUID_ICON_ALIASES: Record<string, string> = {
-  KBONK: 'BONK',
-  KPEPE: 'PEPE',
-  KSHIB: 'SHIB',
-}
+import { assetIconUrls } from '@/lib/asset-icons'
 
 const DARK_ICON_STYLES: Record<string, string> = {
   MEGA: 'brightness-0 invert',
@@ -28,24 +23,25 @@ const SIZES = {
 }
 
 export function AssetIcon({ asset, size = 'md' }: { asset: string; size?: keyof typeof SIZES }) {
-  const [failedAsset, setFailedAsset] = useState<string | null>(null)
-  const unavailable = failedAsset === asset
-  const iconAsset = HYPERLIQUID_ICON_ALIASES[asset.toUpperCase()] ?? asset
-  const iconURL = `https://app.hyperliquid.xyz/coins/${encodeURIComponent(iconAsset)}.svg`
+  const [failedSource, setFailedSource] = useState<{ asset: string; index: number } | null>(null)
+  const iconURLs = assetIconUrls(asset)
+  const sourceIndex = failedSource?.asset === asset ? failedSource.index : 0
+  const iconURL = iconURLs[sourceIndex]
   const styles = SIZES[size]
   const iconStyle = DARK_ICON_STYLES[asset.toUpperCase()] ?? ''
 
   return (
     <span className={`flex shrink-0 items-center justify-center ${styles.slot}`}>
-      {!unavailable ? (
+      {iconURL ? (
         <img
+          key={iconURL}
           src={iconURL}
           alt=""
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
           className={`${styles.image} rounded-sm object-contain ${iconStyle}`}
-          onError={() => setFailedAsset(asset)}
+          onError={() => setFailedSource({ asset, index: sourceIndex + 1 })}
         />
       ) : (
         <span className={`flex items-center justify-center rounded-full border border-white/[0.07] bg-white/[0.035] font-semibold uppercase text-muted-foreground ${styles.fallback}`}>

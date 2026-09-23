@@ -2,6 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,16 +40,19 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 		SignerAddress: "wallet", Signature: "signature",
 	}
 	session := &LiveSession{
-		ID:              "session-1",
-		Plan:            &domain.ExecutionPlan{ID: "plan-1", Asset: "SOL", Notional: 10},
-		Leg1:            legPlan{venue: "pacifica", symbol: "SOL", side: domain.SideLong, price: 100},
-		Leg2:            legPlan{venue: "hyperliquid", symbol: "SOL", side: domain.SideShort, price: 101},
-		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet",
-		AgentPacifica: "sol-agent", AgentHyperliquid: "0xagent",
+		ID:   "session-1",
+		Plan: &domain.ExecutionPlan{ID: "plan-1", Asset: "SOL", Notional: 10},
+		Leg1: legPlan{venue: "pacifica", symbol: "SOL", side: domain.SideLong, price: 100},
+		Leg2: legPlan{venue: "hyperliquid", symbol: "SOL", side: domain.SideShort, price: 101},
+		Bindings: liveVenueBindings{
+			Accounts: map[string]string{"pacifica": "sol-wallet", "hyperliquid": "0xwallet"},
+			Agents:   map[string]string{"pacifica": "sol-agent", "hyperliquid": "0xagent"},
+		},
 		State: sessAwaitingLeg2Sign, BaselineLeg1Size: 3, BaselineLeg2Size: -2,
 		Leg1OpenReq: req, Leg1UnwindReq: req,
-		PacificaLeverageReqID: pacificaLeverageReq.ID, HyperliquidLeverageReqID: hyperliquidLeverageReq.ID,
-		PacificaLeverageReq: pacificaLeverageReq, HyperliquidLeverageReq: hyperliquidLeverageReq,
+		LeverageRequests: map[string]*domain.SigningRequest{
+			"pacifica": pacificaLeverageReq, "hyperliquid": hyperliquidLeverageReq,
+		},
 		ArmedUnwindReq: req, ArmedUnwindSigned: signed,
 		Leg1Fill:     &normFill{FilledAmount: 10, AvgFillPrice: 100, Filled: true},
 		Leg2Attempts: 1,
@@ -77,21 +83,55 @@ func TestDurableLiveSessionRoundTripPreservesRecoveryMaterial(t *testing.T) {
 	if restored.ArmedUnwindReq.Signer != "sol-agent" {
 		t.Fatalf("armed request signer = %q, want persisted session agent", restored.ArmedUnwindReq.Signer)
 	}
-	if restored.AgentPacifica != "sol-agent" || restored.AgentHyperliquid != "0xagent" {
-		t.Fatalf("agent identities not restored: %q/%q", restored.AgentPacifica, restored.AgentHyperliquid)
+	if restored.Bindings.Agents["pacifica"] != "sol-agent" || restored.Bindings.Agents["hyperliquid"] != "0xagent" {
+		t.Fatalf("agent identities not restored: %+v", restored.Bindings.Agents)
 	}
 	if !agentBoundLeg1Requests(restored) {
 		t.Fatal("restored leg-1 requests lost their agent binding")
 	}
-	if restored.PacificaLeverageReq == nil || restored.HyperliquidLeverageReq == nil ||
-		restored.PacificaLeverageReq.Leverage != 2 || restored.HyperliquidLeverageReq.Leverage != 2 {
-		t.Fatalf("restored leverage requests = %+v / %+v", restored.PacificaLeverageReq, restored.HyperliquidLeverageReq)
+	if restored.LeverageRequests["pacifica"] == nil || restored.LeverageRequests["hyperliquid"] == nil ||
+		restored.LeverageRequests["pacifica"].Leverage != 2 || restored.LeverageRequests["hyperliquid"].Leverage != 2 {
+		t.Fatalf("restored leverage requests = %+v", restored.LeverageRequests)
 	}
 	if restored.Leg1Fill == nil || restored.Leg1Fill.FilledAmount != 10 {
 		t.Fatalf("leg 1 fill not restored: %+v", restored.Leg1Fill)
 	}
 	if restored.Leg2Attempts != 1 || len(restored.Recovery) != 1 || restored.Recovery[0].Action != "retry_leg2" {
 		t.Fatalf("retry recovery state not restored: attempts=%d recovery=%+v", restored.Leg2Attempts, restored.Recovery)
+	}
+}
+
+func TestDurableLiveSessionRoundTripPreservesGenericVenueBindings(t *testing.T) {
+	request := &domain.SigningRequest{
+		ID: "alpha-leverage", Venue: "alpha", Action: "update_leverage",
+		Account: "owner-a", Signer: "agent-a", Symbol: "SOL", Leverage: 2,
+	}
+	session := &LiveSession{
+		ID: "session-generic", Plan: &domain.ExecutionPlan{ID: "plan-generic", Asset: "SOL"},
+		Leg1: legPlan{venue: "alpha"}, Leg2: legPlan{venue: "beta"},
+		Bindings: liveVenueBindings{
+			Accounts: map[string]string{"alpha": "owner-a", "beta": "owner-b"},
+			Agents:   map[string]string{"alpha": "agent-a", "beta": "agent-b"},
+		},
+		LeverageRequests: map[string]*domain.SigningRequest{"alpha": request},
+		LeverageApplied:  map[string]bool{"alpha": true},
+		CreatedAt:        time.Now(),
+	}
+
+	payload, err := marshalLiveSession(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := unmarshalLiveSession(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Bindings.Accounts["alpha"] != "owner-a" || restored.Bindings.Accounts["beta"] != "owner-b" ||
+		restored.Bindings.Agents["alpha"] != "agent-a" || restored.Bindings.Agents["beta"] != "agent-b" {
+		t.Fatalf("restored bindings = %+v", restored.Bindings)
+	}
+	if restored.LeverageRequests["alpha"] == nil || !restored.LeverageApplied["alpha"] {
+		t.Fatalf("restored leverage state = %+v / %+v", restored.LeverageRequests, restored.LeverageApplied)
 	}
 }
 
@@ -147,5 +187,87 @@ func TestSessionManagerAllowsOnlyOneInFlightAction(t *testing.T) {
 	manager.release("session-1")
 	if _, found, claimed := manager.claim("session-1"); !found || !claimed {
 		t.Fatal("session was not claimable after release")
+	}
+}
+
+func TestLiveAdvanceRejectsAnotherAccountPairBeforeClaim(t *testing.T) {
+	manager := NewSessionManager()
+	manager.put(&LiveSession{
+		ID: "session-1", Bindings: liveVenueBindings{Accounts: map[string]string{
+			"pacifica": "sol-owner", "hyperliquid": "0xAbC",
+		}},
+		CreatedAt: time.Now(),
+	})
+	server := &Server{live: &LiveDeps{sessions: manager}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/live/advance", strings.NewReader(
+		`{"session_id":"session-1","accounts":{"pacifica":"other-owner","hyperliquid":"0xdef"}}`,
+	))
+	response := httptest.NewRecorder()
+
+	server.handleLiveAdvance(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if _, found, claimed := manager.claimForAccounts("session-1", map[string]string{
+		"pacifica": "sol-owner", "hyperliquid": "0xabc",
+	}); !found || !claimed {
+		t.Fatal("another account pair claimed or blocked the live session")
+	}
+}
+
+func TestDurableSessionOwnershipRequiresMatchingEnvelopeAndSigningAccounts(t *testing.T) {
+	record := executor.DurableSessionRecord{
+		ID: "session-1", AccountPacifica: "sol-owner", AccountHyperliquid: "0xabc", Asset: "SOL",
+	}
+	newSession := func() *LiveSession {
+		return &LiveSession{
+			ID: "session-1", Plan: &domain.ExecutionPlan{ID: "plan-1", Asset: "SOL"},
+			Leg1: legPlan{venue: "pacifica"}, Leg2: legPlan{venue: "hyperliquid"},
+			Bindings: liveVenueBindings{Accounts: map[string]string{
+				"pacifica": "sol-owner", "hyperliquid": "0xAbC",
+			}},
+			Leg1OpenReq: &domain.SigningRequest{Venue: "pacifica", Account: "sol-owner"},
+			Leg2OpenReq: &domain.SigningRequest{Venue: "hyperliquid", Account: "0xABC"},
+			LeverageRequests: map[string]*domain.SigningRequest{
+				"pacifica": {Venue: "pacifica", Account: "sol-owner"},
+			},
+		}
+	}
+	if err := validateDurableSessionOwnership(record, newSession()); err != nil {
+		t.Fatalf("matching durable ownership rejected: %v", err)
+	}
+
+	tests := map[string]func(*LiveSession){
+		"session ID": func(session *LiveSession) { session.ID = "other-session" },
+		"account":    func(session *LiveSession) { session.Bindings.Accounts["pacifica"] = "other-owner" },
+		"asset":      func(session *LiveSession) { session.Plan.Asset = "BTC" },
+		"request account": func(session *LiveSession) {
+			session.Leg2OpenReq.Account = "0xdef"
+		},
+		"leverage request venue": func(session *LiveSession) {
+			session.LeverageRequests["pacifica"].Venue = "hyperliquid"
+		},
+		"unsupported leg venue": func(session *LiveSession) {
+			session.Leg2.venue = "aster"
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			session := newSession()
+			mutate(session)
+			if err := validateDurableSessionOwnership(record, session); err == nil {
+				t.Fatal("expected durable ownership mismatch")
+			}
+		})
+	}
+}
+
+func TestProductionPrepareGuardRejectsUnsupportedVenuePairs(t *testing.T) {
+	if err := requireCurrentLiveVenuePair([]string{"aster", "pacifica"}); err != nil {
+		t.Fatalf("production prepare guard rejected Aster pair: %v", err)
+	}
+	if err := requireCurrentLiveVenuePair([]string{"alpha", "beta"}); err == nil {
+		t.Fatal("production prepare guard accepted an unsupported venue pair")
 	}
 }

@@ -22,8 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import { LivePositionDetail } from '@/components/LivePositionDetail'
 import { AssetIcon } from '@/components/AssetIcon'
-import pacificaLogo from '@/assets/pacifica-logo.svg'
-import hlLogo from '@/assets/hl-logo.svg'
+import { venueMetadata } from '@/lib/venue-metadata'
 
 function fmtPnL(n: number) {
   const sign = n >= 0 ? '+' : ''
@@ -78,20 +77,25 @@ function liqRiskStyle(risk: LiqRisk) {
   }
 }
 
-const venueLogos: Record<string, string> = { pacifica: pacificaLogo, hyperliquid: hlLogo }
-
 function VenueIcon({ venue }: { venue: string }) {
-  const logo = venueLogos[venue]
-  if (logo) return <img src={logo} alt={venue} className="size-4 rounded-sm" />
-  return <span className="text-[10px] text-muted-foreground uppercase">{venue.slice(0, 3)}</span>
+  const metadata = venueMetadata(venue)
+  if (metadata.logo) return <img src={metadata.logo} alt={metadata.label} className="size-4 rounded-sm" />
+  return <span className="text-[10px] text-muted-foreground">{metadata.shortLabel}</span>
 }
 
 interface LivePositionsProps {
   onConnectWallets?: () => void
-  onOpenOpportunity?: (position: LivePosition | null) => void
+  onSelectPosition?: (position: LivePosition | null) => void
+  selectedPositionId?: string | null
+  focusPositionId?: string | null
 }
 
-export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePositionsProps = {}) {
+export function LivePositions({
+  onConnectWallets,
+  onSelectPosition,
+  selectedPositionId = null,
+  focusPositionId = null,
+}: LivePositionsProps = {}) {
   const { positions, loading, error, refetch } = useLivePositions()
   const { aggregate } = useVenueReadiness()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -111,23 +115,33 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
 
   const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded' || p.state === 'pending' || p.state === 'closing')
   const closedPositions = positions.filter((p) => p.state === 'closed' || p.state === 'failed')
-  const displayed = tab === 'open' ? openPositions : closedPositions
-  const selected = displayed.find((p) => p.id === selectedId) ?? null
+  const visibleTab = selectedPositionId || focusPositionId ? 'open' : tab
+  const displayed = visibleTab === 'open' ? openPositions : closedPositions
+  const selected = closedPositions.find((p) => p.id === selectedId) ?? null
+  const selectedOpen = openPositions.find((p) => p.id === selectedPositionId) ?? null
+  const focusedPosition = openPositions.find((p) => p.id === focusPositionId) ?? null
 
   useEffect(() => {
-    if (selectedId !== null && selected === null) onOpenOpportunity?.(null)
-  }, [onOpenOpportunity, selected, selectedId])
+    if (!focusPositionId || !focusedPosition) return
+    onSelectPosition?.(focusedPosition)
+  }, [focusPositionId, focusedPosition, onSelectPosition])
+
+  useEffect(() => {
+    if (!loading && selectedPositionId !== null && selectedOpen === null) onSelectPosition?.(null)
+  }, [loading, onSelectPosition, selectedOpen, selectedPositionId])
 
   const handlePositionClick = (position: LivePosition) => {
-    const opening = selectedId !== position.id
-    setSelectedId(opening ? position.id : null)
-    onOpenOpportunity?.(opening && tab === 'open' ? position : null)
+    if (visibleTab === 'open') {
+      onSelectPosition?.(selectedPositionId === position.id ? null : position)
+      return
+    }
+    setSelectedId(selectedId === position.id ? null : position.id)
   }
 
   const handleTabChange = (nextTab: 'open' | 'closed') => {
     setTab(nextTab)
     setSelectedId(null)
-    onOpenOpportunity?.(null)
+    onSelectPosition?.(null)
   }
 
   const closePositionDetail = () => {
@@ -140,10 +154,10 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
       <div className="px-5 py-2 flex items-center gap-3 shrink-0 bg-[#080b12]">
         <h2 className="text-sm font-semibold text-foreground">Positions</h2>
         <div className="flex gap-0 ml-1">
-          <TabBtn active={tab === 'open'} onClick={() => handleTabChange('open')}>
+          <TabBtn active={visibleTab === 'open'} onClick={() => handleTabChange('open')}>
             Open{openPositions.length > 0 && <span className="ml-1 text-muted-foreground">({openPositions.length})</span>}
           </TabBtn>
-          <TabBtn active={tab === 'closed'} onClick={() => handleTabChange('closed')}>
+          <TabBtn active={visibleTab === 'closed'} onClick={() => handleTabChange('closed')}>
             Closed{closedPositions.length > 0 && <span className="ml-1 text-muted-foreground">({closedPositions.length})</span>}
           </TabBtn>
         </div>
@@ -221,16 +235,13 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                   Submitting order {kill.state.submitted + 1} of {kill.state.totalRequests}...
                 </p>
               )}
-              {kill.state.phase === 'done' && kill.state.failed === 0 && kill.state.uncertain === 0 && (
-                <p className="text-green-400 text-[11px]">All close orders submitted successfully.</p>
-              )}
-              {kill.state.phase === 'done' && kill.state.uncertain > 0 && (
-                <p className="text-yellow-400 text-[11px]">Some submission responses were uncertain. Position states are being reconciled before retry is safe.</p>
-              )}
-              {kill.state.phase === 'done' && kill.state.failed > 0 && (
+              {kill.state.phase === 'confirming' && (
                 <p className="text-yellow-400 text-[11px]">
-                  Completed with {kill.state.failed} failure{kill.state.failed !== 1 ? 's' : ''}.
+                  Confirming every position is closed on the venues...
                 </p>
+              )}
+              {kill.state.phase === 'done' && (
+                <p className="text-green-400 text-[11px]">All targeted positions are confirmed closed.</p>
               )}
 
               {/* Per-position info */}
@@ -276,9 +287,10 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                 </Button>
               </>
             )}
-            {(kill.state.phase === 'preparing' || kill.state.phase === 'signing' || kill.state.phase === 'submitting') && (
+            {(kill.state.phase === 'preparing' || kill.state.phase === 'signing' || kill.state.phase === 'submitting' || kill.state.phase === 'confirming') && (
               <Button variant="outline" size="sm" disabled>
-                {kill.state.phase === 'preparing' ? 'Preparing...' : 'Closing positions...'}
+                {kill.state.phase === 'preparing' ? 'Preparing...' :
+                  kill.state.phase === 'confirming' ? 'Confirming close...' : 'Closing positions...'}
               </Button>
             )}
             {(kill.state.phase === 'done' || kill.state.phase === 'error') && (
@@ -297,9 +309,9 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
 
         {!loading && !error && displayed.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-5 py-4 text-center">
-            {!aggregate.allReady ? (
+            {!aggregate.tradingReady ? (
               <>
-                <p className="text-muted-foreground text-xs">Connect both wallets and authorize each venue to start live trading</p>
+                <p className="text-muted-foreground text-xs">Connect and authorize at least two venues to start live trading</p>
                 {onConnectWallets && (
                   <button
                     onClick={onConnectWallets}
@@ -311,7 +323,7 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
               </>
             ) : (
               <p className="rounded-full bg-muted/35 px-3 py-1 text-xs text-muted-foreground">
-                {positions.length === 0 ? 'No positions yet' : `No ${tab} positions`}
+                {positions.length === 0 ? 'No positions yet' : `No ${visibleTab} positions`}
               </p>
             )}
           </div>
@@ -341,7 +353,9 @@ export function LivePositions({ onConnectWallets, onOpenOpportunity }: LivePosit
                 return (
                   <TableRow
                     key={pos.id}
-                    className={`cursor-pointer transition-colors border-border hover:bg-white/[0.02] ${isDegraded ? 'border-l-2 border-l-orange-400/50' : ''}`}
+                    className={`cursor-pointer transition-colors border-border hover:bg-white/[0.02] ${
+                      (visibleTab === 'open' ? selectedPositionId === pos.id : selectedId === pos.id) ? 'bg-white/[0.035]' : ''
+                    } ${isDegraded ? 'border-l-2 border-l-orange-400/50' : ''}`}
                     onClick={() => handlePositionClick(pos)}
                   >
                     <TableCell className="py-2">

@@ -107,7 +107,7 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 		if positionErr == nil {
 			reconcileCtx, cancelReconcile := context.WithTimeout(s.ctx, recoveryAccountTimeout)
 			reconciled, reconcileErr := s.reconcilePositionFromVenueTruth(
-				reconcileCtx, position, position.AccountPacifica, position.AccountHyperliquid, req.CreatedAt,
+				reconcileCtx, position, req.CreatedAt,
 			)
 			cancelReconcile()
 			if reconcileErr != nil {
@@ -137,7 +137,7 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 		}
 		reconcileCtx, cancelReconcile := context.WithTimeout(s.ctx, recoveryAccountTimeout)
 		exposureState, reconcileErr := s.inspectPositionVenueTruth(
-			reconcileCtx, position, position.AccountPacifica, position.AccountHyperliquid, req.CreatedAt,
+			reconcileCtx, position, req.CreatedAt,
 		)
 		cancelReconcile()
 		if reconcileErr != nil {
