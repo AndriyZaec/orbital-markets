@@ -1,4 +1,4 @@
-import { memo, useState, useMemo, useEffect, useCallback, useLayoutEffect, useRef } from 'react'
+import { lazy, memo, Suspense, useState, useMemo, useEffect, useCallback, useLayoutEffect, useRef } from 'react'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
@@ -11,7 +11,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { OpportunityPanel } from '@/components/OpportunityPanel'
 import { AssetIcon } from '@/components/AssetIcon'
 import {
   InputGroup,
@@ -23,13 +22,9 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { InfoIcon, SearchIcon, XIcon } from 'lucide-react'
 
 import { LivePositions } from '@/components/LivePositions'
-import { LivePositionPanel } from '@/components/LivePositionDetail'
-import { PositionFundingDetail } from '@/components/PositionFundingDetail'
-import { Portfolio } from '@/components/Portfolio'
 import { useVenueReadiness } from '@/hooks/useVenueReadiness'
-import { ConnectAccounts } from '@/components/ConnectAccounts'
 import { DetailStatItem, DetailVenueIcon } from '@/components/DetailStatItem'
-import { FundingChart } from '@/components/FundingChart'
+import { DeferredBoundary } from '@/components/DeferredBoundary'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { venueMetadata } from '@/lib/venue-metadata'
@@ -45,6 +40,17 @@ type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacit
 type SortDir = 'asc' | 'desc'
 
 const FILTER_VENUES = ['pacifica', 'hyperliquid', 'aster'] as const
+
+const OpportunityPanel = lazy(() => import('@/components/OpportunityPanel').then((module) => ({ default: module.OpportunityPanel })))
+const LivePositionPanel = lazy(() => import('@/components/LivePositionDetail').then((module) => ({ default: module.LivePositionPanel })))
+const PositionFundingDetail = lazy(() => import('@/components/PositionFundingDetail').then((module) => ({ default: module.PositionFundingDetail })))
+const Portfolio = lazy(() => import('@/components/Portfolio').then((module) => ({ default: module.Portfolio })))
+const ConnectAccounts = lazy(() => import('@/components/ConnectAccounts').then((module) => ({ default: module.ConnectAccounts })))
+const FundingChart = lazy(() => import('@/components/FundingChart').then((module) => ({ default: module.FundingChart })))
+
+function DeferredSurface({ label }: { label: string }) {
+  return <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">{label}</div>
+}
 
 // Per-venue raw funding rate (single funding period, signed).
 // venue_a / venue_b naming is opaque; we look up by venue name so columns
@@ -327,10 +333,14 @@ export default function App() {
             <>
               <div className="flex-1 flex flex-col min-h-0 bg-[#080b12]">
                 {selectedPosition ? (
-                  <PositionFundingDetail
-                    position={selectedPosition}
-                    onBack={() => setSelection(null)}
-                  />
+                  <DeferredBoundary label="Position history">
+                    <Suspense fallback={<DeferredSurface label="Loading position history..." />}>
+                      <PositionFundingDetail
+                        position={selectedPosition}
+                        onBack={() => setSelection(null)}
+                      />
+                    </Suspense>
+                  </DeferredBoundary>
                 ) : selected ? (
                   <OpportunityDetail
                     opportunity={selected}
@@ -366,40 +376,58 @@ export default function App() {
 
           {activeView === 'portfolio' && (
             <PageBg>
-              <Portfolio
-                onConnectWallets={() => setShowAccounts(true)}
-                onViewPositions={() => setActiveView('trade')}
-              />
+              <DeferredBoundary label="Portfolio">
+                <Suspense fallback={<DeferredSurface label="Loading portfolio..." />}>
+                  <Portfolio
+                    onConnectWallets={() => setShowAccounts(true)}
+                    onViewPositions={() => setActiveView('trade')}
+                  />
+                </Suspense>
+              </DeferredBoundary>
             </PageBg>
           )}
 
         </div>
 
         {activeView === 'trade' && selected && !selectedPosition && (
-          <OpportunityPanel
-            opportunity={selected}
-            lastUpdated={lastUpdated}
-            mode={tradingMode}
-            notionalInput={selectedNotionalInput}
-            onNotionalInputChange={setSelectedNotionalInput}
-            onClose={closeOpportunity}
-            onExecute={handleExecutePaper}
-            onViewPositions={(positionId) => {
-              if (positionId) setFocusPositionId(positionId)
-              else closeOpportunity()
-            }}
-            onOpenAccounts={() => setShowAccounts(true)}
-          />
+          <DeferredBoundary label="Execution panel">
+            <Suspense fallback={<DeferredSurface label="Loading execution panel..." />}>
+              <OpportunityPanel
+                opportunity={selected}
+                lastUpdated={lastUpdated}
+                mode={tradingMode}
+                notionalInput={selectedNotionalInput}
+                onNotionalInputChange={setSelectedNotionalInput}
+                onClose={closeOpportunity}
+                onExecute={handleExecutePaper}
+                onViewPositions={(positionId) => {
+                  if (positionId) setFocusPositionId(positionId)
+                  else closeOpportunity()
+                }}
+                onOpenAccounts={() => setShowAccounts(true)}
+              />
+            </Suspense>
+          </DeferredBoundary>
         )}
 
         {activeView === 'trade' && selectedPosition && (
-          <LivePositionPanel
-            position={selectedPosition}
-            onClose={() => setSelection(null)}
-          />
+          <DeferredBoundary label="Position controls">
+            <Suspense fallback={<DeferredSurface label="Loading position controls..." />}>
+              <LivePositionPanel
+                position={selectedPosition}
+                onClose={() => setSelection(null)}
+              />
+            </Suspense>
+          </DeferredBoundary>
         )}
 
-        <ConnectAccounts open={showAccounts} onClose={() => setShowAccounts(false)} />
+        {showAccounts && (
+          <DeferredBoundary label="Account management">
+            <Suspense fallback={<DeferredSurface label="Loading account management..." />}>
+              <ConnectAccounts open onClose={() => setShowAccounts(false)} />
+            </Suspense>
+          </DeferredBoundary>
+        )}
       </div>
 
     </div>
@@ -803,18 +831,22 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
         <DetailStatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />
       </div>
       <div className="flex-1 overflow-auto min-h-0 px-5 py-4">
-        <FundingChart
-          asset={opp.asset}
-          venueA={opp.venue_pair.venue_a}
-          venueB={opp.venue_pair.venue_b}
-          direction={opp.direction}
-          currentApr={opp.annualized_gross_edge}
-          recommendedNotional={opp.recommended_notional}
-          notional={notional}
-          onNotionalChange={onNotionalChange}
-          feeEstimate={opp.fee_estimate}
-          slippageEstimate={opp.slippage_estimate}
-        />
+        <DeferredBoundary label="Funding history">
+          <Suspense fallback={<DeferredSurface label="Loading funding history..." />}>
+            <FundingChart
+              asset={opp.asset}
+              venueA={opp.venue_pair.venue_a}
+              venueB={opp.venue_pair.venue_b}
+              direction={opp.direction}
+              currentApr={opp.annualized_gross_edge}
+              recommendedNotional={opp.recommended_notional}
+              notional={notional}
+              onNotionalChange={onNotionalChange}
+              feeEstimate={opp.fee_estimate}
+              slippageEstimate={opp.slippage_estimate}
+            />
+          </Suspense>
+        </DeferredBoundary>
       </div>
     </div>
   )

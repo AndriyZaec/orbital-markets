@@ -1,6 +1,5 @@
 import { recoverTypedDataAddress, type Address, type Hex } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import builderConfig from '../../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
 import {
@@ -11,14 +10,15 @@ import {
 import { buildAsterApproveAgentTypedData } from './aster-approve-agent.ts'
 import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
+import { asterBuilderAddress, asterBuilderFeeRate } from './builder-config.ts'
+
+export { asterBuilderAddress, asterBuilderFeeRate } from './builder-config.ts'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
 const orderChainId = 1666
 const ownerChainId = 56
 const agentName = 'OrbitalMarkets'
 const agentLifetime = 7 * 24 * 60 * 60 * 1000
-export const asterBuilderAddress = builderConfig.address.toLowerCase() as Address
-export const asterBuilderFeeRate = String(builderConfig.fee / 100_000)
 
 export interface AsterApproveAgentRequest {
   user: Address

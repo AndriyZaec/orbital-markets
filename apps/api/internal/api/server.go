@@ -22,28 +22,30 @@ import (
 )
 
 type Server struct {
-	ctx                  context.Context // server-lifetime context, not per-request
-	scanner              *scanner.Scanner
-	executor             *paper.Executor
-	store                *paper.DBStore
-	db                   *sql.DB
-	liveStore            *executor.Store // always available when DB exists — read-only live position access
-	live                 *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
-	closeMarkets         closeMarketSource
-	logger               *slog.Logger
-	mux                  *http.ServeMux
-	handler              http.Handler // mux wrapped in middleware (recovery → logging → auth)
-	recoveryOwner        string
-	telegramLinks        TelegramLinker
-	productAnalytics     *analytics.Emitter
-	analyticsAccessToken string
-	asterDataAgent       AsterDataAgentProbe
-	metricsMu            sync.Mutex
-	metricsCache         *analytics.LiveMetrics
-	metricsCachedAt      time.Time
-	signalMu             sync.Mutex
-	signalFundingRows    []scanner.SignalFundingRow
-	signalCachedAt       time.Time
+	ctx                   context.Context // server-lifetime context, not per-request
+	scanner               *scanner.Scanner
+	executor              *paper.Executor
+	store                 *paper.DBStore
+	db                    *sql.DB
+	liveStore             *executor.Store // always available when DB exists — read-only live position access
+	live                  *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	closeMarkets          closeMarketSource
+	logger                *slog.Logger
+	mux                   *http.ServeMux
+	handler               http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	recoveryOwner         string
+	telegramLinks         TelegramLinker
+	productAnalytics      *analytics.Emitter
+	analyticsAccessToken  string
+	asterDataAgent        AsterDataAgentProbe
+	metricsMu             sync.Mutex
+	metricsCache          *analytics.LiveMetrics
+	metricsCachedAt       time.Time
+	signalMu              sync.Mutex
+	signalSnapshot        opportunitySignalSnapshot
+	signalRefreshRunning  bool
+	signalNextSourceCheck time.Time
+	historyCache          *historyCache
 }
 
 // EnableProductAnalytics configures optional best-effort product milestone
@@ -87,6 +89,7 @@ func NewServer(
 		logger:        logger,
 		mux:           http.NewServeMux(),
 		recoveryOwner: uuid.NewString(),
+		historyCache:  newHistoryCache(128),
 	}
 	s.routes()
 
