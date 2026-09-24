@@ -221,7 +221,7 @@ describe('position-backed funding chart', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^Closed/ }))
     await userEvent.click(screen.getByText('SOL'))
-    expect(screen.getByRole('button', { name: 'Close position panel' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Close position panel' })).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: 'Close position panel' }))
     expect(screen.queryByRole('button', { name: 'Close position panel' })).toBeNull()

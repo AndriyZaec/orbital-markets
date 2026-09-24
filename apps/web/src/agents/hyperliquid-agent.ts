@@ -2,17 +2,17 @@ import { toHex, type Address, type Hex } from 'viem'
 import { keccak256 } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { encode } from '@msgpack/msgpack'
-import builderConfig from '../../../api/internal/venue/hyperliquid/live/builder_config.json' with { type: 'json' }
 
 import type { SignedAction, SigningRequest } from '@/types/signing'
 import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
+import { hyperliquidBuilderAddress, hyperliquidBuilderFee, hyperliquidBuilderMaxFeeRate } from './builder-config.ts'
+
+export { hyperliquidBuilderAddress, hyperliquidBuilderFee, hyperliquidBuilderMaxFeeRate } from './builder-config.ts'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
 const agentName = 'Orbital Markets'
 const hyperliquidInfoUrl = 'https://api.hyperliquid.xyz/info'
-export const hyperliquidBuilderAddress = builderConfig.address as Address
-export const hyperliquidBuilderFee = builderConfig.fee
 
 export interface HyperliquidApproveAgentAction {
   [key: string]: unknown
@@ -102,7 +102,7 @@ export function buildHyperliquidApproveBuilderFeeAction(
     type: 'approveBuilderFee',
     hyperliquidChain: 'Mainnet',
     signatureChainId: toHex(chainId),
-    maxFeeRate: builderConfig.maxFeeRate,
+    maxFeeRate: hyperliquidBuilderMaxFeeRate,
     builder: builderAddress.toLowerCase() as Address,
     nonce,
   }

@@ -6,11 +6,7 @@ import { bsc, mainnet } from 'wagmi/chains'
 
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
-import {
-  authorizeAsterDataAgent,
-  prepareAsterDataAgentAuthorization,
-  type AsterDataAgentApprovalTypedData,
-} from './aster-data-agent.ts'
+import type { AsterDataAgentApprovalTypedData } from './aster-data-agent.ts'
 import {
   asterBuilderAddress,
   authorizeAsterAgent,
@@ -18,22 +14,16 @@ import {
   type AsterApprovalTypedData,
   type AsterApproveAgentRequest,
 } from './aster-agent.ts'
-import {
-  approveHyperliquidBuilderFee,
-  authorizeHyperliquidAgent,
-  hasApprovedHyperliquidBuilderFee,
-  hyperliquidBuilderAddress,
-  type HyperliquidApproveAgentRequest,
-  type HyperliquidApproveBuilderFeeRequest,
+import type {
+  HyperliquidApproveAgentRequest,
+  HyperliquidApproveBuilderFeeRequest,
 } from './hyperliquid-agent.ts'
-import {
-  authorizePacificaAgent,
-  revokePacificaAgent,
-  type PacificaApproveBuilderCodeRequest,
-  type PacificaBindAgentRequest,
-  type PacificaRevokeAgentRequest,
+import type {
+  PacificaApproveBuilderCodeRequest,
+  PacificaBindAgentRequest,
+  PacificaRevokeAgentRequest,
 } from './pacifica-agent.ts'
-import { assertSupportedSigningVenue, signWithStoredTradingAgent } from './signing.ts'
+import { hyperliquidBuilderAddress } from './builder-config.ts'
 import {
   createTradingAgentStore,
   type TradingAgentStore,
@@ -211,8 +201,9 @@ function TradingAgentSession({
     }
   }
 
-  const authorizePacifica = (ownerAddress: string) => {
+  const authorizePacifica = async (ownerAddress: string) => {
     if (!solanaSignMessage) throw new Error('Solana wallet does not support message signing')
+    const { authorizePacificaAgent } = await import('./pacifica-agent.ts')
     return authorizePacificaAgent({
       storage,
       ownerAddress,
@@ -240,6 +231,7 @@ function TradingAgentSession({
     const revocationKey = `${ownerAddress}:${agentAddress}`
     if (revokedPacificaAgents.current.has(revocationKey)) return
     if (!solanaSignMessage) throw new Error('Solana wallet does not support message signing')
+    const { revokePacificaAgent } = await import('./pacifica-agent.ts')
     await revokePacificaAgent({
       ownerAddress,
       agentAddress,
@@ -273,6 +265,7 @@ function TradingAgentSession({
 
   const authorizeHyperliquid = async (ownerAddress: string) => {
     if (chainId !== mainnet.id) await switchToAuthorizationChain(mainnet.id)
+    const { authorizeHyperliquidAgent, hasApprovedHyperliquidBuilderFee } = await import('./hyperliquid-agent.ts')
     return authorizeHyperliquidAgent({
       storage,
       ownerAddress,
@@ -291,6 +284,7 @@ function TradingAgentSession({
       throw new Error('Aster owner changed during agent authorization')
     }
     const isCurrent = () => ownerStillCurrent('aster', ownerAddress, owners.current)
+    const { authorizeAsterDataAgent, prepareAsterDataAgentAuthorization } = await import('./aster-data-agent.ts')
     return authorizeAsterAgent({
       storage,
       ownerAddress,
@@ -320,6 +314,7 @@ function TradingAgentSession({
       if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
         throw new Error('Hyperliquid owner changed during builder approval')
       }
+      const { approveHyperliquidBuilderFee, hasApprovedHyperliquidBuilderFee } = await import('./hyperliquid-agent.ts')
       if (await hasApprovedHyperliquidBuilderFee(ownerAddress, hyperliquidBuilderAddress)) return
       if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
         throw new Error('Hyperliquid owner changed during builder approval')
@@ -345,7 +340,7 @@ function TradingAgentSession({
   }
 
   const sign = async (request: SigningRequest) => {
-    assertSupportedSigningVenue(request.venue)
+    const { signWithStoredTradingAgent } = await import('./signing.ts')
     const currentOwner = request.venue === 'pacifica'
       ? pacificaOwner
       : request.venue === 'aster' ? asterOwner : hyperliquidOwner

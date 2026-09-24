@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { useKillSwitch } from '@/hooks/useKillSwitch'
@@ -20,9 +20,11 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { LivePositionDetail } from '@/components/LivePositionDetail'
+import { DeferredBoundary } from '@/components/DeferredBoundary'
 import { AssetIcon } from '@/components/AssetIcon'
 import { venueMetadata } from '@/lib/venue-metadata'
+
+const LivePositionDetail = lazy(() => import('@/components/LivePositionDetail').then((module) => ({ default: module.LivePositionDetail })))
 
 function fmtPnL(n: number) {
   const sign = n >= 0 ? '+' : ''
@@ -401,7 +403,11 @@ export function LivePositions({
       </div>
 
       {selected && (
-        <LivePositionDetail position={selected} onClose={closePositionDetail} onRefresh={refetch} />
+        <DeferredBoundary label="Position detail">
+          <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading position detail...</div>}>
+            <LivePositionDetail position={selected} onClose={closePositionDetail} onRefresh={refetch} />
+          </Suspense>
+        </DeferredBoundary>
       )}
     </>
   )
