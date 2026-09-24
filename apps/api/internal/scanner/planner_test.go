@@ -102,11 +102,11 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	if plan.Leg1.Leverage != 10 || plan.Leg2.Leverage != 10 {
 		t.Fatalf("leg leverage = %v/%v, want 10/10", plan.Leg1.Leverage, plan.Leg2.Leverage)
 	}
-	if plan.RiskTier != domain.RiskExperimental || !containsWarning(plan.Warnings, "Experimental opportunity") {
-		t.Fatalf("experimental plan risk/warnings = %s/%v, want advisory warning", plan.RiskTier, plan.Warnings)
+	if plan.RiskTier != domain.RiskExperimental {
+		t.Fatalf("plan risk tier = %s, want experimental", plan.RiskTier)
 	}
-	if !containsWarning(plan.Warnings, "87.60% annualized exceeds 50%") {
-		t.Fatalf("experimental plan warnings = %v, want concrete trigger values", plan.Warnings)
+	if containsWarning(plan.Warnings, "annualized exceeds 50%") {
+		t.Fatalf("experimental plan warnings = %v, high APR alone must not warn about reversals", plan.Warnings)
 	}
 	largePlan, err := s.BuildPlan(context.Background(), opps[0].ID, 10, 1000)
 	if err != nil {

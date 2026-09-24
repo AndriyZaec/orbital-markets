@@ -233,19 +233,19 @@ export function OpportunityPanel({
       })
     : []
   const hasMarginShortfall = marginShortfalls.length > 0
-  const experimentalWarning = plan?.risk_tier === 'experimental'
-    ? plan.warnings?.find((warning) => warning.startsWith('Experimental opportunity:')) ?? null
+  const fundingReversalSignal = opp.signal_7d?.status === 'choppy' ? opp.signal_7d : null
+  const requiresFundingReversalAcknowledgement = fundingReversalSignal !== null
+  const fundingReversalReason = fundingReversalSignal
+    ? `The 7-day funding direction was only ${(fundingReversalSignal.direction_consistency * 100).toFixed(0)}% consistent across ${fundingReversalSignal.samples} samples.`
     : null
   const [riskAcknowledgement, setRiskAcknowledgement] = useState({
     opportunityId: '',
     acknowledged: false,
   })
-  const experimentalRiskAcknowledged = !experimentalWarning || (
+  const fundingReversalRiskAcknowledged = !requiresFundingReversalAcknowledgement || (
     riskAcknowledgement.opportunityId === opp.id && riskAcknowledgement.acknowledged
   )
-  const detailWarnings = plan?.warnings?.filter(
-    (warning) => mode !== 'live' || warning !== experimentalWarning,
-  ) ?? []
+  const detailWarnings = plan?.warnings ?? []
 
   const handleExecute = async () => {
     setExecuting(true)
@@ -497,17 +497,17 @@ export function OpportunityPanel({
             Add collateral · {marginShortfalls.join(' · ')}
           </p>
         )}
-        {mode === 'live' && experimentalWarning && (
+        {mode === 'live' && requiresFundingReversalAcknowledgement && (
           <TooltipProvider>
             <div className="mb-3 flex items-center gap-2 text-xs">
               <label className="flex cursor-pointer items-center gap-2 text-foreground">
                 <Checkbox
-                  checked={experimentalRiskAcknowledged}
+                  checked={fundingReversalRiskAcknowledged}
                   onCheckedChange={(checked) => setRiskAcknowledgement({
                     opportunityId: opp.id,
                     acknowledged: checked,
                   })}
-                  aria-label="Acknowledge experimental funding risk"
+                  aria-label="Acknowledge frequent funding reversal risk"
                 />
                 <span>I accept funding reversal risk</span>
               </label>
@@ -520,7 +520,7 @@ export function OpportunityPanel({
                   )}
                 />
                 <TooltipContent side="top" align="end">
-                  {experimentalWarning.replace('Experimental opportunity: ', '')}
+                  {fundingReversalReason}
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -547,7 +547,7 @@ export function OpportunityPanel({
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
                 isFullyReady
-                  ? !plan?.executable || planExpired || planUpdating || !notionalValid || hasMarginShortfall || !experimentalRiskAcknowledged
+                  ? !plan?.executable || planExpired || planUpdating || !notionalValid || hasMarginShortfall || !fundingReversalRiskAcknowledged
                   : false
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
