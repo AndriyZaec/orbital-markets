@@ -171,9 +171,16 @@ export function OpportunityPanel({
       ? [[readiness.venue, readiness.address]]
       : []))
     : undefined
-  const canRequestPlan = mode !== 'live' ||
+  const marketAvailable = opp.status === 'available'
+  const availabilityMessage = opp.availability_reasons?.map((reason) => {
+    const venue = reason.venue ? venueLabel(reason.venue) : 'Venue'
+    return reason.code === 'source_fetch_failed'
+      ? `${venue} market feed is unreachable.`
+      : `${venue} market data is temporarily unavailable.`
+  }).join(' ') || 'Market data is temporarily unavailable.'
+  const canRequestPlan = marketAvailable && (mode !== 'live' ||
     !liveVenues.includes('aster') ||
-    Boolean(asterReadiness.address)
+    Boolean(asterReadiness.address))
   const { plan, loading: planLoading, error: planError, maxLeverage, refresh: refreshPlan } = usePlan(
     canRequestPlan ? opp.id : null,
     debouncedLeverageForPlan,
@@ -324,6 +331,12 @@ export function OpportunityPanel({
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
+        {!marketAvailable && (
+          <div className={`mt-3 rounded border px-3 py-2 text-xs ${opp.status === 'degraded' ? 'border-yellow-500/20 bg-yellow-500/[0.06] text-yellow-300' : 'border-red-500/20 bg-red-500/[0.06] text-red-300'}`}>
+            <span className="font-medium capitalize">{opp.status}</span>
+            <span className="text-muted-foreground"> · {availabilityMessage}</span>
+          </div>
+        )}
       </div>
 
       {/* Scrollable content */}
@@ -531,10 +544,10 @@ export function OpportunityPanel({
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!plan?.executable || planExpired || executing || planUpdating || !notionalValid}
+            disabled={!marketAvailable || !plan?.executable || planExpired || executing || planUpdating || !notionalValid}
             onClick={handleExecute}
           >
-            {executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+            {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
           </Button>
         ) : (
           <>
@@ -546,13 +559,15 @@ export function OpportunityPanel({
               // route the click to open Connect Accounts. Plan/notional
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
-                isFullyReady
+                !marketAvailable || (isFullyReady
                   ? !plan?.executable || planExpired || planUpdating || !notionalValid || hasMarginShortfall || !fundingReversalRiskAcknowledged
-                  : false
+                  : false)
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
             >
-              {isFullyReady
+              {!marketAvailable
+                ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}`
+                : isFullyReady
                 ? hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
                 : noSelectedWallets
                   ? 'Connect Wallets to Go Live'

@@ -15,16 +15,20 @@ import (
 )
 
 type Scanner struct {
-	adapters []venue.Adapter
-	mu       sync.RWMutex
-	opps     []domain.Opportunity
-	logger   *slog.Logger
+	adapters        []venue.Adapter
+	scanMu          sync.Mutex
+	mu              sync.RWMutex
+	opps            []domain.Opportunity
+	generation      uint64
+	sourceRevisions map[string]uint64
+	logger          *slog.Logger
 }
 
 func New(logger *slog.Logger, adapters ...venue.Adapter) *Scanner {
 	return &Scanner{
-		adapters: adapters,
-		logger:   logger,
+		adapters:        adapters,
+		sourceRevisions: make(map[string]uint64, len(adapters)),
+		logger:          logger,
 	}
 }
 
@@ -47,20 +51,27 @@ func (s *Scanner) Opportunities() []domain.Opportunity {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]domain.Opportunity, len(s.opps))
-	copy(out, s.opps)
+	for i := range s.opps {
+		out[i] = cloneOpportunity(s.opps[i])
+	}
 	return out
 }
 
 // MarketData returns the latest snapshots from all adapters.
 func (s *Scanner) MarketData(ctx context.Context) []venue.MarketData {
 	var all []venue.MarketData
+	now := time.Now()
 	for _, a := range s.adapters {
 		data, err := a.FetchMarketData(ctx)
 		if err != nil {
 			s.logger.Error("fetch market data", "venue", a.Name(), "err", err)
 			continue
 		}
-		all = append(all, data...)
+		for _, snapshot := range data {
+			if isValid(snapshot, now) {
+				all = append(all, snapshot)
+			}
+		}
 	}
 	return all
 }
@@ -76,7 +87,7 @@ func (s *Scanner) MarketSnapshot(ctx context.Context, venueName, asset string) (
 			return venue.MarketData{}, fmt.Errorf("fetch %s market data: %w", venueName, err)
 		}
 		for _, snapshot := range data {
-			if strings.EqualFold(snapshot.Asset, asset) {
+			if strings.EqualFold(snapshot.Asset, asset) && isValid(snapshot, time.Now()) {
 				return snapshot, nil
 			}
 		}
@@ -93,11 +104,26 @@ const (
 )
 
 func (s *Scanner) scan(ctx context.Context) {
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+
 	// 1. Collect snapshots from all adapters, grouped by asset.
-	byAsset := s.collectByAsset(ctx)
+	collection := s.collectByAsset(ctx)
+	byAsset := collection.byAsset
+
+	s.mu.RLock()
+	previous := make([]domain.Opportunity, len(s.opps))
+	copy(previous, s.opps)
+	generation := s.generation + 1
+	s.mu.RUnlock()
+	previousByID := make(map[string]domain.Opportunity, len(previous))
+	for _, opportunity := range previous {
+		previousByID[opportunity.ID] = opportunity
+	}
 
 	// 2. Pairwise comparison across venues for each asset.
 	var opps []domain.Opportunity
+	currentByID := make(map[string]struct{})
 	now := time.Now()
 
 	for asset, snapshots := range byAsset {
@@ -107,49 +133,151 @@ func (s *Scanner) scan(ctx context.Context) {
 
 		for i := 0; i < len(snapshots); i++ {
 			for j := i + 1; j < len(snapshots); j++ {
-				a := snapshots[i]
-				b := snapshots[j]
+				a, b := canonicalVenuePair(snapshots[i], snapshots[j])
 
 				opp := s.compareSnapshots(asset, a, b, now)
 				if opp == nil {
 					continue
 				}
+				opp.Status = domain.OpportunityAvailable
+				opp.Generation = generation
+				opp.SourceRevisions = pairSourceRevisions(s.sourceRevisions, a.Venue, b.Venue)
+				if old, found := previousByID[opp.ID]; found {
+					opp.DetectedAt = old.DetectedAt
+				}
 				opps = append(opps, *opp)
+				currentByID[opp.ID] = struct{}{}
 			}
 		}
 	}
+	for _, old := range previous {
+		if _, found := currentByID[old.ID]; found {
+			continue
+		}
+		old.Status = nextUnavailableStatus(old.Status)
+		old.Generation = generation
+		old.SourceRevisions = pairSourceRevisions(s.sourceRevisions, old.VenuePair.VenueA, old.VenuePair.VenueB)
+		old.AvailabilityReasons = collection.unavailableReasons(old)
+		old.ExecutionStatus = "blocked"
+		opps = append(opps, old)
+	}
 
-	// 3. Sort by absolute funding spread descending.
+	// 3. Preserve spread position across health transitions so limited API
+	// responses do not flicker a row solely because its source degraded.
 	sort.Slice(opps, func(i, j int) bool {
 		return math.Abs(opps[i].FundingSpread) > math.Abs(opps[j].FundingSpread)
 	})
 
 	s.mu.Lock()
 	s.opps = opps
+	s.generation = generation
 	s.mu.Unlock()
 
-	s.logger.Info("scan complete", "opportunities", len(opps), "assets_scanned", len(byAsset))
+	available, degraded, unavailable := opportunityStatusCounts(opps)
+	s.logger.Info("scan complete",
+		"generation", generation,
+		"opportunities", len(opps),
+		"available", available,
+		"degraded", degraded,
+		"unavailable", unavailable,
+		"assets_scanned", len(byAsset),
+	)
+}
+
+type marketCollection struct {
+	byAsset       map[string][]venue.MarketData
+	assetsByVenue map[string]map[string]struct{}
+	fetchFailed   map[string]bool
 }
 
 // collectByAsset gathers snapshots from all adapters grouped by normalized asset name.
-func (s *Scanner) collectByAsset(ctx context.Context) map[string][]venue.MarketData {
-	byAsset := make(map[string][]venue.MarketData)
+func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
+	collection := marketCollection{
+		byAsset:       make(map[string][]venue.MarketData),
+		assetsByVenue: make(map[string]map[string]struct{}, len(s.adapters)),
+		fetchFailed:   make(map[string]bool),
+	}
 	now := time.Now()
 
 	for _, a := range s.adapters {
+		venueName := a.Name()
 		data, err := a.FetchMarketData(ctx)
 		if err != nil {
-			s.logger.Error("fetch market data", "venue", a.Name(), "err", err)
+			collection.fetchFailed[venueName] = true
+			s.logger.Error("fetch market data", "venue", venueName, "err", err)
 			continue
 		}
+		s.sourceRevisions[venueName]++
+		collection.assetsByVenue[venueName] = make(map[string]struct{})
 		for _, md := range data {
 			if !isValid(md, now) {
 				continue
 			}
-			byAsset[md.Asset] = append(byAsset[md.Asset], md)
+			collection.byAsset[md.Asset] = append(collection.byAsset[md.Asset], md)
+			collection.assetsByVenue[venueName][md.Asset] = struct{}{}
 		}
 	}
-	return byAsset
+	return collection
+}
+
+func (c marketCollection) unavailableReasons(opportunity domain.Opportunity) []domain.OpportunityAvailabilityReason {
+	reasons := make([]domain.OpportunityAvailabilityReason, 0, 2)
+	for _, venueName := range []string{opportunity.VenuePair.VenueA, opportunity.VenuePair.VenueB} {
+		code := ""
+		if c.fetchFailed[venueName] {
+			code = domain.OpportunityReasonSourceFetchFailed
+		} else if _, found := c.assetsByVenue[venueName][opportunity.Asset]; !found {
+			code = domain.OpportunityReasonMarketDataUnavailable
+		}
+		if code != "" {
+			reasons = append(reasons, domain.OpportunityAvailabilityReason{Code: code, Venue: venueName})
+		}
+	}
+	return reasons
+}
+
+func canonicalVenuePair(a, b venue.MarketData) (venue.MarketData, venue.MarketData) {
+	if a.Venue > b.Venue {
+		return b, a
+	}
+	return a, b
+}
+
+func pairSourceRevisions(revisions map[string]uint64, venueA, venueB string) map[string]uint64 {
+	return map[string]uint64{venueA: revisions[venueA], venueB: revisions[venueB]}
+}
+
+func nextUnavailableStatus(previous domain.OpportunityStatus) domain.OpportunityStatus {
+	if previous == domain.OpportunityDegraded || previous == domain.OpportunityUnavailable {
+		return domain.OpportunityUnavailable
+	}
+	return domain.OpportunityDegraded
+}
+
+func opportunityStatusCounts(opportunities []domain.Opportunity) (available, degraded, unavailable int) {
+	for _, opportunity := range opportunities {
+		switch opportunity.Status {
+		case domain.OpportunityAvailable:
+			available++
+		case domain.OpportunityDegraded:
+			degraded++
+		case domain.OpportunityUnavailable:
+			unavailable++
+		}
+	}
+	return available, degraded, unavailable
+}
+
+func cloneOpportunity(opportunity domain.Opportunity) domain.Opportunity {
+	opportunity.SourceRevisions = pairSourceRevisions(
+		opportunity.SourceRevisions,
+		opportunity.VenuePair.VenueA,
+		opportunity.VenuePair.VenueB,
+	)
+	opportunity.AvailabilityReasons = append([]domain.OpportunityAvailabilityReason(nil), opportunity.AvailabilityReasons...)
+	opportunity.RiskFlags = append([]string(nil), opportunity.RiskFlags...)
+	opportunity.Warnings = append([]string(nil), opportunity.Warnings...)
+	return opportunity
 }
 
 // isValid filters out snapshots that are stale or have broken data.
@@ -272,7 +400,7 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		executionStatus = "blocked"
 	}
 
-	id := fmt.Sprintf("%s-%s-%s-%s", asset, a.Venue, b.Venue, direction)
+	id := fmt.Sprintf("%s-%s-%s", asset, a.Venue, b.Venue)
 
 	return &domain.Opportunity{
 		ID:         id,

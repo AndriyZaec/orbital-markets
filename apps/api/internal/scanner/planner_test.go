@@ -30,8 +30,8 @@ func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
 	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)),
 		leverageTestAdapter{name: "pacifica", err: errors.New("must not fetch unrelated venue")},
 		leverageTestAdapter{name: "hyperliquid", data: []venue.MarketData{
-			{Venue: "hyperliquid", Asset: "SOL", BidPrice: 99, AskPrice: 101, Timestamp: now},
-			{Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, AskPrice: 0.0537, Timestamp: now},
+			{Venue: "hyperliquid", Asset: "SOL", MarkPrice: 100, IndexPrice: 100, OpenInterest: 1, BidPrice: 99, AskPrice: 101, Timestamp: now},
+			{Venue: "hyperliquid", Asset: "2Z", MarkPrice: 0.05365, IndexPrice: 0.05365, OpenInterest: 1, BidPrice: 0.0536, AskPrice: 0.0537, Timestamp: now},
 		}},
 	)
 
@@ -41,6 +41,30 @@ func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
 	}
 	if snapshot.Asset != "2Z" || snapshot.BidPrice != 0.0536 {
 		t.Fatalf("snapshot = %+v, want Hyperliquid 2Z BBO", snapshot)
+	}
+}
+
+func TestMarketReadersShareScannerValidityRules(t *testing.T) {
+	now := time.Now()
+	invalid := leverageTestAdapter{name: "aster", data: []venue.MarketData{{
+		Venue: "aster", Asset: "PIPPIN", MarkPrice: 1, IndexPrice: 1,
+		BidPrice: 0.99, AskPrice: 1.01, OpenInterest: 0, Timestamp: now,
+	}}}
+	valid := leverageTestAdapter{name: "pacifica", data: []venue.MarketData{{
+		Venue: "pacifica", Asset: "PIPPIN", MarkPrice: 1, IndexPrice: 1,
+		BidPrice: 0.99, AskPrice: 1.01, OpenInterest: 1000, Timestamp: now,
+	}}}
+	scanner := New(slog.New(slog.NewTextHandler(io.Discard, nil)), invalid, valid)
+
+	markets := scanner.MarketData(context.Background())
+	if len(markets) != 1 || markets[0].Venue != "pacifica" {
+		t.Fatalf("MarketData() = %+v, want only valid Pacifica snapshot", markets)
+	}
+	if _, err := scanner.MarketSnapshot(context.Background(), "aster", "PIPPIN"); err == nil {
+		t.Fatal("MarketSnapshot() accepted invalid Aster snapshot")
+	}
+	if _, _, err := scanner.FreshSnapshots(context.Background(), "PIPPIN", "aster", "pacifica"); err == nil {
+		t.Fatal("FreshSnapshots() accepted invalid Aster snapshot")
 	}
 }
 

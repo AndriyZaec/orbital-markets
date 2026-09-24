@@ -20,6 +20,16 @@ type LeverageRangeError struct {
 
 type LeverageCapResolver func(venueName, symbol string, notional float64) (int, bool)
 
+type OpportunityStatusError struct {
+	ID      string
+	Status  domain.OpportunityStatus
+	Reasons []domain.OpportunityAvailabilityReason
+}
+
+func (e *OpportunityStatusError) Error() string {
+	return fmt.Sprintf("opportunity %s is %s", e.ID, e.Status)
+}
+
 func (e *LeverageRangeError) Error() string {
 	return fmt.Sprintf(
 		"leverage %.1fx outside supported range (minimum %.0fx, pair maximum %dx)",
@@ -55,6 +65,11 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if opp == nil {
 		return nil, fmt.Errorf("opportunity not found: %s", opportunityID)
 	}
+	if opp.Status != domain.OpportunityAvailable {
+		return nil, &OpportunityStatusError{
+			ID: opportunityID, Status: opp.Status, Reasons: opp.AvailabilityReasons,
+		}
+	}
 	for _, adapter := range s.adapters {
 		if adapter.Name() != opp.VenuePair.VenueA && adapter.Name() != opp.VenuePair.VenueB {
 			continue
@@ -70,6 +85,13 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	snapA, snapB, err := s.FreshSnapshots(ctx, opp.Asset, opp.VenuePair.VenueA, opp.VenuePair.VenueB)
 	if err != nil {
 		return nil, fmt.Errorf("fetch fresh data: %w", err)
+	}
+	freshDirection := domain.DirectionLongA
+	if snapA.FundingRate-snapB.FundingRate > 0 {
+		freshDirection = domain.DirectionLongB
+	}
+	if freshDirection != opp.Direction {
+		return nil, fmt.Errorf("funding direction changed for %s; refresh opportunity", opp.Asset)
 	}
 	notional := opp.RecommendedNotional
 	if requestedNotional > 0 {
@@ -267,12 +289,26 @@ func (s *Scanner) FindOpportunity(id string) *domain.Opportunity {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i := range s.opps {
-		if s.opps[i].ID == id {
+		if s.opps[i].ID == id || matchesLegacyOpportunityID(s.opps[i], id) {
 			opp := s.opps[i]
 			return &opp
 		}
 	}
 	return nil
+}
+
+func matchesLegacyOpportunityID(opportunity domain.Opportunity, id string) bool {
+	for _, pair := range [][2]string{
+		{opportunity.VenuePair.VenueA, opportunity.VenuePair.VenueB},
+		{opportunity.VenuePair.VenueB, opportunity.VenuePair.VenueA},
+	} {
+		for _, direction := range []domain.Direction{domain.DirectionLongA, domain.DirectionLongB} {
+			if id == fmt.Sprintf("%s-%s-%s-%s", opportunity.Asset, pair[0], pair[1], direction) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FreshSnapshots fetches current market data for a given asset from two venues.
@@ -292,7 +328,7 @@ func (s *Scanner) FreshSnapshots(ctx context.Context, asset, venueA, venueB stri
 		}
 
 		for _, md := range data {
-			if md.Asset != asset {
+			if md.Asset != asset || !isValid(md, time.Now()) {
 				continue
 			}
 			if name == venueA {

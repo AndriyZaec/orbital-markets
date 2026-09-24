@@ -12,6 +12,13 @@ interface OpportunitySignal {
   samples: number
 }
 
+type OpportunityStatus = 'available' | 'degraded' | 'unavailable'
+
+interface OpportunityAvailabilityReason {
+  code: 'source_fetch_failed' | 'market_data_unavailable'
+  venue?: string
+}
+
 interface Opportunity {
   id: string
   detected_at: string
@@ -34,6 +41,10 @@ interface Opportunity {
   liq_suspect: boolean
   confidence: 'low' | 'medium' | 'high'
   risk_tier: 'conservative' | 'standard' | 'aggressive' | 'experimental'
+  status: OpportunityStatus
+  generation: number
+  source_revisions: Record<string, number>
+  availability_reasons: OpportunityAvailabilityReason[] | null
   execution_status: 'executable' | 'blocked'
   risk_flags: string[] | null
   warnings: string[] | null
@@ -89,4 +100,4 @@ export function useOpportunities(accounts?: Record<string, string>, pollInterval
   return { opportunities, loading, error, lastUpdated, refetch: fetch_ }
 }
 
-export type { Opportunity, OpportunitySignal, OpportunitySignalStatus }
+export type { Opportunity, OpportunityAvailabilityReason, OpportunitySignal, OpportunitySignalStatus, OpportunityStatus }

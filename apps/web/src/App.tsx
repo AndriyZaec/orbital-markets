@@ -140,6 +140,17 @@ function opportunityIdFromURL() {
   return new URLSearchParams(window.location.search).get('opportunity')
 }
 
+function matchesOpportunityId(opportunity: Opportunity, id: string | null) {
+  if (!id || opportunity.id === id) return opportunity.id === id
+  const { venue_a: venueA, venue_b: venueB } = opportunity.venue_pair
+  return [
+    `${opportunity.asset}-${venueA}-${venueB}-long_a_short_b`,
+    `${opportunity.asset}-${venueA}-${venueB}-long_b_short_a`,
+    `${opportunity.asset}-${venueB}-${venueA}-long_a_short_b`,
+    `${opportunity.asset}-${venueB}-${venueA}-long_b_short_a`,
+  ].includes(id)
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState<View>(() => (
     'trade'
@@ -162,9 +173,10 @@ export default function App() {
   const countdown = useCountdown(lastUpdated, 60)
   const isLive = countdown > 0
 
-  const selectedId = selection?.kind === 'opportunity' ? selection.id : null
+  const selectedReferenceId = selection?.kind === 'opportunity' ? selection.id : null
   const selectedPosition = selection?.kind === 'position' ? selection.position : null
-  const selected = opportunities.find((o) => o.id === selectedId) ?? null
+  const selected = opportunities.find((opportunity) => matchesOpportunityId(opportunity, selectedReferenceId)) ?? null
+  const selectedId = selected?.id ?? selectedReferenceId
   const suggestedNotionalInput = selected?.recommended_notional
     ? String(Math.round(selected.recommended_notional))
     : ''
@@ -730,7 +742,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       if (row) rowRefs.current.set(opp.id, row)
                       else rowRefs.current.delete(opp.id)
                     }}
-                    className="group cursor-pointer border-b border-white/[0.045] outline-none transition-[background-color,box-shadow] hover:bg-white/[0.035] focus-visible:bg-white/[0.04] focus-visible:shadow-[inset_2px_0_0_#3b82f6]"
+                    className={`group cursor-pointer border-b border-white/[0.045] outline-none transition-[background-color,box-shadow,opacity] hover:bg-white/[0.035] focus-visible:bg-white/[0.04] focus-visible:shadow-[inset_2px_0_0_#3b82f6] ${opp.status === 'available' ? '' : 'opacity-60'}`}
                     onClick={() => onSelect(opp.id)}
                   >
                     <TableCell className="py-3">
@@ -738,7 +750,10 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                         <AssetIcon asset={opp.asset} />
                         <div>
                           <p className="font-semibold text-foreground">{opp.asset}</p>
-                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">Up to {maxLev === null ? '--' : `${maxLev}x`} · <span className="capitalize">{opp.liquidity}</span> liquidity</p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/80">
+                            Up to {maxLev === null ? '--' : `${maxLev}x`} · <span className="capitalize">{opp.liquidity}</span> liquidity
+                            {opp.status !== 'available' && <span className={opp.status === 'degraded' ? ' text-yellow-400' : ' text-red-400'}> · <span className="capitalize">{opp.status}</span></span>}
+                          </p>
                         </div>
                       </div>
                     </TableCell>
