@@ -85,9 +85,9 @@ func (r *Rollup) foldRawTo5m(ctx context.Context, bucket int64) error {
 	defer rows.Close()
 
 	type acc struct {
-		open, high, low, close                float64
-		fundingSum, oiSum, bidSum, askSum     float64
-		n                                     int
+		open, high, low, close            float64
+		fundingSum, oiSum, bidSum, askSum float64
+		n                                 int
 	}
 	groups := map[[2]string]*acc{}
 
@@ -119,11 +119,20 @@ func (r *Rollup) foldRawTo5m(ctx context.Context, bucket int64) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	queries := r.queries.WithTx(tx)
 
 	written := 0
 	for key, g := range groups {
 		n := float64(g.n)
-		err := r.queries.UpsertSnapshot5m(ctx, sqlc.UpsertSnapshot5mParams{
+		err := queries.UpsertSnapshot5m(ctx, sqlc.UpsertSnapshot5mParams{
 			Venue:      key[0],
 			Asset:      key[1],
 			BucketUnix: bucket,
@@ -140,6 +149,9 @@ func (r *Rollup) foldRawTo5m(ctx context.Context, bucket int64) error {
 			return err
 		}
 		written++
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	if written > 0 {
 		r.logger.Info("rollup 5m", "bucket", time.Unix(bucket, 0).UTC().Format(time.RFC3339), "rows", written)
@@ -196,11 +208,20 @@ func (r *Rollup) fold5mTo1h(ctx context.Context, bucket int64) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	queries := r.queries.WithTx(tx)
 
 	written := 0
 	for key, g := range groups {
 		n := float64(g.n)
-		err := r.queries.UpsertSnapshot1h(ctx, sqlc.UpsertSnapshot1hParams{
+		err := queries.UpsertSnapshot1h(ctx, sqlc.UpsertSnapshot1hParams{
 			Venue:      key[0],
 			Asset:      key[1],
 			BucketUnix: bucket,
@@ -217,6 +238,9 @@ func (r *Rollup) fold5mTo1h(ctx context.Context, bucket int64) error {
 			return err
 		}
 		written++
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	if written > 0 {
 		r.logger.Info("rollup 1h", "bucket", time.Unix(bucket, 0).UTC().Format(time.RFC3339), "rows", written)

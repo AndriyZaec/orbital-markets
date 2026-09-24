@@ -25,6 +25,17 @@ type historyResponse struct {
 	Points []historyPoint `json:"points"`
 }
 
+type historyLoadParams struct {
+	asset    string
+	venueA   string
+	venueB   string
+	rangeStr string
+	spec     struct {
+		dur    time.Duration
+		source historySource
+	}
+}
+
 // historyRow is the common shape paired across sources (raw, 5m, 1h).
 type historyRow struct {
 	TsUnix      int64
@@ -57,7 +68,6 @@ var rangeSpec = map[string]struct {
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	requestStarted := time.Now()
 	asset := r.URL.Query().Get("asset")
 	venueA := r.URL.Query().Get("venue_a")
 	venueB := r.URL.Query().Get("venue_b")
@@ -74,53 +84,119 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	params := historyLoadParams{asset: asset, venueA: venueA, venueB: venueB, rangeStr: rangeStr, spec: spec}
+	key := historyCacheKey{asset: asset, venueA: venueA, venueB: venueB, range_: rangeStr}
+	refreshCtx := s.ctx
+	if refreshCtx == nil {
+		refreshCtx = context.Background()
+	}
+	response, cacheResult, err := s.historyCache.get(
+		r.Context(),
+		refreshCtx,
+		key,
+		historyCacheTTL(spec.source),
+		func(ctx context.Context) (historyResponse, error) {
+			started := time.Now()
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			response, err := s.loadHistory(ctx, params)
+			if err != nil {
+				args := []any{
+					"err", err,
+					"asset", asset,
+					"venue_a", venueA,
+					"venue_b", venueB,
+					"range", rangeStr,
+					"duration_ms", time.Since(started).Milliseconds(),
+				}
+				if s.db != nil {
+					stats := s.db.Stats()
+					args = append(args,
+						"db_open", stats.OpenConnections,
+						"db_in_use", stats.InUse,
+						"db_wait_count", stats.WaitCount,
+						"db_wait_ms", stats.WaitDuration.Milliseconds(),
+					)
+				}
+				s.logger.Error("history cache: load failed", args...)
+			}
+			return response, err
+		},
+	)
+	s.logger.Info("history cache", "result", cacheResult, "asset", asset, "venue_a", venueA, "venue_b", venueB, "range", rangeStr)
+	if err != nil {
+		s.logger.Error("history: load", "err", err, "cache_result", cacheResult)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func historyCacheTTL(source historySource) time.Duration {
+	switch source {
+	case source5m:
+		return 5 * time.Minute
+	case source1h:
+		return time.Hour
+	default:
+		return time.Minute
+	}
+}
+
+func (s *Server) loadHistory(ctx context.Context, params historyLoadParams) (historyResponse, error) {
+	requestStarted := time.Now()
 	now := time.Now().UTC()
-	start := now.Add(-spec.dur)
+	start := now.Add(-params.spec.dur)
 	queries := sqlc.New(s.db)
 
 	fetchAStarted := time.Now()
-	rowsA, err := fetchHistoryRows(r.Context(), queries, spec.source, venueA, asset, start.Unix(), now.Unix())
+	rowsA, err := fetchHistoryRows(ctx, queries, params.spec.source, params.venueA, params.asset, start.Unix(), now.Unix())
 	fetchADuration := time.Since(fetchAStarted)
 	if err != nil {
-		s.logger.Error("history: fetch venue_a", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
-		return
+		return historyResponse{}, err
 	}
 
 	fetchBStarted := time.Now()
-	rowsB, err := fetchHistoryRows(r.Context(), queries, spec.source, venueB, asset, start.Unix(), now.Unix())
+	rowsB, err := fetchHistoryRows(ctx, queries, params.spec.source, params.venueB, params.asset, start.Unix(), now.Unix())
 	fetchBDuration := time.Since(fetchBStarted)
 	if err != nil {
-		s.logger.Error("history: fetch venue_b", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
-		return
+		return historyResponse{}, err
 	}
 
 	pairStarted := time.Now()
-	points := downsampleHistoryPoints(pairHistoryRows(rowsA, rowsB, spec.source), 200)
+	points := downsampleHistoryPoints(pairHistoryRows(rowsA, rowsB, params.spec.source), 200)
 	pairDuration := time.Since(pairStarted)
 	totalDuration := time.Since(requestStarted)
-	if totalDuration >= 100*time.Millisecond {
-		s.logger.Warn("history: slow request",
-			"asset", asset,
-			"range", rangeStr,
-			"source", spec.source,
-			"rows_a", len(rowsA),
-			"rows_b", len(rowsB),
-			"points", len(points),
-			"fetch_a_ms", fetchADuration.Milliseconds(),
-			"fetch_b_ms", fetchBDuration.Milliseconds(),
-			"pair_ms", pairDuration.Milliseconds(),
-			"total_ms", totalDuration.Milliseconds(),
+	logArgs := []any{
+		"asset", params.asset,
+		"venue_a", params.venueA,
+		"venue_b", params.venueB,
+		"range", params.rangeStr,
+		"source", params.spec.source,
+		"rows_a", len(rowsA),
+		"rows_b", len(rowsB),
+		"points", len(points),
+		"fetch_a_ms", fetchADuration.Milliseconds(),
+		"fetch_b_ms", fetchBDuration.Milliseconds(),
+		"pair_ms", pairDuration.Milliseconds(),
+		"total_ms", totalDuration.Milliseconds(),
+	}
+	if s.db != nil {
+		stats := s.db.Stats()
+		logArgs = append(logArgs,
+			"db_open", stats.OpenConnections,
+			"db_in_use", stats.InUse,
+			"db_wait_count", stats.WaitCount,
+			"db_wait_ms", stats.WaitDuration.Milliseconds(),
 		)
 	}
+	if totalDuration >= 100*time.Millisecond {
+		s.logger.Warn("history: slow load", logArgs...)
+	} else {
+		s.logger.Info("history: cache rebuild complete", logArgs...)
+	}
 
-	writeJSON(w, http.StatusOK, historyResponse{
-		Asset:  asset,
-		VenueA: venueA,
-		VenueB: venueB,
-		Points: points,
-	})
+	return historyResponse{Asset: params.asset, VenueA: params.venueA, VenueB: params.venueB, Points: points}, nil
 }
 
 func downsampleHistoryPoints(points []historyPoint, maxPoints int) []historyPoint {
