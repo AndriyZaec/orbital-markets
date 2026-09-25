@@ -83,25 +83,6 @@ function useCountdown(lastUpdated: Date | null, intervalSec: number) {
   return remaining
 }
 
-function useExpiry(expiresAt: string | null) {
-  const [remaining, setRemaining] = useState(0)
-  const [expired, setExpired] = useState(false)
-
-  useEffect(() => {
-    if (!expiresAt) return
-    const update = () => {
-      const ms = new Date(expiresAt).getTime() - Date.now()
-      if (ms <= 0) { setRemaining(0); setExpired(true) }
-      else { setRemaining(Math.ceil(ms / 1000)); setExpired(false) }
-    }
-    update()
-    const id = setInterval(update, 1000)
-    return () => clearInterval(id)
-  }, [expiresAt])
-
-  return { remaining, expired }
-}
-
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value)
   useEffect(() => {
@@ -206,8 +187,6 @@ export function OpportunityPanel({
     reportedCapabilityRef.current = revision
     onCapabilityUpdated()
   }, [maxLeverage, onCapabilityUpdated, opp.id, opportunityMaxLev])
-  const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
-
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
   const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
@@ -507,14 +486,6 @@ export function OpportunityPanel({
           <span className="text-[11px] text-muted-foreground">
             {isLive ? `Live · ${Math.ceil(countdown)}s` : 'Refreshing...'}
           </span>
-          {plan && !planExpired && (
-            <span className="text-[11px] text-muted-foreground ml-auto">
-              Plan: {planRemaining}s
-            </span>
-          )}
-          {plan && planExpired && (
-            <span className="text-[11px] text-yellow-400 ml-auto">Plan expired</span>
-          )}
         </div>
         {mode === 'live' && hasMarginShortfall && (
           <p className="mb-2.5 text-center text-[11px] text-muted-foreground">
@@ -555,10 +526,10 @@ export function OpportunityPanel({
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!marketAvailable || !plan?.executable || planExpired || executing || planUpdating || !notionalValid}
+            disabled={!marketAvailable || !plan?.executable || executing || planUpdating || !notionalValid}
             onClick={handleExecute}
           >
-            {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+            {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
           </Button>
         ) : (
           <>
@@ -571,7 +542,7 @@ export function OpportunityPanel({
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
                 !marketAvailable || (isFullyReady
-                  ? !plan?.executable || planExpired || planUpdating || !notionalValid || hasMarginShortfall || !fundingReversalRiskAcknowledged
+                  ? !plan?.executable || planUpdating || !notionalValid || hasMarginShortfall || !fundingReversalRiskAcknowledged
                   : false)
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}

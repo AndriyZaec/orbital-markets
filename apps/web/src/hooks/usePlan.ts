@@ -86,10 +86,11 @@ export function usePlan(
     serializedAccounts?: string,
     requestKey?: string,
     signal?: AbortSignal,
+    background = false,
   ) => {
     const requestId = ++requestSequence.current
     try {
-      setLoading(true)
+      if (!background) setLoading(true)
       const body: Record<string, unknown> = {
         opportunity_id: oppId,
         leverage: selectedLeverage,
@@ -159,7 +160,7 @@ export function usePlan(
     )
 
     intervalRef.current = setInterval(
-      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal),
+      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal, true),
       10_000,
     )
     return () => {
