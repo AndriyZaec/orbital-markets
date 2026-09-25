@@ -42,6 +42,7 @@ type Client struct {
 	logger       *slog.Logger
 	sendSigned   func(context.Context, MarketOrderRequest) (*SubmitResult, error)
 	sendLeverage func(context.Context, UpdateLeverageRequest) (*SubmitResult, error)
+	dialWS       func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -56,6 +57,7 @@ func NewClient(
 		signer:       signer,
 		accountState: accountState,
 		logger:       logger,
+		dialWS:       websocket.DefaultDialer.DialContext,
 	}
 }
 
@@ -256,11 +258,17 @@ func (c *Client) sendLeverageUpdate(ctx context.Context, req UpdateLeverageReque
 }
 
 func (c *Client) sendWSAction(ctx context.Context, action string, req any, clientOrderID, symbol string) (*SubmitResult, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, submitTimeout)
+	defer cancel()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := requestCtx.Err(); err != nil {
+		return nil, fmt.Errorf("submit deadline: %w", err)
+	}
 
 	if c.conn == nil {
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, tradingWSURL, nil)
+		conn, _, err := c.dialWS(requestCtx, tradingWSURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("dial: %w", err)
 		}
@@ -280,13 +288,18 @@ func (c *Client) sendWSAction(ctx context.Context, action string, req any, clien
 		},
 	}
 
+	deadline, _ := requestCtx.Deadline()
+	if err := conn.SetWriteDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("set write deadline: %w", err)
+	}
 	submittedAt := time.Now()
 	if err := conn.WriteJSON(envelope); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	deadline := time.Now().Add(submitTimeout)
-	conn.SetReadDeadline(deadline)
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("set read deadline: %w", err)
+	}
 
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
