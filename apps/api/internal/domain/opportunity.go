@@ -76,10 +76,11 @@ type Opportunity struct {
 	EstimatedNetEdge    float64 `json:"estimated_net_edge"`
 
 	// Sizing
-	AvailableNotional   float64 `json:"available_notional"`
-	BestPriceCapacity   float64 `json:"best_price_capacity"`
-	RecommendedNotional float64 `json:"recommended_notional"`
-	MaxLeverage         int     `json:"max_leverage"`
+	AvailableNotional    float64                       `json:"available_notional"`
+	BestPriceCapacity    float64                       `json:"best_price_capacity"`
+	RecommendedNotional  float64                       `json:"recommended_notional"`
+	MaxLeverage          int                           `json:"max_leverage"`
+	LeverageCapabilities map[string]LeverageCapability `json:"leverage_capabilities,omitempty"`
 
 	// Classification
 	Liquidity           LiquidityTier                   `json:"liquidity"`

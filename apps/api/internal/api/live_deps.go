@@ -35,6 +35,7 @@ const (
 // LiveDeps holds dependencies for live non-custodial execution. Account feeds
 // are started lazily and shared by normalized venue+account key.
 type LiveDeps struct {
+	logger                        *slog.Logger
 	signingStore                  *domain.SigningRequestStore
 	liveStore                     *executor.Store
 	sessions                      *SessionManager
@@ -56,35 +57,56 @@ type LiveDeps struct {
 }
 
 type accountLeverageSource interface {
-	MaxLeverage(symbol string, notional float64) (int, bool)
+	LeverageCapability(context.Context, string, float64, bool) domain.LeverageCapability
 }
 
 func (d *LiveDeps) accountLeverageResolver(accounts map[string]string) scanner.LeverageCapResolver {
-	if d == nil || d.accounts == nil || len(accounts) == 0 {
-		return nil
+	if d == nil || d.accounts == nil {
+		return func(_ context.Context, venueName, _ string, notional float64, _ bool) domain.LeverageCapability {
+			if venueName != "aster" {
+				return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported, RequestedNotional: notional, Reason: domain.LeverageReasonVenueUnsupported}
+			}
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityPending, RequestedNotional: notional, Reason: domain.LeverageReasonAccountPending}
+		}
 	}
-	return func(venueName, symbol string, notional float64) (int, bool) {
+	return func(ctx context.Context, venueName, symbol string, notional float64, refresh bool) domain.LeverageCapability {
 		if venueName != "aster" {
-			return 0, false
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported, RequestedNotional: notional, Reason: domain.LeverageReasonVenueUnsupported}
 		}
 		account := accounts[venueName]
 		if account == "" {
-			return 0, true
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityPending, RequestedNotional: notional, Reason: domain.LeverageReasonAccountPending}
 		}
-		lease, found := d.accounts.Lookup(venueName, account)
+		var lease *accountFeedLease
+		var found bool
+		if refresh {
+			lease, found = d.accounts.Lookup(venueName, account)
+		} else {
+			lease, found = d.accounts.LookupPassive(venueName, account)
+		}
+		if !found && refresh {
+			var err error
+			lease, err = d.accounts.Acquire(venueName, account)
+			found = err == nil
+		}
 		if !found {
-			return 0, true
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityPending, RequestedNotional: notional, Reason: domain.LeverageReasonAccountPending}
 		}
 		defer lease.Release()
 		source, ok := lease.Feed().(accountLeverageSource)
 		if !ok {
-			return 0, true
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported, RequestedNotional: notional, Reason: domain.LeverageReasonVenueUnsupported}
 		}
-		maximum, found := source.MaxLeverage(symbol, notional)
-		if !found {
-			return 0, true
+		capability := source.LeverageCapability(ctx, symbol, notional, refresh)
+		if d.logger != nil {
+			d.logger.Info("account leverage capability",
+				"venue", venueName,
+				"symbol", symbol,
+				"status", capability.Status,
+				"reason", capability.Reason,
+			)
 		}
-		return maximum, true
+		return capability
 	}
 }
 
@@ -115,6 +137,7 @@ func NewLiveDeps(
 	hlApprover := hllive.NewDefaultAgentApprover()
 	pacificaBuilderApprover := pacificlive.NewDefaultBuilderCodeApprover()
 	deps := &LiveDeps{
+		logger:                        logger,
 		signingStore:                  signingStore,
 		liveStore:                     liveStore,
 		sessions:                      NewSessionManager(),

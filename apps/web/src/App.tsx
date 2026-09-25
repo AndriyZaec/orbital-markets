@@ -29,7 +29,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import type { LivePosition } from '@/hooks/useLivePositions'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { enforceMinimumVenueSelection, matchesVenueFilter } from '@/lib/opportunity-filters'
-import { knownMaxLeverage } from '@/lib/leverage'
+import { knownMaxLeverage, leverageCapabilityMessage } from '@/lib/leverage'
 
 type View = 'trade' | 'portfolio'
 type TradeSelection =
@@ -157,7 +157,7 @@ export default function App() {
   ))
   const { aggregate: accountsAggregate, aster: asterReadiness } = useVenueReadiness()
   const opportunityAccounts = asterReadiness.address ? { aster: asterReadiness.address } : undefined
-  const { opportunities, loading, error, lastUpdated } = useOpportunities(opportunityAccounts)
+  const { opportunities, loading, error, lastUpdated, refetch: refetchOpportunities } = useOpportunities(opportunityAccounts)
   const [selection, setSelection] = useState<TradeSelection>(() => {
     const id = opportunityIdFromURL()
     return id ? { kind: 'opportunity', id } : null
@@ -417,6 +417,7 @@ export default function App() {
                   else closeOpportunity()
                 }}
                 onOpenAccounts={() => setShowAccounts(true)}
+                onCapabilityUpdated={() => { void refetchOpportunities() }}
               />
             </Suspense>
           </DeferredBoundary>
@@ -733,6 +734,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 const venueA = venueMetadata(opp.venue_pair.venue_a)
                 const venueB = venueMetadata(opp.venue_pair.venue_b)
                 const maxLev = knownMaxLeverage(opp.max_leverage)
+                const leverageIssue = leverageCapabilityMessage(opp.leverage_capabilities)
                 const apr = opp.annualized_gross_edge
 
                 return (
@@ -751,7 +753,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                         <div>
                           <p className="font-semibold text-foreground">{opp.asset}</p>
                           <p className="mt-0.5 text-[10px] text-muted-foreground/80">
-                            Up to {maxLev === null ? '--' : `${maxLev}x`} · <span className="capitalize">{opp.liquidity}</span> liquidity
+                            {maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `Up to ${maxLev}x`} · <span className="capitalize">{opp.liquidity}</span> liquidity
                             {opp.status !== 'available' && <span className={opp.status === 'degraded' ? ' text-yellow-400' : ' text-red-400'}> · <span className="capitalize">{opp.status}</span></span>}
                           </p>
                         </div>
@@ -770,7 +772,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
                       <p className="font-semibold text-emerald-400"><MetricFlash value={apr}>{fmtPct(apr)}</MetricFlash></p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">{maxLev === null ? '-- at --' : `${fmtPct(apr * maxLev)} at ${maxLev}x`}</p>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">{maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `${fmtPct(apr * maxLev)} at ${maxLev}x`}</p>
                     </TableCell>
                     <TableCell className="py-3 text-right">
                       <OpportunitySignalCell signal={opp.signal_7d} />
@@ -822,6 +824,7 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
   const maxLev = knownMaxLeverage(opp.max_leverage)
+  const leverageIssue = leverageCapabilityMessage(opp.leverage_capabilities)
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -837,10 +840,10 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
       <div className="px-5 py-2.5 flex items-center gap-6 border-b border-border shrink-0 overflow-x-auto">
         <DetailStatItem label="Long"><DetailVenueIcon venue={longVenue} /></DetailStatItem>
         <DetailStatItem label="Short"><DetailVenueIcon venue={shortVenue} /></DetailStatItem>
-        <DetailStatItem label="Max Leverage" value={maxLev === null ? '--' : `${maxLev}x`} />
+        <DetailStatItem label="Max Leverage" value={maxLev === null ? (leverageIssue ?? 'Unavailable') : `${maxLev}x`} />
         <DetailStatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
         <DetailStatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
-        <DetailStatItem label="APR x Max Lev" value={maxLev === null ? '--' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
+        <DetailStatItem label="APR x Max Lev" value={maxLev === null ? 'Unavailable' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
         <DetailStatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
         <DetailStatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
         <DetailStatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />

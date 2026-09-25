@@ -18,7 +18,26 @@ type LeverageRangeError struct {
 	PairMax   int
 }
 
-type LeverageCapResolver func(venueName, symbol string, notional float64) (int, bool)
+type LeverageCapResolver func(context.Context, string, string, float64, bool) domain.LeverageCapability
+
+type LeverageCapabilityError struct {
+	Venue      string
+	Symbol     string
+	Capability domain.LeverageCapability
+}
+
+func (e *LeverageCapabilityError) Error() string {
+	return fmt.Sprintf("leverage capability for %s on %s is %s", e.Symbol, e.Venue, e.Capability.Status)
+}
+
+func (e *LeverageCapabilityError) Retryable() bool {
+	switch e.Capability.Status {
+	case domain.LeverageCapabilityPending, domain.LeverageCapabilityStale, domain.LeverageCapabilityMissing:
+		return true
+	default:
+		return false
+	}
+}
 
 type OpportunityStatusError struct {
 	ID      string
@@ -100,11 +119,14 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	maxLeverageA := snapA.MaxLeverage
 	maxLeverageB := snapB.MaxLeverage
 	if resolveLeverageCap != nil {
-		if maximum, found := resolveLeverageCap(snapA.Venue, snapA.MarketKey, notional); found {
-			maxLeverageA = maximum
+		var capabilityErr error
+		maxLeverageA, capabilityErr = resolveMaximumLeverage(ctx, resolveLeverageCap, snapA, notional, maxLeverageA)
+		if capabilityErr != nil {
+			return nil, capabilityErr
 		}
-		if maximum, found := resolveLeverageCap(snapB.Venue, snapB.MarketKey, notional); found {
-			maxLeverageB = maximum
+		maxLeverageB, capabilityErr = resolveMaximumLeverage(ctx, resolveLeverageCap, snapB, notional, maxLeverageB)
+		if capabilityErr != nil {
+			return nil, capabilityErr
 		}
 	}
 	pairMaxLeverage := minLeverage(maxLeverageA, maxLeverageB)
@@ -282,6 +304,23 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	}
 
 	return plan, nil
+}
+
+func resolveMaximumLeverage(
+	ctx context.Context,
+	resolve LeverageCapResolver,
+	snapshot venue.MarketData,
+	notional float64,
+	fallback int,
+) (int, error) {
+	capability := resolve(ctx, snapshot.Venue, snapshot.MarketKey, notional, true)
+	if capability.Status == domain.LeverageCapabilityUnsupported {
+		return fallback, nil
+	}
+	if capability.Status != domain.LeverageCapabilityKnown || capability.Maximum == nil || *capability.Maximum <= 0 {
+		return 0, &LeverageCapabilityError{Venue: snapshot.Venue, Symbol: snapshot.MarketKey, Capability: capability}
+	}
+	return *capability.Maximum, nil
 }
 
 // FindOpportunity returns a copy of the opportunity with the given ID, or nil.

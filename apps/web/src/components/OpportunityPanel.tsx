@@ -10,7 +10,7 @@ import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 import { AssetIcon } from '@/components/AssetIcon'
 import { trackAnalytics } from '@/lib/analytics'
 import { venueMetadata } from '@/lib/venue-metadata'
-import { knownMaxLeverage, reconcileLeverageSelection } from '@/lib/leverage'
+import { knownMaxLeverage, leverageCapabilityMessage, reconcileLeverageSelection } from '@/lib/leverage'
 import { executionIntentSide } from '@/lib/live-execution-state'
 
 interface Props {
@@ -27,6 +27,7 @@ interface Props {
   ) => Promise<void>
   onViewPositions?: (positionId: string | null) => void
   onOpenAccounts?: () => void
+  onCapabilityUpdated?: () => void
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -120,6 +121,7 @@ export function OpportunityPanel({
   onExecute,
   onViewPositions,
   onOpenAccounts,
+  onCapabilityUpdated,
 }: Props) {
   // Matches useOpportunities' 60s poll interval.
   const countdown = useCountdown(lastUpdated, 60)
@@ -129,6 +131,7 @@ export function OpportunityPanel({
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
   const opportunityMaxLev = knownMaxLeverage(opp.max_leverage)
+  const leverageIssue = leverageCapabilityMessage(opp.leverage_capabilities)
   const initialLeverage = opportunityMaxLev ?? 1
   const venuePair = `${longVenue}_${shortVenue}`
   const liveVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()] as [VenueId, VenueId]
@@ -181,20 +184,28 @@ export function OpportunityPanel({
   const canRequestPlan = marketAvailable && (mode !== 'live' ||
     !liveVenues.includes('aster') ||
     Boolean(asterReadiness.address))
-  const { plan, loading: planLoading, error: planError, maxLeverage, refresh: refreshPlan } = usePlan(
+  const { plan, loading: planLoading, error: planError, maxLeverage, leverageCapabilityBlocked, refresh: refreshPlan } = usePlan(
     canRequestPlan ? opp.id : null,
     debouncedLeverageForPlan,
     debouncedNotionalForPlan,
     planAccounts,
   )
   const planUpdating = planLoading || planInputsPending
-  const maxLev = maxLeverage ?? opportunityMaxLev
+  const maxLev = leverageCapabilityBlocked ? null : maxLeverage ?? opportunityMaxLev
   useEffect(() => {
     if (maxLeverage === null) return
     setLeverageSelection((current) => reconcileLeverageSelection(
       current, opp.id, opportunityMaxLev, maxLeverage,
     ))
   }, [maxLeverage, opp.id, opportunityMaxLev])
+  const reportedCapabilityRef = useRef('')
+  useEffect(() => {
+    if (maxLeverage === null || maxLeverage === opportunityMaxLev || !onCapabilityUpdated) return
+    const revision = `${opp.id}:${maxLeverage}`
+    if (reportedCapabilityRef.current === revision) return
+    reportedCapabilityRef.current = revision
+    onCapabilityUpdated()
+  }, [maxLeverage, onCapabilityUpdated, opp.id, opportunityMaxLev])
   const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
 
   // Live execution is gated by the typed readiness layer (wallet + signer +
@@ -387,7 +398,7 @@ export function OpportunityPanel({
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Leverage</span>
               <span className="text-[11px] text-muted-foreground/70">
-                Pair max {maxLev === null ? '--' : `${maxLev}x`}
+                {maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `Pair max ${maxLev}x`}
               </span>
             </div>
             {plan && (

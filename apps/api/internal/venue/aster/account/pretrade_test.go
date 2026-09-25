@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
 func TestValidatePreTradeRequiresOneWayModeAndLeverageBrackets(t *testing.T) {
@@ -18,6 +20,55 @@ func TestValidatePreTradeRequiresOneWayModeAndLeverageBrackets(t *testing.T) {
 	joined := strings.Join(reasons, "; ")
 	if !strings.Contains(joined, "One-way Mode") || !strings.Contains(joined, "maximum leverage") {
 		t.Fatalf("reasons = %v", reasons)
+	}
+}
+
+func TestLeverageCapabilityDistinguishesUnknownStates(t *testing.T) {
+	now := time.Date(2026, time.September, 25, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		snapshot AccountStateSnapshot
+		notional float64
+		want     domain.LeverageCapabilityStatus
+	}{
+		{name: "pending", snapshot: AccountStateSnapshot{}, notional: 100, want: domain.LeverageCapabilityPending},
+		{name: "missing", snapshot: AccountStateSnapshot{Connected: true, LastUpdated: now}, notional: 100, want: domain.LeverageCapabilityMissing},
+		{name: "stale", snapshot: AccountStateSnapshot{
+			Connected: true, LastUpdated: now,
+			LeverageBracketsUpdatedAt: map[string]time.Time{"PIPPINUSDT": now.Add(-leverageBracketsMaxAge - time.Second)},
+			LeverageBrackets:          LeverageBrackets{"PIPPINUSDT": {{InitialLeverage: 10, NotionalCap: 1000}}},
+		}, notional: 100, want: domain.LeverageCapabilityStale},
+		{name: "out of range", snapshot: AccountStateSnapshot{
+			Connected: true, LastUpdated: now,
+			LeverageBracketsUpdatedAt: map[string]time.Time{"PIPPINUSDT": now},
+			LeverageBrackets:          LeverageBrackets{"PIPPINUSDT": {{InitialLeverage: 10, NotionalCap: 1000}}},
+		}, notional: 1000, want: domain.LeverageCapabilityOutOfRange},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capability := LeverageCapability(tt.snapshot, "PIPPINUSDT", tt.notional, now)
+			if capability.Status != tt.want || capability.Maximum != nil {
+				t.Fatalf("capability = %+v, want status %s without maximum", capability, tt.want)
+			}
+		})
+	}
+}
+
+func TestLeverageCapabilityIncludesKnownRevisionsAndExpiry(t *testing.T) {
+	now := time.Date(2026, time.September, 25, 12, 0, 0, 0, time.UTC)
+	accountObservedAt := now.Add(-time.Second)
+	bracketObservedAt := now.Add(-2 * time.Second)
+	capability := LeverageCapability(AccountStateSnapshot{
+		Connected: true, LastUpdated: accountObservedAt,
+		LeverageBracketsUpdatedAt: map[string]time.Time{"PIPPINUSDT": bracketObservedAt},
+		LeverageBrackets:          LeverageBrackets{"PIPPINUSDT": {{InitialLeverage: 10, NotionalCap: 1000}}},
+	}, "PIPPINUSDT", 100, now)
+	if capability.Status != domain.LeverageCapabilityKnown || capability.Maximum == nil || *capability.Maximum != 10 {
+		t.Fatalf("capability = %+v, want known 10x", capability)
+	}
+	if capability.AccountRevision != uint64(accountObservedAt.UnixMilli()) || capability.BracketRevision != uint64(bracketObservedAt.UnixMilli()) ||
+		!capability.ObservedAt.Equal(bracketObservedAt) || !capability.ExpiresAt.Equal(bracketObservedAt.Add(leverageBracketsMaxAge)) {
+		t.Fatalf("capability revisions = %+v", capability)
 	}
 }
 

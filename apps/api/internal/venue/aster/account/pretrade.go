@@ -56,6 +56,53 @@ func FreshMaximumLeverage(snapshot AccountStateSnapshot, symbol string, notional
 	return MaximumLeverage(snapshot.LeverageBrackets, symbol, notional)
 }
 
+func LeverageCapability(snapshot AccountStateSnapshot, symbol string, notional float64, now time.Time) domain.LeverageCapability {
+	capability := domain.LeverageCapability{
+		RequestedNotional: notional,
+		AccountRevision:   timeRevision(snapshot.LastUpdated),
+	}
+	if !finiteNumber(notional) || notional < 0 {
+		capability.Status = domain.LeverageCapabilityOutOfRange
+		capability.Reason = domain.LeverageReasonInvalidNotional
+		return capability
+	}
+	if snapshot.LastUpdated.IsZero() {
+		capability.Status = domain.LeverageCapabilityPending
+		capability.Reason = domain.LeverageReasonAccountPending
+		return capability
+	}
+	if !snapshot.Connected || now.Sub(snapshot.LastUpdated) > accountStateMaxAge {
+		capability.Status = domain.LeverageCapabilityStale
+		capability.ObservedAt = snapshot.LastUpdated
+		capability.ExpiresAt = snapshot.LastUpdated.Add(accountStateMaxAge)
+		capability.Reason = domain.LeverageReasonAccountUnavailable
+		return capability
+	}
+	updatedAt := snapshot.LeverageBracketsUpdatedAt[symbol]
+	capability.BracketRevision = timeRevision(updatedAt)
+	capability.ObservedAt = updatedAt
+	if updatedAt.IsZero() || len(snapshot.LeverageBrackets[symbol]) == 0 {
+		capability.Status = domain.LeverageCapabilityMissing
+		capability.Reason = domain.LeverageReasonBracketMissing
+		return capability
+	}
+	capability.ExpiresAt = updatedAt.Add(leverageBracketsMaxAge)
+	if now.After(capability.ExpiresAt) {
+		capability.Status = domain.LeverageCapabilityStale
+		capability.Reason = domain.LeverageReasonBracketStale
+		return capability
+	}
+	maximum, found := MaximumLeverage(snapshot.LeverageBrackets, symbol, notional)
+	if !found {
+		capability.Status = domain.LeverageCapabilityOutOfRange
+		capability.Reason = domain.LeverageReasonNotionalOutOfRange
+		return capability
+	}
+	capability.Status = domain.LeverageCapabilityKnown
+	capability.Maximum = &maximum
+	return capability
+}
+
 func MaximumLeverage(brackets LeverageBrackets, symbol string, notional float64) (int, bool) {
 	if !finiteNumber(notional) || notional < 0 {
 		return 0, false
@@ -66,4 +113,11 @@ func MaximumLeverage(brackets LeverageBrackets, symbol string, notional float64)
 		}
 	}
 	return 0, false
+}
+
+func timeRevision(value time.Time) uint64 {
+	if value.IsZero() || value.UnixMilli() < 0 {
+		return 0
+	}
+	return uint64(value.UnixMilli())
 }

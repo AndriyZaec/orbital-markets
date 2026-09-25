@@ -296,6 +296,21 @@ func (s *AccountState) ApplyLeverageBrackets(brackets LeverageBrackets, updatedA
 	}
 }
 
+func (s *AccountState) ApplyTargetLeverageBrackets(brackets LeverageBrackets, updatedAt time.Time) {
+	if updatedAt.IsZero() {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for symbol, tiers := range brackets {
+		if len(tiers) == 0 || !updatedAt.After(s.leverageBracketsUpdatedAt[symbol]) {
+			continue
+		}
+		s.leverageBrackets[symbol] = append([]LeverageBracket(nil), tiers...)
+		s.leverageBracketsUpdatedAt[symbol] = updatedAt
+	}
+}
+
 func (s *AccountState) ReplaceObservation(account string, observation Observation) error {
 	account = strings.ToLower(strings.TrimSpace(account))
 	dataAgent := strings.ToLower(strings.TrimSpace(observation.DataAgent))
@@ -319,6 +334,14 @@ func (s *AccountState) ReplaceObservation(account string, observation Observatio
 	defer s.mu.Unlock()
 	if !s.snapshotCreatedAt.IsZero() && !observation.ObservedAt.After(s.snapshotCreatedAt) {
 		return nil
+	}
+	for symbol, tiers := range s.leverageBrackets {
+		existingUpdatedAt := s.leverageBracketsUpdatedAt[symbol]
+		if observedAt, observed := bracketsUpdatedAt[symbol]; observed && observedAt.After(existingUpdatedAt) {
+			continue
+		}
+		brackets[symbol] = append([]LeverageBracket(nil), tiers...)
+		bracketsUpdatedAt[symbol] = existingUpdatedAt
 	}
 	mode := observation.PositionMode
 	margin := observation.Margin

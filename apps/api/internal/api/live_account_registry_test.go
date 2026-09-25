@@ -294,6 +294,32 @@ func TestAccountFeedRegistryEvictsOnlyIdleFeeds(t *testing.T) {
 	active.Release()
 }
 
+func TestAccountFeedRegistryPassiveLookupDoesNotExtendIdleLifetime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	registry := newTestAccountFeedRegistry(ctx, &fakeAccountFeedFactory{}, accountFeedRegistryConfig{
+		IdleTTL: time.Minute,
+		Now:     func() time.Time { return now },
+	})
+
+	lease, err := registry.Acquire("venue", "account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	now = now.Add(2 * time.Minute)
+	passive, found := registry.LookupPassive("venue", "account")
+	if !found {
+		t.Fatal("passive lookup did not find existing feed")
+	}
+	passive.Release()
+	registry.cleanupIdle(now)
+	if _, found := registry.Lookup("venue", "account"); found {
+		t.Fatal("passive lookup extended feed idle lifetime")
+	}
+}
+
 func TestAccountFeedRegistryEvictsLRUIdleFeedAtCapacity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

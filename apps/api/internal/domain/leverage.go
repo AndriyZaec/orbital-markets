@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // Shared leverage model.
 //
 // Leverage is user-selected and applied uniformly to both legs. Its upper
@@ -18,6 +20,39 @@ const (
 	DefaultLeverage = 1.0
 	MinLeverage     = 1.0
 )
+
+type LeverageCapabilityStatus string
+
+const (
+	LeverageCapabilityKnown       LeverageCapabilityStatus = "known"
+	LeverageCapabilityPending     LeverageCapabilityStatus = "pending"
+	LeverageCapabilityStale       LeverageCapabilityStatus = "stale"
+	LeverageCapabilityMissing     LeverageCapabilityStatus = "missing"
+	LeverageCapabilityUnsupported LeverageCapabilityStatus = "unsupported"
+	LeverageCapabilityOutOfRange  LeverageCapabilityStatus = "out_of_range"
+)
+
+const (
+	LeverageReasonAccountPending      = "account_pending"
+	LeverageReasonAccountUnavailable  = "account_unavailable"
+	LeverageReasonBracketMissing      = "bracket_missing"
+	LeverageReasonBracketStale        = "bracket_stale"
+	LeverageReasonNotionalOutOfRange  = "notional_out_of_range"
+	LeverageReasonInvalidNotional     = "invalid_notional"
+	LeverageReasonVenueUnsupported    = "venue_unsupported"
+	LeverageReasonTargetRefreshFailed = "target_refresh_failed"
+)
+
+type LeverageCapability struct {
+	Status            LeverageCapabilityStatus `json:"status"`
+	Maximum           *int                     `json:"maximum,omitempty"`
+	RequestedNotional float64                  `json:"requested_notional"`
+	AccountRevision   uint64                   `json:"account_revision"`
+	BracketRevision   uint64                   `json:"bracket_revision"`
+	ObservedAt        time.Time                `json:"observed_at,omitempty"`
+	ExpiresAt         time.Time                `json:"expires_at,omitempty"`
+	Reason            string                   `json:"reason,omitempty"`
+}
 
 // LeverageConfig holds leverage-related sizing for a trade.
 type LeverageConfig struct {

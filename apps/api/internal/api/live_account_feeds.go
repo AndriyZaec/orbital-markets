@@ -34,6 +34,10 @@ type asterAccountReader interface {
 	ReadAccount(context.Context, string) (asteraccount.Observation, error)
 }
 
+type asterLeverageBracketReader interface {
+	ReadLeverageBrackets(context.Context, string, string) (asteraccount.LeverageBrackets, time.Time, error)
+}
+
 type asterFundingReader interface {
 	ReadFunding(context.Context, string, time.Time, time.Time) ([]venue.FundingPayment, error)
 }
@@ -80,7 +84,7 @@ func (f *asterAccountFeedFactory) Start(ctx context.Context, account string) (li
 		state: asteraccount.NewAccountState(account), client: f.client,
 		account: account, reader: f.reader, logger: f.logger, ctx: ctx,
 		fundingReader: f.fundingReader, orderReader: f.orderReader, applyFunding: f.applyFunding,
-		backendReads: f.backendReads || f.reader != nil,
+		backendReads: f.backendReads || f.reader != nil, now: time.Now,
 	}
 	if f.reader != nil {
 		interval := f.pollInterval
@@ -110,6 +114,7 @@ type asterAccountFeed struct {
 	logger        *slog.Logger
 	ctx           context.Context
 	backendReads  bool
+	now           func() time.Time
 
 	refreshMu sync.Mutex
 	refresh   *asterAccountRefresh
@@ -117,6 +122,9 @@ type asterAccountFeed struct {
 
 	fundingMu      sync.Mutex
 	fundingRefresh *asterFundingRefresh
+
+	bracketMu        sync.Mutex
+	bracketRefreshes map[string]*asterBracketRefresh
 }
 
 type asterAccountRefresh struct {
@@ -125,6 +133,11 @@ type asterAccountRefresh struct {
 }
 
 type asterFundingRefresh struct {
+	done chan struct{}
+	err  error
+}
+
+type asterBracketRefresh struct {
 	done chan struct{}
 	err  error
 }
@@ -202,8 +215,85 @@ func (f *asterAccountFeed) PreTradeBlockers(leg domain.Leg) []string {
 	return asteraccount.ValidatePreTrade(f.state.Snapshot(), leg.MarketKey, leg.MarginRequired, leg.Leverage)
 }
 
-func (f *asterAccountFeed) MaxLeverage(symbol string, notional float64) (int, bool) {
-	return asteraccount.FreshMaximumLeverage(f.state.Snapshot(), symbol, notional, time.Now())
+func (f *asterAccountFeed) LeverageCapability(ctx context.Context, symbol string, notional float64, refresh bool) domain.LeverageCapability {
+	capability := asteraccount.LeverageCapability(f.state.Snapshot(), symbol, notional, f.currentTime())
+	if !refresh {
+		return capability
+	}
+	accountNeedsRefresh := capability.Status == domain.LeverageCapabilityPending ||
+		(capability.Status == domain.LeverageCapabilityStale && capability.Reason == domain.LeverageReasonAccountUnavailable)
+	if accountNeedsRefresh && f.reader != nil && f.ctx != nil {
+		accountRefresh := f.startAccountRefresh()
+		select {
+		case <-ctx.Done():
+			capability.Reason = domain.LeverageReasonAccountUnavailable
+			return capability
+		case <-accountRefresh.done:
+		}
+		capability = asteraccount.LeverageCapability(f.state.Snapshot(), symbol, notional, f.currentTime())
+	}
+	bracketNeedsRefresh := capability.Status == domain.LeverageCapabilityMissing ||
+		(capability.Status == domain.LeverageCapabilityStale && capability.Reason == domain.LeverageReasonBracketStale)
+	if !bracketNeedsRefresh {
+		return capability
+	}
+	refreshState := f.startLeverageBracketRefresh(symbol)
+	select {
+	case <-ctx.Done():
+		capability.Reason = domain.LeverageReasonTargetRefreshFailed
+		return capability
+	case <-refreshState.done:
+	}
+	capability = asteraccount.LeverageCapability(f.state.Snapshot(), symbol, notional, f.currentTime())
+	if refreshState.err != nil && capability.Status != domain.LeverageCapabilityKnown {
+		capability.Reason = domain.LeverageReasonTargetRefreshFailed
+	}
+	return capability
+}
+
+func (f *asterAccountFeed) currentTime() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
+}
+
+func (f *asterAccountFeed) startLeverageBracketRefresh(symbol string) *asterBracketRefresh {
+	f.bracketMu.Lock()
+	if refresh := f.bracketRefreshes[symbol]; refresh != nil {
+		f.bracketMu.Unlock()
+		return refresh
+	}
+	refresh := &asterBracketRefresh{done: make(chan struct{})}
+	if f.bracketRefreshes == nil {
+		f.bracketRefreshes = make(map[string]*asterBracketRefresh)
+	}
+	f.bracketRefreshes[symbol] = refresh
+	f.bracketMu.Unlock()
+
+	go func() {
+		reader, ok := f.reader.(asterLeverageBracketReader)
+		if !ok {
+			refresh.err = fmt.Errorf("Aster target leverage-bracket reader not configured")
+		} else {
+			baseCtx := f.ctx
+			if baseCtx == nil {
+				baseCtx = context.Background()
+			}
+			ctx, cancel := context.WithTimeout(baseCtx, asterAccountReadTimeout)
+			brackets, observedAt, err := reader.ReadLeverageBrackets(ctx, f.account, symbol)
+			cancel()
+			refresh.err = err
+			if err == nil {
+				f.state.ApplyTargetLeverageBrackets(brackets, observedAt)
+			}
+		}
+		f.bracketMu.Lock()
+		delete(f.bracketRefreshes, symbol)
+		close(refresh.done)
+		f.bracketMu.Unlock()
+	}()
+	return refresh
 }
 
 func (f *asterAccountFeed) RefreshPositions(ctx context.Context) error {

@@ -25,9 +25,11 @@ type fakeAsterAccountClient struct {
 }
 
 type fakeAsterAccountReader struct {
-	mu    sync.Mutex
-	calls int
-	read  func(context.Context, string, int) (asteraccount.Observation, error)
+	mu           sync.Mutex
+	calls        int
+	bracketCalls int
+	read         func(context.Context, string, int) (asteraccount.Observation, error)
+	readBracket  func(context.Context, string, string, int) (asteraccount.LeverageBrackets, time.Time, error)
 }
 
 type fakeAsterFundingReader struct {
@@ -77,6 +79,23 @@ func (f *fakeAsterAccountReader) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeAsterAccountReader) ReadLeverageBrackets(ctx context.Context, owner, symbol string) (asteraccount.LeverageBrackets, time.Time, error) {
+	f.mu.Lock()
+	f.bracketCalls++
+	call := f.bracketCalls
+	f.mu.Unlock()
+	if f.readBracket == nil {
+		return nil, time.Time{}, errors.New("target bracket read not configured")
+	}
+	return f.readBracket(ctx, owner, symbol, call)
+}
+
+func (f *fakeAsterAccountReader) bracketCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bracketCalls
 }
 
 func completeAsterObservation(observedAt time.Time) asteraccount.Observation {
@@ -584,15 +603,72 @@ func TestAsterAccountFeedAppliesLeverageResponse(t *testing.T) {
 }
 
 func TestAsterAccountFeedResolvesNotionalLeverageCap(t *testing.T) {
-	feed := &asterAccountFeed{state: asteraccount.NewAccountState("0xowner")}
-	feed.state.ApplyLeverageBrackets(asteraccount.LeverageBrackets{"MEMEUSDT": {
-		{InitialLeverage: 20, NotionalFloor: 0, NotionalCap: 1000},
-		{InitialLeverage: 8, NotionalFloor: 1000, NotionalCap: 10000},
-	}}, time.Now())
+	now := time.Now()
+	state := asteraccount.NewAccountState("0xowner")
+	if err := state.ReplaceObservation("0xowner", asteraccount.Observation{
+		DataAgent: "0xdata", Margin: asteraccount.MarginSummary{CanTrade: true}, Positions: []asteraccount.Position{},
+		PositionMode: asteraccount.PositionMode{OneWay: true}, ObservedAt: now,
+		LeverageBrackets: asteraccount.LeverageBrackets{"MEMEUSDT": {
+			{InitialLeverage: 20, NotionalFloor: 0, NotionalCap: 1000},
+			{InitialLeverage: 8, NotionalFloor: 1000, NotionalCap: 10000},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	feed := &asterAccountFeed{state: state, now: func() time.Time { return now }}
 
-	maximum, found := feed.MaxLeverage("MEMEUSDT", 1500)
-	if !found || maximum != 8 {
-		t.Fatalf("maximum = %d, found = %v, want 8, true", maximum, found)
+	capability := feed.LeverageCapability(context.Background(), "MEMEUSDT", 1500, false)
+	if capability.Status != domain.LeverageCapabilityKnown || capability.Maximum == nil || *capability.Maximum != 8 {
+		t.Fatalf("capability = %+v, want known 8x", capability)
+	}
+}
+
+func TestAsterAccountFeedCoalescesTargetBracketRefresh(t *testing.T) {
+	now := time.Now()
+	state := asteraccount.NewAccountState("0xowner")
+	if err := state.ReplaceObservation("0xowner", completeAsterObservation(now)); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	reader := &fakeAsterAccountReader{readBracket: func(_ context.Context, _ string, symbol string, call int) (asteraccount.LeverageBrackets, time.Time, error) {
+		if symbol != "PIPPINUSDT" || call != 1 {
+			t.Fatalf("target read = %s call %d", symbol, call)
+		}
+		close(started)
+		<-release
+		return asteraccount.LeverageBrackets{"PIPPINUSDT": {{InitialLeverage: 12, NotionalCap: 10000}}}, now.Add(time.Second), nil
+	}}
+	feed := &asterAccountFeed{state: state, reader: reader, account: "0xowner", ctx: context.Background(), now: func() time.Time { return now.Add(time.Second) }}
+
+	first := feed.startLeverageBracketRefresh("PIPPINUSDT")
+	<-started
+	second := feed.startLeverageBracketRefresh("PIPPINUSDT")
+	if first != second {
+		t.Fatal("concurrent target bracket refresh was not coalesced")
+	}
+	close(release)
+	<-first.done
+	capability := feed.LeverageCapability(context.Background(), "PIPPINUSDT", 500, false)
+	if reader.bracketCallCount() != 1 || capability.Status != domain.LeverageCapabilityKnown || capability.Maximum == nil || *capability.Maximum != 12 {
+		t.Fatalf("calls = %d capability = %+v", reader.bracketCallCount(), capability)
+	}
+}
+
+func TestAsterAccountFeedRefreshesMissingTargetCapability(t *testing.T) {
+	now := time.Now()
+	state := asteraccount.NewAccountState("0xowner")
+	if err := state.ReplaceObservation("0xowner", completeAsterObservation(now)); err != nil {
+		t.Fatal(err)
+	}
+	reader := &fakeAsterAccountReader{readBracket: func(_ context.Context, _ string, symbol string, _ int) (asteraccount.LeverageBrackets, time.Time, error) {
+		return asteraccount.LeverageBrackets{symbol: {{InitialLeverage: 15, NotionalCap: 10000}}}, now.Add(time.Second), nil
+	}}
+	feed := &asterAccountFeed{state: state, reader: reader, account: "0xowner", ctx: context.Background(), now: func() time.Time { return now.Add(time.Second) }}
+
+	capability := feed.LeverageCapability(context.Background(), "PIPPINUSDT", 500, true)
+	if reader.bracketCallCount() != 1 || capability.Status != domain.LeverageCapabilityKnown || capability.Maximum == nil || *capability.Maximum != 15 {
+		t.Fatalf("calls = %d capability = %+v", reader.bracketCallCount(), capability)
 	}
 }
 
@@ -607,21 +683,82 @@ func TestLiveDepsResolvesAsterAccountLeverageCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	feed := lease.Feed().(*asterAccountFeed)
+	now := time.Now()
+	if err := feed.state.ReplaceObservation(account, asteraccount.Observation{
+		DataAgent: "0x2222222222222222222222222222222222222222",
+		Margin:    asteraccount.MarginSummary{CanTrade: true}, Positions: []asteraccount.Position{},
+		PositionMode: asteraccount.PositionMode{OneWay: true}, ObservedAt: now,
+		LeverageBrackets: asteraccount.LeverageBrackets{"MEMEUSDT": {
+			{InitialLeverage: 12, NotionalFloor: 0, NotionalCap: 10000},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	lease.Release()
 	live := &LiveDeps{accounts: registry}
-	applied, err := live.applyAsterPrivateResult(context.Background(), &domain.SigningRequest{Account: account, CreatedAt: time.Now()}, &asterlive.PrivateResult{
-		AccountUpdate: &asteraccount.Update{LeverageBrackets: asteraccount.LeverageBrackets{"MEMEUSDT": {
-			{InitialLeverage: 12, NotionalFloor: 0, NotionalCap: 10000},
-		}}},
-	})
-	if err != nil || !applied {
-		t.Fatalf("applied = %v, error = %v", applied, err)
-	}
 
-	maximum, found := live.accountLeverageResolver(map[string]string{"aster": account})("aster", "MEMEUSDT", 500)
-	if !found || maximum != 12 {
-		t.Fatalf("maximum = %d, found = %v, want 12, true", maximum, found)
+	capability := live.accountLeverageResolver(map[string]string{"aster": account})(context.Background(), "aster", "MEMEUSDT", 500, false)
+	if capability.Status != domain.LeverageCapabilityKnown || capability.Maximum == nil || *capability.Maximum != 12 {
+		t.Fatalf("capability = %+v, want known 12x", capability)
 	}
+}
+
+func TestLiveDepsReportsPendingWithoutAsterAccountFeed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	live := &LiveDeps{accounts: newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &asterAccountFeedFactory{},
+	}, accountFeedRegistryConfig{})}
+	capability := live.accountLeverageResolver(map[string]string{
+		"aster": "0x1111111111111111111111111111111111111111",
+	})(context.Background(), "aster", "PIPPINUSDT", 500, false)
+	if capability.Status != domain.LeverageCapabilityPending || capability.Maximum != nil {
+		t.Fatalf("capability = %+v, want pending without numeric maximum", capability)
+	}
+}
+
+func TestLiveDepsReportsPendingWithoutAsterAccountBinding(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	live := &LiveDeps{accounts: newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &asterAccountFeedFactory{},
+	}, accountFeedRegistryConfig{})}
+
+	capability := live.accountLeverageResolver(nil)(context.Background(), "aster", "PIPPINUSDT", 500, true)
+	if capability.Status != domain.LeverageCapabilityPending || capability.Reason != domain.LeverageReasonAccountPending {
+		t.Fatalf("capability = %+v, want pending account binding", capability)
+	}
+}
+
+func TestLiveDepsReportsPendingWithoutAccountRegistry(t *testing.T) {
+	var live *LiveDeps
+	capability := live.accountLeverageResolver(nil)(context.Background(), "aster", "PIPPINUSDT", 500, true)
+	if capability.Status != domain.LeverageCapabilityPending || capability.Reason != domain.LeverageReasonAccountPending {
+		t.Fatalf("capability = %+v, want pending account registry", capability)
+	}
+}
+
+func TestLiveDepsReacquiresEvictedAsterFeedForPlanning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"aster": &asterAccountFeedFactory{},
+	}, accountFeedRegistryConfig{})
+	live := &LiveDeps{accounts: registry}
+	account := "0x1111111111111111111111111111111111111111"
+
+	capability := live.accountLeverageResolver(map[string]string{"aster": account})(
+		context.Background(), "aster", "PIPPINUSDT", 500, true,
+	)
+	if capability.Status != domain.LeverageCapabilityPending || capability.Maximum != nil {
+		t.Fatalf("capability = %+v, want pending without numeric maximum", capability)
+	}
+	lease, found := registry.Lookup("aster", account)
+	if !found {
+		t.Fatal("planning did not reacquire evicted Aster feed")
+	}
+	lease.Release()
 }
 
 func TestAsterAccountFeedAppliesDepositRequiredState(t *testing.T) {

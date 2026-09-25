@@ -222,17 +222,20 @@ func TestBuildPlanUsesAccountLeverageCapForAsterMarket(t *testing.T) {
 	}
 
 	resolverCalled := false
+	resolverRefreshed := false
 	plan, err := s.BuildPlanWithLeverageCaps(
 		context.Background(), opportunities[0].ID, 10, 1500,
-		func(venueName, symbol string, notional float64) (int, bool) {
+		func(_ context.Context, venueName, symbol string, notional float64, refresh bool) domain.LeverageCapability {
 			if venueName != "aster" {
-				return 0, false
+				return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported}
 			}
 			resolverCalled = true
+			resolverRefreshed = refresh
 			if symbol != "MEMEUSDT" || notional != 1500 {
 				t.Fatalf("resolver input = %s, %s, %v", venueName, symbol, notional)
 			}
-			return 10, true
+			maximum := 10
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityKnown, Maximum: &maximum, RequestedNotional: notional}
 		},
 	)
 	if err != nil {
@@ -241,16 +244,19 @@ func TestBuildPlanUsesAccountLeverageCapForAsterMarket(t *testing.T) {
 	if plan.MaxLeverage != 10 {
 		t.Fatalf("MaxLeverage = %d, want 10", plan.MaxLeverage)
 	}
-	if !resolverCalled {
-		t.Fatal("Aster leverage resolver was not called")
+	if !resolverCalled || !resolverRefreshed {
+		t.Fatal("Aster leverage resolver was not called with target refresh enabled")
 	}
 	_, err = s.BuildPlanWithLeverageCaps(
 		context.Background(), opportunities[0].ID, 1, 1500,
-		func(venueName, _ string, _ float64) (int, bool) {
-			return 0, venueName == "aster"
+		func(_ context.Context, venueName, _ string, notional float64, _ bool) domain.LeverageCapability {
+			if venueName == "aster" {
+				return domain.LeverageCapability{Status: domain.LeverageCapabilityMissing, RequestedNotional: notional, Reason: domain.LeverageReasonBracketMissing}
+			}
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported}
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "maximum leverage unavailable") {
+	if err == nil || !strings.Contains(err.Error(), "is missing") {
 		t.Fatalf("missing account cap error = %v", err)
 	}
 }

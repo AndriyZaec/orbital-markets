@@ -34,3 +34,28 @@ func TestWritePlanErrorIncludesOpportunityHealth(t *testing.T) {
 		t.Fatalf("availability reasons = %+v", response.Reasons)
 	}
 }
+
+func TestWritePlanErrorIncludesLeverageCapability(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writePlanError(recorder, http.StatusUnprocessableEntity, &scanner.LeverageCapabilityError{
+		Venue: "aster", Symbol: "PIPPINUSDT",
+		Capability: domain.LeverageCapability{
+			Status: domain.LeverageCapabilityMissing, RequestedNotional: 500,
+			Reason: domain.LeverageReasonBracketMissing,
+		},
+	})
+
+	var response struct {
+		Venue      string                    `json:"venue"`
+		Symbol     string                    `json:"symbol"`
+		Capability domain.LeverageCapability `json:"capability"`
+		Retryable  bool                      `json:"retryable"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Venue != "aster" || response.Symbol != "PIPPINUSDT" ||
+		response.Capability.Status != domain.LeverageCapabilityMissing || !response.Retryable {
+		t.Fatalf("response = %+v", response)
+	}
+}

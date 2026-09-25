@@ -165,6 +165,48 @@ func TestAccountStateBackendObservationPreservesExecutionLeverageConfirmation(t 
 	}
 }
 
+func TestAccountStatePreservesTargetBracketOmittedByBulkObservation(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	observedAt := time.Now()
+	state.ApplyTargetLeverageBrackets(LeverageBrackets{"PIPPINUSDT": {{
+		InitialLeverage: 20, NotionalFloor: 0, NotionalCap: 10000,
+	}}}, observedAt)
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata", Margin: MarginSummary{CanTrade: true, Equity: 120, Available: 110},
+		Positions: []Position{}, PositionMode: PositionMode{OneWay: true},
+		LeverageBrackets: LeverageBrackets{"BTCUSDT": {{InitialLeverage: 50, NotionalCap: 10000}}},
+		ObservedAt:       observedAt.Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := state.Snapshot()
+	if len(snapshot.LeverageBrackets["PIPPINUSDT"]) != 1 || !snapshot.LeverageBracketsUpdatedAt["PIPPINUSDT"].Equal(observedAt) {
+		t.Fatalf("target bracket was dropped by bulk observation: %+v", snapshot)
+	}
+}
+
+func TestAccountStatePreservesNewerTargetBracketIncludedByBulkObservation(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	bulkStartedAt := time.Now()
+	state.ApplyTargetLeverageBrackets(LeverageBrackets{"PIPPINUSDT": {{
+		InitialLeverage: 20, NotionalFloor: 0, NotionalCap: 10000,
+	}}}, bulkStartedAt.Add(time.Second))
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata", Margin: MarginSummary{CanTrade: true, Equity: 120, Available: 110},
+		Positions: []Position{}, PositionMode: PositionMode{OneWay: true},
+		LeverageBrackets: LeverageBrackets{"PIPPINUSDT": {{InitialLeverage: 5, NotionalCap: 10000}}},
+		ObservedAt:       bulkStartedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := state.Snapshot()
+	if maximum, found := MaximumLeverage(snapshot.LeverageBrackets, "PIPPINUSDT", 500); !found || maximum != 20 {
+		t.Fatalf("newer target bracket was overwritten: %+v", snapshot)
+	}
+}
+
 func TestBackendObservationUsesExistingExecutionFreshnessLimit(t *testing.T) {
 	state := NewAccountState("0xabcd")
 	observedAt := time.Now().Add(-accountStateMaxAge - time.Second)

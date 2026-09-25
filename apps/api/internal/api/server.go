@@ -16,6 +16,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api/middleware"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
@@ -192,6 +193,11 @@ const (
 	opportunitiesMaxLimit     = 300
 )
 
+type marketLeverage struct {
+	marketKey string
+	maximum   int
+}
+
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
 	if err != nil {
@@ -208,31 +214,37 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	opps := s.scanner.Opportunities()
-	if resolveLeverageCap := s.live.accountLeverageResolver(bindings.Accounts); resolveLeverageCap != nil {
-		type marketLeverage struct {
-			marketKey string
-			maximum   int
+	markets := make(map[string]marketLeverage)
+	for _, snapshot := range s.scanner.MarketData(r.Context()) {
+		key := strings.ToLower(snapshot.Venue) + "\x00" + strings.ToUpper(snapshot.Asset)
+		markets[key] = marketLeverage{marketKey: snapshot.MarketKey, maximum: snapshot.MaxLeverage}
+	}
+	resolveLeverageCap := s.live.accountLeverageResolver(bindings.Accounts)
+	for i := range opps {
+		keyA := strings.ToLower(opps[i].VenuePair.VenueA) + "\x00" + strings.ToUpper(opps[i].Asset)
+		keyB := strings.ToLower(opps[i].VenuePair.VenueB) + "\x00" + strings.ToUpper(opps[i].Asset)
+		marketA, foundA := markets[keyA]
+		marketB, foundB := markets[keyB]
+		capabilityA := publicLeverageCapability(opps[i].VenuePair.VenueA, marketA, foundA, opps[i].RecommendedNotional)
+		capabilityB := publicLeverageCapability(opps[i].VenuePair.VenueB, marketB, foundB, opps[i].RecommendedNotional)
+		if resolveLeverageCap != nil && foundA {
+			if resolved := resolveLeverageCap(r.Context(), opps[i].VenuePair.VenueA, marketA.marketKey, opps[i].RecommendedNotional, false); resolved.Status != domain.LeverageCapabilityUnsupported {
+				capabilityA = resolved
+			}
 		}
-		markets := make(map[string]marketLeverage)
-		for _, snapshot := range s.scanner.MarketData(r.Context()) {
-			key := strings.ToLower(snapshot.Venue) + "\x00" + strings.ToUpper(snapshot.Asset)
-			markets[key] = marketLeverage{marketKey: snapshot.MarketKey, maximum: snapshot.MaxLeverage}
+		if resolveLeverageCap != nil && foundB {
+			if resolved := resolveLeverageCap(r.Context(), opps[i].VenuePair.VenueB, marketB.marketKey, opps[i].RecommendedNotional, false); resolved.Status != domain.LeverageCapabilityUnsupported {
+				capabilityB = resolved
+			}
 		}
-		for i := range opps {
-			keyA := strings.ToLower(opps[i].VenuePair.VenueA) + "\x00" + strings.ToUpper(opps[i].Asset)
-			keyB := strings.ToLower(opps[i].VenuePair.VenueB) + "\x00" + strings.ToUpper(opps[i].Asset)
-			marketA, foundA := markets[keyA]
-			marketB, foundB := markets[keyB]
-			if !foundA || !foundB {
-				continue
-			}
-			if maximum, found := resolveLeverageCap(opps[i].VenuePair.VenueA, marketA.marketKey, opps[i].RecommendedNotional); found {
-				marketA.maximum = maximum
-			}
-			if maximum, found := resolveLeverageCap(opps[i].VenuePair.VenueB, marketB.marketKey, opps[i].RecommendedNotional); found {
-				marketB.maximum = maximum
-			}
-			opps[i].MaxLeverage = min(marketA.maximum, marketB.maximum)
+		opps[i].LeverageCapabilities = map[string]domain.LeverageCapability{
+			opps[i].VenuePair.VenueA: capabilityA,
+			opps[i].VenuePair.VenueB: capabilityB,
+		}
+		if capabilityA.Maximum != nil && capabilityB.Maximum != nil {
+			opps[i].MaxLeverage = min(*capabilityA.Maximum, *capabilityB.Maximum)
+		} else {
+			opps[i].MaxLeverage = 0
 		}
 	}
 	responses, err := s.opportunitiesWithSignals(r.Context(), opps)
@@ -298,6 +310,17 @@ func writePlanError(w http.ResponseWriter, status int, err error) {
 		})
 		return
 	}
+	var capabilityErr *scanner.LeverageCapabilityError
+	if errors.As(err, &capabilityErr) {
+		writeJSON(w, status, map[string]any{
+			"error":      err.Error(),
+			"venue":      capabilityErr.Venue,
+			"symbol":     capabilityErr.Symbol,
+			"capability": capabilityErr.Capability,
+			"retryable":  capabilityErr.Retryable(),
+		})
+		return
+	}
 	var leverageErr *scanner.LeverageRangeError
 	if errors.As(err, &leverageErr) {
 		writeJSON(w, status, map[string]any{
@@ -307,6 +330,19 @@ func writePlanError(w http.ResponseWriter, status int, err error) {
 		return
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func publicLeverageCapability(venueName string, market marketLeverage, found bool, notional float64) domain.LeverageCapability {
+	if strings.EqualFold(venueName, "aster") {
+		return domain.LeverageCapability{Status: domain.LeverageCapabilityPending, RequestedNotional: notional, Reason: domain.LeverageReasonAccountPending}
+	}
+	if !found || market.maximum <= 0 {
+		return domain.LeverageCapability{Status: domain.LeverageCapabilityMissing, RequestedNotional: notional, Reason: domain.LeverageReasonBracketMissing}
+	}
+	maximum := market.maximum
+	return domain.LeverageCapability{
+		Status: domain.LeverageCapabilityKnown, Maximum: &maximum, RequestedNotional: notional,
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

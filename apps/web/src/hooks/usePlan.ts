@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
+import { leverageCapabilityMessage } from '@/lib/leverage'
 import { usePageVisibility } from './usePageVisibility'
+import type { LeverageCapability } from './useOpportunities'
 
 type LiqRiskLevel = 'safe' | 'elevated' | 'warning' | 'critical' | ''
 
@@ -68,12 +70,14 @@ export function usePlan(
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [maxLeverageResult, setMaxLeverageResult] = useState<{ key: string; value: number | null }>({ key: '', value: null })
+  const [capabilityErrorKey, setCapabilityErrorKey] = useState('')
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const requestSequence = useRef(0)
   const pageVisible = usePageVisibility()
   const accountsKey = JSON.stringify(Object.entries(accounts ?? {}).sort(([left], [right]) => left.localeCompare(right)))
   const planKey = JSON.stringify([opportunityId, requestedNotional ?? null, accountsKey])
   const maxLeverage = maxLeverageResult.key === planKey ? maxLeverageResult.value : null
+  const leverageCapabilityBlocked = capabilityErrorKey === planKey
 
   const fetchPlan = useCallback(async (
     oppId: string,
@@ -102,19 +106,26 @@ export function usePlan(
         signal,
       })
       if (!resp.ok) {
-        const body: { error?: string; pair_max_leverage?: number } = await resp.json().catch(() => ({}))
+        const body: { error?: string; pair_max_leverage?: number; venue?: string; capability?: LeverageCapability } = await resp.json().catch(() => ({}))
         if (signal?.aborted || requestId !== requestSequence.current) return
         if (typeof body.pair_max_leverage === 'number') {
           setMaxLeverageResult({ key: requestKey ?? '', value: body.pair_max_leverage })
         } else {
           setMaxLeverageResult({ key: requestKey ?? '', value: null })
         }
-        throw apiError(resp.status, 'Unable to build an execution plan. Please try again.', body)
+        const capabilityMessage = body.capability
+          ? leverageCapabilityMessage({ [body.venue ?? 'venue']: body.capability })
+          : null
+        setCapabilityErrorKey(capabilityMessage ? requestKey ?? '' : '')
+        throw apiError(resp.status, 'Unable to build an execution plan. Please try again.', capabilityMessage
+          ? { ...body, error: capabilityMessage }
+          : body)
       }
       const data: ExecutionPlan = await resp.json()
       if (signal?.aborted || requestId !== requestSequence.current) return
       setPlan(data)
       setMaxLeverageResult({ key: requestKey ?? '', value: data.max_leverage })
+      setCapabilityErrorKey('')
       setError(null)
       return data
     } catch (e) {
@@ -135,6 +146,7 @@ export function usePlan(
         setPlan(null)
         setError(null)
         setMaxLeverageResult({ key: '', value: null })
+        setCapabilityErrorKey('')
       }, 0)
       return () => window.clearTimeout(resetId)
     }
@@ -162,6 +174,7 @@ export function usePlan(
     setPlan(null)
     setError(null)
     setMaxLeverageResult({ key: '', value: null })
+    setCapabilityErrorKey('')
   }, [])
 
   const refresh = useCallback(() => {
@@ -169,7 +182,7 @@ export function usePlan(
     return fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey)
   }, [accountsKey, fetchPlan, leverage, opportunityId, planKey, requestedNotional])
 
-  return { plan, loading, error, maxLeverage, clear, refresh }
+  return { plan, loading, error, maxLeverage, leverageCapabilityBlocked, clear, refresh }
 }
 
 export type { ExecutionPlan, Leg, Bounds }

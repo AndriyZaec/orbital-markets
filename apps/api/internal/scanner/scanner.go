@@ -275,6 +275,12 @@ func cloneOpportunity(opportunity domain.Opportunity) domain.Opportunity {
 		opportunity.VenuePair.VenueB,
 	)
 	opportunity.AvailabilityReasons = append([]domain.OpportunityAvailabilityReason(nil), opportunity.AvailabilityReasons...)
+	if opportunity.LeverageCapabilities != nil {
+		opportunity.LeverageCapabilities = make(map[string]domain.LeverageCapability, len(opportunity.LeverageCapabilities))
+		for venueName, capability := range opportunity.LeverageCapabilities {
+			opportunity.LeverageCapabilities[venueName] = capability
+		}
+	}
 	opportunity.RiskFlags = append([]string(nil), opportunity.RiskFlags...)
 	opportunity.Warnings = append([]string(nil), opportunity.Warnings...)
 	return opportunity
