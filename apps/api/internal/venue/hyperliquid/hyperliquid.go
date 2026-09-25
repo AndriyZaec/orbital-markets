@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -73,25 +74,39 @@ type bboLevel struct {
 
 // Internal state per asset
 type assetState struct {
-	markPrice    float64
-	indexPrice   float64
-	fundingRate  float64
-	openInterest float64
-	bidPrice     float64
-	bidSize      float64
-	askPrice     float64
-	askSize      float64
-	maxLeverage  int
-	timestamp    time.Time
+	markPrice          float64
+	indexPrice         float64
+	fundingRate        float64
+	openInterest       float64
+	bidPrice           float64
+	bidSize            float64
+	askPrice           float64
+	askSize            float64
+	maxLeverage        int
+	timestamp          time.Time
+	bookHealth         venue.ComponentHealth
+	markHealth         venue.ComponentHealth
+	indexHealth        venue.ComponentHealth
+	fundingHealth      venue.ComponentHealth
+	openInterestHealth venue.ComponentHealth
 }
 
 type Adapter struct {
-	mu         sync.RWMutex
-	assets     map[string]*assetState
-	assetMap   *AssetMap
-	logger     *slog.Logger
-	client     *http.Client
-	fundingURL string
+	mu               sync.RWMutex
+	assets           map[string]*assetState
+	assetMap         *AssetMap
+	logger           *slog.Logger
+	client           *http.Client
+	fundingURL       string
+	marketURL        string
+	now              func() time.Time
+	restGeneration   uint64
+	restReceivedAt   time.Time
+	restAvailable    bool
+	restReason       string
+	streamGeneration uint64
+	streamConnected  bool
+	streamReceivedAt time.Time
 }
 
 func New(logger *slog.Logger) *Adapter {
@@ -101,6 +116,8 @@ func New(logger *slog.Logger) *Adapter {
 		logger:     logger,
 		client:     &http.Client{Timeout: 10 * time.Second},
 		fundingURL: restURL,
+		marketURL:  restURL,
+		now:        time.Now,
 	}
 }
 
@@ -195,7 +212,30 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 	for name, s := range a.assets {
 		ts := s.timestamp
 		if ts.IsZero() {
-			ts = time.Now()
+			ts = a.now()
+		}
+		book := componentHealth(s.bookHealth)
+		restSource := venue.SourceHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved}
+		if !a.restReceivedAt.IsZero() || a.restReason != "" {
+			restSource = venue.SourceHealth{
+				Status: venue.HealthUnavailable, Generation: a.restGeneration,
+				ReceivedAt: a.restReceivedAt, Reason: a.restReason,
+			}
+			if a.restAvailable {
+				restSource.Status = venue.HealthAvailable
+				restSource.Reason = ""
+			}
+		}
+		streamSource := venue.SourceHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved}
+		if a.streamGeneration > 0 {
+			streamSource = venue.SourceHealth{
+				Status: venue.HealthUnavailable, Generation: a.streamGeneration,
+				ReceivedAt: a.streamReceivedAt, Reason: venue.HealthReasonDisconnected,
+			}
+			if a.streamConnected {
+				streamSource.Status = venue.HealthAvailable
+				streamSource.Reason = ""
+			}
 		}
 		out = append(out, venue.MarketData{
 			Venue:        venueName,
@@ -211,6 +251,12 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			OpenInterest: s.openInterest,
 			MaxLeverage:  s.maxLeverage,
 			Timestamp:    ts,
+			Health: &venue.MarketHealth{
+				Mark: componentHealth(s.markHealth), Index: componentHealth(s.indexHealth),
+				Funding: componentHealth(s.fundingHealth), Book: book,
+				OpenInterest: componentHealth(s.openInterestHealth), REST: restSource,
+				Stream: streamSource,
+			},
 		})
 	}
 	return out, nil
@@ -242,8 +288,14 @@ func (a *Adapter) restLoop(ctx context.Context) {
 }
 
 func (a *Adapter) pollREST(ctx context.Context) {
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			a.markRESTUnavailable()
+		}
+	}()
 	body := `{"type":"metaAndAssetCtxs"}`
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, restURL, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.marketURL, strings.NewReader(body))
 	if err != nil {
 		a.logger.Error("hyperliquid rest: build request", "err", err)
 		return
@@ -256,6 +308,10 @@ func (a *Adapter) pollREST(ctx context.Context) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		a.logger.Error("hyperliquid rest: status", "status", resp.StatusCode)
+		return
+	}
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -282,7 +338,8 @@ func (a *Adapter) pollREST(ctx context.Context) {
 		return
 	}
 
-	if len(meta.Universe) != len(ctxs) {
+	completeSnapshot := len(meta.Universe) > 0 && len(meta.Universe) == len(ctxs)
+	if !completeSnapshot {
 		a.logger.Warn("hyperliquid rest: universe/ctx length mismatch",
 			"universe", len(meta.Universe), "ctxs", len(ctxs))
 	}
@@ -292,6 +349,13 @@ func (a *Adapter) pollREST(ctx context.Context) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.restGeneration++
+	a.restReceivedAt = a.now()
+	a.restAvailable = completeSnapshot
+	a.restReason = venue.HealthReasonIncompleteSnapshot
+	if completeSnapshot {
+		a.restReason = ""
+	}
 
 	n := min(len(meta.Universe), len(ctxs))
 	for i := 0; i < n; i++ {
@@ -304,10 +368,10 @@ func (a *Adapter) pollREST(ctx context.Context) {
 			a.assets[name] = state
 		}
 
-		state.markPrice = parseFloat(c.MarkPx)
-		state.indexPrice = parseFloat(c.OraclePx)
-		state.fundingRate = parseFloat(c.Funding)
-		state.openInterest = parseFloat(c.OpenInterest)
+		state.markPrice, state.markHealth = parseRESTComponent(c.MarkPx, a.restReceivedAt, a.restGeneration)
+		state.indexPrice, state.indexHealth = parseRESTComponent(c.OraclePx, a.restReceivedAt, a.restGeneration)
+		state.fundingRate, state.fundingHealth = parseRESTComponent(c.Funding, a.restReceivedAt, a.restGeneration)
+		state.openInterest, state.openInterestHealth = parseRESTComponent(c.OpenInterest, a.restReceivedAt, a.restGeneration)
 		if meta.Universe[i].MaxLeverage > 0 {
 			state.maxLeverage = meta.Universe[i].MaxLeverage
 		}
@@ -316,6 +380,14 @@ func (a *Adapter) pollREST(ctx context.Context) {
 	if a.assetMap.Len() > 0 {
 		a.logger.Debug("hyperliquid asset map updated", "symbols", a.assetMap.Len())
 	}
+	succeeded = true
+}
+
+func (a *Adapter) markRESTUnavailable() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.restAvailable = false
+	a.restReason = venue.HealthReasonFetchFailed
 }
 
 func (a *Adapter) wsLoop(ctx context.Context) {
@@ -360,6 +432,8 @@ func (a *Adapter) connectWS(ctx context.Context) error {
 			return fmt.Errorf("subscribe %s: %w", coin, err)
 		}
 	}
+	generation := a.markStreamConnected()
+	defer a.markStreamDisconnected(generation)
 
 	a.logger.Info("hyperliquid ws connected", "subscriptions", len(coins))
 
@@ -390,30 +464,83 @@ func (a *Adapter) connectWS(ctx context.Context) error {
 			continue
 		}
 
-		if len(bbo.BBO) < 2 {
-			continue
-		}
-
-		a.mu.Lock()
-		if state, ok := a.assets[bbo.Coin]; ok {
-			bidPx := parseFloat(bbo.BBO[0].Px)
-			bidSz := parseFloat(bbo.BBO[0].Sz)
-			askPx := parseFloat(bbo.BBO[1].Px)
-			askSz := parseFloat(bbo.BBO[1].Sz)
-
-			state.bidPrice = bidPx
-			state.bidSize = bidSz * bidPx // convert token size to notional
-			state.askPrice = askPx
-			state.askSize = askSz * askPx // convert token size to notional
-			if bbo.Time > 0 {
-				state.timestamp = time.UnixMilli(bbo.Time)
-			}
-		}
-		a.mu.Unlock()
+		a.applyBBO(generation, bbo)
 	}
 }
 
-func parseFloat(s string) float64 {
-	f, _ := strconv.ParseFloat(s, 64)
-	return f
+func (a *Adapter) markStreamConnected() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.streamGeneration++
+	a.streamConnected = true
+	a.streamReceivedAt = time.Time{}
+	return a.streamGeneration
+}
+
+func (a *Adapter) markStreamDisconnected(generation uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.streamGeneration == generation {
+		a.streamConnected = false
+	}
+}
+
+func (a *Adapter) applyBBO(generation uint64, bbo bboData) {
+	if len(bbo.BBO) < 2 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.streamConnected || a.streamGeneration != generation {
+		return
+	}
+	state, ok := a.assets[bbo.Coin]
+	if !ok {
+		return
+	}
+	bidPx, bidPxErr := strconv.ParseFloat(bbo.BBO[0].Px, 64)
+	bidSz, bidSzErr := strconv.ParseFloat(bbo.BBO[0].Sz, 64)
+	askPx, askPxErr := strconv.ParseFloat(bbo.BBO[1].Px, 64)
+	askSz, askSzErr := strconv.ParseFloat(bbo.BBO[1].Sz, 64)
+	state.bidPrice = bidPx
+	state.bidSize = bidSz * bidPx
+	state.askPrice = askPx
+	state.askSize = askSz * askPx
+	receivedAt := a.now()
+	a.streamReceivedAt = receivedAt
+	state.bookHealth = venue.ComponentHealth{
+		Status: venue.HealthAvailable, ReceivedAt: receivedAt, SourceGeneration: generation,
+	}
+	if invalidFloat(bidPx, bidPxErr) || invalidFloat(bidSz, bidSzErr) ||
+		invalidFloat(askPx, askPxErr) || invalidFloat(askSz, askSzErr) {
+		state.bookHealth.Status = venue.HealthUnavailable
+		state.bookHealth.Reason = venue.HealthReasonInvalidValue
+	}
+	if bbo.Time > 0 {
+		state.timestamp = time.UnixMilli(bbo.Time)
+		state.bookHealth.SourceTime = state.timestamp
+	}
+}
+
+func parseRESTComponent(raw string, receivedAt time.Time, generation uint64) (float64, venue.ComponentHealth) {
+	value, err := strconv.ParseFloat(raw, 64)
+	health := venue.ComponentHealth{
+		Status: venue.HealthAvailable, ReceivedAt: receivedAt, SourceGeneration: generation,
+	}
+	if invalidFloat(value, err) {
+		health.Status = venue.HealthUnavailable
+		health.Reason = venue.HealthReasonInvalidValue
+	}
+	return value, health
+}
+
+func invalidFloat(value float64, err error) bool {
+	return err != nil || math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+func componentHealth(health venue.ComponentHealth) venue.ComponentHealth {
+	if health.Status == "" {
+		return venue.ComponentHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved}
+	}
+	return health
 }
