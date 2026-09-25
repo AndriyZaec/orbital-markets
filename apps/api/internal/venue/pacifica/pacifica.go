@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -52,26 +53,35 @@ type wsBBO struct {
 
 // assetState holds combined prices + bbo data for one symbol.
 type assetState struct {
-	markPrice    float64
-	indexPrice   float64
-	fundingRate  float64
-	openInterest float64
-	bidPrice     float64
-	bidSize      float64 // notional
-	askPrice     float64
-	askSize      float64 // notional
-	maxLeverage  int
-	lotSize      string
-	timestamp    time.Time
+	markPrice          float64
+	indexPrice         float64
+	fundingRate        float64
+	openInterest       float64
+	bidPrice           float64
+	bidSize            float64 // notional
+	askPrice           float64
+	askSize            float64 // notional
+	maxLeverage        int
+	lotSize            string
+	timestamp          time.Time
+	markHealth         venue.ComponentHealth
+	indexHealth        venue.ComponentHealth
+	fundingHealth      venue.ComponentHealth
+	openInterestHealth venue.ComponentHealth
+	bookHealth         venue.ComponentHealth
 }
 
 type Adapter struct {
-	mu         sync.RWMutex
-	assets     map[string]*assetState
-	logger     *slog.Logger
-	client     *http.Client
-	metadataMu sync.Mutex
-	fundingURL string
+	mu               sync.RWMutex
+	assets           map[string]*assetState
+	logger           *slog.Logger
+	client           *http.Client
+	metadataMu       sync.Mutex
+	fundingURL       string
+	now              func() time.Time
+	streamGeneration uint64
+	streamConnected  bool
+	streamReceivedAt time.Time
 }
 
 func New(logger *slog.Logger) *Adapter {
@@ -80,6 +90,7 @@ func New(logger *slog.Logger) *Adapter {
 		logger:     logger,
 		client:     &http.Client{Timeout: 10 * time.Second},
 		fundingURL: fundingHistoryURL,
+		now:        time.Now,
 	}
 }
 
@@ -158,6 +169,17 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 
 	out := make([]venue.MarketData, 0, len(a.assets))
 	for name, s := range a.assets {
+		streamSource := venue.SourceHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved}
+		if a.streamGeneration > 0 {
+			streamSource = venue.SourceHealth{
+				Status: venue.HealthUnavailable, Generation: a.streamGeneration,
+				ReceivedAt: a.streamReceivedAt, Reason: venue.HealthReasonDisconnected,
+			}
+			if a.streamConnected {
+				streamSource.Status = venue.HealthAvailable
+				streamSource.Reason = ""
+			}
+		}
 		out = append(out, venue.MarketData{
 			Venue:        venueName,
 			Asset:        name,
@@ -172,6 +194,13 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			OpenInterest: s.openInterest,
 			MaxLeverage:  s.maxLeverage,
 			Timestamp:    s.timestamp,
+			Health: &venue.MarketHealth{
+				Mark: pacificaComponentHealth(s.markHealth), Index: pacificaComponentHealth(s.indexHealth),
+				Funding: pacificaComponentHealth(s.fundingHealth), Book: pacificaComponentHealth(s.bookHealth),
+				OpenInterest: pacificaComponentHealth(s.openInterestHealth),
+				REST:         venue.SourceHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved},
+				Stream:       streamSource,
+			},
 		})
 	}
 	return out, nil
@@ -267,6 +296,8 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("subscribe prices: %w", err)
 	}
+	generation := a.markStreamConnected()
+	defer a.markStreamDisconnected(generation)
 
 	a.logger.Info("pacifica ws connected")
 
@@ -300,7 +331,7 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 				a.logger.Warn("pacifica: parse prices", "err", err)
 				continue
 			}
-			a.updatePrices(prices)
+			a.updatePrices(generation, prices)
 
 			// Subscribe to BBO for any new symbols we discovered
 			for _, p := range prices {
@@ -325,20 +356,43 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 			if err := json.Unmarshal(msg.Data, &bbo); err != nil {
 				continue
 			}
-			a.updateBBO(bbo)
+			a.updateBBO(generation, bbo)
 		}
 	}
 }
 
-func (a *Adapter) updatePrices(prices []wsPrice) {
+func (a *Adapter) markStreamConnected() uint64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.streamGeneration++
+	a.streamConnected = true
+	a.streamReceivedAt = time.Time{}
+	return a.streamGeneration
+}
+
+func (a *Adapter) markStreamDisconnected(generation uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.streamGeneration == generation {
+		a.streamConnected = false
+	}
+}
+
+func (a *Adapter) updatePrices(generation uint64, prices []wsPrice) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.streamConnected || a.streamGeneration != generation {
+		return
+	}
+	receivedAt := a.now()
+	a.streamReceivedAt = receivedAt
 
 	for _, p := range prices {
-		mark := parseFloat(p.Mark)
-		oracle := parseFloat(p.Oracle)
-		funding := parseFloat(p.Funding)
-		oi := parseFloat(p.OpenInterest)
+		sourceTime := time.UnixMilli(p.Timestamp)
+		mark, markHealth := parsePacificaComponent(p.Mark, sourceTime, receivedAt, generation)
+		oracle, indexHealth := parsePacificaComponent(p.Oracle, sourceTime, receivedAt, generation)
+		funding, fundingHealth := parsePacificaComponent(p.Funding, sourceTime, receivedAt, generation)
+		oi, openInterestHealth := parsePacificaComponent(p.OpenInterest, sourceTime, receivedAt, generation)
 		mid := parseFloat(p.Mid)
 
 		state, exists := a.assets[p.Symbol]
@@ -351,7 +405,11 @@ func (a *Adapter) updatePrices(prices []wsPrice) {
 		state.indexPrice = oracle
 		state.fundingRate = funding
 		state.openInterest = oi
-		state.timestamp = time.UnixMilli(p.Timestamp)
+		state.timestamp = sourceTime
+		state.markHealth = markHealth
+		state.indexHealth = indexHealth
+		state.fundingHealth = fundingHealth
+		state.openInterestHealth = openInterestHealth
 
 		// Use mid as fallback bid/ask until BBO arrives
 		if state.bidPrice == 0 {
@@ -363,31 +421,74 @@ func (a *Adapter) updatePrices(prices []wsPrice) {
 	}
 }
 
-func (a *Adapter) updateBBO(bbo wsBBO) {
+func (a *Adapter) updateBBO(generation uint64, bbo wsBBO) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !a.streamConnected || a.streamGeneration != generation {
+		return
+	}
 
 	state, exists := a.assets[bbo.Symbol]
 	if !exists {
 		return
 	}
 
-	bidPx := parseFloat(bbo.BidPrice)
-	bidAmt := parseFloat(bbo.BidAmount)
-	askPx := parseFloat(bbo.AskPrice)
-	askAmt := parseFloat(bbo.AskAmount)
+	bidPx, bidPxErr := strconv.ParseFloat(bbo.BidPrice, 64)
+	bidAmt, bidAmtErr := strconv.ParseFloat(bbo.BidAmount, 64)
+	askPx, askPxErr := strconv.ParseFloat(bbo.AskPrice, 64)
+	askAmt, askAmtErr := strconv.ParseFloat(bbo.AskAmount, 64)
 
 	state.bidPrice = bidPx
 	state.bidSize = bidAmt * bidPx // token amount × price = notional
 	state.askPrice = askPx
 	state.askSize = askAmt * askPx
+	receivedAt := a.now()
+	a.streamReceivedAt = receivedAt
+	state.bookHealth = venue.ComponentHealth{
+		Status: venue.HealthAvailable, ReceivedAt: receivedAt, SourceGeneration: generation,
+	}
+	if invalidPacificaFloat(bidPx, bidPxErr) || invalidPacificaFloat(bidAmt, bidAmtErr) ||
+		invalidPacificaFloat(askPx, askPxErr) || invalidPacificaFloat(askAmt, askAmtErr) {
+		state.bookHealth.Status = venue.HealthUnavailable
+		state.bookHealth.Reason = venue.HealthReasonInvalidValue
+	}
 
 	if bbo.Timestamp > 0 {
 		state.timestamp = time.UnixMilli(bbo.Timestamp)
+		state.bookHealth.SourceTime = state.timestamp
 	}
 }
 
 func parseFloat(s string) float64 {
 	f, _ := strconv.ParseFloat(s, 64)
 	return f
+}
+
+func parsePacificaComponent(
+	raw string,
+	sourceTime time.Time,
+	receivedAt time.Time,
+	generation uint64,
+) (float64, venue.ComponentHealth) {
+	value, err := strconv.ParseFloat(raw, 64)
+	health := venue.ComponentHealth{
+		Status: venue.HealthAvailable, SourceTime: sourceTime,
+		ReceivedAt: receivedAt, SourceGeneration: generation,
+	}
+	if invalidPacificaFloat(value, err) {
+		health.Status = venue.HealthUnavailable
+		health.Reason = venue.HealthReasonInvalidValue
+	}
+	return value, health
+}
+
+func invalidPacificaFloat(value float64, err error) bool {
+	return err != nil || math.IsNaN(value) || math.IsInf(value, 0)
+}
+
+func pacificaComponentHealth(health venue.ComponentHealth) venue.ComponentHealth {
+	if health.Status == "" {
+		return venue.ComponentHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved}
+	}
+	return health
 }
