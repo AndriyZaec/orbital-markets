@@ -10,7 +10,7 @@ import { LiveExecutionModal } from '@/components/LiveExecutionModal'
 import { AssetIcon } from '@/components/AssetIcon'
 import { trackAnalytics } from '@/lib/analytics'
 import { venueMetadata } from '@/lib/venue-metadata'
-import { knownMaxLeverage, reconcileLeverageSelection } from '@/lib/leverage'
+import { knownMaxLeverage, leverageCapabilityMessage, reconcileLeverageSelection } from '@/lib/leverage'
 import { executionIntentSide } from '@/lib/live-execution-state'
 
 interface Props {
@@ -27,6 +27,7 @@ interface Props {
   ) => Promise<void>
   onViewPositions?: (positionId: string | null) => void
   onOpenAccounts?: () => void
+  onCapabilityUpdated?: () => void
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -82,25 +83,6 @@ function useCountdown(lastUpdated: Date | null, intervalSec: number) {
   return remaining
 }
 
-function useExpiry(expiresAt: string | null) {
-  const [remaining, setRemaining] = useState(0)
-  const [expired, setExpired] = useState(false)
-
-  useEffect(() => {
-    if (!expiresAt) return
-    const update = () => {
-      const ms = new Date(expiresAt).getTime() - Date.now()
-      if (ms <= 0) { setRemaining(0); setExpired(true) }
-      else { setRemaining(Math.ceil(ms / 1000)); setExpired(false) }
-    }
-    update()
-    const id = setInterval(update, 1000)
-    return () => clearInterval(id)
-  }, [expiresAt])
-
-  return { remaining, expired }
-}
-
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value)
   useEffect(() => {
@@ -120,6 +102,7 @@ export function OpportunityPanel({
   onExecute,
   onViewPositions,
   onOpenAccounts,
+  onCapabilityUpdated,
 }: Props) {
   // Matches useOpportunities' 60s poll interval.
   const countdown = useCountdown(lastUpdated, 60)
@@ -129,6 +112,7 @@ export function OpportunityPanel({
   const longVenue = isLongA ? opp.venue_pair.venue_a : opp.venue_pair.venue_b
   const shortVenue = isLongA ? opp.venue_pair.venue_b : opp.venue_pair.venue_a
   const opportunityMaxLev = knownMaxLeverage(opp.max_leverage)
+  const leverageIssue = leverageCapabilityMessage(opp.leverage_capabilities)
   const initialLeverage = opportunityMaxLev ?? 1
   const venuePair = `${longVenue}_${shortVenue}`
   const liveVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()] as [VenueId, VenueId]
@@ -171,25 +155,38 @@ export function OpportunityPanel({
       ? [[readiness.venue, readiness.address]]
       : []))
     : undefined
-  const canRequestPlan = mode !== 'live' ||
+  const marketAvailable = opp.status === 'available'
+  const availabilityMessage = opp.availability_reasons?.map((reason) => {
+    const venue = reason.venue ? venueLabel(reason.venue) : 'Venue'
+    return reason.code === 'source_fetch_failed'
+      ? `${venue} market feed is unreachable.`
+      : `${venue} market data is temporarily unavailable.`
+  }).join(' ') || 'Market data is temporarily unavailable.'
+  const canRequestPlan = marketAvailable && (mode !== 'live' ||
     !liveVenues.includes('aster') ||
-    Boolean(asterReadiness.address)
-  const { plan, loading: planLoading, error: planError, maxLeverage, refresh: refreshPlan } = usePlan(
+    Boolean(asterReadiness.address))
+  const { plan, loading: planLoading, error: planError, maxLeverage, leverageCapabilityBlocked, refresh: refreshPlan } = usePlan(
     canRequestPlan ? opp.id : null,
     debouncedLeverageForPlan,
     debouncedNotionalForPlan,
     planAccounts,
   )
   const planUpdating = planLoading || planInputsPending
-  const maxLev = maxLeverage ?? opportunityMaxLev
+  const maxLev = leverageCapabilityBlocked ? null : maxLeverage ?? opportunityMaxLev
   useEffect(() => {
     if (maxLeverage === null) return
     setLeverageSelection((current) => reconcileLeverageSelection(
       current, opp.id, opportunityMaxLev, maxLeverage,
     ))
   }, [maxLeverage, opp.id, opportunityMaxLev])
-  const { remaining: planRemaining, expired: planExpired } = useExpiry(plan?.expires_at ?? null)
-
+  const reportedCapabilityRef = useRef('')
+  useEffect(() => {
+    if (maxLeverage === null || maxLeverage === opportunityMaxLev || !onCapabilityUpdated) return
+    const revision = `${opp.id}:${maxLeverage}`
+    if (reportedCapabilityRef.current === revision) return
+    reportedCapabilityRef.current = revision
+    onCapabilityUpdated()
+  }, [maxLeverage, onCapabilityUpdated, opp.id, opportunityMaxLev])
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
   const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
@@ -233,19 +230,19 @@ export function OpportunityPanel({
       })
     : []
   const hasMarginShortfall = marginShortfalls.length > 0
-  const experimentalWarning = plan?.risk_tier === 'experimental'
-    ? plan.warnings?.find((warning) => warning.startsWith('Experimental opportunity:')) ?? null
+  const fundingReversalSignal = opp.signal_7d?.status === 'choppy' ? opp.signal_7d : null
+  const requiresFundingReversalAcknowledgement = fundingReversalSignal !== null
+  const fundingReversalReason = fundingReversalSignal
+    ? `The 7-day funding direction was only ${(fundingReversalSignal.direction_consistency * 100).toFixed(0)}% consistent across ${fundingReversalSignal.samples} samples.`
     : null
   const [riskAcknowledgement, setRiskAcknowledgement] = useState({
     opportunityId: '',
     acknowledged: false,
   })
-  const experimentalRiskAcknowledged = !experimentalWarning || (
+  const fundingReversalRiskAcknowledged = !requiresFundingReversalAcknowledgement || (
     riskAcknowledgement.opportunityId === opp.id && riskAcknowledgement.acknowledged
   )
-  const detailWarnings = plan?.warnings?.filter(
-    (warning) => mode !== 'live' || warning !== experimentalWarning,
-  ) ?? []
+  const detailWarnings = plan?.warnings ?? []
 
   const handleExecute = async () => {
     setExecuting(true)
@@ -324,6 +321,12 @@ export function OpportunityPanel({
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
+        {!marketAvailable && (
+          <div className={`mt-3 rounded border px-3 py-2 text-xs ${opp.status === 'degraded' ? 'border-yellow-500/20 bg-yellow-500/[0.06] text-yellow-300' : 'border-red-500/20 bg-red-500/[0.06] text-red-300'}`}>
+            <span className="font-medium capitalize">{opp.status}</span>
+            <span className="text-muted-foreground"> · {availabilityMessage}</span>
+          </div>
+        )}
       </div>
 
       {/* Scrollable content */}
@@ -374,7 +377,7 @@ export function OpportunityPanel({
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Leverage</span>
               <span className="text-[11px] text-muted-foreground/70">
-                Pair max {maxLev === null ? '--' : `${maxLev}x`}
+                {maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `Pair max ${maxLev}x`}
               </span>
             </div>
             {plan && (
@@ -483,31 +486,23 @@ export function OpportunityPanel({
           <span className="text-[11px] text-muted-foreground">
             {isLive ? `Live · ${Math.ceil(countdown)}s` : 'Refreshing...'}
           </span>
-          {plan && !planExpired && (
-            <span className="text-[11px] text-muted-foreground ml-auto">
-              Plan: {planRemaining}s
-            </span>
-          )}
-          {plan && planExpired && (
-            <span className="text-[11px] text-yellow-400 ml-auto">Plan expired</span>
-          )}
         </div>
         {mode === 'live' && hasMarginShortfall && (
           <p className="mb-2.5 text-center text-[11px] text-muted-foreground">
             Add collateral · {marginShortfalls.join(' · ')}
           </p>
         )}
-        {mode === 'live' && experimentalWarning && (
+        {mode === 'live' && requiresFundingReversalAcknowledgement && (
           <TooltipProvider>
             <div className="mb-3 flex items-center gap-2 text-xs">
               <label className="flex cursor-pointer items-center gap-2 text-foreground">
                 <Checkbox
-                  checked={experimentalRiskAcknowledged}
+                  checked={fundingReversalRiskAcknowledged}
                   onCheckedChange={(checked) => setRiskAcknowledgement({
                     opportunityId: opp.id,
                     acknowledged: checked,
                   })}
-                  aria-label="Acknowledge experimental funding risk"
+                  aria-label="Acknowledge frequent funding reversal risk"
                 />
                 <span>I accept funding reversal risk</span>
               </label>
@@ -520,7 +515,7 @@ export function OpportunityPanel({
                   )}
                 />
                 <TooltipContent side="top" align="end">
-                  {experimentalWarning.replace('Experimental opportunity: ', '')}
+                  {fundingReversalReason}
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -531,10 +526,10 @@ export function OpportunityPanel({
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!plan?.executable || planExpired || executing || planUpdating || !notionalValid}
+            disabled={!marketAvailable || !plan?.executable || executing || planUpdating || !notionalValid}
             onClick={handleExecute}
           >
-            {executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : planExpired ? 'Plan Expired' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+            {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
           </Button>
         ) : (
           <>
@@ -546,13 +541,15 @@ export function OpportunityPanel({
               // route the click to open Connect Accounts. Plan/notional
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
-                isFullyReady
-                  ? !plan?.executable || planExpired || planUpdating || !notionalValid || hasMarginShortfall || !experimentalRiskAcknowledged
-                  : false
+                !marketAvailable || (isFullyReady
+                  ? !plan?.executable || planUpdating || !notionalValid || hasMarginShortfall || !fundingReversalRiskAcknowledged
+                  : false)
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
             >
-              {isFullyReady
+              {!marketAvailable
+                ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}`
+                : isFullyReady
                 ? hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
                 : noSelectedWallets
                   ? 'Connect Wallets to Go Live'

@@ -84,6 +84,26 @@ func TestReaderReturnsNoPartialAccountObservation(t *testing.T) {
 	}
 }
 
+func TestReaderReadsExactSymbolLeverageBrackets(t *testing.T) {
+	store, now := approvedReaderService(t)
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/fapi/v3/leverageBracket" || r.URL.Query().Get("symbol") != "PIPPINUSDT" {
+			t.Fatalf("request = %s", r.URL.String())
+		}
+		fmt.Fprint(w, `{"symbol":"PIPPINUSDT","brackets":[{"initialLeverage":20,"notionalCap":10000,"notionalFloor":0}]}`)
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+
+	brackets, observedAt, err := reader.ReadLeverageBrackets(context.Background(), testOwner, "PIPPINUSDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(brackets["PIPPINUSDT"]) != 1 || brackets["PIPPINUSDT"][0].InitialLeverage != 20 || !observedAt.Equal(*now) {
+		t.Fatalf("brackets = %+v at %s", brackets, observedAt)
+	}
+}
+
 func TestReaderReportsUnreadableCredentialWithoutCallingAster(t *testing.T) {
 	store, now := approvedReaderService(t)
 	wrongKeyStore, err := NewStore(store.db, bytes.Repeat([]byte{0x7f}, 32))

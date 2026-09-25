@@ -18,7 +18,36 @@ type LeverageRangeError struct {
 	PairMax   int
 }
 
-type LeverageCapResolver func(venueName, symbol string, notional float64) (int, bool)
+type LeverageCapResolver func(context.Context, string, string, float64, bool) domain.LeverageCapability
+
+type LeverageCapabilityError struct {
+	Venue      string
+	Symbol     string
+	Capability domain.LeverageCapability
+}
+
+func (e *LeverageCapabilityError) Error() string {
+	return fmt.Sprintf("leverage capability for %s on %s is %s", e.Symbol, e.Venue, e.Capability.Status)
+}
+
+func (e *LeverageCapabilityError) Retryable() bool {
+	switch e.Capability.Status {
+	case domain.LeverageCapabilityPending, domain.LeverageCapabilityStale, domain.LeverageCapabilityMissing:
+		return true
+	default:
+		return false
+	}
+}
+
+type OpportunityStatusError struct {
+	ID      string
+	Status  domain.OpportunityStatus
+	Reasons []domain.OpportunityAvailabilityReason
+}
+
+func (e *OpportunityStatusError) Error() string {
+	return fmt.Sprintf("opportunity %s is %s", e.ID, e.Status)
+}
 
 func (e *LeverageRangeError) Error() string {
 	return fmt.Sprintf(
@@ -55,6 +84,11 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if opp == nil {
 		return nil, fmt.Errorf("opportunity not found: %s", opportunityID)
 	}
+	if opp.Status != domain.OpportunityAvailable {
+		return nil, &OpportunityStatusError{
+			ID: opportunityID, Status: opp.Status, Reasons: opp.AvailabilityReasons,
+		}
+	}
 	for _, adapter := range s.adapters {
 		if adapter.Name() != opp.VenuePair.VenueA && adapter.Name() != opp.VenuePair.VenueB {
 			continue
@@ -71,6 +105,13 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if err != nil {
 		return nil, fmt.Errorf("fetch fresh data: %w", err)
 	}
+	freshDirection := domain.DirectionLongA
+	if snapA.FundingRate-snapB.FundingRate > 0 {
+		freshDirection = domain.DirectionLongB
+	}
+	if freshDirection != opp.Direction {
+		return nil, fmt.Errorf("funding direction changed for %s; refresh opportunity", opp.Asset)
+	}
 	notional := opp.RecommendedNotional
 	if requestedNotional > 0 {
 		notional = requestedNotional
@@ -78,11 +119,14 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	maxLeverageA := snapA.MaxLeverage
 	maxLeverageB := snapB.MaxLeverage
 	if resolveLeverageCap != nil {
-		if maximum, found := resolveLeverageCap(snapA.Venue, snapA.MarketKey, notional); found {
-			maxLeverageA = maximum
+		var capabilityErr error
+		maxLeverageA, capabilityErr = resolveMaximumLeverage(ctx, resolveLeverageCap, snapA, notional, maxLeverageA)
+		if capabilityErr != nil {
+			return nil, capabilityErr
 		}
-		if maximum, found := resolveLeverageCap(snapB.Venue, snapB.MarketKey, notional); found {
-			maxLeverageB = maximum
+		maxLeverageB, capabilityErr = resolveMaximumLeverage(ctx, resolveLeverageCap, snapB, notional, maxLeverageB)
+		if capabilityErr != nil {
+			return nil, capabilityErr
 		}
 	}
 	pairMaxLeverage := minLeverage(maxLeverageA, maxLeverageB)
@@ -151,22 +195,9 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 
 	var warnings []string
 	if opp.RiskTier == domain.RiskExperimental {
-		highEdge := opp.AnnualizedGrossEdge > 0.50
 		highEntryCost := opp.EntrySpreadEstimate > 0 && opp.AnnualizedGrossEdge > 0 &&
 			opp.EntrySpreadEstimate/opp.AnnualizedGrossEdge > 0.5
-		switch {
-		case highEdge && highEntryCost:
-			warnings = append(warnings, fmt.Sprintf(
-				"Experimental opportunity: projected gross funding edge %.2f%% annualized exceeds 50%% and estimated entry spread %.2f%% is unusually high. Funding can reverse before costs break even; verify current rates before signing.",
-				opp.AnnualizedGrossEdge*100,
-				opp.EntrySpreadEstimate*100,
-			))
-		case highEdge:
-			warnings = append(warnings, fmt.Sprintf(
-				"Experimental opportunity: projected gross funding edge %.2f%% annualized exceeds 50%%. Funding can reverse quickly; verify current rates before signing.",
-				opp.AnnualizedGrossEdge*100,
-			))
-		default:
+		if highEntryCost {
 			warnings = append(warnings, fmt.Sprintf(
 				"Experimental opportunity: estimated entry spread %.2f%% is unusually high relative to the %.2f%% annualized gross edge. Break-even may take longer than the funding signal persists.",
 				opp.EntrySpreadEstimate*100,
@@ -275,17 +306,48 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	return plan, nil
 }
 
+func resolveMaximumLeverage(
+	ctx context.Context,
+	resolve LeverageCapResolver,
+	snapshot venue.MarketData,
+	notional float64,
+	fallback int,
+) (int, error) {
+	capability := resolve(ctx, snapshot.Venue, snapshot.MarketKey, notional, true)
+	if capability.Status == domain.LeverageCapabilityUnsupported {
+		return fallback, nil
+	}
+	if capability.Status != domain.LeverageCapabilityKnown || capability.Maximum == nil || *capability.Maximum <= 0 {
+		return 0, &LeverageCapabilityError{Venue: snapshot.Venue, Symbol: snapshot.MarketKey, Capability: capability}
+	}
+	return *capability.Maximum, nil
+}
+
 // FindOpportunity returns a copy of the opportunity with the given ID, or nil.
 func (s *Scanner) FindOpportunity(id string) *domain.Opportunity {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i := range s.opps {
-		if s.opps[i].ID == id {
+		if s.opps[i].ID == id || matchesLegacyOpportunityID(s.opps[i], id) {
 			opp := s.opps[i]
 			return &opp
 		}
 	}
 	return nil
+}
+
+func matchesLegacyOpportunityID(opportunity domain.Opportunity, id string) bool {
+	for _, pair := range [][2]string{
+		{opportunity.VenuePair.VenueA, opportunity.VenuePair.VenueB},
+		{opportunity.VenuePair.VenueB, opportunity.VenuePair.VenueA},
+	} {
+		for _, direction := range []domain.Direction{domain.DirectionLongA, domain.DirectionLongB} {
+			if id == fmt.Sprintf("%s-%s-%s-%s", opportunity.Asset, pair[0], pair[1], direction) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FreshSnapshots fetches current market data for a given asset from two venues.
@@ -305,7 +367,7 @@ func (s *Scanner) FreshSnapshots(ctx context.Context, asset, venueA, venueB stri
 		}
 
 		for _, md := range data {
-			if md.Asset != asset {
+			if md.Asset != asset || !isValid(md, time.Now()) {
 				continue
 			}
 			if name == venueA {

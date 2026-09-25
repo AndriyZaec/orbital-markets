@@ -35,6 +35,24 @@ const (
 	DirectionLongB Direction = "long_b_short_a"
 )
 
+type OpportunityStatus string
+
+const (
+	OpportunityAvailable   OpportunityStatus = "available"
+	OpportunityDegraded    OpportunityStatus = "degraded"
+	OpportunityUnavailable OpportunityStatus = "unavailable"
+)
+
+const (
+	OpportunityReasonSourceFetchFailed     = "source_fetch_failed"
+	OpportunityReasonMarketDataUnavailable = "market_data_unavailable"
+)
+
+type OpportunityAvailabilityReason struct {
+	Code  string `json:"code"`
+	Venue string `json:"venue,omitempty"`
+}
+
 type VenuePair struct {
 	VenueA string `json:"venue_a"`
 	VenueB string `json:"venue_b"`
@@ -58,17 +76,22 @@ type Opportunity struct {
 	EstimatedNetEdge    float64 `json:"estimated_net_edge"`
 
 	// Sizing
-	AvailableNotional   float64 `json:"available_notional"`
-	BestPriceCapacity   float64 `json:"best_price_capacity"`
-	RecommendedNotional float64 `json:"recommended_notional"`
-	MaxLeverage         int     `json:"max_leverage"`
+	AvailableNotional    float64                       `json:"available_notional"`
+	BestPriceCapacity    float64                       `json:"best_price_capacity"`
+	RecommendedNotional  float64                       `json:"recommended_notional"`
+	MaxLeverage          int                           `json:"max_leverage"`
+	LeverageCapabilities map[string]LeverageCapability `json:"leverage_capabilities,omitempty"`
 
 	// Classification
-	Liquidity       LiquidityTier `json:"liquidity"`
-	Confidence      Confidence    `json:"confidence"`
-	RiskTier        RiskTier      `json:"risk_tier"`
-	LiqSuspect      bool          `json:"liq_suspect"`
-	ExecutionStatus string        `json:"execution_status"` // "executable" or "blocked"
-	RiskFlags       []string      `json:"risk_flags,omitempty"`
-	Warnings        []string      `json:"warnings,omitempty"`
+	Liquidity           LiquidityTier                   `json:"liquidity"`
+	Confidence          Confidence                      `json:"confidence"`
+	RiskTier            RiskTier                        `json:"risk_tier"`
+	LiqSuspect          bool                            `json:"liq_suspect"`
+	Status              OpportunityStatus               `json:"status"`
+	Generation          uint64                          `json:"generation"`
+	SourceRevisions     map[string]uint64               `json:"source_revisions"`
+	AvailabilityReasons []OpportunityAvailabilityReason `json:"availability_reasons,omitempty"`
+	ExecutionStatus     string                          `json:"execution_status"` // "executable" or "blocked"
+	RiskFlags           []string                        `json:"risk_flags,omitempty"`
+	Warnings            []string                        `json:"warnings,omitempty"`
 }

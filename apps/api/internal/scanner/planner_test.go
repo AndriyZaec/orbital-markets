@@ -30,8 +30,8 @@ func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
 	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)),
 		leverageTestAdapter{name: "pacifica", err: errors.New("must not fetch unrelated venue")},
 		leverageTestAdapter{name: "hyperliquid", data: []venue.MarketData{
-			{Venue: "hyperliquid", Asset: "SOL", BidPrice: 99, AskPrice: 101, Timestamp: now},
-			{Venue: "hyperliquid", Asset: "2Z", BidPrice: 0.0536, AskPrice: 0.0537, Timestamp: now},
+			{Venue: "hyperliquid", Asset: "SOL", MarkPrice: 100, IndexPrice: 100, OpenInterest: 1, BidPrice: 99, AskPrice: 101, Timestamp: now},
+			{Venue: "hyperliquid", Asset: "2Z", MarkPrice: 0.05365, IndexPrice: 0.05365, OpenInterest: 1, BidPrice: 0.0536, AskPrice: 0.0537, Timestamp: now},
 		}},
 	)
 
@@ -41,6 +41,30 @@ func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
 	}
 	if snapshot.Asset != "2Z" || snapshot.BidPrice != 0.0536 {
 		t.Fatalf("snapshot = %+v, want Hyperliquid 2Z BBO", snapshot)
+	}
+}
+
+func TestMarketReadersShareScannerValidityRules(t *testing.T) {
+	now := time.Now()
+	invalid := leverageTestAdapter{name: "aster", data: []venue.MarketData{{
+		Venue: "aster", Asset: "PIPPIN", MarkPrice: 1, IndexPrice: 1,
+		BidPrice: 0.99, AskPrice: 1.01, OpenInterest: 0, Timestamp: now,
+	}}}
+	valid := leverageTestAdapter{name: "pacifica", data: []venue.MarketData{{
+		Venue: "pacifica", Asset: "PIPPIN", MarkPrice: 1, IndexPrice: 1,
+		BidPrice: 0.99, AskPrice: 1.01, OpenInterest: 1000, Timestamp: now,
+	}}}
+	scanner := New(slog.New(slog.NewTextHandler(io.Discard, nil)), invalid, valid)
+
+	markets := scanner.MarketData(context.Background())
+	if len(markets) != 1 || markets[0].Venue != "pacifica" {
+		t.Fatalf("MarketData() = %+v, want only valid Pacifica snapshot", markets)
+	}
+	if _, err := scanner.MarketSnapshot(context.Background(), "aster", "PIPPIN"); err == nil {
+		t.Fatal("MarketSnapshot() accepted invalid Aster snapshot")
+	}
+	if _, _, err := scanner.FreshSnapshots(context.Background(), "PIPPIN", "aster", "pacifica"); err == nil {
+		t.Fatal("FreshSnapshots() accepted invalid Aster snapshot")
 	}
 }
 
@@ -102,11 +126,11 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	if plan.Leg1.Leverage != 10 || plan.Leg2.Leverage != 10 {
 		t.Fatalf("leg leverage = %v/%v, want 10/10", plan.Leg1.Leverage, plan.Leg2.Leverage)
 	}
-	if plan.RiskTier != domain.RiskExperimental || !containsWarning(plan.Warnings, "Experimental opportunity") {
-		t.Fatalf("experimental plan risk/warnings = %s/%v, want advisory warning", plan.RiskTier, plan.Warnings)
+	if plan.RiskTier != domain.RiskExperimental {
+		t.Fatalf("plan risk tier = %s, want experimental", plan.RiskTier)
 	}
-	if !containsWarning(plan.Warnings, "87.60% annualized exceeds 50%") {
-		t.Fatalf("experimental plan warnings = %v, want concrete trigger values", plan.Warnings)
+	if containsWarning(plan.Warnings, "annualized exceeds 50%") {
+		t.Fatalf("experimental plan warnings = %v, high APR alone must not warn about reversals", plan.Warnings)
 	}
 	largePlan, err := s.BuildPlan(context.Background(), opps[0].ID, 10, 1000)
 	if err != nil {
@@ -198,17 +222,20 @@ func TestBuildPlanUsesAccountLeverageCapForAsterMarket(t *testing.T) {
 	}
 
 	resolverCalled := false
+	resolverRefreshed := false
 	plan, err := s.BuildPlanWithLeverageCaps(
 		context.Background(), opportunities[0].ID, 10, 1500,
-		func(venueName, symbol string, notional float64) (int, bool) {
+		func(_ context.Context, venueName, symbol string, notional float64, refresh bool) domain.LeverageCapability {
 			if venueName != "aster" {
-				return 0, false
+				return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported}
 			}
 			resolverCalled = true
+			resolverRefreshed = refresh
 			if symbol != "MEMEUSDT" || notional != 1500 {
 				t.Fatalf("resolver input = %s, %s, %v", venueName, symbol, notional)
 			}
-			return 10, true
+			maximum := 10
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityKnown, Maximum: &maximum, RequestedNotional: notional}
 		},
 	)
 	if err != nil {
@@ -217,16 +244,19 @@ func TestBuildPlanUsesAccountLeverageCapForAsterMarket(t *testing.T) {
 	if plan.MaxLeverage != 10 {
 		t.Fatalf("MaxLeverage = %d, want 10", plan.MaxLeverage)
 	}
-	if !resolverCalled {
-		t.Fatal("Aster leverage resolver was not called")
+	if !resolverCalled || !resolverRefreshed {
+		t.Fatal("Aster leverage resolver was not called with target refresh enabled")
 	}
 	_, err = s.BuildPlanWithLeverageCaps(
 		context.Background(), opportunities[0].ID, 1, 1500,
-		func(venueName, _ string, _ float64) (int, bool) {
-			return 0, venueName == "aster"
+		func(_ context.Context, venueName, _ string, notional float64, _ bool) domain.LeverageCapability {
+			if venueName == "aster" {
+				return domain.LeverageCapability{Status: domain.LeverageCapabilityMissing, RequestedNotional: notional, Reason: domain.LeverageReasonBracketMissing}
+			}
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported}
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "maximum leverage unavailable") {
+	if err == nil || !strings.Contains(err.Error(), "is missing") {
 		t.Fatalf("missing account cap error = %v", err)
 	}
 }

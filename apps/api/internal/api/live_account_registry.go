@@ -109,6 +109,7 @@ type accountFeedLease struct {
 	registry *accountFeedRegistry
 	entry    *accountFeedEntry
 	created  bool
+	passive  bool
 	once     sync.Once
 }
 
@@ -143,7 +144,9 @@ func (l *accountFeedLease) release(discardIfUnused bool) {
 		defer l.registry.mu.Unlock()
 		if current := l.registry.entries[l.entry.key]; current == l.entry {
 			current.refs--
-			current.lastUsed = l.registry.config.Now()
+			if !l.passive {
+				current.lastUsed = l.registry.config.Now()
+			}
 			if discardIfUnused && l.created && current.refs == 0 {
 				current.cancel()
 				delete(l.registry.entries, l.entry.key)
@@ -197,6 +200,16 @@ func (r *accountFeedRegistry) acquire(venue, account string, recovery bool) (*ac
 
 // Lookup leases an existing feed without starting one for an arbitrary read request.
 func (r *accountFeedRegistry) Lookup(venue, account string) (*accountFeedLease, bool) {
+	return r.lookup(venue, account, false)
+}
+
+// LookupPassive protects an existing feed during an observational read without
+// extending its idle lifetime.
+func (r *accountFeedRegistry) LookupPassive(venue, account string) (*accountFeedLease, bool) {
+	return r.lookup(venue, account, true)
+}
+
+func (r *accountFeedRegistry) lookup(venue, account string, passive bool) (*accountFeedLease, bool) {
 	key, _, err := r.normalizedKey(venue, account)
 	if err != nil {
 		return nil, false
@@ -208,8 +221,10 @@ func (r *accountFeedRegistry) Lookup(venue, account string) (*accountFeedLease, 
 		return nil, false
 	}
 	entry.refs++
-	entry.lastUsed = r.config.Now()
-	return &accountFeedLease{registry: r, entry: entry}, true
+	if !passive {
+		entry.lastUsed = r.config.Now()
+	}
+	return &accountFeedLease{registry: r, entry: entry, passive: passive}, true
 }
 
 func (r *accountFeedRegistry) normalizedKey(venue, account string) (accountFeedKey, accountFeedFactory, error) {
