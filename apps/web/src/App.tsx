@@ -2,7 +2,7 @@ import { lazy, memo, Suspense, useState, useMemo, useEffect, useCallback, useLay
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useOpportunities } from '@/hooks/useOpportunities'
 
-import type { Opportunity, OpportunitySignal, OpportunitySignalStatus } from '@/hooks/useOpportunities'
+import type { Opportunity, OpportunitySignal, OpportunitySignalState, OpportunitySignalStatus } from '@/hooks/useOpportunities'
 import {
   Table,
   TableBody,
@@ -775,7 +775,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <p className="mt-0.5 text-[10px] text-muted-foreground">{maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `${fmtPct(apr * maxLev)} at ${maxLev}x`}</p>
                     </TableCell>
                     <TableCell className="py-3 text-right">
-                      <OpportunitySignalCell signal={opp.signal_7d} />
+                      <OpportunitySignalCell signal={opp.signal_7d} state={opp.signal_7d_state} />
                     </TableCell>
                     <TableCell className={`border-l border-white/[0.035] py-3 text-right font-mono ${opp.entry_spread_estimate < 0 ? 'text-red-400' : 'text-foreground'}`}>
                       <MetricFlash value={opp.entry_spread_estimate}>{fmtPct(opp.entry_spread_estimate, 4)}</MetricFlash>
@@ -1117,8 +1117,8 @@ const signalMoons: Record<OpportunitySignalStatus, string> = {
   limited: '🌑',
 }
 
-function OpportunitySignalCell({ signal }: { signal: OpportunitySignal | null }) {
-  if (!signal) return <span className="font-mono text-muted-foreground">—</span>
+function OpportunitySignalCell({ signal, state }: { signal: OpportunitySignal | null; state: OpportunitySignalState }) {
+  if (!signal) return <span className="text-[11px] text-muted-foreground">{state === 'loading' ? 'Loading' : 'Unavailable'}</span>
 
   const activity = Math.round(signal.activity * 100)
   let detail = `${fmtPct(signal.average_edge)} avg · ${activity}% active`
@@ -1133,7 +1133,9 @@ function OpportunitySignalCell({ signal }: { signal: OpportunitySignal | null })
   return (
     <div className="ml-auto grid w-40 grid-cols-[minmax(0,1fr)_22px] items-center gap-2 text-right">
       <span className="min-w-0">
-        <span className="block text-[11px] font-semibold text-foreground">{signalLabels[signal.status]}</span>
+        <span className="block text-[11px] font-semibold text-foreground">
+          {signalLabels[signal.status]}{state === 'stale' ? ' · Stale' : ''}
+        </span>
         <span className="mt-0.5 block whitespace-nowrap text-[10px] text-muted-foreground">{detail}</span>
       </span>
       <span className={`text-[20px] leading-none ${signal.status === 'persistent' ? 'signal-moon-glow' : 'opacity-80'}`} aria-hidden="true">{moon}</span>

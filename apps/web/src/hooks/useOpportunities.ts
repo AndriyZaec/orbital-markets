@@ -14,6 +14,7 @@ interface OpportunitySignal {
 
 type OpportunityStatus = 'available' | 'degraded' | 'unavailable'
 type LeverageCapabilityStatus = 'known' | 'pending' | 'stale' | 'missing' | 'unsupported' | 'out_of_range'
+type OpportunitySignalState = 'loading' | 'ready' | 'stale' | 'unavailable'
 
 interface LeverageCapability {
   status: LeverageCapabilityStatus
@@ -62,6 +63,8 @@ interface Opportunity {
   risk_flags: string[] | null
   warnings: string[] | null
   signal_7d: OpportunitySignal | null
+  signal_7d_state: OpportunitySignalState
+  signal_7d_version: number
 }
 
 // Default poll matches the backend scanner's 60s refresh cadence. Polling
@@ -118,4 +121,4 @@ export function useOpportunities(accounts?: Record<string, string>, pollInterval
   return { opportunities, loading, error, lastUpdated, refetch: fetch_ }
 }
 
-export type { LeverageCapability, LeverageCapabilityStatus, Opportunity, OpportunityAvailabilityReason, OpportunitySignal, OpportunitySignalStatus, OpportunityStatus }
+export type { LeverageCapability, LeverageCapabilityStatus, Opportunity, OpportunityAvailabilityReason, OpportunitySignal, OpportunitySignalState, OpportunitySignalStatus, OpportunityStatus }
