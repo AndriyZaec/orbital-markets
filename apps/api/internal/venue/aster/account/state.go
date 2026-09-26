@@ -380,6 +380,49 @@ func (s *AccountState) Snapshot() AccountStateSnapshot {
 	return s.snapshotAt(time.Now())
 }
 
+// LeverageSnapshot returns the account freshness and one symbol's leverage
+// metadata without copying positions or every cached bracket tier.
+func (s *AccountState) LeverageSnapshot(symbol string) AccountStateSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := time.Now()
+	snapshot := AccountStateSnapshot{
+		Account: s.account, ExecutionAgent: s.executionAgent, DataAgent: s.dataAgent,
+		DataSource: s.dataSource, SnapshotID: s.snapshotID,
+		LeverageBySymbol:          make(map[string]float64, 1),
+		LeverageBrackets:          make(LeverageBrackets, 1),
+		LeverageBracketsUpdatedAt: make(map[string]time.Time, 1),
+		PositionsUpdatedAt:        s.positionsUpdatedAt,
+		UnavailableReason:         s.unavailableReason,
+	}
+	if leverage, ok := s.leverageBySymbol[symbol]; ok {
+		snapshot.LeverageBySymbol[symbol] = leverage
+	}
+	if brackets, ok := s.leverageBrackets[symbol]; ok {
+		snapshot.LeverageBrackets[symbol] = append([]LeverageBracket(nil), brackets...)
+	}
+	if updatedAt, ok := s.leverageBracketsUpdatedAt[symbol]; ok {
+		snapshot.LeverageBracketsUpdatedAt[symbol] = updatedAt
+	}
+	if s.mode != nil {
+		snapshot.OneWayModeKnown = true
+		snapshot.OneWayMode = s.mode.OneWay
+	}
+	if s.margin != nil {
+		snapshot.CanTradeKnown = true
+		snapshot.CanTrade = s.margin.CanTrade
+		snapshot.Equity = s.margin.Equity
+		snapshot.Available = s.margin.Available
+	}
+	if s.mode != nil && s.margin != nil && s.positions != nil {
+		snapshot.LastUpdated = oldest(s.marginUpdatedAt, s.positionsUpdatedAt)
+		newestUpdate := newest(s.marginUpdatedAt, s.positionsUpdatedAt)
+		snapshot.Connected = !snapshot.LastUpdated.IsZero() && newestUpdate.Sub(snapshot.LastUpdated) <= 30*time.Second &&
+			now.Sub(newestUpdate) <= browserHeartbeatTTL
+	}
+	return snapshot
+}
+
 func (s *AccountState) snapshotAt(now time.Time) AccountStateSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

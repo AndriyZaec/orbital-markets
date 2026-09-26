@@ -207,6 +207,35 @@ func TestAccountStatePreservesNewerTargetBracketIncludedByBulkObservation(t *tes
 	}
 }
 
+func TestLeverageSnapshotCopiesOnlyRequestedSymbol(t *testing.T) {
+	state := NewAccountState("0xabcd")
+	observedAt := time.Now()
+	if err := state.ReplaceObservation("0xabcd", Observation{
+		DataAgent: "0xdata",
+		Margin:    MarginSummary{CanTrade: true, Equity: 120, Available: 110},
+		Positions: []Position{
+			{Symbol: "BTCUSDT", Leverage: 5},
+			{Symbol: "ETHUSDT", Leverage: 8},
+		},
+		PositionMode: PositionMode{OneWay: true},
+		LeverageBrackets: LeverageBrackets{
+			"BTCUSDT": {{InitialLeverage: 20, NotionalCap: 10000}},
+			"ETHUSDT": {{InitialLeverage: 10, NotionalCap: 10000}},
+		},
+		ObservedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := state.LeverageSnapshot("BTCUSDT")
+	if len(snapshot.Positions) != 0 || len(snapshot.LeverageBySymbol) != 1 || len(snapshot.LeverageBrackets) != 1 || len(snapshot.LeverageBracketsUpdatedAt) != 1 {
+		t.Fatalf("targeted leverage snapshot copied unrelated account state: %+v", snapshot)
+	}
+	if snapshot.LeverageBySymbol["BTCUSDT"] != 5 || len(snapshot.LeverageBrackets["BTCUSDT"]) != 1 {
+		t.Fatalf("targeted leverage snapshot = %+v", snapshot)
+	}
+}
+
 func TestBackendObservationUsesExistingExecutionFreshnessLimit(t *testing.T) {
 	state := NewAccountState("0xabcd")
 	observedAt := time.Now().Add(-accountStateMaxAge - time.Second)
