@@ -155,9 +155,8 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>(() => (
     'trade'
   ))
-  const { aggregate: accountsAggregate, aster: asterReadiness } = useVenueReadiness()
-  const opportunityAccounts = asterReadiness.address ? { aster: asterReadiness.address } : undefined
-  const { opportunities, loading, error, lastUpdated, refetch: refetchOpportunities } = useOpportunities(opportunityAccounts)
+  const { aggregate: accountsAggregate } = useVenueReadiness()
+  const { opportunities, loading, error, lastUpdated } = useOpportunities()
   const [selection, setSelection] = useState<TradeSelection>(() => {
     const id = opportunityIdFromURL()
     return id ? { kind: 'opportunity', id } : null
@@ -417,7 +416,6 @@ export default function App() {
                   else closeOpportunity()
                 }}
                 onOpenAccounts={() => setShowAccounts(true)}
-                onCapabilityUpdated={() => { void refetchOpportunities() }}
               />
             </Suspense>
           </DeferredBoundary>
@@ -484,7 +482,8 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
   const filtered = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     return opportunities.filter((opportunity) => (
-      matchesVenueFilter(opportunity.venue_pair, selectedVenues)
+      opportunity.status === 'available'
+      && matchesVenueFilter(opportunity.venue_pair, selectedVenues)
       && (!normalizedQuery || opportunity.asset.toLowerCase().includes(normalizedQuery))
     ))
   }, [opportunities, query, selectedVenues])
