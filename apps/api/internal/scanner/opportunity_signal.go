@@ -110,7 +110,7 @@ func classifyOpportunitySignal(opportunity domain.Opportunity, stats signalStats
 	}
 
 	status := SignalFlat
-	currentActive := opportunity.AnnualizedGrossEdge >= signalAPRThreshold
+	currentActive := OpportunitySignalActive(opportunity)
 	switch {
 	case stats.Samples < signalMinimumSamples:
 		status = SignalLimited
@@ -137,4 +137,8 @@ func classifyOpportunitySignal(opportunity domain.Opportunity, stats signalStats
 		AverageEdge:          domain.AnnualizeRate(stats.TotalEdge / float64(stats.Samples)),
 		Samples:              stats.Samples,
 	}
+}
+
+func OpportunitySignalActive(opportunity domain.Opportunity) bool {
+	return opportunity.AnnualizedGrossEdge >= signalAPRThreshold
 }
