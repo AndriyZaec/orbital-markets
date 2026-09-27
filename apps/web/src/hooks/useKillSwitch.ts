@@ -5,6 +5,7 @@ import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/sig
 import { useTradingAgents } from './useTradingAgents'
 import { summarizeKillPreparation, waitForKilledPositions } from '@/lib/kill-switch'
 import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
+import { submitSignedActionsConcurrently } from '@/lib/signed-submissions'
 import type { Venue } from '@/agents/types'
 
 export type KillPhase =
@@ -268,12 +269,13 @@ export function useKillSwitch() {
         signedActions.push({ request: req, signed: await tradingAgents.sign(req) })
       }
 
-      for (let i = 0; i < signedActions.length; i++) {
-        const { request: req, signed } = signedActions[i]
-        try {
-          setState(s => ({ ...s, phase: 'submitting', signed: signedActions.length, submitted: i }))
-          const result = await submitSigned(signed)
-
+      setState(s => ({ ...s, phase: 'submitting', signed: signedActions.length, submitted: 0 }))
+      const submittedActions = await submitSignedActionsConcurrently(signedActions, submitSigned)
+      for (const { request: req, outcome } of submittedActions) {
+        if (outcome.status === 'rejected') {
+          uncertain++
+        } else {
+          const result = outcome.value
           if (result.accepted) {
             succeeded++
           } else if (result.uncertain) {
@@ -282,13 +284,16 @@ export function useKillSwitch() {
             failed++
             errors.push(`${req.venue} ${req.symbol}: ${result.error || 'rejected'}`)
           }
-
-          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, uncertain, errors: [...errors] }))
-        } catch {
-          uncertain++
-          setState(s => ({ ...s, submitted: i + 1, uncertain }))
         }
       }
+      setState(s => ({
+        ...s,
+        submitted: submittedActions.length,
+        succeeded,
+        failed,
+        uncertain,
+        errors: [...errors],
+      }))
 
       if (failed > 0 || unresolvedDiscoveryErrors.length > 0) {
         setState(s => ({ ...s, phase: 'error', succeeded, failed, uncertain, errors: [...errors] }))

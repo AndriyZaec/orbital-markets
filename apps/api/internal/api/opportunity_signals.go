@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -166,7 +165,11 @@ func opportunitySignalVersion(opportunities []domain.Opportunity) uint64 {
 	for _, opportunity := range opportunities {
 		_, _ = h.Write([]byte(opportunity.ID))
 		_, _ = h.Write([]byte{0})
-		_, _ = h.Write([]byte(strconv.FormatFloat(opportunity.AnnualizedGrossEdge, 'g', -1, 64)))
+		if scanner.OpportunitySignalActive(opportunity) {
+			_, _ = h.Write([]byte{1})
+		} else {
+			_, _ = h.Write([]byte{0})
+		}
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write([]byte(opportunity.Direction))
 		_, _ = h.Write([]byte{0})
@@ -413,8 +416,10 @@ func opportunityResponses(
 		if signal, ok := signals[opportunity.ID]; ok {
 			responses[i].Signal7d = &signal
 			responses[i].Signal7dState = "ready"
-			if publishedVersion < desiredVersion || sourceCheckFailed {
+			if sourceCheckFailed || lastBuildFailed {
 				responses[i].Signal7dState = "stale"
+			} else if publishedVersion < desiredVersion {
+				responses[i].Signal7dState = "refreshing"
 			}
 			continue
 		}

@@ -5,6 +5,7 @@ import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/sig
 import { useTradingAgents } from './useTradingAgents'
 import { waitForClosedPosition } from '@/lib/live-close'
 import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
+import { submitSignedActionsConcurrently } from '@/lib/signed-submissions'
 import type { Venue } from '@/agents/types'
 
 export type ClosePhase = 'idle' | 'preparing' | 'signing' | 'submitting' | 'confirming' | 'done' | 'error'
@@ -121,25 +122,33 @@ export function useLiveClose() {
       }
 
       setState(s => ({ ...s, phase: 'submitting', submitted: 0 }))
-      for (let i = 0; i < signedActions.length; i++) {
-        const { request: req, signed } = signedActions[i]
-        try {
-          const submitResp = await apiFetch('/api/v1/live/submit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(signed),
-          })
-          if (!submitResp.ok) {
-            const b = await submitResp.json().catch(() => ({}))
-            failed++
-            const message = apiError(submitResp.status, 'Order submission failed. Check the position before retrying.', b).message
-            errors.push(`${req.venue} ${req.symbol}: ${message}`)
-            outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'failed', error: message })
-            setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))
-            continue
+      const submittedActions = await submitSignedActionsConcurrently(signedActions, async (signed) => {
+        const submitResp = await apiFetch('/api/v1/live/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(signed),
+        })
+        if (!submitResp.ok) {
+          const b = await submitResp.json().catch(() => ({}))
+          return {
+            request_id: signed.request_id,
+            client_order_id: signed.client_order_id,
+            venue: signed.venue,
+            accepted: false,
+            error: apiError(submitResp.status, 'Order submission failed. Check the position before retrying.', b).message,
+            submitted_at: '',
+            responded_at: '',
           }
-          const result: SubmissionResult = await submitResp.json()
+        }
+        return submitResp.json() as Promise<SubmissionResult>
+      })
 
+      for (const { request: req, outcome } of submittedActions) {
+        if (outcome.status === 'rejected') {
+          errors.push(`${req.venue} ${req.symbol}: submission response uncertain; checking position state`)
+          outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'uncertain' })
+        } else {
+          const result = outcome.value
           if (!result.accepted && !result.uncertain) {
             failed++
             const message = result.error || 'rejected'
@@ -151,13 +160,16 @@ export function useLiveClose() {
           } else {
             outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'uncertain' })
           }
-          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))
-        } catch {
-          errors.push(`${req.venue} ${req.symbol}: submission response uncertain; checking position state`)
-          outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'uncertain' })
-          setState(s => ({ ...s, submitted: i + 1, succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))
         }
       }
+      setState(s => ({
+        ...s,
+        submitted: submittedActions.length,
+        succeeded,
+        failed,
+        errors: [...errors],
+        outcomes: [...outcomes],
+      }))
 
       if (failed > 0) {
         setState(s => ({ ...s, phase: 'done', succeeded, failed, errors: [...errors], outcomes: [...outcomes] }))

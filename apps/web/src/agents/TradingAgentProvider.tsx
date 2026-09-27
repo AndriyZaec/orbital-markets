@@ -7,13 +7,7 @@ import { bsc, mainnet } from 'wagmi/chains'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import type { SigningRequest } from '@/types/signing'
 import type { AsterDataAgentApprovalTypedData } from './aster-data-agent.ts'
-import {
-  asterBuilderAddress,
-  authorizeAsterAgent,
-  reconcilePendingAsterAgent,
-  type AsterApprovalTypedData,
-  type AsterApproveAgentRequest,
-} from './aster-agent.ts'
+import type { AsterApprovalTypedData, AsterApproveAgentRequest } from './aster-agent.ts'
 import type {
   HyperliquidApproveAgentRequest,
   HyperliquidApproveBuilderFeeRequest,
@@ -23,7 +17,7 @@ import type {
   PacificaBindAgentRequest,
   PacificaRevokeAgentRequest,
 } from './pacifica-agent.ts'
-import { hyperliquidBuilderAddress } from './builder-config.ts'
+import { asterBuilderAddress, hyperliquidBuilderAddress } from './builder-config.ts'
 import {
   createTradingAgentStore,
   type TradingAgentStore,
@@ -138,12 +132,14 @@ function TradingAgentSession({
       if (!ownerAddress) return
       try {
         let agent = venue === 'aster'
-          ? await withAgentLock('aster', ownerAddress, async () =>
-            await reconcilePendingAsterAgent({
+          ? await withAgentLock('aster', ownerAddress, async () => {
+            const { reconcilePendingAsterAgent } = await import('./aster-agent.ts')
+            return await reconcilePendingAsterAgent({
               storage,
               ownerAddress,
               reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
-            }) ?? await storage.restore('aster', ownerAddress))
+            }) ?? await storage.restore('aster', ownerAddress)
+          })
           : await storage.restore(venue, ownerAddress)
         const expectedBuilder = venue === 'hyperliquid'
           ? hyperliquidBuilderAddress
@@ -284,7 +280,13 @@ function TradingAgentSession({
       throw new Error('Aster owner changed during agent authorization')
     }
     const isCurrent = () => ownerStillCurrent('aster', ownerAddress, owners.current)
-    const { authorizeAsterDataAgent, prepareAsterDataAgentAuthorization } = await import('./aster-data-agent.ts')
+    const [
+      { authorizeAsterAgent },
+      { authorizeAsterDataAgent, prepareAsterDataAgentAuthorization },
+    ] = await Promise.all([
+      import('./aster-agent.ts'),
+      import('./aster-data-agent.ts'),
+    ])
     return authorizeAsterAgent({
       storage,
       ownerAddress,

@@ -2,15 +2,41 @@ package live
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+func TestSendOrderBoundsWebSocketDialBySubmitTimeout(t *testing.T) {
+	client := NewClient(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	var dialDeadline time.Time
+	client.dialWS = func(ctx context.Context, _ string, _ http.Header) (*websocket.Conn, *http.Response, error) {
+		var ok bool
+		dialDeadline, ok = ctx.Deadline()
+		if !ok {
+			t.Fatal("websocket dial context has no deadline")
+		}
+		return nil, nil, errors.New("dial stopped")
+	}
+
+	_, err := client.sendOrder(context.Background(), MarketOrderRequest{
+		Symbol: "SOL", ClientOrderID: "order-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "dial stopped") {
+		t.Fatalf("error = %v, want dial failure", err)
+	}
+	remaining := time.Until(dialDeadline)
+	if remaining <= 0 || remaining > submitTimeout {
+		t.Fatalf("dial deadline in %s, want within (0, %s]", remaining, submitTimeout)
+	}
+}
 
 func TestSendOrderDoesNotRetainTradingConnection(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}

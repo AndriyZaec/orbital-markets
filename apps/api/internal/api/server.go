@@ -122,6 +122,7 @@ func (s *Server) EnableTelegramLinks(links TelegramLinker) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/v1/access", s.handleAccess)
 	s.mux.HandleFunc("GET /api/v1/markets", s.handleMarkets)
 	s.mux.HandleFunc("GET /api/v1/opportunities", s.handleOpportunities)
 	s.mux.HandleFunc("POST /api/v1/plan", s.handleBuildPlan)
@@ -176,6 +177,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleAccess(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 	data := s.scanner.MarketData(r.Context())
 	writeJSON(w, http.StatusOK, data)
@@ -191,16 +196,10 @@ const (
 )
 
 type marketLeverage struct {
-	marketKey string
-	maximum   int
+	maximum int
 }
 
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
-	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
 	limit := opportunitiesDefaultLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -214,26 +213,15 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 	markets := make(map[string]marketLeverage)
 	for _, snapshot := range s.scanner.MarketData(r.Context()) {
 		key := strings.ToLower(snapshot.Venue) + "\x00" + strings.ToUpper(snapshot.Asset)
-		markets[key] = marketLeverage{marketKey: snapshot.MarketKey, maximum: snapshot.MaxLeverage}
+		markets[key] = marketLeverage{maximum: snapshot.MaxLeverage}
 	}
-	resolveLeverageCap := s.live.accountLeverageResolver(bindings.Accounts)
 	for i := range opps {
 		keyA := strings.ToLower(opps[i].VenuePair.VenueA) + "\x00" + strings.ToUpper(opps[i].Asset)
 		keyB := strings.ToLower(opps[i].VenuePair.VenueB) + "\x00" + strings.ToUpper(opps[i].Asset)
 		marketA, foundA := markets[keyA]
 		marketB, foundB := markets[keyB]
-		capabilityA := publicLeverageCapability(opps[i].VenuePair.VenueA, marketA, foundA, opps[i].RecommendedNotional)
-		capabilityB := publicLeverageCapability(opps[i].VenuePair.VenueB, marketB, foundB, opps[i].RecommendedNotional)
-		if resolveLeverageCap != nil && foundA {
-			if resolved := resolveLeverageCap(r.Context(), opps[i].VenuePair.VenueA, marketA.marketKey, opps[i].RecommendedNotional, false); resolved.Status != domain.LeverageCapabilityUnsupported {
-				capabilityA = resolved
-			}
-		}
-		if resolveLeverageCap != nil && foundB {
-			if resolved := resolveLeverageCap(r.Context(), opps[i].VenuePair.VenueB, marketB.marketKey, opps[i].RecommendedNotional, false); resolved.Status != domain.LeverageCapabilityUnsupported {
-				capabilityB = resolved
-			}
-		}
+		capabilityA := publicLeverageCapability(marketA, foundA, opps[i].RecommendedNotional)
+		capabilityB := publicLeverageCapability(marketB, foundB, opps[i].RecommendedNotional)
 		opps[i].LeverageCapabilities = map[string]domain.LeverageCapability{
 			opps[i].VenuePair.VenueA: capabilityA,
 			opps[i].VenuePair.VenueB: capabilityB,
@@ -329,10 +317,7 @@ func writePlanError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
-func publicLeverageCapability(venueName string, market marketLeverage, found bool, notional float64) domain.LeverageCapability {
-	if strings.EqualFold(venueName, "aster") {
-		return domain.LeverageCapability{Status: domain.LeverageCapabilityPending, RequestedNotional: notional, Reason: domain.LeverageReasonAccountPending}
-	}
+func publicLeverageCapability(market marketLeverage, found bool, notional float64) domain.LeverageCapability {
 	if !found || market.maximum <= 0 {
 		return domain.LeverageCapability{Status: domain.LeverageCapabilityMissing, RequestedNotional: notional, Reason: domain.LeverageReasonBracketMissing}
 	}

@@ -14,7 +14,7 @@ interface OpportunitySignal {
 
 type OpportunityStatus = 'available' | 'degraded' | 'unavailable'
 type LeverageCapabilityStatus = 'known' | 'pending' | 'stale' | 'missing' | 'unsupported' | 'out_of_range'
-type OpportunitySignalState = 'loading' | 'ready' | 'stale' | 'unavailable'
+type OpportunitySignalState = 'loading' | 'ready' | 'refreshing' | 'stale' | 'unavailable'
 
 interface LeverageCapability {
   status: LeverageCapabilityStatus
@@ -70,31 +70,37 @@ interface Opportunity {
 // Default poll matches the backend scanner's 60s refresh cadence. Polling
 // faster just moves the same data around; a manual refetch is still available
 // on the returned object for user-triggered refreshes.
-export function useOpportunities(accounts?: Record<string, string>, pollInterval = 60_000) {
+export function useOpportunities(pollInterval = 60_000) {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const pageVisible = usePageVisibility()
   const requestSequence = useRef(0)
-  const accountsKey = JSON.stringify(Object.entries(accounts ?? {}).sort(([left], [right]) => left.localeCompare(right)))
-  const hasAsterAccount = Object.keys(accounts ?? {}).some((venue) => venue.toLowerCase() === 'aster')
-  const capabilityRefreshPending = hasAsterAccount && opportunities.some((opportunity) =>
-    Object.values(opportunity.leverage_capabilities ?? {}).some((capability) =>
-      capability.status === 'pending' || capability.status === 'stale'))
-  const effectivePollInterval = capabilityRefreshPending ? Math.min(pollInterval, 5_000) : pollInterval
+  const signalFollowUpKey = useRef('')
+  const [signalFollowUpsRemaining, setSignalFollowUpsRemaining] = useState(0)
+  const effectivePollInterval = signalFollowUpsRemaining > 0 ? Math.min(pollInterval, 5_000) : pollInterval
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
     const request = ++requestSequence.current
     try {
-      const params = new URLSearchParams()
-      const accountEntries = JSON.parse(accountsKey) as [string, string][]
-      for (const [venue, account] of accountEntries) params.set(`accounts[${venue}]`, account)
-      const query = params.toString()
-      const resp = await apiFetch(`/api/v1/opportunities${query ? `?${query}` : ''}`, { signal })
+      const resp = await apiFetch('/api/v1/opportunities', { signal })
       if (!resp.ok) throw await apiResponseError(resp, 'Unable to load opportunities. Please try again.')
       const data: Opportunity[] = await resp.json()
       if (signal?.aborted || request !== requestSequence.current) return
+      const followUpKey = data
+        .filter((opportunity) => opportunity.signal_7d_state === 'loading' ||
+          opportunity.signal_7d_state === 'refreshing' ||
+          opportunity.signal_7d_state === 'stale')
+        .map((opportunity) => `${opportunity.id}:${opportunity.signal_7d_state}:${opportunity.signal_7d_version}`)
+        .join('|')
+      if (!followUpKey) {
+        signalFollowUpKey.current = ''
+        setSignalFollowUpsRemaining(0)
+      } else if (followUpKey !== signalFollowUpKey.current) {
+        signalFollowUpKey.current = followUpKey
+        setSignalFollowUpsRemaining(3)
+      }
       setOpportunities(data)
       setLastUpdated(new Date())
       setError(null)
@@ -104,19 +110,33 @@ export function useOpportunities(accounts?: Record<string, string>, pollInterval
     } finally {
       if (!signal?.aborted && request === requestSequence.current) setLoading(false)
     }
-  }, [accountsKey])
+  }, [])
 
   useEffect(() => {
     if (!pageVisible) return
     const controller = new AbortController()
     const initialId = window.setTimeout(() => fetch_(controller.signal), 0)
-    const intervalId = window.setInterval(() => fetch_(controller.signal), effectivePollInterval)
     return () => {
       controller.abort()
       window.clearTimeout(initialId)
+    }
+  }, [fetch_, pageVisible])
+
+  useEffect(() => {
+    if (!pageVisible) return
+    const controller = new AbortController()
+    const intervalId = window.setInterval(() => {
+      void fetch_(controller.signal).finally(() => {
+        if (!controller.signal.aborted && signalFollowUpsRemaining > 0) {
+          setSignalFollowUpsRemaining((remaining) => Math.max(0, remaining - 1))
+        }
+      })
+    }, effectivePollInterval)
+    return () => {
+      controller.abort()
       window.clearInterval(intervalId)
     }
-  }, [effectivePollInterval, fetch_, pageVisible])
+  }, [effectivePollInterval, fetch_, pageVisible, signalFollowUpsRemaining])
 
   return { opportunities, loading, error, lastUpdated, refetch: fetch_ }
 }

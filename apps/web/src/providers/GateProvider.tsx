@@ -3,8 +3,8 @@ import { apiFetch } from '@/lib/api'
 import { Gate } from '@/components/Gate'
 import { trackAnalytics } from '@/lib/analytics'
 
-// Centralizes gate detection: a single probe to a gated endpoint
-// (/api/v1/opportunities). 200 means the __beta cookie is valid (or dev
+// Centralizes gate detection: a single probe to the gated access endpoint.
+// 204 means the __beta cookie is valid (or dev
 // no-auth mode); 404 means the auth middleware rejected the request, so we
 // render the gate. /api/v1/health is unsuitable as a probe because it always
 // returns 200 for CF / Fly health checks. Re-probes on tab focus so a cookie
@@ -21,7 +21,7 @@ export function GateProvider({ children }: { children: ReactNode }) {
 
     async function probe() {
       try {
-        const resp = await apiFetch('/api/v1/opportunities')
+        const resp = await apiFetch('/api/v1/access')
         if (cancelled) return
         setStatus(resp.ok ? 'open' : 'gated')
         if (resp.ok && !appOpenedTrackedRef.current) {

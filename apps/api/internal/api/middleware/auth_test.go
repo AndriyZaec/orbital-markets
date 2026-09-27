@@ -52,3 +52,18 @@ func TestAuthAllowsDeliberatelyPublicMetrics(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
 	}
 }
+
+func TestAuthProtectsAccessProbe(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := Auth("jwt-secret", logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/access", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}

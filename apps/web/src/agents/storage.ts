@@ -1,6 +1,3 @@
-import bs58 from 'bs58'
-import nacl from 'tweetnacl'
-import { privateKeyToAccount } from 'viem/accounts'
 import type { Hex } from 'viem'
 
 import type { StoredTradingAgent, Venue } from './types'
@@ -119,7 +116,7 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
 
   private async encryptAgent(agent: StoredTradingAgent): Promise<EncryptedTradingAgent> {
     const normalized = normalizeAgent(agent)
-    if (!validAgent(normalized) || !keyPairMatches(normalized)) {
+    if (!validAgent(normalized) || !await keyPairMatches(normalized)) {
       throw new Error('Trading agent is invalid')
     }
     const envelope = envelopeMetadata(normalized)
@@ -227,7 +224,7 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
       ...(value.builderAddress ? { builderAddress: value.builderAddress } : {}),
       ...(value.builderCode ? { builderCode: value.builderCode } : {}),
     }
-    if (keyPairMatches(agent)) return agent
+    if (await keyPairMatches(agent)) return agent
     await deleteValue(database, agentStoreName, key)
     return null
   }
@@ -319,12 +316,21 @@ function keyAlgorithm(venue: Venue): KeyAlgorithm {
   return venue === 'pacifica' ? 'ed25519' : 'secp256k1'
 }
 
-function keyPairMatches(agent: StoredTradingAgent): boolean {
-  try {
-    if (isEVMVenue(agent.venue)) {
+async function keyPairMatches(agent: StoredTradingAgent): Promise<boolean> {
+  if (isEVMVenue(agent.venue)) {
+    const { privateKeyToAccount } = await import('viem/accounts')
+    try {
       if (!/^0x[0-9a-fA-F]{64}$/.test(agent.privateKey)) return false
       return privateKeyToAccount(agent.privateKey as Hex).address.toLowerCase() === agent.agentAddress.toLowerCase()
+    } catch {
+      return false
     }
+  }
+  const [{ default: bs58 }, { default: nacl }] = await Promise.all([
+    import('bs58'),
+    import('tweetnacl'),
+  ])
+  try {
     const secretKey = bs58.decode(agent.privateKey)
     if (secretKey.length !== nacl.sign.secretKeyLength) return false
     return bs58.encode(nacl.sign.keyPair.fromSecretKey(secretKey).publicKey) === agent.agentAddress

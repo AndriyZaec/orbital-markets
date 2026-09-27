@@ -216,7 +216,7 @@ func (f *asterAccountFeed) PreTradeBlockers(leg domain.Leg) []string {
 }
 
 func (f *asterAccountFeed) LeverageCapability(ctx context.Context, symbol string, notional float64, refresh bool) domain.LeverageCapability {
-	capability := asteraccount.LeverageCapability(f.state.Snapshot(), symbol, notional, f.currentTime())
+	capability := asteraccount.LeverageCapability(f.state.LeverageSnapshot(symbol), symbol, notional, f.currentTime())
 	if !refresh {
 		return capability
 	}
@@ -230,7 +230,7 @@ func (f *asterAccountFeed) LeverageCapability(ctx context.Context, symbol string
 			return capability
 		case <-accountRefresh.done:
 		}
-		capability = asteraccount.LeverageCapability(f.state.Snapshot(), symbol, notional, f.currentTime())
+		capability = asteraccount.LeverageCapability(f.state.LeverageSnapshot(symbol), symbol, notional, f.currentTime())
 	}
 	bracketNeedsRefresh := capability.Status == domain.LeverageCapabilityMissing ||
 		(capability.Status == domain.LeverageCapabilityStale && capability.Reason == domain.LeverageReasonBracketStale)
@@ -244,7 +244,7 @@ func (f *asterAccountFeed) LeverageCapability(ctx context.Context, symbol string
 		return capability
 	case <-refreshState.done:
 	}
-	capability = asteraccount.LeverageCapability(f.state.Snapshot(), symbol, notional, f.currentTime())
+	capability = asteraccount.LeverageCapability(f.state.LeverageSnapshot(symbol), symbol, notional, f.currentTime())
 	if refreshState.err != nil && capability.Status != domain.LeverageCapabilityKnown {
 		capability.Reason = domain.LeverageReasonTargetRefreshFailed
 	}

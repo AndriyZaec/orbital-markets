@@ -7,7 +7,7 @@
 //   - credentials: 'include' so the __beta cookie (scoped to .<domain>) is sent
 //     cross-subdomain to api.<domain>.
 //
-// Gate detection lives in GateProvider via a /api/v1/health probe — apiFetch
+// Gate detection lives in GateProvider via a gated /api/v1/access probe — apiFetch
 // stays a thin wrapper so genuine 404s from endpoints surface as 404s.
 
 const API_BASE: string = import.meta.env?.VITE_API_URL ?? ''

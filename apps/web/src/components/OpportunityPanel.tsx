@@ -27,7 +27,6 @@ interface Props {
   ) => Promise<void>
   onViewPositions?: (positionId: string | null) => void
   onOpenAccounts?: () => void
-  onCapabilityUpdated?: () => void
 }
 
 function fmtPct(n: number, decimals = 4) {
@@ -102,7 +101,6 @@ export function OpportunityPanel({
   onExecute,
   onViewPositions,
   onOpenAccounts,
-  onCapabilityUpdated,
 }: Props) {
   // Matches useOpportunities' 60s poll interval.
   const countdown = useCountdown(lastUpdated, 60)
@@ -179,14 +177,6 @@ export function OpportunityPanel({
       current, opp.id, opportunityMaxLev, maxLeverage,
     ))
   }, [maxLeverage, opp.id, opportunityMaxLev])
-  const reportedCapabilityRef = useRef('')
-  useEffect(() => {
-    if (maxLeverage === null || maxLeverage === opportunityMaxLev || !onCapabilityUpdated) return
-    const revision = `${opp.id}:${maxLeverage}`
-    if (reportedCapabilityRef.current === revision) return
-    reportedCapabilityRef.current = revision
-    onCapabilityUpdated()
-  }, [maxLeverage, onCapabilityUpdated, opp.id, opportunityMaxLev])
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
   const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
@@ -331,6 +321,12 @@ export function OpportunityPanel({
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto">
+        {!marketAvailable && (
+          <p className="px-5 py-6 text-sm text-muted-foreground">
+            Latest market metrics are hidden until both venue feeds publish a fresh snapshot.
+          </p>
+        )}
+        <div className={marketAvailable ? '' : 'hidden'}>
         {/* Position Size + Currency */}
         <div className="px-5 py-4 border-b border-border">
           <div className="flex gap-2">
@@ -474,6 +470,7 @@ export function OpportunityPanel({
             </ul>
           </div>
         )}
+        </div>
       </div>
 
       {/* Action */}

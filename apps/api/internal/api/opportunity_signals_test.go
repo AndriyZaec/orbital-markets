@@ -54,7 +54,7 @@ func TestOpportunitySignalsRebuildLazilyAndReuseRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := opportunity
-	changed.AnnualizedGrossEdge = 0.21
+	changed.Direction = domain.DirectionLongA
 	if _, err := server.opportunitiesWithSignals(context.Background(), []domain.Opportunity{changed}); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestOpportunitySignalsRunsFollowUpForInvalidationDuringBuild(t *testing.T) 
 	}()
 	<-firstStarted
 	changed := first
-	changed.AnnualizedGrossEdge = 0.25
+	changed.Direction = domain.DirectionLongA
 	if _, err := server.opportunitiesWithSignals(context.Background(), []domain.Opportunity{changed}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestOpportunitySignalsAdvancesPublicationWhenInputsRevertDuringBuild(t *tes
 	}
 
 	changed := original
-	changed.AnnualizedGrossEdge = 0.25
+	changed.Direction = domain.DirectionLongA
 	_, _ = server.opportunitiesWithSignals(context.Background(), []domain.Opportunity{changed})
 	workerDone := make(chan struct{})
 	go func() {
@@ -251,7 +251,7 @@ func TestOpportunitySignalsPreservesLastSuccessfulSnapshotOnFailure(t *testing.T
 
 	fail = true
 	changed := opportunity
-	changed.AnnualizedGrossEdge = 0.25
+	changed.Direction = domain.DirectionLongA
 	_, _ = server.opportunitiesWithSignals(context.Background(), []domain.Opportunity{changed})
 	(<-jobs)()
 	server.signals.mu.Lock()
@@ -350,7 +350,7 @@ func TestOpportunitySignalsRetainsTemporarilyAbsentPair(t *testing.T) {
 	second.Asset = "BTC"
 	_, _ = server.opportunitiesWithSignals(context.Background(), []domain.Opportunity{first, second})
 	(<-jobs)()
-	second.AnnualizedGrossEdge = 0.30
+	second.Direction = domain.DirectionLongA
 	_, _ = server.opportunitiesWithSignals(context.Background(), []domain.Opportunity{second})
 	(<-jobs)()
 
@@ -405,6 +405,42 @@ func TestOpportunitySignalVersionTracksOpportunityInputs(t *testing.T) {
 	b := []domain.Opportunity{{ID: "SOL-a-b-long-b"}}
 	if opportunitySignalVersion(a) == opportunitySignalVersion(b) {
 		t.Fatal("different opportunity identities produced the same version")
+	}
+}
+
+func TestOpportunitySignalVersionIgnoresEdgeChangesWithinClassification(t *testing.T) {
+	original := signalTestOpportunity()
+	changed := original
+	changed.AnnualizedGrossEdge = original.AnnualizedGrossEdge + 0.01
+
+	if opportunitySignalVersion([]domain.Opportunity{original}) != opportunitySignalVersion([]domain.Opportunity{changed}) {
+		t.Fatal("edge changes within the active classification invalidated the signal")
+	}
+}
+
+func TestOpportunitySignalVersionTracksActivityThresholdCrossing(t *testing.T) {
+	active := signalTestOpportunity()
+	inactive := active
+	inactive.AnnualizedGrossEdge = 0
+
+	if opportunitySignalVersion([]domain.Opportunity{active}) == opportunitySignalVersion([]domain.Opportunity{inactive}) {
+		t.Fatal("activity threshold crossing did not invalidate the signal")
+	}
+}
+
+func TestOpportunitySignalResponseRefreshDoesNotClaimStaleData(t *testing.T) {
+	opportunity := signalTestOpportunity()
+	responses := opportunityResponses(
+		[]domain.Opportunity{opportunity},
+		map[string]scanner.OpportunitySignal{opportunity.ID: {Samples: 24}},
+		2,
+		1,
+		false,
+		false,
+	)
+
+	if responses[0].Signal7dState != "refreshing" {
+		t.Fatalf("signal state = %q, want refreshing", responses[0].Signal7dState)
 	}
 }
 
