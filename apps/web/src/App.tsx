@@ -208,7 +208,7 @@ export default function App() {
     url.searchParams.delete('opportunity')
     const historyState = { ...(window.history.state ?? {}) }
     delete historyState.orbitalOpportunity
-    window.history.replaceState(historyState, '', url)
+    window.history.pushState(historyState, '', url)
     setSelection({ kind: 'position', position })
   }, [])
 
