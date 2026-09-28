@@ -63,8 +63,9 @@ background cache, and discovery-only integration.
 - Its OrbitalData key is generated and encrypted by the existing backend
   data-agent flow. Only the owner address is configured as
   `ASTER_REFERENCE_ACCOUNT`.
-- SQLite access is serialized through one `database/sql` connection in this
-  single-process deployment.
+- Operational SQLite access is serialized through one `database/sql`
+  connection. Analytics uses a separate single-connection, query-only reader so
+  internal reports cannot occupy the money-sensitive write queue.
 - Admin Weekly APR keeps its current formula and UTC calendar-week grouping.
 
 ## Safety Invariants
@@ -96,6 +97,10 @@ background cache, and discovery-only integration.
 
 - Restore `SetMaxOpenConns(1)` and `SetMaxIdleConns(1)` while retaining WAL,
   foreign keys, and the five-second busy timeout.
+- Route analytics through a separate `mode=ro`, `query_only` WAL connection with
+  a short busy timeout; fail analytics closed if that isolation is unavailable.
+- Use passive WAL checkpoints so an active analytics snapshot never makes the
+  operational connection wait for truncation.
 - Add a regression test for the connection and PRAGMA invariants.
 - Log underlying errors for live analytics, Weekly APR, and public metrics while
   retaining bounded client-facing errors.
@@ -202,7 +207,8 @@ If strict read-only permission cannot be independently verified, leave
 
 ### Admin APR
 
-- the SQLite pool is single-connection with WAL, foreign keys, and busy timeout;
+- the operational SQLite pool is single-connection with WAL, foreign keys, and
+  busy timeout, while analytics remains query-only and independently pooled;
 - recorder and rollup writes no longer fail with same-process `SQLITE_BUSY`;
 - Weekly APR retains peak-direction semantics and top-five ordering;
 - analytics query failures produce an operator log and bounded 500 response.

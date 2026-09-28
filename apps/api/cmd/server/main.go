@@ -47,6 +47,12 @@ func main() {
 	}
 	defer database.Close()
 	logger.Info("database ready", "path", dbPath)
+	analyticsDatabase, err := db.OpenReadOnly(dbPath)
+	if err != nil {
+		logger.Warn("analytics database isolation unavailable", "err", err)
+	} else {
+		defer analyticsDatabase.Close()
+	}
 
 	pac := pacifica.New(logger)
 	hl := hyperliquid.New(logger)
@@ -117,6 +123,7 @@ func main() {
 	}
 	srv.EnableProductAnalytics(productAnalytics)
 	srv.EnableAnalyticsAccessToken(os.Getenv("ANALYTICS_ACCESS_TOKEN"))
+	srv.EnableAnalyticsDatabase(analyticsDatabase)
 	if telegram != nil && telegram.links != nil {
 		srv.EnableTelegramLinks(telegram.links)
 	}

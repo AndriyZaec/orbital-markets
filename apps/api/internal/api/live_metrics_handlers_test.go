@@ -55,3 +55,21 @@ func TestAnalyticsHandlersLogDatabaseFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestWeeklyAPRDoesNotFallBackWhenAnalyticsIsolationIsUnavailable(t *testing.T) {
+	var logs bytes.Buffer
+	server := &Server{
+		analyticsDBDisabled: true,
+		logger:              slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	response := httptest.NewRecorder()
+
+	server.handleWeeklyAPR(response, httptest.NewRequest(http.MethodGet, "/api/v1/analytics/weekly-apr", nil))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+	if !strings.Contains(logs.String(), "isolated analytics database unavailable") {
+		t.Fatalf("logs = %q, want isolation error", logs.String())
+	}
+}

@@ -45,3 +45,19 @@ func Open(path string) (*sql.DB, error) {
 
 	return db, nil
 }
+
+// OpenReadOnly opens an isolated query-only connection. In WAL mode this keeps
+// analytical reads from occupying the serialized operational connection.
+func OpenReadOnly(path string) (*sql.DB, error) {
+	database, err := sql.Open("sqlite", path+"?mode=ro&_pragma=busy_timeout(250)&_pragma=query_only(ON)")
+	if err != nil {
+		return nil, fmt.Errorf("open read-only db: %w", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	if err := database.Ping(); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("ping read-only db: %w", err)
+	}
+	return database, nil
+}

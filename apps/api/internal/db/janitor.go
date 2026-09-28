@@ -60,7 +60,8 @@ func (j *Janitor) sweep(ctx context.Context) {
 		j.logger.Error("janitor: incremental_vacuum", "err", err)
 	}
 
-	if _, err := j.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	// PASSIVE never waits for readers, including isolated analytics queries.
+	if _, err := j.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
 		j.logger.Error("janitor: wal_checkpoint", "err", err)
 	}
 

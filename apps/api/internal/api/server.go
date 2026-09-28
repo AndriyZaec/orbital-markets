@@ -29,6 +29,8 @@ type Server struct {
 	executor             *paper.Executor
 	store                *paper.DBStore
 	db                   *sql.DB
+	analyticsDB          *sql.DB
+	analyticsDBDisabled  bool
 	liveStore            *executor.Store // always available when DB exists — read-only live position access
 	live                 *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
 	closeMarkets         closeMarketSource
@@ -57,6 +59,11 @@ func (s *Server) EnableProductAnalytics(emitter *analytics.Emitter) {
 
 func (s *Server) EnableAnalyticsAccessToken(token string) {
 	s.analyticsAccessToken = token
+}
+
+func (s *Server) EnableAnalyticsDatabase(database *sql.DB) {
+	s.analyticsDB = database
+	s.analyticsDBDisabled = database == nil
 }
 
 func (s *Server) EnableAsterReferenceLeverage(cache *bracketcache.Cache) {
@@ -88,6 +95,7 @@ func NewServer(
 		executor:      exec,
 		store:         store,
 		db:            database,
+		analyticsDB:   database,
 		liveStore:     ls,
 		live:          live,
 		closeMarkets:  sc,
