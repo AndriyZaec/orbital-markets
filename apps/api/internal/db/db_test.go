@@ -1,32 +1,39 @@
 package db
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
-func TestOpenAllowsConcurrentReadsWithForeignKeys(t *testing.T) {
+func TestOpenSerializesSQLiteAccessWithConnectionPragmas(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "concurrent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
 
-	reserved, err := database.Conn(context.Background())
-	if err != nil {
+	if got := database.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("MaxOpenConnections = %d, want 1", got)
+	}
+
+	var foreignKeys, busyTimeout int
+	var journalMode string
+	if err := database.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
 		t.Fatal(err)
 	}
-	defer reserved.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	var foreignKeys int
-	if err := database.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
-		t.Fatalf("concurrent read: %v", err)
+	if err := database.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatal(err)
 	}
 	if foreignKeys != 1 {
 		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
+	}
+	if busyTimeout != 5000 {
+		t.Fatalf("busy_timeout = %d, want 5000", busyTimeout)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("journal_mode = %q, want wal", journalMode)
 	}
 }

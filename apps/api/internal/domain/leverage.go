@@ -33,14 +33,15 @@ const (
 )
 
 const (
-	LeverageReasonAccountPending      = "account_pending"
-	LeverageReasonAccountUnavailable  = "account_unavailable"
-	LeverageReasonBracketMissing      = "bracket_missing"
-	LeverageReasonBracketStale        = "bracket_stale"
-	LeverageReasonNotionalOutOfRange  = "notional_out_of_range"
-	LeverageReasonInvalidNotional     = "invalid_notional"
-	LeverageReasonVenueUnsupported    = "venue_unsupported"
-	LeverageReasonTargetRefreshFailed = "target_refresh_failed"
+	LeverageReasonAccountPending       = "account_pending"
+	LeverageReasonAccountUnavailable   = "account_unavailable"
+	LeverageReasonBracketMissing       = "bracket_missing"
+	LeverageReasonBracketStale         = "bracket_stale"
+	LeverageReasonNotionalOutOfRange   = "notional_out_of_range"
+	LeverageReasonInvalidNotional      = "invalid_notional"
+	LeverageReasonVenueUnsupported     = "venue_unsupported"
+	LeverageReasonReferenceUnavailable = "reference_unavailable"
+	LeverageReasonTargetRefreshFailed  = "target_refresh_failed"
 )
 
 type LeverageCapability struct {

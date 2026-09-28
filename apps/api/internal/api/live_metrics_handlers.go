@@ -21,6 +21,7 @@ func (s *Server) handleLiveAnalytics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := s.liveMetrics(r)
 	if err != nil {
+		s.logger.Error("live analytics: load failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load live analytics"})
 		return
 	}
@@ -35,6 +36,7 @@ func (s *Server) handleWeeklyAPR(w http.ResponseWriter, r *http.Request) {
 
 	report, err := analytics.LoadWeeklyAPR(r.Context(), s.db, time.Now(), weeklyAPRWeeks)
 	if err != nil {
+		s.logger.Error("weekly APR: load failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load weekly APR"})
 		return
 	}
@@ -47,12 +49,24 @@ func (s *Server) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	metrics, err := s.liveMetrics(r)
 	if err != nil {
+		s.logPublicMetricsError(err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load public metrics"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"total_volume": fmt.Sprintf("%.2f", metrics.Volume.AllTime.GrossVenueVolume),
 	})
+}
+
+func (s *Server) logPublicMetricsError(err error) {
+	now := time.Now()
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	if now.Sub(s.publicMetricsLogAt) < liveMetricsCacheTTL {
+		return
+	}
+	s.publicMetricsLogAt = now
+	s.logger.Error("public metrics: load failed", "err", err)
 }
 
 func (s *Server) liveMetrics(r *http.Request) (*analytics.LiveMetrics, error) {

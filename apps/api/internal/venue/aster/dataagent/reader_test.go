@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,6 +102,76 @@ func TestReaderReadsExactSymbolLeverageBrackets(t *testing.T) {
 	}
 	if len(brackets["PIPPINUSDT"]) != 1 || brackets["PIPPINUSDT"][0].InitialLeverage != 20 || !observedAt.Equal(*now) {
 		t.Fatalf("brackets = %+v at %s", brackets, observedAt)
+	}
+}
+
+func TestReaderReadsAllReferenceLeverageBrackets(t *testing.T) {
+	store, now := approvedReaderService(t)
+	status, err := store.StatusByOwner(context.Background(), testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/fapi/v3/agent":
+			fmt.Fprintf(w, `[{"agentAddress":%q,"canRead":true,"canSpotTrade":false,"canPerpTrade":false,"canWithdraw":false,"expired":%d}]`, status.AgentAddress, now.Add(time.Hour).UnixMilli())
+		case "/fapi/v3/leverageBracket":
+			if r.URL.Query().Has("symbol") {
+				t.Fatalf("request = %s", r.URL.String())
+			}
+			fmt.Fprint(w, `[{"symbol":"BTCUSDT","brackets":[{"initialLeverage":20,"notionalCap":10000,"notionalFloor":0}]},{"symbol":"ETHUSDT","brackets":[{"initialLeverage":10,"notionalCap":10000,"notionalFloor":0}]}]`)
+		default:
+			t.Fatalf("request = %s", r.URL.String())
+		}
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+
+	brackets, observedAt, err := reader.ReadAllLeverageBrackets(context.Background(), testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(brackets) != 2 || brackets["BTCUSDT"][0].InitialLeverage != 20 || !observedAt.Equal(*now) {
+		t.Fatalf("brackets = %+v at %s", brackets, observedAt)
+	}
+}
+
+func TestReaderRejectsReferenceAgentWithWritePermission(t *testing.T) {
+	store, now := approvedReaderService(t)
+	status, err := store.StatusByOwner(context.Background(), testOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/fapi/v3/agent" {
+			t.Fatal("bracket read followed rejected permissions")
+		}
+		fmt.Fprintf(w, `[{"agentAddress":%q,"canRead":true,"canSpotTrade":false,"canPerpTrade":true,"canWithdraw":false,"expired":%d}]`, status.AgentAddress, now.Add(time.Hour).UnixMilli())
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+
+	if _, _, err := reader.ReadAllLeverageBrackets(context.Background(), testOwner); !errors.Is(err, ErrUnsafePermissions) {
+		t.Fatalf("read error = %v, want unsafe permissions", err)
+	}
+}
+
+func TestExcludedOwnerCannotUseGenericReader(t *testing.T) {
+	store, now := approvedReaderService(t)
+	called := false
+	venue := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+	filtered := ExcludeOwner(reader, strings.ToUpper(testOwner))
+
+	if _, err := filtered.ReadAccount(context.Background(), testOwner); !errors.Is(err, ErrNotApproved) {
+		t.Fatalf("read error = %v, want not approved", err)
+	}
+	if called {
+		t.Fatal("excluded owner reached Aster")
+	}
+	if _, err := ExcludeProbeOwner(reader, strings.ToUpper(testOwner)).Status(context.Background(), testOwner, testExecutionAgent); !errors.Is(err, ErrNotApproved) {
+		t.Fatalf("probe error = %v, want not approved", err)
 	}
 }
 

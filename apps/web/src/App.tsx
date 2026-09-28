@@ -752,7 +752,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                         <div>
                           <p className="font-semibold text-foreground">{opp.asset}</p>
                           <p className="mt-0.5 text-[10px] text-muted-foreground/80">
-                            {maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `Up to ${maxLev}x`} · <span className="capitalize">{opp.liquidity}</span> liquidity
+                            {(maxLev !== null || leverageIssue) && <>{maxLev === null ? leverageIssue : `Up to ${maxLev}x`} · </>}<span className="capitalize">{opp.liquidity}</span> liquidity
                             {opp.status !== 'available' && <span className={opp.status === 'degraded' ? ' text-yellow-400' : ' text-red-400'}> · <span className="capitalize">{opp.status}</span></span>}
                           </p>
                         </div>
@@ -771,7 +771,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                     </TableCell>
                     <TableCell className="py-3 text-right font-mono">
                       <p className="font-semibold text-emerald-400"><MetricFlash value={apr}>{fmtPct(apr)}</MetricFlash></p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">{maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `${fmtPct(apr * maxLev)} at ${maxLev}x`}</p>
+                      {(maxLev !== null || leverageIssue) && <p className="mt-0.5 text-[10px] text-muted-foreground">{maxLev === null ? leverageIssue : `${fmtPct(apr * maxLev)} at ${maxLev}x`}</p>}
                     </TableCell>
                     <TableCell className="py-3 text-right">
                       <OpportunitySignalCell signal={opp.signal_7d} state={opp.signal_7d_state} />

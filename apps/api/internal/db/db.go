@@ -21,10 +21,11 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	// WAL permits readers to run alongside the single SQLite writer. Keeping a
-	// bounded pool prevents analytical reads from starving live account state.
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(8)
+	// SQLite permits only one writer. Serialize this single-process deployment
+	// in database/sql so concurrent background jobs wait instead of losing writes
+	// to SQLITE_BUSY. WAL still keeps transactions efficient on the connection.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		db.Close()

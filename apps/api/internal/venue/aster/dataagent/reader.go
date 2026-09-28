@@ -39,6 +39,7 @@ type OrderStatus struct {
 type dataReader interface {
 	readAccount(context.Context, string, string, []byte) (AccountObservation, error)
 	readLeverageBrackets(context.Context, string, string, []byte, string) (asteraccount.LeverageBrackets, time.Time, error)
+	validateReadOnlyAgent(context.Context, string, string, []byte) error
 	readFunding(context.Context, string, string, []byte, time.Time, time.Time) ([]venue.FundingPayment, error)
 	lookupOrder(context.Context, string, string, []byte, string, string) (OrderStatus, error)
 }
@@ -47,6 +48,25 @@ func (s *Service) ReadLeverageBrackets(ctx context.Context, owner, symbol string
 	if !readSymbolPattern.MatchString(symbol) {
 		return nil, time.Time{}, ErrInvalidInput
 	}
+	return s.readLeverageBrackets(ctx, owner, symbol)
+}
+
+func (s *Service) ReadAllLeverageBrackets(ctx context.Context, owner string) (asteraccount.LeverageBrackets, time.Time, error) {
+	record, err := s.loadReadRecord(ctx, owner)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer clear(record.PrivateKey)
+	if s.reader == nil {
+		return nil, time.Time{}, ErrUnavailable
+	}
+	if err := s.reader.validateReadOnlyAgent(ctx, record.Owner, record.AgentAddress, record.PrivateKey); err != nil {
+		return nil, time.Time{}, err
+	}
+	return s.reader.readLeverageBrackets(ctx, record.Owner, record.AgentAddress, record.PrivateKey, "")
+}
+
+func (s *Service) readLeverageBrackets(ctx context.Context, owner, symbol string) (asteraccount.LeverageBrackets, time.Time, error) {
 	record, err := s.loadReadRecord(ctx, owner)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -192,7 +212,11 @@ func (c *Client) readLeverageBrackets(
 	symbol string,
 ) (asteraccount.LeverageBrackets, time.Time, error) {
 	observedAt := c.now().UTC()
-	body, err := c.signedGET(ctx, "/fapi/v3/leverageBracket", []pair{{"symbol", symbol}}, owner, agent, privateKey, c.nextNonce())
+	var params []pair
+	if symbol != "" {
+		params = []pair{{"symbol", symbol}}
+	}
+	body, err := c.signedGET(ctx, "/fapi/v3/leverageBracket", params, owner, agent, privateKey, c.nextNonce())
 	if err != nil {
 		if errors.Is(err, ErrReadRejected) {
 			return nil, time.Time{}, ErrReadRejected
@@ -200,10 +224,24 @@ func (c *Client) readLeverageBrackets(
 		return nil, time.Time{}, fmt.Errorf("Aster leverage-bracket read failed")
 	}
 	brackets, err := asteraccount.ParseLeverageBrackets(body, symbol)
-	if err != nil || len(brackets[symbol]) == 0 {
+	if err != nil || (symbol == "" && len(brackets) == 0) || (symbol != "" && len(brackets[symbol]) == 0) {
 		return nil, time.Time{}, fmt.Errorf("Aster leverage-bracket response was invalid")
 	}
 	return brackets, observedAt, nil
+}
+
+func (c *Client) validateReadOnlyAgent(ctx context.Context, owner, agent string, privateKey []byte) error {
+	body, err := c.signedGET(ctx, "/fapi/v3/agent", nil, owner, agent, privateKey, c.nextNonce())
+	if err != nil {
+		return fmt.Errorf("Aster data-agent permission read failed")
+	}
+	now := c.now().UnixMilli()
+	permissions, expiry, _, err := validateAgentResponse(body, agent, "", now)
+	if err != nil || permissions == nil || !permissions.CanRead || permissions.CanSpotTrade ||
+		permissions.CanPerpTrade || permissions.CanWithdraw || expiry <= now {
+		return ErrUnsafePermissions
+	}
+	return nil
 }
 
 func (c *Client) lookupOrder(

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
@@ -15,6 +16,8 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster"
+	asteraccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/account"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/bracketcache"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
@@ -86,16 +89,31 @@ func main() {
 			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, logger), time.Now,
 		)
 	}
+	var asterReference *bracketcache.Cache
+	referenceAccount := strings.TrimSpace(os.Getenv("ASTER_REFERENCE_ACCOUNT"))
+	if referenceAccount != "" {
+		if asterDataAgent == nil {
+			logger.Warn("Aster reference leverage disabled", "reason", "data agent service unavailable")
+		} else {
+			asterReference = bracketcache.New(bracketcache.ReaderFunc(func(ctx context.Context) (asteraccount.LeverageBrackets, time.Time, error) {
+				return asterDataAgent.ReadAllLeverageBrackets(ctx, referenceAccount)
+			}), logger, time.Now)
+			go asterReference.Run(ctx)
+		}
+	}
 
 	// Live execution deps (non-custodial signing flow)
-	liveDeps := startLive(ctx, logger, database, sc, pac, hl, ast, asterDataAgent)
+	liveDeps := startLive(ctx, logger, database, sc, pac, hl, ast, dataagent.ExcludeOwner(asterDataAgent, referenceAccount))
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
 	if asterDataAgent != nil {
-		srv.EnableAsterDataAgentProbe(asterDataAgent)
+		srv.EnableAsterDataAgentProbe(dataagent.ExcludeProbeOwner(asterDataAgent, referenceAccount))
+	}
+	if asterReference != nil {
+		srv.EnableAsterReferenceLeverage(asterReference)
 	}
 	srv.EnableProductAnalytics(productAnalytics)
 	srv.EnableAnalyticsAccessToken(os.Getenv("ANALYTICS_ACCESS_TOKEN"))

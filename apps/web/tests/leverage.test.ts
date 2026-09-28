@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { knownMaxLeverage, reconcileLeverageSelection } from '../src/lib/leverage.ts'
+import { knownMaxLeverage, leverageCapabilityMessage, reconcileLeverageSelection } from '../src/lib/leverage.ts'
+
+test('does not present unavailable Aster reference leverage as a missing market bracket', () => {
+  assert.equal(leverageCapabilityMessage({
+    aster: { status: 'unsupported', reason: 'reference_unavailable' },
+  }), null)
+})
 
 test('treats missing leverage metadata as unknown', () => {
   assert.equal(knownMaxLeverage(0), null)
