@@ -187,8 +187,9 @@ func TestRealizedFundingSumsVenueLedgersWithoutDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	syncUntil := time.Now().UTC()
 	for range 2 {
-		total, ok := monitor.realized(context.Background(), position, openedAt, time.Now(), false)
+		total, ok := monitor.realized(context.Background(), position, openedAt, syncUntil, false)
 		if !ok || total != 0.01 {
 			t.Fatalf("realized funding = %v, ok = %v", total, ok)
 		}
@@ -196,7 +197,7 @@ func TestRealizedFundingSumsVenueLedgersWithoutDuplicates(t *testing.T) {
 	if pacifica.calls != 1 || hyperliquid.calls != 1 {
 		t.Fatalf("funding calls = Pacifica %d Hyperliquid %d", pacifica.calls, hyperliquid.calls)
 	}
-	total, ok := monitor.realized(context.Background(), position, openedAt, time.Now(), true)
+	total, ok := monitor.realized(context.Background(), position, openedAt, syncUntil.Add(time.Second), true)
 	if !ok || total != 0.01 {
 		t.Fatalf("deduplicated funding = %v, ok = %v", total, ok)
 	}
