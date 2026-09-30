@@ -55,13 +55,14 @@ type ProbeStatus struct {
 }
 
 type Store struct {
-	db   *sql.DB
-	aead cipher.AEAD
+	db     *sql.DB
+	reader *sql.DB
+	aead   cipher.AEAD
 }
 
-func NewStore(db *sql.DB, masterKey []byte) (*Store, error) {
-	if db == nil {
-		return nil, fmt.Errorf("Aster data-agent database is required")
+func NewStore(writer, reader *sql.DB, masterKey []byte) (*Store, error) {
+	if writer == nil || reader == nil {
+		return nil, fmt.Errorf("Aster data-agent writer and reader databases are required")
 	}
 	if len(masterKey) != 32 {
 		return nil, fmt.Errorf("ASTER_DATA_AGENT_MASTER_KEY must decode to exactly 32 bytes")
@@ -74,12 +75,12 @@ func NewStore(db *sql.DB, masterKey []byte) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize Aster data-agent authenticated encryption: %w", err)
 	}
-	if _, err := db.Exec(`UPDATE aster_data_agents
+	if _, err := writer.Exec(`UPDATE aster_data_agents
 		SET status = 'uncertain', last_error = 'Aster data-agent approval was interrupted; outcome is uncertain; do not retry'
 		WHERE status = 'submitting'`); err != nil {
 		return nil, fmt.Errorf("recover interrupted Aster data-agent submissions: %w", err)
 	}
-	return &Store{db: db, aead: aead}, nil
+	return &Store{db: writer, reader: reader, aead: aead}, nil
 }
 
 // SavePending inserts a probe or replaces only a pending probe older than replaceBeforeNonce.
@@ -252,7 +253,7 @@ func (s *Store) load(ctx context.Context, where string, args ...any) (Record, er
 	var nonce, ciphertext []byte
 	var approvedAt sql.NullString
 	var lastResult string
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+	err := s.reader.QueryRowContext(ctx, query, args...).Scan(
 		&record.ProbeID, &record.Owner, &record.ExecutionAgent, &record.AgentAddress, &version,
 		&nonce, &ciphertext, &record.ApprovalNonce, &record.RequestedExpiry, &record.Status,
 		&approvedAt, &lastResult, &record.LastError,
@@ -282,7 +283,7 @@ func (s *Store) loadMetadata(ctx context.Context, where string, args ...any) (Re
 	query := `SELECT probe_id, owner_account, execution_agent, agent_address,
 		approval_nonce, requested_expiry, status, approved_at, last_result_json, last_error
 		FROM aster_data_agents WHERE ` + where
-	record, err := scanMetadata(s.db.QueryRowContext(ctx, query, args...))
+	record, err := scanMetadata(s.reader.QueryRowContext(ctx, query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, ErrNotFound
 	}

@@ -27,7 +27,7 @@ func (s *Store) AgentAuthorizationMatches(
 	venue, ownerAccount, agentAddress string,
 ) (bool, error) {
 	var expected string
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reader.QueryRowContext(ctx, `
 		SELECT agent_address
 		FROM agent_authorizations
 		WHERE venue = ? AND owner_account = ?`,

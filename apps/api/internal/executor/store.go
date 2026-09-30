@@ -18,11 +18,12 @@ import (
 // All writes are append-friendly and safe to call during execution.
 type Store struct {
 	db     *sql.DB
+	reader *sql.DB
 	logger *slog.Logger
 }
 
-func NewStore(db *sql.DB, logger *slog.Logger) *Store {
-	return &Store{db: db, logger: logger}
+func NewStore(writer, reader *sql.DB, logger *slog.Logger) *Store {
+	return &Store{db: writer, reader: reader, logger: logger}
 }
 
 // CreatePosition inserts a new live position at execution start.
@@ -319,7 +320,7 @@ func (s *Store) UpsertCloseOutcome(ctx context.Context, outcome CloseOutcome) er
 // original confirmed legs that must be closed.
 func (s *Store) GetCloseProgress(ctx context.Context, positionID string) (CloseProgress, error) {
 	var progress CloseProgress
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reader.QueryRowContext(ctx, `
 		WITH required AS (
 			SELECT COUNT(DISTINCT leg) AS total
 			FROM live_fills
@@ -348,7 +349,7 @@ func (s *Store) GetCloseProgress(ctx context.Context, positionID string) (CloseP
 // ConfirmedCloseLegs returns legs already confirmed closed, so retries do not
 // submit a second reduce-only order for them.
 func (s *Store) ConfirmedCloseLegs(ctx context.Context, positionID string) (map[int]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.reader.QueryContext(ctx, `
 		SELECT outcome.leg
 		FROM live_close_outcomes outcome
 		JOIN (
@@ -375,7 +376,7 @@ func (s *Store) ConfirmedCloseLegs(ctx context.Context, positionID string) (map[
 
 func (s *Store) LastCloseActivity(ctx context.Context, positionID string) (time.Time, error) {
 	var raw sql.NullString
-	if err := s.db.QueryRowContext(ctx, `
+	if err := s.reader.QueryRowContext(ctx, `
 		SELECT MAX(updated_at) FROM live_close_outcomes WHERE position_id = ?`, positionID,
 	).Scan(&raw); err != nil {
 		return time.Time{}, err
@@ -461,7 +462,7 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 
 // GetPosition returns a live position by ID.
 func (s *Store) GetPosition(ctx context.Context, id string) (*LivePosition, error) {
-	row := s.db.QueryRowContext(ctx,
+	row := s.reader.QueryRowContext(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions WHERE id = ?`, id)
 	return scanLivePosition(row)
 }
@@ -478,7 +479,7 @@ func (s *Store) GetPositionForBindings(ctx context.Context, id string, bindings 
 		return nil, err
 	}
 	args = append([]any{id}, args...)
-	row := s.db.QueryRowContext(ctx,
+	row := s.reader.QueryRowContext(ctx,
 		`SELECT `+livePositionCols+` FROM live_positions
 		 WHERE id = ? AND `+match, args...)
 	return scanLivePosition(row)
@@ -588,7 +589,7 @@ func (s *Store) ListClosingPositions(ctx context.Context) ([]LivePosition, error
 }
 
 func (s *Store) queryPositions(ctx context.Context, query string, args ...any) ([]LivePosition, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +608,7 @@ func (s *Store) queryPositions(ctx context.Context, query string, args ...any) (
 
 // GetFills returns all fills for a position.
 func (s *Store) GetFills(ctx context.Context, positionID string) ([]LiveFill, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.reader.QueryContext(ctx, `
 		SELECT id, position_id, leg, venue, symbol, side,
 			order_id, client_order_id,
 			requested_amount, filled_amount, avg_fill_price,
@@ -636,7 +637,7 @@ func (s *Store) GetFills(ctx context.Context, positionID string) ([]LiveFill, er
 
 // GetEvents returns all events for a position.
 func (s *Store) GetEvents(ctx context.Context, positionID string) ([]LiveEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.reader.QueryContext(ctx, `
 		SELECT id, position_id, event, state, detail, at
 		FROM live_events WHERE position_id = ? ORDER BY id`, positionID)
 	if err != nil {
@@ -1007,7 +1008,7 @@ func normalizeFundingAccount(venueName, account string) string {
 
 func (s *Store) SumFundingPayments(ctx context.Context, positionID string) (float64, error) {
 	var total float64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reader.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(amount_usd), 0)
 		FROM live_funding_payments WHERE position_id = ?`, positionID).Scan(&total)
 	return total, err
@@ -1064,7 +1065,7 @@ func (s *Store) RecordFundingVenueSync(ctx context.Context, positionID, venueNam
 
 func (s *Store) FundingVenueSyncComplete(ctx context.Context, position *LivePosition, finalized bool) (bool, error) {
 	var count int
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reader.QueryRowContext(ctx, `
 		SELECT COUNT(DISTINCT venue) FROM live_funding_venue_sync
 		WHERE position_id = ? AND venue IN (?, ?) AND (? = 0 OR finalized = 1)`,
 		position.ID, position.VenueA, position.VenueB, boolToInt(finalized)).Scan(&count)

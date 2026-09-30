@@ -20,7 +20,8 @@ type telegramIntegration struct {
 func buildTelegramIntegration(
 	logger *slog.Logger,
 	sc *scanner.Scanner,
-	database *sql.DB,
+	writer *sql.DB,
+	reader *sql.DB,
 ) *telegramIntegration {
 	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 	if token == "" {
@@ -35,10 +36,10 @@ func buildTelegramIntegration(
 	var links *telegrambot.LinkService
 	var options []telegrambot.Option
 	if username := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_USERNAME")); username != "" {
-		links = telegrambot.NewLinkService(database, username)
+		links = telegrambot.NewLinkService(writer, reader, username)
 		options = append(options,
 			telegrambot.WithAccountLinks(links),
-			telegrambot.WithPositions(executor.NewStore(database, logger)),
+			telegrambot.WithPositions(executor.NewStore(writer, reader, logger)),
 		)
 	} else {
 		logger.Warn("Telegram account linking disabled: TELEGRAM_BOT_USERNAME is not set")

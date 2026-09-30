@@ -144,7 +144,7 @@ func (s *Store) ActiveDurableSessionForBindings(
 		return record, err
 	}
 	args = append(args, asset)
-	err = s.db.QueryRowContext(ctx, `
+	err = s.reader.QueryRowContext(ctx, `
 		SELECT id, state, has_exposure
 		FROM live_sessions
 		WHERE `+match+` AND asset = ?
@@ -161,7 +161,7 @@ func (s *Store) ActiveDurableSessionForBindings(
 
 // ListActiveDurableSessions returns non-terminal sessions for startup recovery.
 func (s *Store) ListActiveDurableSessions(ctx context.Context) ([]DurableSessionRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.reader.QueryContext(ctx, `
 		SELECT id, state, payload, account_pacifica, account_hyperliquid,
 			account_bindings_json, account_bindings_key, asset,
 			has_exposure, expires_at, created_at, updated_at
@@ -221,7 +221,7 @@ func (s *Store) GetDurableSession(ctx context.Context, id string) (DurableSessio
 	var payload, bindingsJSON, bindingsKey string
 	var hasExposure int64
 	var terminalAt sql.NullString
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reader.QueryRowContext(ctx, `
 		SELECT id, state, payload, account_pacifica, account_hyperliquid,
 			account_bindings_json, account_bindings_key, asset,
 			has_exposure, recovery_detail, terminal_at
@@ -249,7 +249,7 @@ func (s *Store) GetDurableSessionForPlan(ctx context.Context, planID string) (Du
 	var payload, bindingsJSON, bindingsKey string
 	var hasExposure int64
 	var terminalAt sql.NullString
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reader.QueryRowContext(ctx, `
 		SELECT id, state, payload, account_pacifica, account_hyperliquid,
 			account_bindings_json, account_bindings_key, asset,
 			has_exposure, recovery_detail, terminal_at

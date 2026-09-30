@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"time"
@@ -109,8 +110,8 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 					"range", rangeStr,
 					"duration_ms", time.Since(started).Milliseconds(),
 				}
-				if s.db != nil {
-					stats := s.db.Stats()
+				if s.analyticsDB != nil {
+					stats := s.analyticsDB.Stats()
 					args = append(args,
 						"db_open", stats.OpenConnections,
 						"db_in_use", stats.InUse,
@@ -144,10 +145,13 @@ func historyCacheTTL(source historySource) time.Duration {
 }
 
 func (s *Server) loadHistory(ctx context.Context, params historyLoadParams) (historyResponse, error) {
+	if s.analyticsDB == nil {
+		return historyResponse{}, errors.New("isolated analytics database unavailable")
+	}
 	requestStarted := time.Now()
 	now := time.Now().UTC()
 	start := now.Add(-params.spec.dur)
-	queries := sqlc.New(s.db)
+	queries := sqlc.New(s.analyticsDB)
 
 	fetchAStarted := time.Now()
 	rowsA, err := fetchHistoryRows(ctx, queries, params.spec.source, params.venueA, params.asset, start.Unix(), now.Unix())
@@ -181,8 +185,8 @@ func (s *Server) loadHistory(ctx context.Context, params historyLoadParams) (his
 		"pair_ms", pairDuration.Milliseconds(),
 		"total_ms", totalDuration.Milliseconds(),
 	}
-	if s.db != nil {
-		stats := s.db.Stats()
+	if s.analyticsDB != nil {
+		stats := s.analyticsDB.Stats()
 		logArgs = append(logArgs,
 			"db_open", stats.OpenConnections,
 			"db_in_use", stats.InUse,

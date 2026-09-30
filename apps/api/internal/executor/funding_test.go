@@ -48,7 +48,7 @@ func TestFundingUsesPersistedGenericVenueBindings(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := NewStore(database, logger)
+	store := NewStore(database, database, logger)
 	startedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	result := &ExecutionResult{
 		PlanID: "generic-position", OpportunityID: "opportunity", Asset: "SOL",
@@ -102,7 +102,7 @@ func TestFinalFundingUsesActualHoldingInterval(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	pacifica := &fakeFundingHistory{}
 	hyperliquid := &fakeFundingHistory{}
-	monitor := NewFundingMonitor(logger, NewStore(database, logger), map[string]venue.FundingHistory{
+	monitor := NewFundingMonitor(logger, NewStore(database, database, logger), map[string]venue.FundingHistory{
 		"pacifica": pacifica, "hyperliquid": hyperliquid,
 	})
 
@@ -133,7 +133,7 @@ func TestPartialFundingSyncIsNotPublished(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := NewStore(database, logger)
+	store := NewStore(database, database, logger)
 	pacifica := &fakeFundingHistory{payments: []venue.FundingPayment{{
 		ExternalID: "pac-1", Venue: "pacifica", Account: "sol-wallet", Asset: "SOL", AmountUSD: 0.02, PaidAt: startedAt.Add(time.Hour),
 	}}}
@@ -172,7 +172,7 @@ func TestRealizedFundingSumsVenueLedgersWithoutDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := NewStore(database, logger)
+	store := NewStore(database, database, logger)
 	pacifica := &fakeFundingHistory{payments: []venue.FundingPayment{{
 		ExternalID: "pac-1", Venue: "pacifica", Account: "sol-wallet", Asset: "SOL", AmountUSD: 0.02, PaidAt: openedAt.Add(time.Hour),
 	}}}
@@ -255,7 +255,7 @@ func TestLongHeldFundingResumesCoverageAfterRestartAndCompactsRawRows(t *testing
 	aster := &fakeFundingHistory{payments: payments("aster", "0xaster", "aster", 0.2)}
 	hyperliquid := &fakeFundingHistory{payments: payments("hyperliquid", "0xhyper", "hyper", -0.1)}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := NewStore(database, logger)
+	store := NewStore(database, database, logger)
 	position, err := store.GetPosition(context.Background(), "position-long")
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +267,7 @@ func TestLongHeldFundingResumesCoverageAfterRestartAndCompactsRawRows(t *testing
 		t.Fatalf("first bounded pass total = %v, complete = %v", total, complete)
 	}
 
-	restartedStore := NewStore(database, logger)
+	restartedStore := NewStore(database, database, logger)
 	restarted := NewFundingMonitor(logger, restartedStore, map[string]venue.FundingHistory{
 		"aster": aster, "hyperliquid": hyperliquid,
 	})
@@ -342,7 +342,7 @@ func TestPriceAndFundingUpdatesRecomputeTotalAtomically(t *testing.T) {
 			100, 2, ?, ?, ?)`, now, now, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	store.UpdateMonitoring(context.Background(), "position-1", MonitorUpdate{PricePnL: -1.40})
 	if err := store.UpdateRealizedFunding(context.Background(), "position-1", 1.35); err != nil {
 		t.Fatal(err)
@@ -368,7 +368,7 @@ func TestAsterIncomeSyncClaimIsAccountScopedAndHourly(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	store := NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	now := time.Now().UTC()
 	claimed, err := store.ClaimAsterIncomeSync(context.Background(), "0xAbCd", now)
 	if err != nil || !claimed {
@@ -399,7 +399,7 @@ func TestRealizedFundingRequiresBothVenueSnapshots(t *testing.T) {
 			'{"aster":"0xabc","pacifica":"wallet"}', 'aster=0xabc|pacifica=wallet', 100, 2, ?, ?, ?)`, now, now, now); err != nil {
 		t.Fatal(err)
 	}
-	store := NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	position, err := store.GetPosition(context.Background(), "position-1")
 	if err != nil {
 		t.Fatal(err)

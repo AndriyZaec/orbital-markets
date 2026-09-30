@@ -20,7 +20,7 @@ func TestCloseProgressRequiresConfirmedFillForEveryOpenLeg(t *testing.T) {
 	defer database.Close()
 	ctx := context.Background()
 	seedLivePosition(t, database, "position-1")
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if err := store.UpsertCloseOutcome(ctx, executor.CloseOutcome{
 		PositionID: "position-1", Leg: 1, Venue: "pacifica", ClientOrderID: "close-1",
@@ -95,7 +95,7 @@ func TestCloseProgressTreatsResolvedPartialFillAsFailure(t *testing.T) {
 	defer database.Close()
 	ctx := context.Background()
 	seedLivePosition(t, database, "position-2")
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	if err := store.UpsertCloseOutcome(ctx, executor.CloseOutcome{
 		PositionID: "position-2", Leg: 1, Venue: "pacifica", ClientOrderID: "close-partial",
@@ -150,7 +150,7 @@ func TestMarkClosedFinalizesPricePnLFromCloseFills(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, outcome := range []executor.CloseOutcome{
 		{PositionID: "position-pnl", Leg: 1, Venue: "pacifica", ClientOrderID: "close-long", RequestedAmount: 1, FilledAmount: 1, AvgFillPrice: 110, FillRatio: 1, Accepted: true, Confirmed: true, Resolved: true},
 		{PositionID: "position-pnl", Leg: 2, Venue: "hyperliquid", ClientOrderID: "close-short", RequestedAmount: 1, FilledAmount: 1, AvgFillPrice: 90, FillRatio: 1, Accepted: true, Confirmed: true, Resolved: true},
@@ -186,7 +186,7 @@ func TestMarkClosedAggregatesPartialCloseAndRetryPrices(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, outcome := range []executor.CloseOutcome{
 		{PositionID: "position-retry-pnl", Leg: 1, Venue: "pacifica", ClientOrderID: "close-long-partial", RequestedAmount: 1, FilledAmount: 0.4, AvgFillPrice: 105, FillRatio: 0.4, Accepted: true, Resolved: true},
 		{PositionID: "position-retry-pnl", Leg: 1, Venue: "pacifica", ClientOrderID: "close-long-retry", RequestedAmount: 0.6, FilledAmount: 0.6, AvgFillPrice: 115, FillRatio: 1, Accepted: true, Confirmed: true, Resolved: true},

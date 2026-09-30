@@ -103,10 +103,7 @@ func (s *Server) metricsDatabase() *sql.DB {
 	if s.analyticsDBDisabled {
 		return nil
 	}
-	if s.analyticsDB != nil {
-		return s.analyticsDB
-	}
-	return s.db
+	return s.analyticsDB
 }
 
 func requireMetricsDatabase(database *sql.DB) (*sql.DB, error) {

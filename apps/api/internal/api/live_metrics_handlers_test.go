@@ -36,7 +36,7 @@ func TestAnalyticsHandlersLogDatabaseFailures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			server := &Server{db: database, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+			server := &Server{analyticsDB: database, logger: slog.New(slog.NewTextHandler(&logs, nil))}
 			response := httptest.NewRecorder()
 			test.handle(server, response, httptest.NewRequest(http.MethodGet, test.path, nil))
 			if test.repeat {

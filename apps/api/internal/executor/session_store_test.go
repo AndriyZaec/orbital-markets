@@ -23,7 +23,7 @@ func TestDurableSessionLifecycleRetainsTerminalAuditRecord(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	expiresAt := time.Now().Add(3 * time.Minute).UTC().Truncate(time.Second)
 
 	err = store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
@@ -84,7 +84,7 @@ func TestGetDurableSessionForPlanFindsTerminalSessionPayload(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	payload := []byte(`{"plan":{"id":"plan-2z"}}`)
 	if err := store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
 		ID: "session-2z", State: "complete", Payload: payload, Asset: "2Z",
@@ -113,7 +113,7 @@ func TestDurableSessionsUseAnExactGenericBindingSlot(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	bindings := map[string]string{"beta": "owner-b", "alpha": "owner-a"}
 	record := executor.DurableSessionRecord{
 		ID: "session-1", State: "awaiting_leg1_signs", Payload: []byte(`{}`),
@@ -161,7 +161,7 @@ func TestDurableSessionRecoveryRetainsOwnershipFromCanonicalKey(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	bindings := map[string]string{"alpha": "owner-a", "beta": "owner-b"}
 	if err := store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
 		ID: "corrupt-session", State: "leg1_submitted", Payload: []byte(`{}`),
@@ -192,7 +192,7 @@ func TestGenericReadersFallBackToLegacyAccountColumns(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = database.Exec(`
 		INSERT INTO live_sessions (
@@ -238,7 +238,7 @@ func TestAtomicPositionPersistenceUsesGenericBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	result := &executor.ExecutionResult{
 		PlanID: "plan-generic", OpportunityID: "opportunity", Asset: "SOL",
 		State: executor.ExecStateOpen, StartedAt: time.Now(),
@@ -318,7 +318,7 @@ func TestPersistFullResultAtomicWritesCompleteTerminalRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	result := &executor.ExecutionResult{
 		PlanID: "plan-1", OpportunityID: "opportunity-1", Asset: "SOL",
 		State: executor.ExecStateOpen, StartedAt: time.Now(),
@@ -377,7 +377,7 @@ func TestFlagDurableSessionKeepsPossibleExposureActive(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
 		ID: "blocked-session", State: "leg1_submitted", Payload: []byte(`not-json`),
 		AccountPacifica: "wallet-1", AccountHyperliquid: "0x1", Asset: "SOL",
@@ -461,7 +461,7 @@ func TestDurableSessionsAllowOnlyOneActiveSessionPerAccountAsset(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	record := executor.DurableSessionRecord{
 		ID: "session-1", State: "awaiting_leg1_signs", Payload: []byte(`{}`),
 		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",
@@ -489,7 +489,7 @@ func TestSupersedeSafeDurableSessionsAllowsImmediateRetry(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	record := executor.DurableSessionRecord{
 		ID: "session-1", State: "awaiting_leg1_signs", Payload: []byte(`{}`),
 		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",
@@ -519,7 +519,7 @@ func TestSupersedeSafeDurableSessionsPreservesPossibleExposure(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	record := executor.DurableSessionRecord{
 		ID: "session-1", State: "leg1_submitting", Payload: []byte(`{}`),
 		AccountPacifica: "sol-wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",
@@ -551,7 +551,7 @@ func TestDurableSessionRecoveryLeasePreventsOverlappingOwners(t *testing.T) {
 	}
 	defer database.Close()
 	ctx := context.Background()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := store.UpsertDurableSession(ctx, executor.DurableSessionRecord{
 		ID: "session-1", State: "leg1_submitting", Payload: []byte(`{}`),
 		AccountPacifica: "wallet", AccountHyperliquid: "0xwallet", Asset: "SOL",

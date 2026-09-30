@@ -23,13 +23,14 @@ const (
 // also folds the just-closed 1h bucket from the 5m table. Retention is enforced
 // inline: 30d for 5m, 1y for 1h.
 type Rollup struct {
-	db      *sql.DB
+	writer  *sql.DB
+	reader  *sql.DB
 	queries *sqlc.Queries
 	logger  *slog.Logger
 }
 
-func NewRollup(db *sql.DB, logger *slog.Logger) *Rollup {
-	return &Rollup{db: db, queries: sqlc.New(db), logger: logger}
+func NewRollup(writer, reader *sql.DB, logger *slog.Logger) *Rollup {
+	return &Rollup{writer: writer, reader: reader, queries: sqlc.New(writer), logger: logger}
 }
 
 func (r *Rollup) Run(ctx context.Context) {
@@ -72,7 +73,7 @@ func (r *Rollup) tick(ctx context.Context) {
 
 // foldRawTo5m aggregates raw rows in [bucket, bucket+5m) into market_snapshots_5m.
 func (r *Rollup) foldRawTo5m(ctx context.Context, bucket int64) error {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.reader.QueryContext(ctx,
 		`SELECT venue, asset, mark_price, funding_rate, open_interest, bid_price, ask_price
 		 FROM market_snapshots
 		 WHERE ts_unix >= ? AND ts_unix < ?
@@ -122,7 +123,7 @@ func (r *Rollup) foldRawTo5m(ctx context.Context, bucket int64) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -161,7 +162,7 @@ func (r *Rollup) foldRawTo5m(ctx context.Context, bucket int64) error {
 
 // fold5mTo1h aggregates market_snapshots_5m rows in [bucket, bucket+1h) into market_snapshots_1h.
 func (r *Rollup) fold5mTo1h(ctx context.Context, bucket int64) error {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.reader.QueryContext(ctx,
 		`SELECT venue, asset, open, high, low, close, funding_avg, oi_avg, bid_avg, ask_avg
 		 FROM market_snapshots_5m
 		 WHERE bucket_unix >= ? AND bucket_unix < ?
@@ -211,7 +212,7 @@ func (r *Rollup) fold5mTo1h(ctx context.Context, bucket int64) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -252,11 +253,11 @@ func (r *Rollup) retain(ctx context.Context, now int64) error {
 	cutoff5m := now - int64(retain5m.Seconds())
 	cutoff1h := now - int64(retain1h.Seconds())
 
-	res5m, err := r.db.ExecContext(ctx, "DELETE FROM market_snapshots_5m WHERE bucket_unix < ?", cutoff5m)
+	res5m, err := r.writer.ExecContext(ctx, "DELETE FROM market_snapshots_5m WHERE bucket_unix < ?", cutoff5m)
 	if err != nil {
 		return err
 	}
-	res1h, err := r.db.ExecContext(ctx, "DELETE FROM market_snapshots_1h WHERE bucket_unix < ?", cutoff1h)
+	res1h, err := r.writer.ExecContext(ctx, "DELETE FROM market_snapshots_1h WHERE bucket_unix < ?", cutoff1h)
 	if err != nil {
 		return err
 	}

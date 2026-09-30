@@ -21,7 +21,8 @@ import (
 func startLive(
 	ctx context.Context,
 	logger *slog.Logger,
-	database *sql.DB,
+	writer *sql.DB,
+	reader *sql.DB,
 	market executor.MarketSource,
 	pac *pacifica.Adapter,
 	hl *hyperliquid.Adapter,
@@ -33,7 +34,7 @@ func startLive(
 	hlAssetMap := hl.AssetMap()
 
 	// --- Live position store + monitor ---
-	liveStore := executor.NewStore(database, logger)
+	liveStore := executor.NewStore(writer, reader, logger)
 	signingStore := domain.NewSigningRequestStore()
 	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader)
 	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)

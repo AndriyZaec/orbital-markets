@@ -40,19 +40,16 @@ func main() {
 		defaultDB = "/data/orbital.db" // Fly volume mount
 	}
 	dbPath := envOr("DB_PATH", defaultDB)
-	database, err := db.Open(dbPath)
+	databaseHandles, err := db.OpenHandles(dbPath)
 	if err != nil {
 		logger.Error("failed to open database", "err", err)
 		os.Exit(1)
 	}
-	defer database.Close()
+	defer databaseHandles.Close()
+	database := databaseHandles.Writer
+	operationalDatabase := databaseHandles.Operational
+	analyticsDatabase := databaseHandles.Analytics
 	logger.Info("database ready", "path", dbPath)
-	analyticsDatabase, err := db.OpenReadOnly(dbPath)
-	if err != nil {
-		logger.Warn("analytics database isolation unavailable", "err", err)
-	} else {
-		defer analyticsDatabase.Close()
-	}
 
 	pac := pacifica.New(logger)
 	hl := hyperliquid.New(logger)
@@ -63,10 +60,10 @@ func main() {
 	// Snapshot recorder + retention janitor + rollup aggregator
 	recorder := db.NewRecorder(database, sc, logger)
 	janitor := db.NewJanitor(database, dbPath, logger)
-	rollup := db.NewRollup(database, logger)
+	rollup := db.NewRollup(database, analyticsDatabase, logger)
 
 	// Paper trading (SQLite-backed)
-	store := paper.NewDBStore(database)
+	store := paper.NewDBStore(database, analyticsDatabase)
 	if err := store.LoadFromDB(context.Background()); err != nil {
 		logger.Error("failed to load positions from DB", "err", err)
 	}
@@ -88,11 +85,11 @@ func main() {
 	var asterDataAgent *dataagent.Service
 	if masterKey, keyErr := dataagent.ParseMasterKey(os.Getenv("ASTER_DATA_AGENT_MASTER_KEY")); keyErr != nil {
 		logger.Warn("Aster data agent disabled", "reason", keyErr)
-	} else if dataAgentStore, storeErr := dataagent.NewStore(database, masterKey); storeErr != nil {
+	} else if dataAgentStore, storeErr := dataagent.NewStore(database, operationalDatabase, masterKey); storeErr != nil {
 		logger.Warn("Aster data agent disabled", "reason", storeErr)
 	} else {
 		asterDataAgent = dataagent.NewService(
-			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, logger), time.Now,
+			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, operationalDatabase, logger), time.Now,
 		)
 	}
 	var asterReference *bracketcache.Cache
@@ -109,12 +106,12 @@ func main() {
 	}
 
 	// Live execution deps (non-custodial signing flow)
-	liveDeps := startLive(ctx, logger, database, sc, pac, hl, ast, dataagent.ExcludeOwner(asterDataAgent, referenceAccount))
+	liveDeps := startLive(ctx, logger, database, operationalDatabase, sc, pac, hl, ast, dataagent.ExcludeOwner(asterDataAgent, referenceAccount))
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
-	telegram := buildTelegramIntegration(logger, sc, database)
+	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)
 
-	srv := api.NewServer(ctx, logger, sc, executor, store, database, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
 	if asterDataAgent != nil {
 		srv.EnableAsterDataAgentProbe(dataagent.ExcludeProbeOwner(asterDataAgent, referenceAccount))
 	}

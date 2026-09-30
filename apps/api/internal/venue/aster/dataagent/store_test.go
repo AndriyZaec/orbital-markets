@@ -15,7 +15,7 @@ func TestStoreEncryptsAndRestoresKeysAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agents.db")
 	key := bytes.Repeat([]byte{0x42}, 32)
 	database := openAgentDB(t, path)
-	store, err := NewStore(database, key)
+	store, err := NewStore(database, database, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestStoreEncryptsAndRestoresKeysAcrossRestart(t *testing.T) {
 
 	database = openAgentDB(t, path)
 	t.Cleanup(func() { database.Close() })
-	restarted, err := NewStore(database, key)
+	restarted, err := NewStore(database, database, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +44,42 @@ func TestStoreEncryptsAndRestoresKeysAcrossRestart(t *testing.T) {
 	}
 	if bytes.Contains(ciphertext, want.PrivateKey) {
 		t.Fatal("persisted ciphertext contains plaintext key")
+	}
+}
+
+func TestStatusReadRemainsResponsiveWhileWriterIsOccupied(t *testing.T) {
+	handles, err := appdb.OpenHandles(filepath.Join(t.TempDir(), "agents.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handles.Close()
+
+	store, err := NewStore(handles.Writer, handles.Operational, bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := testRecord("probe-responsive", testOwner, testDataAgent, bytes.Repeat([]byte{0x11}, 32))
+	if err := store.SavePending(context.Background(), record, record.ApprovalNonce-1); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := handles.Writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("UPDATE aster_data_agents SET last_error = last_error WHERE probe_id = ?", record.ProbeID); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	status, err := store.StatusByOwner(ctx, record.Owner)
+	if err != nil {
+		t.Fatalf("Aster status read blocked by writer: %v", err)
+	}
+	if status.Status != StatusPending {
+		t.Fatalf("status = %q, want pending", status.Status)
 	}
 }
 
@@ -65,7 +101,7 @@ func TestStoreAuthenticatesAllImmutableMetadata(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			database := openAgentDB(t, filepath.Join(t.TempDir(), "agents.db"))
 			defer database.Close()
-			store, _ := NewStore(database, bytes.Repeat([]byte{1}, 32))
+			store, _ := NewStore(database, database, bytes.Repeat([]byte{1}, 32))
 			record := testRecord("probe-tamper", testOwner, testDataAgent, bytes.Repeat([]byte{3}, 32))
 			if err := store.SavePending(context.Background(), record, record.ApprovalNonce-1); err != nil {
 				t.Fatal(err)
@@ -83,12 +119,12 @@ func TestStoreAuthenticatesAllImmutableMetadata(t *testing.T) {
 func TestStoreRejectsWrongMasterKeyAndCrossOwnerLoad(t *testing.T) {
 	database := openAgentDB(t, filepath.Join(t.TempDir(), "agents.db"))
 	t.Cleanup(func() { database.Close() })
-	store, _ := NewStore(database, bytes.Repeat([]byte{1}, 32))
+	store, _ := NewStore(database, database, bytes.Repeat([]byte{1}, 32))
 	record := testRecord("probe-owner", testOwner, testDataAgent, bytes.Repeat([]byte{3}, 32))
 	if err := store.SavePending(context.Background(), record, record.ApprovalNonce-1); err != nil {
 		t.Fatal(err)
 	}
-	wrong, _ := NewStore(database, bytes.Repeat([]byte{2}, 32))
+	wrong, _ := NewStore(database, database, bytes.Repeat([]byte{2}, 32))
 	if _, err := wrong.Load(context.Background(), record.ProbeID); err == nil {
 		t.Fatal("wrong master key decrypted record")
 	}
@@ -100,7 +136,7 @@ func TestStoreRejectsWrongMasterKeyAndCrossOwnerLoad(t *testing.T) {
 func TestStoreReplacesOnlyExpiredPendingRecord(t *testing.T) {
 	database := openAgentDB(t, filepath.Join(t.TempDir(), "agents.db"))
 	t.Cleanup(func() { database.Close() })
-	store, _ := NewStore(database, bytes.Repeat([]byte{4}, 32))
+	store, _ := NewStore(database, database, bytes.Repeat([]byte{4}, 32))
 	first := testRecord("probe-old", testOwner, testDataAgent, bytes.Repeat([]byte{5}, 32))
 	if err := store.SavePending(context.Background(), first, first.ApprovalNonce-1); err != nil {
 		t.Fatal(err)
@@ -121,7 +157,7 @@ func TestStoreReplacesOnlyExpiredPendingRecord(t *testing.T) {
 		t.Run("does not replace "+string(status), func(t *testing.T) {
 			database := openAgentDB(t, filepath.Join(t.TempDir(), "agents.db"))
 			defer database.Close()
-			store, _ := NewStore(database, bytes.Repeat([]byte{4}, 32))
+			store, _ := NewStore(database, database, bytes.Repeat([]byte{4}, 32))
 			existing := testRecord("probe-existing", testOwner, testDataAgent, bytes.Repeat([]byte{7}, 32))
 			if err := store.SavePending(context.Background(), existing, existing.ApprovalNonce-1); err != nil {
 				t.Fatal(err)
@@ -141,7 +177,7 @@ func TestStoreRecoversInterruptedSubmissionAsUncertain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agents.db")
 	key := bytes.Repeat([]byte{0x44}, 32)
 	database := openAgentDB(t, path)
-	store, err := NewStore(database, key)
+	store, err := NewStore(database, database, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +192,7 @@ func TestStoreRecoversInterruptedSubmissionAsUncertain(t *testing.T) {
 
 	database = openAgentDB(t, path)
 	defer database.Close()
-	if _, err := NewStore(database, key); err != nil {
+	if _, err := NewStore(database, database, key); err != nil {
 		t.Fatal(err)
 	}
 	status, err := storeStatus(database, key, record.Owner)
@@ -166,7 +202,7 @@ func TestStoreRecoversInterruptedSubmissionAsUncertain(t *testing.T) {
 }
 
 func storeStatus(database *sql.DB, key []byte, owner string) (ProbeStatus, error) {
-	store, err := NewStore(database, key)
+	store, err := NewStore(database, database, key)
 	if err != nil {
 		return ProbeStatus{}, err
 	}

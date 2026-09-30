@@ -31,6 +31,7 @@ type AccountLink struct {
 
 type LinkService struct {
 	db           *sql.DB
+	reader       *sql.DB
 	botUsername  string
 	intentMu     sync.Mutex
 	intentWindow time.Time
@@ -38,9 +39,10 @@ type LinkService struct {
 	now          func() time.Time
 }
 
-func NewLinkService(database *sql.DB, botUsername string) *LinkService {
+func NewLinkService(writer, reader *sql.DB, botUsername string) *LinkService {
 	return &LinkService{
-		db:          database,
+		db:          writer,
+		reader:      reader,
 		botUsername: strings.TrimPrefix(strings.TrimSpace(botUsername), "@"),
 		now:         time.Now,
 	}
@@ -161,7 +163,7 @@ func (s *LinkService) ConsumeLinkIntent(ctx context.Context, token string, chatI
 func (s *LinkService) AccountLink(ctx context.Context, chatID int64) (AccountLink, bool, error) {
 	var link AccountLink
 	var linkedAt int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.reader.QueryRowContext(ctx, `
 		SELECT chat_id, account_pacifica, account_hyperliquid, linked_at
 		FROM telegram_account_links
 		WHERE chat_id = ?`, chatID,

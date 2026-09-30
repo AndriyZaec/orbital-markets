@@ -72,7 +72,7 @@ type opportunitySignalProjection struct {
 }
 
 func (s *Server) opportunitiesWithSignals(_ context.Context, opportunities []domain.Opportunity) ([]opportunityResponse, error) {
-	if s.db == nil || len(opportunities) == 0 {
+	if s.analyticsDB == nil || len(opportunities) == 0 {
 		return opportunityResponses(opportunities, nil, 0, 0, true, true), nil
 	}
 
@@ -308,7 +308,7 @@ func (s *Server) buildOpportunitySignals(
 	if checkSource {
 		var rollupRevision uint64
 		var sourceBucket int64
-		if err := s.db.QueryRowContext(ctx, `
+		if err := s.analyticsDB.QueryRowContext(ctx, `
 			SELECT revision, COALESCE((SELECT MAX(bucket_unix) FROM market_snapshots_1h), 0)
 			FROM rollup_revisions
 			WHERE name = 'market_snapshots_1h'`).Scan(&rollupRevision, &sourceBucket); err != nil {
@@ -320,7 +320,7 @@ func (s *Server) buildOpportunitySignals(
 	sourceChanged := source.rollupRevision != cached.rollupRevision || cached.fundingRows == nil
 	rowsRead := 0
 	if sourceChanged {
-		rows, err := s.db.QueryContext(ctx, `
+		rows, err := s.analyticsDB.QueryContext(ctx, `
 			SELECT venue, asset, bucket_unix, funding_avg
 			FROM market_snapshots_1h
 			WHERE bucket_unix >= ? AND bucket_unix <= ?
@@ -385,8 +385,8 @@ func (s *Server) logOpportunitySignalBuild(
 		"opportunities_enriched", enriched,
 		"duration_ms", time.Since(started).Milliseconds(),
 	}
-	if s.db != nil {
-		stats := s.db.Stats()
+	if s.analyticsDB != nil {
+		stats := s.analyticsDB.Stats()
 		args = append(args,
 			"db_open", stats.OpenConnections,
 			"db_in_use", stats.InUse,
