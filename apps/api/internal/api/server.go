@@ -28,7 +28,6 @@ type Server struct {
 	scanner              *scanner.Scanner
 	executor             *paper.Executor
 	store                *paper.DBStore
-	db                   *sql.DB
 	analyticsDB          *sql.DB
 	analyticsDBDisabled  bool
 	liveStore            *executor.Store // always available when DB exists — read-only live position access
@@ -86,7 +85,7 @@ func NewServer(
 	if live != nil && live.liveStore != nil {
 		ls = live.liveStore
 	} else {
-		ls = executor.NewStore(database, logger)
+		ls = executor.NewStore(database, database, logger)
 	}
 
 	s := &Server{
@@ -94,7 +93,6 @@ func NewServer(
 		scanner:       sc,
 		executor:      exec,
 		store:         store,
-		db:            database,
 		analyticsDB:   database,
 		liveStore:     ls,
 		live:          live,

@@ -344,7 +344,7 @@ func TestServiceRunsApprovedProbeAfterRestart(t *testing.T) {
 	key := bytes.Repeat([]byte{8}, 32)
 	now := time.Unix(1_800_000_000, 0)
 	database := openAgentDB(t, path)
-	store, _ := NewStore(database, key)
+	store, _ := NewStore(database, database, key)
 	firstVenue := &fakeVenue{report: successfulReport(&now)}
 	first := NewService(store, firstVenue, fakeExecutionChecker{matches: true}, func() time.Time { return now })
 	prepared := prepareProbe(t, first)
@@ -355,7 +355,7 @@ func TestServiceRunsApprovedProbeAfterRestart(t *testing.T) {
 
 	database = openAgentDB(t, path)
 	defer database.Close()
-	restartedStore, _ := NewStore(database, key)
+	restartedStore, _ := NewStore(database, database, key)
 	restartedVenue := &fakeVenue{report: successfulReport(&now)}
 	restarted := NewService(restartedStore, restartedVenue, fakeExecutionChecker{matches: true}, func() time.Time { return now })
 	report, err := restarted.Run(context.Background(), testOwner, testExecutionAgent)
@@ -369,7 +369,7 @@ func TestServiceUsesCurrentExecutionAgentAfterRotationAndRestart(t *testing.T) {
 	key := bytes.Repeat([]byte{0x31}, 32)
 	now := time.Unix(1_800_000_000, 0)
 	database := openAgentDB(t, path)
-	store, _ := NewStore(database, key)
+	store, _ := NewStore(database, database, key)
 	initialVenue := &fakeVenue{report: successfulReport(&now)}
 	initial := NewService(store, initialVenue, fakeExecutionChecker{
 		matches: true, expectedAgent: testExecutionAgent,
@@ -388,7 +388,7 @@ func TestServiceUsesCurrentExecutionAgentAfterRotationAndRestart(t *testing.T) {
 
 	database = openAgentDB(t, path)
 	defer database.Close()
-	restartedStore, _ := NewStore(database, key)
+	restartedStore, _ := NewStore(database, database, key)
 	rotatedVenue := &fakeVenue{report: successfulReport(&now)}
 	restarted := NewService(restartedStore, rotatedVenue, fakeExecutionChecker{
 		matches: true, expectedAgent: testRotatedExecutionAgent,
@@ -452,7 +452,7 @@ func newLifecycleService(t *testing.T) (*Service, *Store, *time.Time) {
 	t.Helper()
 	database := openAgentDB(t, filepath.Join(t.TempDir(), "agents.db"))
 	t.Cleanup(func() { database.Close() })
-	store, err := NewStore(database, bytes.Repeat([]byte{9}, 32))
+	store, err := NewStore(database, database, bytes.Repeat([]byte{9}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -490,9 +490,9 @@ func newSignalTestDB(t *testing.T) *sql.DB {
 
 func newSignalTestServer(database *sql.DB) *Server {
 	return &Server{
-		ctx:    context.Background(),
-		db:     database,
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ctx:         context.Background(),
+		analyticsDB: database,
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 

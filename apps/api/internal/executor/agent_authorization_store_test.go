@@ -17,7 +17,7 @@ func TestAgentAuthorizationPersistsAndCannotMoveBetweenOwners(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx := context.Background()
 	const (
 		venue = "hyperliquid"
@@ -48,7 +48,7 @@ func TestAgentAuthorizationCanBeDeletedAfterRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx := context.Background()
 	const (
 		venue = "pacifica"
@@ -76,7 +76,7 @@ func TestDeletingStaleAgentDoesNotRemoveCurrentAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx := context.Background()
 	const (
 		venue        = "pacifica"

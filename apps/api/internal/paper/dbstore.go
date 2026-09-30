@@ -11,14 +11,16 @@ import (
 
 // DBStore persists paper positions to SQLite and keeps an in-memory cache for fast reads.
 type DBStore struct {
-	*Store   // embed in-memory store for fast reads
-	queries *sqlc.Queries
+	*Store      // embed in-memory store for fast reads
+	queries     *sqlc.Queries
+	readQueries *sqlc.Queries
 }
 
-func NewDBStore(database *sql.DB) *DBStore {
+func NewDBStore(writer, reader *sql.DB) *DBStore {
 	return &DBStore{
-		Store:   NewStore(),
-		queries: sqlc.New(database),
+		Store:       NewStore(),
+		queries:     sqlc.New(writer),
+		readQueries: sqlc.New(reader),
 	}
 }
 
@@ -36,30 +38,30 @@ func (s *DBStore) Add(pos *Position) {
 	}
 
 	s.queries.InsertPosition(ctx, sqlc.InsertPositionParams{
-		ID:               pos.ID,
-		PlanID:           pos.PlanID,
-		OpportunityID:    pos.OpportunityID,
-		Asset:            pos.Asset,
-		Direction:        string(pos.Direction),
-		VenueA:           pos.VenuePair.VenueA,
-		VenueB:           pos.VenuePair.VenueB,
-		State:            string(pos.State),
-		TargetNotional:   pos.TargetNotional,
-		EntrySpread:      pos.EntrySpread,
-		HedgeMismatch:    pos.HedgeMismatch,
-		CloseReason:      string(pos.CloseReason),
-		RiskTier:         string(pos.RiskTier),
-		PricePnl:         pos.PricePnL,
-		FundingPnl:       pos.FundingPnL,
-		TotalPnl:         pos.TotalPnL,
-		RealizedPnl:      pos.RealizedPnL,
+		ID:                pos.ID,
+		PlanID:            pos.PlanID,
+		OpportunityID:     pos.OpportunityID,
+		Asset:             pos.Asset,
+		Direction:         string(pos.Direction),
+		VenueA:            pos.VenuePair.VenueA,
+		VenueB:            pos.VenuePair.VenueB,
+		State:             string(pos.State),
+		TargetNotional:    pos.TargetNotional,
+		EntrySpread:       pos.EntrySpread,
+		HedgeMismatch:     pos.HedgeMismatch,
+		CloseReason:       string(pos.CloseReason),
+		RiskTier:          string(pos.RiskTier),
+		PricePnl:          pos.PricePnL,
+		FundingPnl:        pos.FundingPnL,
+		TotalPnl:          pos.TotalPnL,
+		RealizedPnl:       pos.RealizedPnL,
 		EstBreakEvenHours: pos.EstBreakEvenHours,
 		BreakEvenReached:  boolToInt(pos.BreakEvenReached),
-		HoldHours:        pos.HoldHours,
-		CreatedAt:        pos.CreatedAt.Format(time.RFC3339),
-		OpenedAt:         openedAt,
-		ClosedAt:         closedAt,
-		UpdatedAt:        pos.UpdatedAt.Format(time.RFC3339),
+		HoldHours:         pos.HoldHours,
+		CreatedAt:         pos.CreatedAt.Format(time.RFC3339),
+		OpenedAt:          openedAt,
+		ClosedAt:          closedAt,
+		UpdatedAt:         pos.UpdatedAt.Format(time.RFC3339),
 	})
 }
 
@@ -77,22 +79,22 @@ func (s *DBStore) Update(pos *Position) {
 	}
 
 	s.queries.UpdatePosition(ctx, sqlc.UpdatePositionParams{
-		State:            string(pos.State),
-		EntrySpread:      pos.EntrySpread,
-		HedgeMismatch:    pos.HedgeMismatch,
-		CloseReason:      string(pos.CloseReason),
-		RiskTier:         string(pos.RiskTier),
-		PricePnl:         pos.PricePnL,
-		FundingPnl:       pos.FundingPnL,
-		TotalPnl:         pos.TotalPnL,
-		RealizedPnl:      pos.RealizedPnL,
+		State:             string(pos.State),
+		EntrySpread:       pos.EntrySpread,
+		HedgeMismatch:     pos.HedgeMismatch,
+		CloseReason:       string(pos.CloseReason),
+		RiskTier:          string(pos.RiskTier),
+		PricePnl:          pos.PricePnL,
+		FundingPnl:        pos.FundingPnL,
+		TotalPnl:          pos.TotalPnL,
+		RealizedPnl:       pos.RealizedPnL,
 		EstBreakEvenHours: pos.EstBreakEvenHours,
 		BreakEvenReached:  boolToInt(pos.BreakEvenReached),
-		HoldHours:        pos.HoldHours,
-		OpenedAt:         openedAt,
-		ClosedAt:         closedAt,
-		UpdatedAt:        pos.UpdatedAt.Format(time.RFC3339),
-		ID:               pos.ID,
+		HoldHours:         pos.HoldHours,
+		OpenedAt:          openedAt,
+		ClosedAt:          closedAt,
+		UpdatedAt:         pos.UpdatedAt.Format(time.RFC3339),
+		ID:                pos.ID,
 	})
 
 	// Persist fills and events
@@ -138,7 +140,7 @@ func (s *DBStore) persistEvents(ctx context.Context, pos *Position) {
 
 // Analytics returns the queries for direct analytics access.
 func (s *DBStore) Queries() *sqlc.Queries {
-	return s.queries
+	return s.readQueries
 }
 
 func boolToInt(b bool) int64 {
@@ -190,32 +192,32 @@ func intToBool(i int64) bool {
 
 // LoadFromDB loads all positions from SQLite into memory on startup.
 func (s *DBStore) LoadFromDB(ctx context.Context) error {
-	rows, err := s.queries.ListPositions(ctx)
+	rows, err := s.readQueries.ListPositions(ctx)
 	if err != nil {
 		return err
 	}
 
 	for _, row := range rows {
 		pos := &Position{
-			ID:              row.ID,
-			PlanID:          row.PlanID,
-			OpportunityID:   row.OpportunityID,
-			Asset:           row.Asset,
-			Direction:       domain.Direction(row.Direction),
-			VenuePair:       domain.VenuePair{VenueA: row.VenueA, VenueB: row.VenueB},
-			State:           ExecState(row.State),
-			TargetNotional:  row.TargetNotional,
-			EntrySpread:     row.EntrySpread,
-			HedgeMismatch:   row.HedgeMismatch,
-			CloseReason:     CloseReason(row.CloseReason),
-			RiskTier:        domain.RiskTier(row.RiskTier),
-			PricePnL:        row.PricePnl,
-			FundingPnL:      row.FundingPnl,
-			TotalPnL:        row.TotalPnl,
-			RealizedPnL:     row.RealizedPnl,
+			ID:                row.ID,
+			PlanID:            row.PlanID,
+			OpportunityID:     row.OpportunityID,
+			Asset:             row.Asset,
+			Direction:         domain.Direction(row.Direction),
+			VenuePair:         domain.VenuePair{VenueA: row.VenueA, VenueB: row.VenueB},
+			State:             ExecState(row.State),
+			TargetNotional:    row.TargetNotional,
+			EntrySpread:       row.EntrySpread,
+			HedgeMismatch:     row.HedgeMismatch,
+			CloseReason:       CloseReason(row.CloseReason),
+			RiskTier:          domain.RiskTier(row.RiskTier),
+			PricePnL:          row.PricePnl,
+			FundingPnL:        row.FundingPnl,
+			TotalPnL:          row.TotalPnl,
+			RealizedPnL:       row.RealizedPnl,
 			EstBreakEvenHours: row.EstBreakEvenHours,
-			BreakEvenReached: intToBool(row.BreakEvenReached),
-			HoldHours:       row.HoldHours,
+			BreakEvenReached:  intToBool(row.BreakEvenReached),
+			HoldHours:         row.HoldHours,
 		}
 		pos.CreatedAt, _ = time.Parse(time.RFC3339, row.CreatedAt)
 		pos.UpdatedAt, _ = time.Parse(time.RFC3339, row.UpdatedAt)
@@ -229,7 +231,7 @@ func (s *DBStore) LoadFromDB(ctx context.Context) error {
 		}
 
 		// Load fills
-		fills, _ := s.queries.GetFillsByPosition(ctx, pos.ID)
+		fills, _ := s.readQueries.GetFillsByPosition(ctx, pos.ID)
 		for _, f := range fills {
 			filledAt, _ := time.Parse(time.RFC3339, f.FilledAt)
 			fill := &Fill{
@@ -250,7 +252,7 @@ func (s *DBStore) LoadFromDB(ctx context.Context) error {
 		}
 
 		// Load events
-		events, _ := s.queries.GetEventsByPosition(ctx, pos.ID)
+		events, _ := s.readQueries.GetEventsByPosition(ctx, pos.ID)
 		for _, e := range events {
 			at, _ := time.Parse(time.RFC3339, e.At)
 			pos.Events = append(pos.Events, Event{

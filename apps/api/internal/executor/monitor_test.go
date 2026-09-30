@@ -119,7 +119,7 @@ func TestMonitorPersistsNativeVenueLiquidationPrices(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := NewStore(database, logger)
+	store := NewStore(database, database, logger)
 	position, err := store.GetPosition(context.Background(), "position-1")
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestMonitorPersistsEstimatedFundingFromBothLegs(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := NewStore(database, logger)
+	store := NewStore(database, database, logger)
 	position, err := store.GetPosition(context.Background(), "position-1")
 	if err != nil {
 		t.Fatal(err)

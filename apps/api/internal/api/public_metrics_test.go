@@ -16,7 +16,7 @@ func TestPublicMetricsExposeOnlyTotalVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	server := &Server{db: database}
+	server := &Server{analyticsDB: database}
 	response := httptest.NewRecorder()
 
 	server.handlePublicMetrics(response, httptest.NewRequest(http.MethodGet, "/api/v1/public/metrics", nil))

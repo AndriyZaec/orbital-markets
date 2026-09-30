@@ -17,7 +17,7 @@ func TestLinkIntentIsHashedSingleUseAndPersistsAccountWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	service := NewLinkService(database, "@orbital_test_bot")
+	service := NewLinkService(database, database, "@orbital_test_bot")
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 
@@ -76,7 +76,7 @@ func TestExpiredLinkIntentCannotBeConsumed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	service := NewLinkService(database, "orbital_test_bot")
+	service := NewLinkService(database, database, "orbital_test_bot")
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	deepLink, _, err := service.CreateLinkIntent(context.Background(), "sol-account", "0xabc")
@@ -96,7 +96,7 @@ func TestRelinkingChatReplacesWatchedAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	service := NewLinkService(database, "orbital_test_bot")
+	service := NewLinkService(database, database, "orbital_test_bot")
 	ctx := context.Background()
 
 	for _, accounts := range [][2]string{{"sol-a", "0xaaa"}, {"sol-b", "0xbbb"}} {
@@ -122,7 +122,7 @@ func TestLinkIntentWritesAreRateLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	service := NewLinkService(database, "orbital_test_bot")
+	service := NewLinkService(database, database, "orbital_test_bot")
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 

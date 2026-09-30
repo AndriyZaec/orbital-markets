@@ -100,7 +100,7 @@ func TestTelegramLinkIntentRouteRemainsBehindJWTMiddleware(t *testing.T) {
 	defer database.Close()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sc := scanner.New(logger)
-	store := paper.NewDBStore(database)
+	store := paper.NewDBStore(database, database)
 	server := NewServer(
 		context.Background(), logger, sc, paper.NewExecutor(logger, store, sc), store,
 		database, nil, "jwt-secret", "",

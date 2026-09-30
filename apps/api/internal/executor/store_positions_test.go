@@ -36,7 +36,7 @@ func TestListRecentActivePositionsForAccountsExcludesHistoryAndAppliesLimit(t *t
 		}
 	}
 
-	store := executor.NewStore(database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := executor.NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	positions, err := store.ListRecentActivePositionsForAccounts(
 		context.Background(),
 		" sol-owner ",
@@ -48,5 +48,48 @@ func TestListRecentActivePositionsForAccountsExcludesHistoryAndAppliesLimit(t *t
 	}
 	if len(positions) != 2 || positions[0].State != "pending" || positions[1].State != "closing" {
 		t.Fatalf("positions = %+v, want two newest active states", positions)
+	}
+}
+
+func TestPositionReadsRemainResponsiveWhileWriterIsOccupied(t *testing.T) {
+	handles, err := appdb.OpenHandles(filepath.Join(t.TempDir(), "positions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handles.Close()
+
+	if _, err := handles.Writer.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			notional, leverage, started_at, updated_at,
+			account_pacifica, account_hyperliquid
+		) VALUES ('position', 'plan', 'opportunity', 'SOL', 'pacifica', 'hyperliquid',
+			'open', 1000, 3, '2026-09-30T12:00:00Z', '2026-09-30T12:00:00Z',
+			'sol-owner', '0xevm')`); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := handles.Writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("UPDATE live_positions SET updated_at = updated_at WHERE id = 'position'"); err != nil {
+		t.Fatal(err)
+	}
+
+	store := executor.NewStore(
+		handles.Writer,
+		handles.Operational,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	positions, err := store.ListPositionsForAccounts(ctx, "sol-owner", "0xevm")
+	if err != nil {
+		t.Fatalf("position read blocked by writer: %v", err)
+	}
+	if len(positions) != 1 || positions[0].ID != "position" {
+		t.Fatalf("positions = %+v, want committed position", positions)
 	}
 }

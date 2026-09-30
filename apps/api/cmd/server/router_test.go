@@ -19,7 +19,7 @@ func TestRootHandlerReturnsAPIDirectlyWhenTelegramDisabled(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil)
+	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil, nil)
 	handler := buildRootHandler(apiHandler, integration)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	response := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestRootHandlerSeparatesTelegramWebhookFromAPI(t *testing.T) {
 		apiCalls++
 		w.WriteHeader(http.StatusNoContent)
 	})
-	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil)
+	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil, nil)
 	handler := buildRootHandler(apiHandler, integration)
 
 	apiRequest := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -67,7 +67,7 @@ func TestRootHandlerDoesNotExposeMisconfiguredTelegramRoute(t *testing.T) {
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	})
-	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil)
+	integration := buildTelegramIntegration(testLogger(), scanner.New(testLogger()), nil, nil)
 	handler := buildRootHandler(apiHandler, integration)
 
 	request := httptest.NewRequest(http.MethodPost, "/telegram/webhook", nil)

@@ -177,7 +177,7 @@ func TestExcludedOwnerCannotUseGenericReader(t *testing.T) {
 
 func TestReaderReportsUnreadableCredentialWithoutCallingAster(t *testing.T) {
 	store, now := approvedReaderService(t)
-	wrongKeyStore, err := NewStore(store.db, bytes.Repeat([]byte{0x7f}, 32))
+	wrongKeyStore, err := NewStore(store.db, store.reader, bytes.Repeat([]byte{0x7f}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}

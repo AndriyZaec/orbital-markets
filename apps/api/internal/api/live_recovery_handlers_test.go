@@ -824,7 +824,7 @@ func newResidualExposureServer(t *testing.T) (*Server, *sql.DB) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	liveStore := executor.NewStore(database, logger)
+	liveStore := executor.NewStore(database, database, logger)
 	modules, err := venue.NewLiveModuleRegistry(pacificlive.NewLiveModule(recoveryTestLotSizes{}))
 	if err != nil {
 		t.Fatal(err)
