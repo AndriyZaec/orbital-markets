@@ -33,6 +33,7 @@ var (
 	ErrNotApproved            = errors.New("Aster data-agent probe is not approved")
 	ErrCredentialUnreadable   = errors.New("Aster data-agent credential cannot be decrypted; restore ASTER_DATA_AGENT_MASTER_KEY")
 	ErrReadRejected           = errors.New("Aster rejected the data-agent read")
+	ErrUnsafePermissions      = errors.New("Aster data agent is not strictly read-only")
 	ErrExecutionAgentMismatch = errors.New("current local Aster execution-agent authorization does not match")
 	ErrUnavailable            = errors.New("Aster data-agent probe is temporarily unavailable")
 	ErrApprovalRejected       = errors.New("Aster approval rejected")

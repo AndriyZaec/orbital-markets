@@ -20,6 +20,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/bracketcache"
 )
 
 type Server struct {
@@ -28,6 +29,8 @@ type Server struct {
 	executor             *paper.Executor
 	store                *paper.DBStore
 	db                   *sql.DB
+	analyticsDB          *sql.DB
+	analyticsDBDisabled  bool
 	liveStore            *executor.Store // always available when DB exists — read-only live position access
 	live                 *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
 	closeMarkets         closeMarketSource
@@ -39,9 +42,11 @@ type Server struct {
 	productAnalytics     *analytics.Emitter
 	analyticsAccessToken string
 	asterDataAgent       AsterDataAgentProbe
+	asterReference       *bracketcache.Cache
 	metricsMu            sync.Mutex
 	metricsCache         *analytics.LiveMetrics
 	metricsCachedAt      time.Time
+	publicMetricsLogAt   time.Time
 	signals              opportunitySignalProjection
 	historyCache         *historyCache
 }
@@ -54,6 +59,15 @@ func (s *Server) EnableProductAnalytics(emitter *analytics.Emitter) {
 
 func (s *Server) EnableAnalyticsAccessToken(token string) {
 	s.analyticsAccessToken = token
+}
+
+func (s *Server) EnableAnalyticsDatabase(database *sql.DB) {
+	s.analyticsDB = database
+	s.analyticsDBDisabled = database == nil
+}
+
+func (s *Server) EnableAsterReferenceLeverage(cache *bracketcache.Cache) {
+	s.asterReference = cache
 }
 
 func NewServer(
@@ -81,6 +95,7 @@ func NewServer(
 		executor:      exec,
 		store:         store,
 		db:            database,
+		analyticsDB:   database,
 		liveStore:     ls,
 		live:          live,
 		closeMarkets:  sc,
@@ -196,7 +211,8 @@ const (
 )
 
 type marketLeverage struct {
-	maximum int
+	marketKey string
+	maximum   int
 }
 
 func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
@@ -210,18 +226,22 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	opps := s.scanner.Opportunities()
+	var asterReference bracketcache.Snapshot
+	if s.asterReference != nil {
+		asterReference = s.asterReference.Snapshot()
+	}
 	markets := make(map[string]marketLeverage)
 	for _, snapshot := range s.scanner.MarketData(r.Context()) {
 		key := strings.ToLower(snapshot.Venue) + "\x00" + strings.ToUpper(snapshot.Asset)
-		markets[key] = marketLeverage{maximum: snapshot.MaxLeverage}
+		markets[key] = marketLeverage{marketKey: snapshot.MarketKey, maximum: snapshot.MaxLeverage}
 	}
 	for i := range opps {
 		keyA := strings.ToLower(opps[i].VenuePair.VenueA) + "\x00" + strings.ToUpper(opps[i].Asset)
 		keyB := strings.ToLower(opps[i].VenuePair.VenueB) + "\x00" + strings.ToUpper(opps[i].Asset)
 		marketA, foundA := markets[keyA]
 		marketB, foundB := markets[keyB]
-		capabilityA := publicLeverageCapability(marketA, foundA, opps[i].RecommendedNotional)
-		capabilityB := publicLeverageCapability(marketB, foundB, opps[i].RecommendedNotional)
+		capabilityA := publicLeverageCapability(opps[i].VenuePair.VenueA, marketA, foundA, opps[i].RecommendedNotional, asterReference)
+		capabilityB := publicLeverageCapability(opps[i].VenuePair.VenueB, marketB, foundB, opps[i].RecommendedNotional, asterReference)
 		opps[i].LeverageCapabilities = map[string]domain.LeverageCapability{
 			opps[i].VenuePair.VenueA: capabilityA,
 			opps[i].VenuePair.VenueB: capabilityB,
@@ -317,8 +337,20 @@ func writePlanError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
-func publicLeverageCapability(market marketLeverage, found bool, notional float64) domain.LeverageCapability {
+func publicLeverageCapability(
+	venueName string,
+	market marketLeverage,
+	found bool,
+	notional float64,
+	asterReference bracketcache.Snapshot,
+) domain.LeverageCapability {
+	if strings.EqualFold(venueName, "aster") && found {
+		return asterReference.Capability(market.marketKey, notional)
+	}
 	if !found || market.maximum <= 0 {
+		if strings.EqualFold(venueName, "aster") {
+			return domain.LeverageCapability{Status: domain.LeverageCapabilityUnsupported, RequestedNotional: notional, Reason: domain.LeverageReasonReferenceUnavailable}
+		}
 		return domain.LeverageCapability{Status: domain.LeverageCapabilityMissing, RequestedNotional: notional, Reason: domain.LeverageReasonBracketMissing}
 	}
 	maximum := market.maximum

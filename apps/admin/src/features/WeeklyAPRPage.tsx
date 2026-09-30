@@ -2,10 +2,20 @@ import { useEffect, useMemo, useState } from 'react'
 import { getWeeklyAPR, type WeeklyAPRReport, type WeeklyAPRRow } from '../api'
 
 type SortMetric = 'peak' | 'average'
+type SortDirection = 'asc' | 'desc'
+
+interface RankedRow {
+  row: WeeklyAPRRow
+  rank: number
+}
+
+interface WeeklyGroup {
+  weekStart: string
+  rows: WeeklyAPRRow[]
+}
 
 export function WeeklyAPRPage() {
   const [data, setData] = useState<WeeklyAPRReport | null>(null)
-  const [sortMetric, setSortMetric] = useState<SortMetric>('peak')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -20,7 +30,7 @@ export function WeeklyAPRPage() {
     return () => controller.abort()
   }, [])
 
-  const rows = useMemo(() => weeklyTopFive(data?.rows ?? [], sortMetric), [data, sortMetric])
+  const weeks = useMemo(() => groupWeeklyRows(data?.rows ?? []), [data])
 
   return (
     <div className="feature-page">
@@ -28,58 +38,26 @@ export function WeeklyAPRPage() {
         <div>
           <span className="panel-kicker">Funding intelligence</span>
           <h2>Weekly APR records</h2>
-          <p>Top five funding spreads per UTC calendar week, calculated from hourly venue snapshots.</p>
+          <p>Top five funding spreads for each UTC week. The current week is week-to-date; averages preserve the peak direction.</p>
         </div>
-        {data && <span className="count-badge">Updated {new Date(data.generated_at).toLocaleString()}</span>}
-      </div>
-
-      <div className="apr-toolbar">
-        <div>
-          <span>Rank each week by</span>
-          <div className="sort-toggle" role="group" aria-label="Weekly APR ranking metric">
-            <button type="button" aria-pressed={sortMetric === 'peak'} className={sortMetric === 'peak' ? 'active' : ''} onClick={() => setSortMetric('peak')}>Peak APR</button>
-            <button type="button" aria-pressed={sortMetric === 'average'} className={sortMetric === 'average' ? 'active' : ''} onClick={() => setSortMetric('average')}>7d Avg APR</button>
-          </div>
-        </div>
-        <p>Direction is captured at the peak APR record. The weekly average preserves that fixed direction.</p>
+        {loading
+          ? <span className="loading-badge" role="status"><span className="mini-loader" />Loading</span>
+          : data && <span className="count-badge">Updated {new Date(data.generated_at).toLocaleString()}</span>}
       </div>
 
       {error && <p className="inline-error">{error}</p>}
-      <div className="table-wrap apr-table">
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>#</th>
-              <th>Ticker</th>
-              <th>Venue long</th>
-              <th>Venue short</th>
-              <th className="numeric">Max APR record</th>
-              <th className="numeric">Weekly average APR</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ row, rank }) => (
-              <tr key={`${row.week_start}-${row.ticker}-${row.venue_long}-${row.venue_short}`}>
-                <td className="week-cell">{formatWeek(row.week_start)}</td>
-                <td className="rank-cell">{rank}</td>
-                <td className="ticker-cell">{row.ticker}</td>
-                <td><Venue value={row.venue_long} side="long" /></td>
-                <td><Venue value={row.venue_short} side="short" /></td>
-                <APRCell value={row.max_apr} emphasized={sortMetric === 'peak'} />
-                <APRCell value={row.weekly_average_apr} emphasized={sortMetric === 'average'} />
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {loading && <div className="table-state">Loading weekly APR records...</div>}
-        {!loading && !error && rows.length === 0 && <div className="table-state">No hourly funding records are available yet.</div>}
+      {!loading && !error && weeks.length === 0 && <div className="table-wrap"><div className="table-state">No hourly funding records are available yet.</div></div>}
+
+      <div className="apr-weeks">
+        {weeks.map((week) => (
+          <WeeklyTable key={week.weekStart} week={week} />
+        ))}
       </div>
     </div>
   )
 }
 
-function weeklyTopFive(rows: WeeklyAPRRow[], metric: SortMetric): Array<{ row: WeeklyAPRRow; rank: number }> {
+export function groupWeeklyRows(rows: WeeklyAPRRow[]): WeeklyGroup[] {
   const weeks = new Map<string, WeeklyAPRRow[]>()
   for (const row of rows) {
     const week = weeks.get(row.week_start) ?? []
@@ -89,16 +67,102 @@ function weeklyTopFive(rows: WeeklyAPRRow[], metric: SortMetric): Array<{ row: W
 
   return [...weeks.entries()]
     .sort(([left], [right]) => right.localeCompare(left))
-    .flatMap(([, weekRows]) => weekRows
-      .sort((left, right) => metricValue(right, metric) - metricValue(left, metric)
-        || right.max_apr - left.max_apr
-        || left.ticker.localeCompare(right.ticker))
-      .slice(0, 5)
-      .map((row, index) => ({ row, rank: index + 1 })))
+    .map(([weekStart, weekRows]) => ({ weekStart, rows: weekRows }))
+}
+
+export function rankWeeklyRows(rows: WeeklyAPRRow[], metric: SortMetric, direction: SortDirection): RankedRow[] {
+  const ranked = [...rows]
+    .sort((left, right) => metricValue(right, metric) - metricValue(left, metric)
+      || right.max_apr - left.max_apr
+      || left.ticker.localeCompare(right.ticker))
+    .slice(0, 5)
+    .map((row, index) => ({ row, rank: index + 1 }))
+  return direction === 'desc' ? ranked : ranked.reverse()
 }
 
 function metricValue(row: WeeklyAPRRow, metric: SortMetric): number {
   return metric === 'peak' ? row.max_apr : row.weekly_average_apr
+}
+
+function WeeklyTable({ week }: { week: WeeklyGroup }) {
+  const [sortMetric, setSortMetric] = useState<SortMetric>('peak')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+  const rows = useMemo(() => rankWeeklyRows(week.rows, sortMetric, sortDirection), [sortDirection, sortMetric, week.rows])
+  const headingID = `week-${week.weekStart}`
+
+  const handleSort = (metric: SortMetric) => {
+    if (metric === sortMetric) {
+      setSortDirection((direction) => direction === 'desc' ? 'asc' : 'desc')
+      return
+    }
+    setSortMetric(metric)
+    setSortDirection('desc')
+  }
+
+  return (
+    <section className="apr-week">
+      <div className="apr-week-heading">
+        <span>UTC week</span>
+        <h3 id={headingID}>{formatWeek(week.weekStart)}</h3>
+      </div>
+      <div className="table-wrap apr-table">
+        <table aria-labelledby={headingID}>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Ticker</th>
+              <SortHeader metric="peak" label="Max APR record" current={sortMetric} direction={sortDirection} onSort={handleSort} />
+              <SortHeader metric="average" label="Week avg APR" current={sortMetric} direction={sortDirection} onSort={handleSort} />
+              <th>Venue long</th>
+              <th>Venue short</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ row, rank }) => (
+              <tr key={`${row.ticker}-${row.venue_long}-${row.venue_short}`}>
+                <td className="rank-cell">{rank}</td>
+                <td className="ticker-cell">{row.ticker}</td>
+                <APRCell value={row.max_apr} emphasized={sortMetric === 'peak'} />
+                <APRCell value={row.weekly_average_apr} emphasized={sortMetric === 'average'} />
+                <td><Venue value={row.venue_long} side="long" /></td>
+                <td><Venue value={row.venue_short} side="short" /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+function SortHeader({ metric, label, current, direction, onSort }: {
+  metric: SortMetric
+  label: string
+  current: SortMetric
+  direction: SortDirection
+  onSort: (metric: SortMetric) => void
+}) {
+  const active = metric === current
+  return (
+    <th className={`numeric sortable-header${active ? ' active' : ''}`} aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" onClick={() => onSort(metric)}>
+        {label}
+        <SortIndicator active={active} direction={direction} />
+      </button>
+    </th>
+  )
+}
+
+function SortIndicator({ active, direction }: { active: boolean; direction: SortDirection }) {
+  return active ? (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+      <path d={direction === 'desc' ? 'M2 4l3 3 3-3' : 'M2 6l3-3 3 3'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ) : (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" className="inactive-sort">
+      <path d="M3 4l2-2 2 2M3 6l2 2 2-2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }
 
 function formatWeek(value: string): string {
@@ -106,7 +170,7 @@ function formatWeek(value: string): string {
   const end = new Date(start)
   end.setUTCDate(end.getUTCDate() + 6)
   const startLabel = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
-  const endLabel = end.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+  const endLabel = end.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
   return `${startLabel} - ${endLabel}`
 }
 

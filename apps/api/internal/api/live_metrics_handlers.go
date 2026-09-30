@@ -2,6 +2,8 @@ package api
 
 import (
 	"crypto/subtle"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,6 +23,7 @@ func (s *Server) handleLiveAnalytics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := s.liveMetrics(r)
 	if err != nil {
+		s.logger.Error("live analytics: load failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load live analytics"})
 		return
 	}
@@ -33,8 +36,15 @@ func (s *Server) handleWeeklyAPR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report, err := analytics.LoadWeeklyAPR(r.Context(), s.db, time.Now(), weeklyAPRWeeks)
+	database, err := requireMetricsDatabase(s.metricsDatabase())
 	if err != nil {
+		s.logger.Error("weekly APR: load failed", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "weekly APR temporarily unavailable"})
+		return
+	}
+	report, err := analytics.LoadWeeklyAPR(r.Context(), database, time.Now(), weeklyAPRWeeks)
+	if err != nil {
+		s.logger.Error("weekly APR: load failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load weekly APR"})
 		return
 	}
@@ -47,12 +57,24 @@ func (s *Server) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	metrics, err := s.liveMetrics(r)
 	if err != nil {
+		s.logPublicMetricsError(err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load public metrics"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"total_volume": fmt.Sprintf("%.2f", metrics.Volume.AllTime.GrossVenueVolume),
 	})
+}
+
+func (s *Server) logPublicMetricsError(err error) {
+	now := time.Now()
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	if now.Sub(s.publicMetricsLogAt) < liveMetricsCacheTTL {
+		return
+	}
+	s.publicMetricsLogAt = now
+	s.logger.Error("public metrics: load failed", "err", err)
 }
 
 func (s *Server) liveMetrics(r *http.Request) (*analytics.LiveMetrics, error) {
@@ -63,7 +85,11 @@ func (s *Server) liveMetrics(r *http.Request) (*analytics.LiveMetrics, error) {
 		return s.metricsCache, nil
 	}
 
-	metrics, err := analytics.LoadLiveMetrics(r.Context(), s.db, now)
+	database, err := requireMetricsDatabase(s.metricsDatabase())
+	if err != nil {
+		return nil, err
+	}
+	metrics, err := analytics.LoadLiveMetrics(r.Context(), database, now)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +97,23 @@ func (s *Server) liveMetrics(r *http.Request) (*analytics.LiveMetrics, error) {
 	s.metricsCache = metrics
 	s.metricsCachedAt = now
 	return metrics, nil
+}
+
+func (s *Server) metricsDatabase() *sql.DB {
+	if s.analyticsDBDisabled {
+		return nil
+	}
+	if s.analyticsDB != nil {
+		return s.analyticsDB
+	}
+	return s.db
+}
+
+func requireMetricsDatabase(database *sql.DB) (*sql.DB, error) {
+	if database == nil {
+		return nil, errors.New("isolated analytics database unavailable")
+	}
+	return database, nil
 }
 
 func (s *Server) analyticsTokenMatches(r *http.Request) bool {
