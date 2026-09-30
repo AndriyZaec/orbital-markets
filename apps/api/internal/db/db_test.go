@@ -1,9 +1,68 @@
 package db
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestOpenHandlesIsolatesOperationalReadsFromWriterAndAnalytics(t *testing.T) {
+	handles, err := OpenHandles(filepath.Join(t.TempDir(), "lanes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handles.Close()
+
+	if got := handles.Writer.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("writer MaxOpenConnections = %d, want 1", got)
+	}
+	if _, err := handles.Writer.Exec("CREATE TABLE lane_test (value INTEGER); INSERT INTO lane_test VALUES (1)"); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := handles.Writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("INSERT INTO lane_test VALUES (2)"); err != nil {
+		t.Fatal(err)
+	}
+	analyticsConn, err := handles.Analytics.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var count int
+	if err := handles.Operational.QueryRowContext(ctx, "SELECT COUNT(*) FROM lane_test").Scan(&count); err != nil {
+		t.Fatalf("operational read blocked by writer: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("operational count = %d, want committed count 1", count)
+	}
+	if err := analyticsConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := handles.Operational.QueryRowContext(ctx, "SELECT COUNT(*) FROM lane_test").Scan(&count); err != nil {
+		t.Fatalf("operational read after commit failed: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("operational count after commit = %d, want 2", count)
+	}
+
+	if _, err := handles.Operational.Exec("INSERT INTO lane_test VALUES (3)"); err == nil {
+		t.Fatal("operational reader accepted a write")
+	}
+	if _, err := handles.Analytics.Exec("INSERT INTO lane_test VALUES (3)"); err == nil {
+		t.Fatal("analytics reader accepted a write")
+	}
+}
 
 func TestOpenSerializesSQLiteAccessWithConnectionPragmas(t *testing.T) {
 	database, err := Open(filepath.Join(t.TempDir(), "concurrent.db"))
