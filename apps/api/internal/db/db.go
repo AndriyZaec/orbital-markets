@@ -32,7 +32,7 @@ func OpenHandles(path string) (*Handles, error) {
 		writer.Close()
 		return nil, fmt.Errorf("open operational reader: %w", err)
 	}
-	analytics, err := openReadOnly(path, 1, 250)
+	analytics, err := openReadOnly(path, 4, 250)
 	if err != nil {
 		operational.Close()
 		writer.Close()

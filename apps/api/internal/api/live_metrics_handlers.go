@@ -13,7 +13,8 @@ import (
 )
 
 const liveMetricsCacheTTL = time.Minute
-const weeklyAPRWeeks = 12
+const weeklyAPRCacheTTL = time.Hour
+const weeklyAPRWeeks = 3
 
 func (s *Server) handleLiveAnalytics(w http.ResponseWriter, r *http.Request) {
 	if !s.analyticsTokenMatches(r) {
@@ -42,13 +43,30 @@ func (s *Server) handleWeeklyAPR(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "weekly APR temporarily unavailable"})
 		return
 	}
-	report, err := analytics.LoadWeeklyAPR(r.Context(), database, time.Now(), weeklyAPRWeeks)
+	report, err := s.weeklyAPR(r, database)
 	if err != nil {
 		s.logger.Error("weekly APR: load failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load weekly APR"})
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) weeklyAPR(r *http.Request, database *sql.DB) (*analytics.WeeklyAPRReport, error) {
+	now := time.Now()
+	s.weeklyAPRMu.Lock()
+	defer s.weeklyAPRMu.Unlock()
+	if s.weeklyAPRCache != nil && now.Sub(s.weeklyAPRCachedAt) < weeklyAPRCacheTTL {
+		return s.weeklyAPRCache, nil
+	}
+
+	report, err := analytics.LoadWeeklyAPR(r.Context(), database, now, weeklyAPRWeeks)
+	if err != nil {
+		return nil, err
+	}
+	s.weeklyAPRCache = report
+	s.weeklyAPRCachedAt = now
+	return report, nil
 }
 
 func (s *Server) handlePublicMetrics(w http.ResponseWriter, r *http.Request) {

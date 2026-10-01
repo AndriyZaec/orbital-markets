@@ -17,6 +17,9 @@ func TestOpenHandlesIsolatesOperationalReadsFromWriterAndAnalytics(t *testing.T)
 	if got := handles.Writer.Stats().MaxOpenConnections; got != 1 {
 		t.Fatalf("writer MaxOpenConnections = %d, want 1", got)
 	}
+	if got := handles.Analytics.Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("analytics MaxOpenConnections = %d, want 4", got)
+	}
 	if _, err := handles.Writer.Exec("CREATE TABLE lane_test (value INTEGER); INSERT INTO lane_test VALUES (1)"); err != nil {
 		t.Fatal(err)
 	}
@@ -29,14 +32,19 @@ func TestOpenHandlesIsolatesOperationalReadsFromWriterAndAnalytics(t *testing.T)
 	if _, err := tx.Exec("INSERT INTO lane_test VALUES (2)"); err != nil {
 		t.Fatal(err)
 	}
+	var count int
 	analyticsConn, err := handles.Analytics.Conn(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
+	analyticsCtx, analyticsCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer analyticsCancel()
+	if err := handles.Analytics.QueryRowContext(analyticsCtx, "SELECT COUNT(*) FROM lane_test").Scan(&count); err != nil {
+		t.Fatalf("analytics read blocked by another analytics reader: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	var count int
 	if err := handles.Operational.QueryRowContext(ctx, "SELECT COUNT(*) FROM lane_test").Scan(&count); err != nil {
 		t.Fatalf("operational read blocked by writer: %v", err)
 	}
