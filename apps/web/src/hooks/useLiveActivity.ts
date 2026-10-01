@@ -5,8 +5,6 @@ import { subscribeLiveAccountEvents } from '@/lib/live-events'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { LivePosition } from './useLivePositions'
 
-export type LiveActivityFilter = 'all' | 'opened' | 'closed'
-
 export interface LiveActivityItem {
   id: string
   type: string
@@ -19,7 +17,7 @@ interface LiveActivityResponse {
   next_cursor?: string
 }
 
-export function useLiveActivity(filter: LiveActivityFilter) {
+export function useLiveActivity() {
   const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
   const accounts = useMemo<VenueAddressMap>(() => Object.fromEntries(Object.entries({
     pacifica: pacificaAddress,
@@ -47,7 +45,7 @@ export function useLiveActivity(filter: LiveActivityFilter) {
   }>({ key: '', items: [], nextCursor: null, loading: false, loadingMore: false, error: null })
   const requestRef = useRef(0)
   const refreshTimer = useRef<number | null>(null)
-  const key = `${accountKey}|${filter}`
+  const key = accountKey
 
   const fetchPage = useCallback(async (cursor?: string, replace = false) => {
     if (Object.keys(accounts).length < 2) {
@@ -67,10 +65,9 @@ export function useLiveActivity(filter: LiveActivityFilter) {
       // sending legacy aliases as well is intentionally treated as a duplicate.
       const query = new URLSearchParams({ limit: '20' })
       for (const [venue, account] of Object.entries(accounts)) query.set(`accounts[${venue}]`, account)
-      if (filter !== 'all') query.append('type', filter)
       if (cursor) query.set('cursor', cursor)
       const response = await apiFetch(`/api/v1/live/activity?${query}`)
-      if (!response.ok) throw await apiResponseError(response, 'Unable to load recent activity.')
+      if (!response.ok) throw await apiResponseError(response, 'Unable to load activity.')
       const data = await response.json() as LiveActivityResponse
       if (request !== requestRef.current) return
       setState((current) => {
@@ -84,10 +81,10 @@ export function useLiveActivity(filter: LiveActivityFilter) {
         ...(current.key === key ? current : { key, items: [], nextCursor: null }),
         loading: false,
         loadingMore: false,
-        error: userErrorMessage(error, 'Unable to load recent activity.'),
+        error: userErrorMessage(error, 'Unable to load activity.'),
       }))
     }
-  }, [accounts, filter, key])
+  }, [accounts, key])
 
   useEffect(() => {
     void fetchPage(undefined, true)

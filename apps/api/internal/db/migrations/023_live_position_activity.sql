@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE INDEX idx_live_positions_bindings_opened
     ON live_positions(account_bindings_key, opened_at DESC, id DESC)
-    WHERE opened_at IS NOT NULL;
+    WHERE state != 'closed' AND opened_at IS NOT NULL;
 
 CREATE INDEX idx_live_positions_bindings_completed
     ON live_positions(account_bindings_key, completed_at DESC, id DESC)
@@ -9,7 +9,7 @@ CREATE INDEX idx_live_positions_bindings_completed
 
 CREATE INDEX idx_live_positions_legacy_opened
     ON live_positions(account_pacifica, account_hyperliquid, opened_at DESC, id DESC)
-    WHERE account_bindings_key = '' AND opened_at IS NOT NULL;
+    WHERE account_bindings_key = '' AND state != 'closed' AND opened_at IS NOT NULL;
 
 CREATE INDEX idx_live_positions_legacy_completed
     ON live_positions(account_pacifica, account_hyperliquid, completed_at DESC, id DESC)

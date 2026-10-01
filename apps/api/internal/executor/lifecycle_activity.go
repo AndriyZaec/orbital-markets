@@ -66,7 +66,7 @@ func (s *Store) ListLifecycleActivity(ctx context.Context, query LifecycleActivi
 	if types[LifecycleActivityOpened] {
 		selections = append(selections, `SELECT id || ':opened' AS activity_id, 'opened' AS activity_type,
 			opened_at AS activity_at, `+livePositionCols+` FROM live_positions
-			WHERE opened_at IS NOT NULL AND (`+accountMatch+`)`)
+			WHERE state != 'closed' AND opened_at IS NOT NULL AND (`+accountMatch+`)`)
 		args = append(args, accountArgs...)
 	}
 	if types[LifecycleActivityClosed] {

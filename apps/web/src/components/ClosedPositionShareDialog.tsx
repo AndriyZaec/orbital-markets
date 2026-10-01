@@ -26,18 +26,58 @@ function fmtReturn(value: number) {
   return `${percent >= 0 ? '+' : ''}${percent.toFixed(Math.abs(percent) >= 100 ? 0 : 2)}%`
 }
 
-function routeLabel(position: LivePosition, fills: LiveFillDetail[]): string {
+function routeVenues(position: LivePosition, fills: LiveFillDetail[]) {
   const long = fills.find((fill) => fill.filled && fill.side.toLowerCase() === 'long')
   const short = fills.find((fill) => fill.filled && fill.side.toLowerCase() === 'short')
   if (long && short) {
-    return `LONG ${venueMetadata(long.venue).shortLabel}  /  SHORT ${venueMetadata(short.venue).shortLabel}`
+    return [
+      { side: 'LONG', metadata: venueMetadata(long.venue) },
+      { side: 'SHORT', metadata: venueMetadata(short.venue) },
+    ]
   }
-  return `${venueMetadata(position.venue_a).shortLabel}  /  ${venueMetadata(position.venue_b).shortLabel}`
+  return [
+    { side: 'VENUE 1', metadata: venueMetadata(position.venue_a) },
+    { side: 'VENUE 2', metadata: venueMetadata(position.venue_b) },
+  ]
+}
+
+function loadLogo(src: string | null): Promise<HTMLImageElement | null> {
+  if (!src) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => resolve(null)
+    image.src = src
+  })
+}
+
+function drawOrbitalMark(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
+  ctx.save()
+  ctx.translate(x + size / 2, y + size / 2)
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.72)'
+  ctx.lineWidth = 1.5
+  ctx.rotate(-0.38)
+  ctx.beginPath()
+  ctx.ellipse(0, 0, size / 2, size / 4, 0, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.rotate(0.95)
+  ctx.beginPath()
+  ctx.ellipse(0, 0, size / 3.2, size / 5, 0, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.fillStyle = '#22d3ee'
+  ctx.shadowColor = 'rgba(34, 211, 238, 0.8)'
+  ctx.shadowBlur = 10
+  ctx.beginPath()
+  ctx.arc(0, 0, 5, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
 }
 
 async function createClosedPositionCard(position: LivePosition, fills: LiveFillDetail[]): Promise<Omit<ShareImage, 'url'>> {
   const metrics = closedPositionShareMetrics(position)
   if (!metrics) throw new Error('Unable to calculate closed-position performance')
+  const route = routeVenues(position, fills)
+  const logos = await Promise.all(route.map(({ metadata }) => loadLogo(metadata.logo)))
   const canvas = document.createElement('canvas')
   canvas.width = 1200
   canvas.height = 630
@@ -57,37 +97,79 @@ async function createClosedPositionCard(position: LivePosition, fills: LiveFillD
   ctx.fillStyle = glow
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
+  ctx.lineWidth = 1
+  for (let x = 0; x <= canvas.width; x += 80) {
+    ctx.strokeStyle = x % 320 === 0 ? 'rgba(103, 232, 249, 0.09)' : 'rgba(103, 232, 249, 0.055)'
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x, canvas.height)
+    ctx.stroke()
+  }
+  for (let y = 0; y <= canvas.height; y += 70) {
+    ctx.strokeStyle = y % 280 === 0 ? 'rgba(103, 232, 249, 0.09)' : 'rgba(103, 232, 249, 0.055)'
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(canvas.width, y)
+    ctx.stroke()
+  }
+
+  drawOrbitalMark(ctx, 72, 55, 40)
+  ctx.fillStyle = '#f8fafc'
+  ctx.font = "650 34px 'Geist Variable', system-ui, sans-serif"
+  ctx.fillText('ORBITAL MARKETS', 128, 84)
+  ctx.fillStyle = '#64748b'
+  ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
+  ctx.textAlign = 'right'
+  ctx.fillText('CLOSED POSITION', 1128, 82)
+  ctx.textAlign = 'left'
+
   ctx.fillStyle = '#67e8f9'
   ctx.font = '600 18px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText('ORBITAL MARKETS  /  CLOSED POSITION', 72, 78)
+  ctx.fillText(position.asset.toUpperCase(), 72, 205)
   ctx.fillStyle = '#f8fafc'
-  ctx.font = "700 52px 'Geist Variable', system-ui, sans-serif"
-  ctx.fillText(position.asset, 72, 158)
-  ctx.fillStyle = '#94a3b8'
-  ctx.font = '600 17px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText(routeLabel(position, fills), 72, 198)
-
+  ctx.font = "700 104px 'Geist Variable', system-ui, sans-serif"
+  ctx.fillStyle = metrics.roi >= 0 ? '#4ade80' : '#fb7185'
+  ctx.fillText(fmtReturn(metrics.heroValue), 66, 342)
   ctx.fillStyle = '#64748b'
   ctx.font = '600 16px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText(metrics.heroLabel, 72, 292)
-  ctx.fillStyle = metrics.roi >= 0 ? '#4ade80' : '#fb7185'
-  ctx.font = "700 104px 'Geist Variable', system-ui, sans-serif"
-  ctx.fillText(fmtReturn(metrics.heroValue), 66, 406)
+  ctx.fillText(metrics.heroLabel, 72, 382)
+
+  ctx.fillText('ROUTE', 744, 205)
+  route.forEach(({ side, metadata }, index) => {
+    const x = 744 + index * 205
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.045)'
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.roundRect(x, 232, 112, 112, 18)
+    ctx.fill()
+    ctx.stroke()
+    const logo = logos[index]
+    if (logo) {
+      ctx.drawImage(logo, x + 22, 254, 68, 68)
+    } else {
+      ctx.fillStyle = metadata.color
+      ctx.font = '700 25px ui-monospace, SFMono-Regular, Menlo, monospace'
+      ctx.textAlign = 'center'
+      ctx.fillText(metadata.shortLabel, x + 56, 300)
+      ctx.textAlign = 'left'
+    }
+    ctx.fillStyle = index === 0 ? '#4ade80' : '#fb7185'
+    ctx.font = '600 14px ui-monospace, SFMono-Regular, Menlo, monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText(side, x + 56, 374)
+    ctx.textAlign = 'left'
+  })
+  ctx.fillStyle = '#475569'
+  ctx.font = '500 30px ui-monospace, SFMono-Regular, Menlo, monospace'
+  ctx.fillText('→', 885, 300)
 
   ctx.fillStyle = '#64748b'
   ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
-  if (metrics.heroLabel === 'APR') {
-    ctx.fillText('ACTUAL ROI', 760, 300)
-    ctx.fillStyle = '#4ade80'
-    ctx.font = '650 34px ui-monospace, SFMono-Regular, Menlo, monospace'
-    ctx.fillText(fmtReturn(metrics.roi), 760, 342)
-  }
-  ctx.fillStyle = '#64748b'
-  ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText('HOLD', 760, 390)
+  ctx.fillText('HOLD', 744, 446)
   ctx.fillStyle = '#e2e8f0'
   ctx.font = '650 34px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText(metrics.holdDuration, 760, 432)
+  ctx.fillText(metrics.holdDuration, 744, 490)
 
   ctx.fillStyle = '#475569'
   ctx.font = "400 16px 'Geist Variable', system-ui, sans-serif"

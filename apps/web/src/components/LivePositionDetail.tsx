@@ -118,7 +118,7 @@ function closeProgress(state: CloseState, positionState: string) {
 export function LivePositionDetail({ position: pos, onClose, onRefresh, onShare }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
-      <div className="h-[90vh] w-[min(580px,calc(100vw-1rem))] overflow-hidden rounded-lg border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+      <div className="flex h-[90vh] w-[min(580px,calc(100vw-1rem))] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} onShare={onShare} />
       </div>
     </div>

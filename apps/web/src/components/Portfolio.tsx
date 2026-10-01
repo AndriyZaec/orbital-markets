@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, Share2Icon, XIcon } from 'lucide-react'
 import { useLivePositions, type LivePosition } from '@/hooks/useLivePositions'
-import { useLiveActivity, type LiveActivityFilter, type LiveActivityItem } from '@/hooks/useLiveActivity'
+import { useLiveActivity, type LiveActivityItem } from '@/hooks/useLiveActivity'
 import type { LiveFillDetail } from '@/hooks/useLivePositionDetail'
 import { useVenueReadiness, type VenueReadiness } from '@/hooks/useVenueReadiness'
 import { AssetIcon } from '@/components/AssetIcon'
@@ -95,8 +95,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
   const [privateView, setPrivateView] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
-  const [activityFilter, setActivityFilter] = useState<LiveActivityFilter>('all')
-  const activity = useLiveActivity(activityFilter)
+  const activity = useLiveActivity()
   const [selectedClosedPosition, setSelectedClosedPosition] = useState<LivePosition | null>(null)
   const [closedShare, setClosedShare] = useState<{ position: LivePosition; fills?: LiveFillDetail[] } | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -315,12 +314,12 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
         )}
       </Section>
 
-      <Section title="Recent Activity" action={<ActivityFilters value={activityFilter} onChange={setActivityFilter} />}>
+      <Section title="Activity">
         {activity.loading && activity.items.length === 0 && <p className="py-3 text-[12px] text-muted-foreground">Loading activity...</p>}
         {activity.error && activity.items.length === 0 && (
           <div className="flex items-center justify-between gap-3 py-3 text-[12px]"><span className="text-red-400">{activity.error}</span><button type="button" onClick={activity.refetch} className="text-cyan-400 hover:text-cyan-300">Retry</button></div>
         )}
-        {!activity.loading && !activity.error && activity.items.length === 0 && <p className="py-3 text-[12px] text-muted-foreground">No lifecycle activity yet.</p>}
+        {!activity.loading && !activity.error && activity.items.length === 0 && <p className="py-3 text-[12px] text-muted-foreground">No activity yet.</p>}
         {activity.items.length > 0 && (
           <div className="divide-y divide-border/70 border-y border-border/70">
             {activity.items.map((item) => (
@@ -647,24 +646,6 @@ function PortfolioShareDialog({
   )
 }
 
-function ActivityFilters({ value, onChange }: { value: LiveActivityFilter; onChange: (value: LiveActivityFilter) => void }) {
-  return (
-    <div className="flex rounded-md bg-white/[0.025] p-0.5" aria-label="Filter recent activity">
-      {(['all', 'opened', 'closed'] as const).map((filter) => (
-        <button
-          key={filter}
-          type="button"
-          aria-pressed={value === filter}
-          onClick={() => onChange(filter)}
-          className={`rounded px-2 py-1 text-[11px] capitalize transition-colors ${value === filter ? 'bg-white/[0.08] text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-        >
-          {filter === 'opened' ? 'Opened' : filter === 'closed' ? 'Closed' : 'All'}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 function ActivityRow({ item, now, onOpenPosition, onOpenClosed, onShare }: {
   item: LiveActivityItem
   now: number
@@ -743,7 +724,7 @@ function Tile({
       <span className={`pointer-events-none absolute inset-x-0 top-0 h-px ${style.line}`} />
       <div className="relative">
         <p className="text-[11px] text-muted-foreground">{label}</p>
-        <p className={`mt-1 text-lg font-mono ${valueClassName ?? 'text-foreground'}`}>{value}</p>
+        <p className={`mt-1 text-lg font-mono ${valueClassName || 'text-foreground'}`}>{value}</p>
         {hint && <p className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</p>}
       </div>
     </div>

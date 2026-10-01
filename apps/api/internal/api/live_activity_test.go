@@ -63,24 +63,17 @@ func TestLiveActivityFiltersAccountPairsAndPaginatesLifecycleRows(t *testing.T) 
 
 	query.Set("cursor", first.NextCursor)
 	second := getLiveActivity(t, server, query)
-	assertActivityRows(t, second.Items, []string{"legacy-pacifica-hyperliquid:opened", "hyperliquid-aster:opened"})
-	if second.NextCursor == "" {
-		t.Fatal("second page omitted next_cursor")
-	}
-
-	query.Set("cursor", second.NextCursor)
-	third := getLiveActivity(t, server, query)
-	assertActivityRows(t, third.Items, []string{"pacifica-aster:opened"})
-	if third.NextCursor != "" {
-		t.Fatalf("last page next_cursor = %q, want empty", third.NextCursor)
+	assertActivityRows(t, second.Items, []string{"legacy-pacifica-hyperliquid:opened"})
+	if second.NextCursor != "" {
+		t.Fatalf("last page next_cursor = %q, want empty", second.NextCursor)
 	}
 
 	query.Del("cursor")
 	query.Set("type", "opened,closed")
 	query.Set("limit", "50")
 	all := getLiveActivity(t, server, query)
-	if len(all.Items) != 5 {
-		t.Fatalf("filtered lifecycle rows = %d, want 5", len(all.Items))
+	if len(all.Items) != 3 {
+		t.Fatalf("filtered lifecycle rows = %d, want 3", len(all.Items))
 	}
 	for _, item := range all.Items {
 		if item.Position.ID == "other-account" {
