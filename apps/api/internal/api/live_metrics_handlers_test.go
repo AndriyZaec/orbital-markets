@@ -2,13 +2,16 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
 	appdb "github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 )
 
@@ -71,5 +74,52 @@ func TestWeeklyAPRDoesNotFallBackWhenAnalyticsIsolationIsUnavailable(t *testing.
 	}
 	if !strings.Contains(logs.String(), "isolated analytics database unavailable") {
 		t.Fatalf("logs = %q, want isolation error", logs.String())
+	}
+}
+
+func TestWeeklyAPRLimitsHistoryAndCachesReport(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "weekly.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	now := time.Now().UTC()
+	weekStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).
+		AddDate(0, 0, -(int(now.Weekday())+6)%7)
+	for week := range 4 {
+		bucket := weekStart.AddDate(0, 0, -7*week).Add(time.Hour).Unix()
+		asset := "WEEK" + string(rune('A'+week))
+		for _, venue := range []string{"aster", "hyperliquid"} {
+			if _, err := database.Exec(`
+				INSERT INTO market_snapshots_1h
+					(venue, asset, bucket_unix, open, high, low, close, funding_avg, oi_avg, bid_avg, ask_avg)
+				VALUES (?, ?, ?, 1, 1, 1, 1, 0.001, 1, 1, 1)`, venue, asset, bucket); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	server := &Server{analyticsDB: database, logger: slog.Default()}
+	first := httptest.NewRecorder()
+	server.handleWeeklyAPR(first, httptest.NewRequest(http.MethodGet, "/api/v1/analytics/weekly-apr", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d: %s", first.Code, first.Body.String())
+	}
+	var report analytics.WeeklyAPRReport
+	if err := json.Unmarshal(first.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 3 {
+		t.Fatalf("weekly rows = %d, want 3", len(report.Rows))
+	}
+
+	if _, err := database.Exec("DELETE FROM market_snapshots_1h"); err != nil {
+		t.Fatal(err)
+	}
+	second := httptest.NewRecorder()
+	server.handleWeeklyAPR(second, httptest.NewRequest(http.MethodGet, "/api/v1/analytics/weekly-apr", nil))
+	if second.Body.String() != first.Body.String() {
+		t.Fatalf("second report bypassed cache:\nfirst: %s\nsecond: %s", first.Body.String(), second.Body.String())
 	}
 }

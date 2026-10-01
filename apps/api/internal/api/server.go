@@ -46,6 +46,9 @@ type Server struct {
 	metricsCache         *analytics.LiveMetrics
 	metricsCachedAt      time.Time
 	publicMetricsLogAt   time.Time
+	weeklyAPRMu          sync.Mutex
+	weeklyAPRCache       *analytics.WeeklyAPRReport
+	weeklyAPRCachedAt    time.Time
 	signals              opportunitySignalProjection
 	historyCache         *historyCache
 }
