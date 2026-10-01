@@ -46,6 +46,22 @@ test("weights portfolio return by each position's deployed capital and duration"
   ])
 })
 
+test('orders assets by absolute PnL contribution', () => {
+  const position = {
+    notional: 100,
+    leverage: 5,
+    started_at: new Date(now - year).toISOString(),
+    completed_at: new Date(now).toISOString(),
+  }
+  const result = portfolioPerformance([
+    { ...position, asset: 'SMALL', total_pnl: 1 },
+    { ...position, asset: 'LOSS', total_pnl: -3 },
+    { ...position, asset: 'WIN', total_pnl: 2 },
+  ], now)
+
+  assert.deepEqual(result.byAsset.map(({ asset }) => asset), ['LOSS', 'WIN', 'SMALL'])
+})
+
 test('shows a negative return on deployed capital without annualizing it', () => {
   const result = portfolioPerformance([{
     asset: 'BTC',
