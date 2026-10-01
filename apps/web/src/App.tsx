@@ -391,7 +391,15 @@ export default function App() {
                 <Suspense fallback={<DeferredSurface label="Loading portfolio..." />}>
                   <Portfolio
                     onConnectWallets={() => setShowAccounts(true)}
-                    onViewPositions={() => setActiveView('trade')}
+                    onViewPositions={() => {
+                      setSelection(null)
+                      setFocusPositionId(null)
+                      setActiveView('trade')
+                    }}
+                    onOpenPosition={(position) => {
+                      selectPosition(position)
+                      setActiveView('trade')
+                    }}
                   />
                 </Suspense>
               </DeferredBoundary>

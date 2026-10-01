@@ -1,5 +1,6 @@
 import { apiUrl } from './api.ts'
 import { liveAccountsKey, liveAccountsQuery, type VenueAddressMap } from './live-bindings.ts'
+import { isActivePositionState } from './portfolio-position.ts'
 
 export type LiveAccountEvent =
   | { type: 'connected' | 'disconnected' }
@@ -26,7 +27,7 @@ export function hasActiveLiveExposureForWallet(data: unknown, wallet: 'evm' | 's
 
 function isActiveLivePosition(position: unknown): position is Record<string, unknown> {
   if (!position || typeof position !== 'object' || !('state' in position)) return false
-  return position.state === 'pending' || position.state === 'open' || position.state === 'degraded' || position.state === 'closing'
+  return typeof position.state === 'string' && isActivePositionState(position.state)
 }
 
 function liveEventsUrl(accounts: VenueAddressMap, sessionId?: string) {

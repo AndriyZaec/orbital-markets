@@ -23,6 +23,9 @@ import {
 import { DeferredBoundary } from '@/components/DeferredBoundary'
 import { AssetIcon } from '@/components/AssetIcon'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { isActivePositionState, isClosedPositionState } from '@/lib/portfolio-position'
+import { ClosedPositionShareDialog } from '@/components/ClosedPositionShareDialog'
+import type { LiveFillDetail } from '@/hooks/useLivePositionDetail'
 
 const LivePositionDetail = lazy(() => import('@/components/LivePositionDetail').then((module) => ({ default: module.LivePositionDetail })))
 
@@ -102,6 +105,7 @@ export function LivePositions({
   const { aggregate } = useVenueReadiness()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [tab, setTab] = useState<'open' | 'closed'>('open')
+  const [share, setShare] = useState<{ position: LivePosition; fills: LiveFillDetail[] } | null>(null)
 
   // Kill switch
   const [killOpen, setKillOpen] = useState(false)
@@ -115,8 +119,8 @@ export function LivePositions({
     }
   }
 
-  const openPositions = positions.filter((p) => p.state === 'open' || p.state === 'degraded' || p.state === 'pending' || p.state === 'closing')
-  const closedPositions = positions.filter((p) => p.state === 'closed' || p.state === 'failed')
+  const openPositions = positions.filter((p) => isActivePositionState(p.state))
+  const closedPositions = positions.filter((p) => isClosedPositionState(p.state))
   const visibleTab = selectedPositionId || focusPositionId ? 'open' : tab
   const displayed = visibleTab === 'open' ? openPositions : closedPositions
   const selected = closedPositions.find((p) => p.id === selectedId) ?? null
@@ -405,9 +409,17 @@ export function LivePositions({
       {selected && (
         <DeferredBoundary label="Position detail">
           <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading position detail...</div>}>
-            <LivePositionDetail position={selected} onClose={closePositionDetail} onRefresh={refetch} />
+            <LivePositionDetail position={selected} onClose={closePositionDetail} onRefresh={refetch} onShare={(position, fills) => setShare({ position, fills })} />
           </Suspense>
         </DeferredBoundary>
+      )}
+      {share && (
+        <ClosedPositionShareDialog
+          open
+          onOpenChange={(open) => { if (!open) setShare(null) }}
+          position={share.position}
+          fills={share.fills}
+        />
       )}
     </>
   )

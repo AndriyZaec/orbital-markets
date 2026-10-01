@@ -420,10 +420,25 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 	var p LivePosition
 	var bindingsJSON, bindingsKey string
 	var openedAt, completedAt, monitorAt sql.NullString
-	err := scanner.Scan(
+	err := scanner.Scan(livePositionScanTargets(
+		&p, &bindingsJSON, &bindingsKey, &openedAt, &completedAt, &monitorAt,
+	)...)
+	if err != nil {
+		return nil, err
+	}
+	finishLivePositionScan(&p, bindingsJSON, bindingsKey, openedAt, completedAt, monitorAt)
+	return &p, nil
+}
+
+func livePositionScanTargets(
+	p *LivePosition,
+	bindingsJSON, bindingsKey *string,
+	openedAt, completedAt, monitorAt *sql.NullString,
+) []any {
+	return []any{
 		&p.ID, &p.PlanID, &p.OpportunityID, &p.Asset,
 		&p.VenueA, &p.VenueB, &p.State, &p.AccountPacifica, &p.AccountHyperliquid,
-		&bindingsJSON, &bindingsKey,
+		bindingsJSON, bindingsKey,
 		&p.Notional, &p.Leverage,
 		&p.EntrySpread, &p.HedgeMismatch,
 		&p.CurrentSpread, &p.CurrentBasis, &p.EntryBasis, &p.BasisChange,
@@ -433,11 +448,16 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 		&p.Leg1LiqDist, &p.Leg2LiqDist,
 		&p.Leg1LiqRisk, &p.Leg2LiqRisk,
 		&p.HoldHours,
-		&p.StartedAt, &openedAt, &completedAt, &monitorAt, &p.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
+		&p.StartedAt, openedAt, completedAt, monitorAt, &p.UpdatedAt,
 	}
+}
+
+func finishLivePositionScan(
+	p *LivePosition,
+	bindingsJSON, bindingsKey string,
+	openedAt, completedAt, monitorAt sql.NullString,
+) {
+	var err error
 	p.AccountBindings, err = decodeAccountBindings(
 		bindingsJSON, bindingsKey, p.AccountPacifica, p.AccountHyperliquid,
 	)
@@ -457,7 +477,6 @@ func scanLivePosition(scanner interface{ Scan(...any) error }) (*LivePosition, e
 	p.OpenedAt = openedAt.String
 	p.CompletedAt = completedAt.String
 	p.MonitorAt = monitorAt.String
-	return &p, nil
 }
 
 // GetPosition returns a live position by ID.
