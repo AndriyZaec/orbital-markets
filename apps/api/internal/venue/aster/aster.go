@@ -283,7 +283,7 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 	if err != nil {
 		return err
 	}
-	restMarkets, err := a.fetchRESTMarkets(ctx, metadata.active)
+	restMarkets, err := a.fetchRESTMarkets(ctx, metadata.active, !token.synchronize)
 	if err != nil {
 		return err
 	}
@@ -812,7 +812,7 @@ func (r OrderRules) valid() bool {
 }
 
 func (a *Adapter) fetchRESTMarkets(
-	ctx context.Context, metadata map[string]marketMetadata,
+	ctx context.Context, metadata map[string]marketMetadata, refreshOpenInterest bool,
 ) (restMarketSnapshot, error) {
 	var premiums []premiumIndex
 	var books []bookTicker
@@ -880,7 +880,9 @@ func (a *Adapter) fetchRESTMarkets(
 		}
 		markets[symbol] = state
 	}
-	a.fetchOpenInterest(ctx, markets)
+	if refreshOpenInterest {
+		a.fetchOpenInterest(ctx, markets)
+	}
 	return restMarketSnapshot{
 		markets: markets, markCount: markCount, indexCount: indexCount,
 		fundingCount: fundingCount, bookCount: bookCount,

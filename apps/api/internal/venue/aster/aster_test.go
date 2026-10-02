@@ -588,6 +588,7 @@ type mutableMarketServerState struct {
 	omitETHMetadata     atomic.Bool
 	inactiveETH         atomic.Bool
 	failETHOpenInterest atomic.Bool
+	openInterestCalls   atomic.Int32
 }
 
 func newMutableMarketServer(t *testing.T, state *mutableMarketServerState) *httptest.Server {
@@ -623,6 +624,7 @@ func newMutableMarketServer(t *testing.T, state *mutableMarketServerState) *http
 			}
 			_, _ = fmt.Fprintf(response, `[{"lastUpdateId":10,"symbol":"BTCUSDT","bidPrice":"99","bidQty":"2","askPrice":"101","askQty":"3","time":%d},{"lastUpdateId":10,"symbol":"ETHUSDT","bidPrice":"199","bidQty":"2","askPrice":"201","askQty":"3","time":%d}]`, timestamp, timestamp)
 		case "/fapi/v3/openInterest":
+			state.openInterestCalls.Add(1)
 			symbol := request.URL.Query().Get("symbol")
 			if symbol == "ETHUSDT" && state.failETHOpenInterest.Load() {
 				http.Error(response, "unavailable", http.StatusServiceUnavailable)
@@ -633,6 +635,38 @@ func newMutableMarketServer(t *testing.T, state *mutableMarketServerState) *http
 			http.NotFound(response, request)
 		}
 	}))
+}
+
+func TestReconnectResyncReusesKnownOpenInterest(t *testing.T) {
+	serverState := &mutableMarketServerState{}
+	server := newMutableMarketServer(t, serverState)
+	defer server.Close()
+	adapter := newTestAdapter(server.URL)
+	adapter.now = func() time.Time { return mutableMarketNow }
+
+	if err := adapter.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	serverState.openInterestCalls.Store(0)
+	adapter.streamGeneration = 1
+	adapter.streamConnected = true
+	adapter.streamSynchronized = false
+	if err := adapter.refresh(context.Background(), refreshToken{
+		expectedGeneration: 1,
+		bookGeneration:     1,
+		synchronize:        true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls := serverState.openInterestCalls.Load(); calls != 0 {
+		t.Fatalf("reconnect resync made %d open-interest requests, want none", calls)
+	}
+	for symbol, market := range adapter.markets {
+		if !market.openInterestKnown || market.openInterest != 1000 {
+			t.Fatalf("%s open interest was not preserved: %+v", symbol, market)
+		}
+	}
 }
 
 var mutableMarketNow = time.Date(2026, time.September, 24, 12, 0, 0, 0, time.UTC)
