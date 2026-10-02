@@ -313,7 +313,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	// Submit leg 1.
 	sub, err := s.submitSignedActionForAccounts(ctx, *openSigned, openReq, sess.accounts)
 	if err != nil || sub == nil {
-		if errors.Is(err, asterlive.ErrSubmissionNotSent) {
+		if errors.Is(err, asterlive.ErrSubmissionNotSent) || errors.Is(err, errLiveSubmissionNotSent) {
 			s.logger.Error("live advance: leg 1 submission not sent",
 				"session_id", sess.ID, "venue", sess.Leg1.venue, "err", err)
 			sess.State = sessFailed
@@ -698,8 +698,22 @@ func (s *Server) submitSignedAction(
 		return nil, fmt.Errorf("%w: %v", errLiveSubmissionNotSent, err)
 	}
 	defer lease.Release()
+	if req.ReduceOnly || req.Action == "close" || req.Action == "emergency_close" {
+		unlockSubmission, lockErr := lockAccountSubmission(ctx, lease, true)
+		if lockErr != nil {
+			return nil, fmt.Errorf("%w: %v", errLiveSubmissionNotSent, lockErr)
+		}
+		defer unlockSubmission()
+		lease.markMutation()
+		return s.submitSignedActionForFeed(ctx, signed, req, lease.Feed())
+	}
 	unlock := lockAccountFeeds(lease)
 	defer unlock()
+	unlockSubmission, lockErr := lockAccountSubmission(ctx, lease, false)
+	if lockErr != nil {
+		return nil, fmt.Errorf("%w: %v", errLiveSubmissionNotSent, lockErr)
+	}
+	defer unlockSubmission()
 	lease.markMutation()
 	return s.submitSignedActionForFeed(ctx, signed, req, lease.Feed())
 }
@@ -714,6 +728,12 @@ func (s *Server) submitSignedActionForAccounts(
 	if !ok {
 		return nil, fmt.Errorf("unsupported venue: %s", req.Venue)
 	}
+	lease := accounts.leases[req.Venue]
+	unlockSubmission, err := lockAccountSubmission(ctx, lease, req.ReduceOnly || req.Action == "close" || req.Action == "emergency_close")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errLiveSubmissionNotSent, err)
+	}
+	defer unlockSubmission()
 	accounts.markMutation(req.Venue)
 	return s.submitSignedActionForFeed(ctx, signed, req, feed)
 }
