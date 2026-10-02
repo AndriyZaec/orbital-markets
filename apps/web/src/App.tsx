@@ -847,10 +847,10 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
       <div className="px-5 py-2.5 flex items-center gap-6 border-b border-border shrink-0 overflow-x-auto">
         <DetailStatItem label="Long"><DetailVenueIcon venue={longVenue} /></DetailStatItem>
         <DetailStatItem label="Short"><DetailVenueIcon venue={shortVenue} /></DetailStatItem>
-        <DetailStatItem label="Max Leverage" value={maxLev === null ? (leverageIssue ?? 'Unavailable') : `${maxLev}x`} />
+        {(maxLev !== null || leverageIssue) && <DetailStatItem label="Max Leverage" value={maxLev === null ? leverageIssue! : `${maxLev}x`} />}
         <DetailStatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
         <DetailStatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
-        <DetailStatItem label="APR x Max Lev" value={maxLev === null ? 'Unavailable' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
+        {maxLev !== null && <DetailStatItem label="APR x Max Lev" value={fmtPct(opp.annualized_gross_edge * maxLev)} mono />}
         <DetailStatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
         <DetailStatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
         <DetailStatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />

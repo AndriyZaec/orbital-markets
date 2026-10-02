@@ -117,7 +117,12 @@ export function usePlan(
         const capabilityMessage = body.capability
           ? leverageCapabilityMessage({ [body.venue ?? 'venue']: body.capability })
           : null
-        setCapabilityErrorKey(capabilityMessage ? requestKey ?? '' : '')
+        setCapabilityErrorKey(body.capability ? requestKey ?? '' : '')
+        if (body.capability && !capabilityMessage) {
+          setError(null)
+          setPlan(null)
+          return
+        }
         throw apiError(resp.status, 'Unable to build an execution plan. Please try again.', capabilityMessage
           ? { ...body, error: capabilityMessage }
           : body)
