@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -54,6 +55,30 @@ func (e *LeverageRangeError) Error() string {
 		"leverage %.1fx outside supported range (minimum %.0fx, pair maximum %dx)",
 		e.Requested, domain.MinLeverage, e.PairMax,
 	)
+}
+
+var ErrExecutionDataNotReady = errors.New("execution data is not ready")
+
+// RefreshExecutionData asks venue adapters for target-specific data required
+// immediately before live execution. It does not affect opportunity discovery.
+func (s *Scanner) RefreshExecutionData(ctx context.Context, plan *domain.ExecutionPlan) error {
+	for _, leg := range []domain.Leg{plan.Leg1, plan.Leg2} {
+		for _, adapter := range s.adapters {
+			if adapter.Name() != leg.Venue {
+				continue
+			}
+			refresher, ok := adapter.(venue.ExecutionDataRefresher)
+			if !ok {
+				break
+			}
+			if err := refresher.RefreshExecutionData(ctx, leg.MarketKey); err != nil {
+				s.logger.Warn("execution data refresh failed", "venue", leg.Venue, "market", leg.MarketKey, "err", err)
+				return ErrExecutionDataNotReady
+			}
+			break
+		}
+	}
+	return nil
 }
 
 // BuildPlan creates an ExecutionPlan from a given opportunity ID using fresh market data.

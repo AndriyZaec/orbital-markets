@@ -25,6 +25,7 @@ const (
 	livePrepareExistingPosition      = "EXISTING_POSITION"
 	livePrepareExistingSession       = "EXISTING_SESSION"
 	livePreparePreTradeBlocked       = "PRETRADE_BLOCKED"
+	livePrepareExecutionDataNotReady = "EXECUTION_DATA_NOT_READY"
 )
 
 func newLivePlanID() string {
@@ -114,6 +115,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
 			"error": "plan not executable",
 		})
+		return
+	}
+	if err := s.scanner.RefreshExecutionData(r.Context(), plan); err != nil {
+		s.logger.Warn("live prepare: execution data not ready",
+			"code", livePrepareExecutionDataNotReady,
+			"opportunity_id", req.OpportunityID,
+		)
+		writeExecutionDataNotReady(w)
 		return
 	}
 	planVenues := livePlanVenues(plan)
@@ -416,6 +425,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		"hedge_venue":      leg2.venue,
 		"expires_at":       leg1Open.ExpiresAt,
 		"signing_requests": signingRequests,
+	})
+}
+
+func writeExecutionDataNotReady(w http.ResponseWriter) {
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error":     "Opportunity is updating. Try again shortly.",
+		"code":      livePrepareExecutionDataNotReady,
+		"retryable": true,
 	})
 }
 

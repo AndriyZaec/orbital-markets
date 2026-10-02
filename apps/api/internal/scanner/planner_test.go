@@ -19,10 +19,43 @@ type leverageTestAdapter struct {
 	err  error
 }
 
+type executionRefreshAdapter struct {
+	leverageTestAdapter
+	refreshed []string
+	err       error
+}
+
+func (a *executionRefreshAdapter) RefreshExecutionData(_ context.Context, marketKey string) error {
+	a.refreshed = append(a.refreshed, marketKey)
+	return a.err
+}
+
 func (a leverageTestAdapter) Name() string { return a.name }
 
 func (a leverageTestAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 	return a.data, a.err
+}
+
+func TestRefreshExecutionDataTargetsOnlyCapablePlanLegs(t *testing.T) {
+	aster := &executionRefreshAdapter{leverageTestAdapter: leverageTestAdapter{name: "aster"}}
+	pacifica := &leverageTestAdapter{name: "pacifica"}
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), aster, pacifica)
+	plan := &domain.ExecutionPlan{
+		Leg1: domain.Leg{Venue: "aster", MarketKey: "BTCUSDT"},
+		Leg2: domain.Leg{Venue: "pacifica", MarketKey: "BTC"},
+	}
+
+	if err := s.RefreshExecutionData(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(aster.refreshed) != 1 || aster.refreshed[0] != "BTCUSDT" {
+		t.Fatalf("refreshed markets = %+v, want BTCUSDT", aster.refreshed)
+	}
+
+	aster.err = errors.New("upstream unavailable")
+	if err := s.RefreshExecutionData(context.Background(), plan); !errors.Is(err, ErrExecutionDataNotReady) {
+		t.Fatalf("refresh error = %v, want ErrExecutionDataNotReady", err)
+	}
 }
 
 func TestMarketSnapshotSelectsRequestedVenueAndAsset(t *testing.T) {
