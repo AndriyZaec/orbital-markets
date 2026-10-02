@@ -28,15 +28,6 @@ function fmtReturn(value: number) {
   return `${percent >= 0 ? '+' : ''}${percent.toFixed(Math.abs(percent) >= 100 ? 0 : 2)}%`
 }
 
-function fmtUsd(value: number) {
-  const sign = value >= 0 ? '+' : '-'
-  return `${sign}$${Math.abs(value).toFixed(2)}`
-}
-
-function fmtUsdAmount(value: number) {
-  return `$${value.toFixed(2)}`
-}
-
 function routeVenues(position: LivePosition, fills: LiveFillDetail[]) {
   const long = fills.find((fill) => fill.filled && fill.side.toLowerCase() === 'long')
   const short = fills.find((fill) => fill.filled && fill.side.toLowerCase() === 'short')
@@ -166,10 +157,16 @@ async function createPositionCard(position: LivePosition, fills: LiveFillDetail[
   ctx.fillStyle = '#f8fafc'
   ctx.font = "700 104px 'Geist Variable', system-ui, sans-serif"
   ctx.fillStyle = metrics.roi >= 0 ? '#4ade80' : '#fb7185'
-  ctx.fillText(fmtReturn(metrics.heroValue), 66, 342)
+  const heroValue = fmtReturn(metrics.heroValue)
+  ctx.fillText(heroValue, 66, 342)
+  const heroWidth = ctx.measureText(heroValue).width
   ctx.fillStyle = '#64748b'
-  ctx.font = '600 16px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText(metrics.heroLabel, 72, 382)
+  ctx.font = '600 17px ui-monospace, SFMono-Regular, Menlo, monospace'
+  ctx.fillText(metrics.heroLabel, 66 + heroWidth + 18, 338)
+  if (metrics.heroLabel.includes('APR')) {
+    ctx.font = '600 18px ui-monospace, SFMono-Regular, Menlo, monospace'
+    ctx.fillText(`ROI ${fmtReturn(metrics.roi)}`, 72, 390)
+  }
 
   ctx.fillText('ROUTE', 744, 205)
   route.forEach(({ side, metadata }, index) => {
@@ -207,22 +204,6 @@ async function createPositionCard(position: LivePosition, fills: LiveFillDetail[
   ctx.fillStyle = '#e2e8f0'
   ctx.font = '650 34px ui-monospace, SFMono-Regular, Menlo, monospace'
   ctx.fillText(metrics.holdDuration, 744, 490)
-
-  if (kind === 'active') {
-    ctx.fillStyle = '#64748b'
-    ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
-    ctx.fillText('DEPLOYED MARGIN', 960, 446)
-    ctx.fillStyle = '#e2e8f0'
-    ctx.font = '650 28px ui-monospace, SFMono-Regular, Menlo, monospace'
-    ctx.fillText(fmtUsdAmount(metrics.deployedCapital), 960, 490)
-  }
-
-  ctx.fillStyle = '#64748b'
-  ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText(metrics.pnlLabel, 72, 438)
-  ctx.fillStyle = metrics.pnlValue >= 0 ? '#4ade80' : '#fb7185'
-  ctx.font = '650 28px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText(fmtUsd(metrics.pnlValue), 72, 478)
 
   ctx.fillStyle = '#475569'
   ctx.font = "400 16px 'Geist Variable', system-ui, sans-serif"
