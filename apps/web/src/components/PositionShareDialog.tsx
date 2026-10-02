@@ -3,7 +3,7 @@ import { CopyIcon, DownloadIcon, Share2Icon, XIcon } from 'lucide-react'
 import type { LivePosition } from '@/hooks/useLivePositions'
 import type { LiveFillDetail } from '@/hooks/useLivePositionDetail'
 import { useLivePositionDetail } from '@/hooks/useLivePositionDetail'
-import { closedPositionShareMetrics } from '@/lib/closed-position-share'
+import { positionShareMetrics, type PositionShareKind } from '@/lib/position-share'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -13,6 +13,8 @@ interface Props {
   onOpenChange: (open: boolean) => void
   position: LivePosition
   fills?: LiveFillDetail[]
+  kind: PositionShareKind
+  generateCard?: typeof createPositionCard
 }
 
 interface ShareImage {
@@ -24,6 +26,15 @@ interface ShareImage {
 function fmtReturn(value: number) {
   const percent = value * 100
   return `${percent >= 0 ? '+' : ''}${percent.toFixed(Math.abs(percent) >= 100 ? 0 : 2)}%`
+}
+
+function fmtUsd(value: number) {
+  const sign = value >= 0 ? '+' : '-'
+  return `${sign}$${Math.abs(value).toFixed(2)}`
+}
+
+function fmtUsdAmount(value: number) {
+  return `$${value.toFixed(2)}`
 }
 
 function routeVenues(position: LivePosition, fills: LiveFillDetail[]) {
@@ -45,9 +56,35 @@ function loadLogo(src: string | null): Promise<HTMLImageElement | null> {
   if (!src) return Promise.resolve(null)
   return new Promise((resolve) => {
     const image = new Image()
-    image.onload = () => resolve(image)
-    image.onerror = () => resolve(null)
+    let settled = false
+    const finish = (result: HTMLImageElement | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      image.onload = null
+      image.onerror = null
+      resolve(result)
+    }
+    const timeout = setTimeout(() => finish(null), 3_000)
+    image.onload = () => finish(image)
+    image.onerror = () => finish(null)
     image.src = src
+  })
+}
+
+function withGenerationTimeout<T>(generation: Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Position card generation timed out')), 10_000)
+    generation.then(
+      (result) => {
+        clearTimeout(timeout)
+        resolve(result)
+      },
+      (error: unknown) => {
+        clearTimeout(timeout)
+        reject(error)
+      },
+    )
   })
 }
 
@@ -73,9 +110,9 @@ function drawOrbitalMark(ctx: CanvasRenderingContext2D, x: number, y: number, si
   ctx.restore()
 }
 
-async function createClosedPositionCard(position: LivePosition, fills: LiveFillDetail[]): Promise<Omit<ShareImage, 'url'>> {
-  const metrics = closedPositionShareMetrics(position)
-  if (!metrics) throw new Error('Unable to calculate closed-position performance')
+async function createPositionCard(position: LivePosition, fills: LiveFillDetail[], kind: PositionShareKind): Promise<Omit<ShareImage, 'url'>> {
+  const metrics = positionShareMetrics(position, kind)
+  if (!metrics) throw new Error('Unable to calculate position performance')
   const route = routeVenues(position, fills)
   const logos = await Promise.all(route.map(({ metadata }) => loadLogo(metadata.logo)))
   const canvas = document.createElement('canvas')
@@ -120,7 +157,7 @@ async function createClosedPositionCard(position: LivePosition, fills: LiveFillD
   ctx.fillStyle = '#64748b'
   ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
   ctx.textAlign = 'right'
-  ctx.fillText('CLOSED POSITION', 1128, 82)
+  ctx.fillText(metrics.title.toUpperCase(), 1128, 82)
   ctx.textAlign = 'left'
 
   ctx.fillStyle = '#67e8f9'
@@ -166,10 +203,26 @@ async function createClosedPositionCard(position: LivePosition, fills: LiveFillD
 
   ctx.fillStyle = '#64748b'
   ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
-  ctx.fillText('HOLD', 744, 446)
+  ctx.fillText(metrics.durationLabel, 744, 446)
   ctx.fillStyle = '#e2e8f0'
   ctx.font = '650 34px ui-monospace, SFMono-Regular, Menlo, monospace'
   ctx.fillText(metrics.holdDuration, 744, 490)
+
+  if (kind === 'active') {
+    ctx.fillStyle = '#64748b'
+    ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
+    ctx.fillText('DEPLOYED MARGIN', 960, 446)
+    ctx.fillStyle = '#e2e8f0'
+    ctx.font = '650 28px ui-monospace, SFMono-Regular, Menlo, monospace'
+    ctx.fillText(fmtUsdAmount(metrics.deployedCapital), 960, 490)
+  }
+
+  ctx.fillStyle = '#64748b'
+  ctx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace'
+  ctx.fillText(metrics.pnlLabel, 72, 438)
+  ctx.fillStyle = metrics.pnlValue >= 0 ? '#4ade80' : '#fb7185'
+  ctx.font = '650 28px ui-monospace, SFMono-Regular, Menlo, monospace'
+  ctx.fillText(fmtUsd(metrics.pnlValue), 72, 478)
 
   ctx.fillStyle = '#475569'
   ctx.font = "400 16px 'Geist Variable', system-ui, sans-serif"
@@ -178,39 +231,87 @@ async function createClosedPositionCard(position: LivePosition, fills: LiveFillD
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((value) => value ? resolve(value) : reject(new Error('Unable to encode performance card')), 'image/png')
   })
-  return { blob, file: new File([blob], `${position.asset.toLowerCase()}-closed-position.png`, { type: 'image/png' }) }
+  return { blob, file: new File([blob], `${position.asset.toLowerCase()}-${kind}-position.png`, { type: 'image/png' }) }
 }
 
-export function ClosedPositionShareDialog({ open, onOpenChange, position, fills }: Props) {
+type GenerationState = 'generating' | 'ready' | 'error'
+
+export function PositionShareDialog({ open, onOpenChange, position, fills, kind, generateCard = createPositionCard }: Props) {
+  const [generationPosition] = useState(position)
   const [image, setImage] = useState<ShareImage | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [generationState, setGenerationState] = useState<GenerationState>('generating')
+  const [generationFills, setGenerationFills] = useState<LiveFillDetail[] | null>(fills ?? null)
+  const [attempt, setAttempt] = useState(0)
   const detail = useLivePositionDetail(
     fills === undefined && open ? position.id : null,
     [position.venue_a, position.venue_b],
   )
-  const resolvedFills = fills ?? detail.data?.fills
 
   useEffect(() => {
-    if (!open || resolvedFills === undefined) return
+    setGenerationFills(fills ?? null)
+    setImage(null)
+    setMessage(null)
+    setGenerationState('generating')
+    setAttempt(0)
+  }, [fills, kind, position.id])
+
+  useEffect(() => {
+    if (generationFills === null && detail.data?.fills) setGenerationFills(detail.data.fills)
+  }, [detail.data?.fills, generationFills])
+
+  useEffect(() => {
+    if (generationFills === null && detail.error) {
+      setMessage(detail.error)
+      setGenerationState('error')
+    }
+  }, [detail.error, generationFills])
+
+  useEffect(() => {
+    if (!open || generationFills !== null || detail.error) return
+    const timeout = setTimeout(() => {
+      setMessage('Unable to load position details for this card.')
+      setGenerationState('error')
+    }, 10_000)
+    return () => clearTimeout(timeout)
+  }, [attempt, detail.error, generationFills, open])
+
+  useEffect(() => {
+    if (!open || generationFills === null) return
     let cancelled = false
     let url: string | null = null
     setImage(null)
     setMessage(null)
-    createClosedPositionCard(position, resolvedFills).then((result) => {
+    setGenerationState('generating')
+    withGenerationTimeout(generateCard(generationPosition, generationFills, kind)).then((result) => {
       url = URL.createObjectURL(result.blob)
       if (cancelled) {
         URL.revokeObjectURL(url)
         return
       }
       setImage({ ...result, url })
+      setGenerationState('ready')
     }).catch(() => {
-      if (!cancelled) setMessage('Unable to prepare this position card.')
+      if (!cancelled) {
+        setMessage('Unable to generate this position card.')
+        setGenerationState('error')
+      }
     })
     return () => {
       cancelled = true
       if (url) URL.revokeObjectURL(url)
     }
-  }, [open, position, resolvedFills])
+  }, [attempt, generateCard, generationFills, generationPosition, kind, open])
+
+  const retryGeneration = () => {
+    setMessage(null)
+    setGenerationState('generating')
+    setAttempt((value) => value + 1)
+    if (generationFills === null) {
+      void detail.refetch()
+      return
+    }
+  }
 
   const copyImage = async () => {
     if (!image) return
@@ -234,7 +335,7 @@ export function ClosedPositionShareDialog({ open, onOpenChange, position, fills 
   const nativeShare = async () => {
     if (!image) return
     try {
-      await navigator.share({ title: `${position.asset} closed position`, files: [image.file] })
+      await navigator.share({ title: `${position.asset} ${kind} position`, files: [image.file] })
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) setMessage('System sharing is unavailable.')
     }
@@ -242,23 +343,27 @@ export function ClosedPositionShareDialog({ open, onOpenChange, position, fills 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-[#080d15] text-slate-100 sm:max-w-2xl" showCloseButton={false}>
+      <DialogContent className="bg-[#080d15] text-slate-100 sm:max-w-2xl" showCloseButton={false} aria-busy={generationState === 'generating'}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.14em]">
-            <Share2Icon className="size-4 text-cyan-400" /> Share closed position
+            <Share2Icon className="size-4 text-cyan-400" /> Share {kind} position
           </DialogTitle>
         </DialogHeader>
         <DialogClose render={<Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" />}>
           <XIcon /><span className="sr-only">Close</span>
         </DialogClose>
-        {image ? <img src={image.url} alt={`${position.asset} closed position share card`} className="w-full rounded-lg ring-1 ring-white/10" /> : (
-          <div className="flex aspect-[40/21] items-center justify-center rounded-lg bg-muted/40 text-sm text-muted-foreground">{message ?? detail.error ?? 'Preparing preview...'}</div>
+        {image ? <img src={image.url} alt={`${position.asset} ${kind} position share card`} className="w-full rounded-lg ring-1 ring-white/10" /> : (
+          <div className="flex aspect-[40/21] flex-col items-center justify-center gap-3 rounded-lg bg-muted/40 text-sm text-muted-foreground" role="status" aria-live="polite">
+            {generationState === 'generating' && <span className="size-5 animate-spin rounded-full border-2 border-slate-500/40 border-t-cyan-400" aria-hidden="true" />}
+            <span>{generationState === 'generating' ? 'Generating...' : message ?? 'Unable to generate this position card.'}</span>
+            {generationState === 'error' && <Button variant="ghost" size="sm" onClick={retryGeneration}>Try again</Button>}
+          </div>
         )}
         {message && image && <p role="status" className="text-xs text-muted-foreground">{message}</p>}
         <DialogFooter className="border-white/[0.07] bg-[#080d15] sm:justify-between">
           <div className="flex flex-wrap gap-2">
-            <Button variant="ghost" onClick={copyImage} disabled={!image}><CopyIcon data-icon="inline-start" />Copy image</Button>
-            <Button variant="ghost" onClick={downloadImage} disabled={!image}><DownloadIcon data-icon="inline-start" />Download PNG</Button>
+            <Button variant="ghost" onClick={copyImage} disabled={generationState !== 'ready'}><CopyIcon data-icon="inline-start" />Copy image</Button>
+            <Button variant="ghost" onClick={downloadImage} disabled={generationState !== 'ready'}><DownloadIcon data-icon="inline-start" />Download PNG</Button>
           </div>
           {canShare && <Button variant="ghost" onClick={nativeShare}><Share2Icon data-icon="inline-start" />Share image</Button>}
         </DialogFooter>

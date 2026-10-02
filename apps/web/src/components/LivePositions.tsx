@@ -24,7 +24,7 @@ import { DeferredBoundary } from '@/components/DeferredBoundary'
 import { AssetIcon } from '@/components/AssetIcon'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { isActivePositionState, isClosedPositionState } from '@/lib/portfolio-position'
-import { ClosedPositionShareDialog } from '@/components/ClosedPositionShareDialog'
+import { PositionShareDialog } from '@/components/PositionShareDialog'
 import type { LiveFillDetail } from '@/hooks/useLivePositionDetail'
 
 const LivePositionDetail = lazy(() => import('@/components/LivePositionDetail').then((module) => ({ default: module.LivePositionDetail })))
@@ -414,9 +414,11 @@ export function LivePositions({
         </DeferredBoundary>
       )}
       {share && (
-        <ClosedPositionShareDialog
+        <PositionShareDialog
+          key={`closed:${share.position.id}`}
           open
           onOpenChange={(open) => { if (!open) setShare(null) }}
+          kind="closed"
           position={share.position}
           fills={share.fills}
         />
