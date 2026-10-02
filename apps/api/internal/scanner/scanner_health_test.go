@@ -20,6 +20,25 @@ type mutableScannerAdapter struct {
 	oiDemands [][]string
 }
 
+type notifyingDemandAdapter struct {
+	*mutableScannerAdapter
+	updates chan struct{}
+}
+
+func (a *notifyingDemandAdapter) SetOpenInterestDemandMarketKeys(marketKeys []string) {
+	a.mutableScannerAdapter.SetOpenInterestDemandMarketKeys(marketKeys)
+	if len(marketKeys) == 0 || len(a.data) == 0 {
+		return
+	}
+	a.data[0].OpenInterest = 1_000_000
+	select {
+	case a.updates <- struct{}{}:
+	default:
+	}
+}
+
+func (a *notifyingDemandAdapter) MarketDataUpdates() <-chan struct{} { return a.updates }
+
 func (a *mutableScannerAdapter) Name() string { return a.name }
 
 func (a *mutableScannerAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
@@ -56,6 +75,35 @@ func TestScanDemandsOnlySharedMarketsWithoutPublishingMissingOpenInterest(t *tes
 	if len(aster.oiDemands) != 2 || len(aster.oiDemands[1]) != 0 {
 		t.Fatalf("Aster OI demand after overlap removal = %+v, want empty replacement", aster.oiDemands)
 	}
+}
+
+func TestRunRescansWhenDemandedMarketDataBecomesReady(t *testing.T) {
+	now := time.Now()
+	aster := &notifyingDemandAdapter{
+		mutableScannerAdapter: &mutableScannerAdapter{name: "aster", data: []venue.MarketData{{
+			Venue: "aster", Asset: "PIPPIN", MarketKey: "PIPPINUSDT",
+			MarkPrice: 1, IndexPrice: 1, FundingRate: 0.001,
+			BidPrice: 0.99, BidSize: 1000, AskPrice: 1.01, AskSize: 1000,
+			Timestamp: now,
+		}}},
+		updates: make(chan struct{}, 1),
+	}
+	pacifica := &mutableScannerAdapter{name: "pacifica", data: []venue.MarketData{
+		healthyMarket("pacifica", "PIPPIN", -0.001, now),
+	}}
+	scanner := New(slog.New(slog.NewTextHandler(io.Discard, nil)), aster, pacifica)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go scanner.Run(ctx, time.Hour)
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(scanner.Opportunities()) == 1 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("Aster opportunity was not published after demanded OI became ready")
 }
 
 func TestScanPublishesStableOpportunityHealth(t *testing.T) {

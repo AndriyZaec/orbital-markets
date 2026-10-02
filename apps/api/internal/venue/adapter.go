@@ -90,6 +90,12 @@ type OpenInterestDemandSink interface {
 	SetOpenInterestDemandMarketKeys(marketKeys []string)
 }
 
+// MarketDataUpdateNotifier signals when asynchronously loaded components can
+// change which markets an adapter publishes between scheduled scanner runs.
+type MarketDataUpdateNotifier interface {
+	MarketDataUpdates() <-chan struct{}
+}
+
 // ExecutionDataRefresher refreshes target-specific market data required before
 // live execution. Discovery remains free to use the last valid cached value.
 type ExecutionDataRefresher interface {

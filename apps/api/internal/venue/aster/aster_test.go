@@ -375,6 +375,11 @@ func TestOpenInterestRefreshTargetsDemandedMarketsAndPreservesLastValue(t *testi
 	if err := adapter.refreshOpenInterestMarket(context.Background(), marketKey); err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case <-adapter.MarketDataUpdates():
+	default:
+		t.Fatal("OI demand synchronization did not notify market-data consumers")
+	}
 	if calls := serverState.openInterestCalls.Load(); calls != 1 {
 		t.Fatalf("open-interest requests = %d, want one", calls)
 	}
@@ -649,6 +654,7 @@ func newTestAdapter(restURL string) *Adapter {
 		pendingBooks:         make(map[string]marketState),
 		openInterestDemand:   make(map[string]struct{}),
 		openInterestWake:     make(chan struct{}, 1),
+		marketDataUpdates:    make(chan struct{}, 1),
 		openInterestFlights:  make(map[string]*openInterestRefreshCall),
 	}
 }
