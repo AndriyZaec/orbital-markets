@@ -82,19 +82,19 @@ export function portfolioPerformance(
 
   const byAsset = Array.from(assets, ([asset, accumulator]) => {
     const result = performance(accumulator)
-    return { asset, ...result }
+    return { asset, pnl: accumulator.pnl, ...result }
   }).flatMap((result) => result.value === null ? [] : [{
     asset: result.asset,
+    pnl: result.pnl,
     value: result.value,
     annualized: result.annualized,
-  }])
+  }]).sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl) || a.asset.localeCompare(b.asset))
+    .map(({ asset, value, annualized }) => ({ asset, value, annualized }))
 
   const totalPerformance = performance(total)
 
   return {
     ...totalPerformance,
-    // Input positions are newest-first, so Map insertion order preserves the
-    // most recently active assets for the share card.
     byAsset,
   }
 }

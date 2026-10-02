@@ -72,25 +72,29 @@ type assetState struct {
 }
 
 type Adapter struct {
-	mu               sync.RWMutex
-	assets           map[string]*assetState
-	logger           *slog.Logger
-	client           *http.Client
-	metadataMu       sync.Mutex
-	fundingURL       string
-	now              func() time.Time
-	streamGeneration uint64
-	streamConnected  bool
-	streamReceivedAt time.Time
+	mu                sync.RWMutex
+	assets            map[string]*assetState
+	logger            *slog.Logger
+	client            *http.Client
+	metadataMu        sync.Mutex
+	fundingURL        string
+	now               func() time.Time
+	streamGeneration  uint64
+	streamConnected   bool
+	streamReceivedAt  time.Time
+	wsURL             string
+	heartbeatInterval time.Duration
 }
 
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
-		assets:     make(map[string]*assetState),
-		logger:     logger,
-		client:     &http.Client{Timeout: 10 * time.Second},
-		fundingURL: fundingHistoryURL,
-		now:        time.Now,
+		assets:            make(map[string]*assetState),
+		logger:            logger,
+		client:            &http.Client{Timeout: 10 * time.Second},
+		fundingURL:        fundingHistoryURL,
+		now:               time.Now,
+		wsURL:             wsURL,
+		heartbeatInterval: 30 * time.Second,
 	}
 }
 
@@ -283,7 +287,7 @@ func (a *Adapter) Connect(ctx context.Context) error {
 }
 
 func (a *Adapter) connectAndListen(ctx context.Context) error {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, a.wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
@@ -303,60 +307,81 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 
 	// Track which symbols we've subscribed BBO for
 	bboSubscribed := make(map[string]bool)
+	heartbeat := time.NewTicker(a.heartbeatInterval)
+	defer heartbeat.Stop()
+	type readResult struct {
+		raw []byte
+		err error
+	}
+	reads := make(chan readResult, 1)
+	go func() {
+		for {
+			_, raw, err := conn.ReadMessage()
+			select {
+			case reads <- readResult{raw: raw, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-		}
-
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			return fmt.Errorf("read: %w", err)
-		}
-
-		var msg wsMessage
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			continue
-		}
-
-		switch msg.Channel {
-		case "prices":
-			var prices []wsPrice
-			if len(msg.Data) == 0 || msg.Data[0] != '[' {
+		case <-heartbeat.C:
+			if err := conn.WriteJSON(map[string]string{"method": "ping"}); err != nil {
+				return fmt.Errorf("heartbeat: %w", err)
+			}
+		case result := <-reads:
+			if result.err != nil {
+				return fmt.Errorf("read: %w", result.err)
+			}
+			var msg wsMessage
+			if err := json.Unmarshal(result.raw, &msg); err != nil {
 				continue
 			}
-			if err := json.Unmarshal(msg.Data, &prices); err != nil {
-				a.logger.Warn("pacifica: parse prices", "err", err)
-				continue
-			}
-			a.updatePrices(generation, prices)
 
-			// Subscribe to BBO for any new symbols we discovered
-			for _, p := range prices {
-				if bboSubscribed[p.Symbol] {
+			switch msg.Channel {
+			case "prices":
+				var prices []wsPrice
+				if len(msg.Data) == 0 || msg.Data[0] != '[' {
 					continue
 				}
-				if err := conn.WriteJSON(map[string]any{
-					"method": "subscribe",
-					"params": map[string]string{
-						"source": "bbo",
-						"symbol": p.Symbol,
-					},
-				}); err != nil {
-					a.logger.Warn("pacifica: subscribe bbo", "symbol", p.Symbol, "err", err)
+				if err := json.Unmarshal(msg.Data, &prices); err != nil {
+					a.logger.Warn("pacifica: parse prices", "err", err)
 					continue
 				}
-				bboSubscribed[p.Symbol] = true
-			}
+				a.updatePrices(generation, prices)
 
-		case "bbo":
-			var bbo wsBBO
-			if err := json.Unmarshal(msg.Data, &bbo); err != nil {
-				continue
+				// Subscribe to BBO for any new symbols we discovered
+				for _, p := range prices {
+					if bboSubscribed[p.Symbol] {
+						continue
+					}
+					if err := conn.WriteJSON(map[string]any{
+						"method": "subscribe",
+						"params": map[string]string{
+							"source": "bbo",
+							"symbol": p.Symbol,
+						},
+					}); err != nil {
+						a.logger.Warn("pacifica: subscribe bbo", "symbol", p.Symbol, "err", err)
+						continue
+					}
+					bboSubscribed[p.Symbol] = true
+				}
+
+			case "bbo":
+				var bbo wsBBO
+				if err := json.Unmarshal(msg.Data, &bbo); err != nil {
+					continue
+				}
+				a.updateBBO(generation, bbo)
 			}
-			a.updateBBO(generation, bbo)
 		}
 	}
 }

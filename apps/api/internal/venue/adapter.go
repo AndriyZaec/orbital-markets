@@ -83,6 +83,19 @@ type Adapter interface {
 	FetchMarketData(ctx context.Context) ([]MarketData, error)
 }
 
+// OpenInterestDemandSink accepts a complete set of venue market keys whose
+// open interest can contribute to a cross-venue opportunity. Implementations
+// must update demand without performing network I/O.
+type OpenInterestDemandSink interface {
+	SetOpenInterestDemandMarketKeys(marketKeys []string)
+}
+
+// ExecutionDataRefresher refreshes target-specific market data required before
+// live execution. Discovery remains free to use the last valid cached value.
+type ExecutionDataRefresher interface {
+	RefreshExecutionData(ctx context.Context, marketKey string) error
+}
+
 // MetadataRefresher is implemented by adapters whose execution constraints are
 // not continuously refreshed with market data. Scanner plan construction uses
 // it before reading fresh snapshots.

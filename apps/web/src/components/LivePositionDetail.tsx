@@ -10,13 +10,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { AssetIcon } from '@/components/AssetIcon'
-import { ExternalLinkIcon } from 'lucide-react'
+import { ExternalLinkIcon, Share2Icon } from 'lucide-react'
 import { venueMetadata } from '@/lib/venue-metadata'
 
 interface Props {
   position: LivePosition
   onClose: () => void
   onRefresh?: () => void
+  onShare?: (position: LivePosition, fills: LiveFillDetail[]) => void
 }
 
 function fmtPrice(n: number) {
@@ -114,28 +115,29 @@ function closeProgress(state: CloseState, positionState: string) {
   }
 }
 
-export function LivePositionDetail({ position: pos, onClose, onRefresh }: Props) {
+export function LivePositionDetail({ position: pos, onClose, onRefresh, onShare }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
-      <div className="h-[90vh] w-[580px] overflow-hidden rounded-lg border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} />
+      <div className="flex h-[90vh] w-[min(580px,calc(100vw-1rem))] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} onShare={onShare} />
       </div>
     </div>
   )
 }
 
-export function LivePositionPanel({ position: pos, onClose, onRefresh }: Props) {
+export function LivePositionPanel({ position: pos, onClose, onRefresh, onShare }: Props) {
   return (
     <aside className="flex h-full w-[360px] shrink-0 border-l border-border bg-card">
-      <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} compact />
+      <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} onShare={onShare} compact />
     </aside>
   )
 }
 
-function LivePositionContent({ position, onDismiss, onRefresh, compact = false }: {
+function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact = false }: {
   position: LivePosition
   onDismiss: () => void
   onRefresh?: () => void
+  onShare?: (position: LivePosition, fills: LiveFillDetail[]) => void
   compact?: boolean
 }) {
   const { data, loading, error: detailError, refetch } = useLivePositionDetail(position.id, [position.venue_a, position.venue_b])
@@ -179,11 +181,18 @@ function LivePositionContent({ position, onDismiss, onRefresh, compact = false }
               <h2 className="text-lg font-semibold text-foreground">{pos.asset}</h2>
               <Badge variant="outline" className={`text-[11px] ${stateColor(pos.state)}`}>{pos.state}</Badge>
             </div>
-            <button onClick={onDismiss} aria-label="Close position panel" className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </button>
+            <div className="flex items-center gap-1">
+              {onShare && pos.state === 'closed' && (
+                <button type="button" disabled={loading || !data} onClick={() => onShare(pos, fills)} aria-label="Share closed position" className="flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground disabled:cursor-wait disabled:opacity-40">
+                  <Share2Icon className="size-3.5" />
+                </button>
+              )}
+              <button onClick={onDismiss} aria-label="Close position panel" className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
           </div>
         )}
 

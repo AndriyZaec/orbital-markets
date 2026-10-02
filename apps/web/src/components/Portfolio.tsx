@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, Share2Icon, XIcon } from 'lucide-react'
 import { useLivePositions, type LivePosition } from '@/hooks/useLivePositions'
+import { useLiveActivity, type LiveActivityItem } from '@/hooks/useLiveActivity'
+import type { LiveFillDetail } from '@/hooks/useLivePositionDetail'
 import { useVenueReadiness, type VenueReadiness } from '@/hooks/useVenueReadiness'
 import { AssetIcon } from '@/components/AssetIcon'
 import { Button } from '@/components/ui/button'
@@ -12,21 +14,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { portfolioPositionCategory } from '@/lib/portfolio-position'
+import { isActivePositionState, isClosedPositionState, portfolioPositionCategory } from '@/lib/portfolio-position'
 import { venueMetadata } from '@/lib/venue-metadata'
 import {
   portfolioPerformance,
   type PortfolioPerformance,
 } from '@/lib/portfolio-performance'
+import { LivePositionDetail } from '@/components/LivePositionDetail'
+import { ClosedPositionShareDialog } from '@/components/ClosedPositionShareDialog'
 
 // Portfolio is the primary account/position surface for closed-beta users.
-// It reuses live balance / live position / venue-authority hooks — no new
-// backend endpoints are added here. Analytics remains in the codebase and
-// its endpoints keep working; only the nav surface changes.
 
 interface Props {
   onConnectWallets: () => void
   onViewPositions: () => void
+  onOpenPosition: (position: LivePosition) => void
 }
 
 // null-safe so disconnected/unknown values render as "--" instead of "$0.00".
@@ -37,11 +39,6 @@ function fmtUsd(n: number | null | undefined, decimals = 2) {
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(2)}K`
   return `${sign}$${abs.toFixed(decimals)}`
-}
-
-function fmtPct(n: number) {
-  if (!Number.isFinite(n)) return '--'
-  return `${(n * 100).toFixed(2)}%`
 }
 
 function fmtReturn(n: number | null) {
@@ -57,7 +54,9 @@ const MASKED_VALUE = '****'
 // state so unknown states still render legibly instead of blanking.
 function actionLabel(state: string): string {
   switch (state.toLowerCase()) {
+    case 'pending': return 'Pending'
     case 'opening': return 'Opening'
+    case 'opened': return 'Opened'
     case 'open': return 'Opened'
     case 'monitoring': return 'Monitoring'
     case 'closing': return 'Closing'
@@ -89,36 +88,22 @@ function categorize(p: LivePosition) {
   return portfolioPositionCategory(p.state, p.hedge_mismatch)
 }
 
-export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
+export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }: Props) {
   const { positions, loading: positionsLoading, error: positionsError } = useLivePositions()
   // One typed readiness layer, shared with the header and ConnectAccounts.
   const { pacifica, hyperliquid, aster, aggregate: readiness } = useVenueReadiness()
   const [privateView, setPrivateView] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
-  const [openedAt] = useState(() => Date.now())
-  const activityAccountKey = `${pacifica.address ?? ''}|${hyperliquid.address ?? ''}|${aster.address ?? ''}`
-  const [activitySnapshot, setActivitySnapshot] = useState<{
-    accountKey: string
-    positions: LivePosition[]
-  } | null>(null)
+  const activity = useLiveActivity()
+  const [selectedClosedPosition, setSelectedClosedPosition] = useState<LivePosition | null>(null)
+  const [closedShare, setClosedShare] = useState<{ position: LivePosition; fills?: LiveFillDetail[] } | null>(null)
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    if (positionsLoading || activitySnapshot?.accountKey === activityAccountKey) return
-    let cancelled = false
-    queueMicrotask(() => {
-      if (!cancelled) {
-        setActivitySnapshot({ accountKey: activityAccountKey, positions: positions.slice(0, 10) })
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [activityAccountKey, activitySnapshot?.accountKey, positions, positionsLoading])
-
-  const recentActivity = activitySnapshot?.accountKey === activityAccountKey
-    ? activitySnapshot.positions
-    : []
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // Sum only venues that actually report a value. If no venue has
   // reported equity, keep the tile as "--" rather than showing $0.00.
@@ -153,20 +138,20 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
     return { openCount, degradedCount, openNotional, unrealizedPnl, realizedPnl, closedCount }
   }, [positions])
 
-  const recentPositions = positions.slice(0, 5)
+  const recentPositions = positions.filter((position) => isActivePositionState(position.state)).slice(0, 5)
   const unrealizedPerformance = useMemo(
     () => portfolioPerformance(positions.filter((position) => {
       const category = categorize(position)
       return category === 'open' || category === 'degraded'
-    }), openedAt),
-    [positions, openedAt],
+    }), now),
+    [positions, now],
   )
   const realizedPerformance = useMemo(
     () => portfolioPerformance(
       positions.filter((position) => position.state.toLowerCase() === 'closed'),
-      openedAt,
+      now,
     ),
-    [positions, openedAt],
+    [positions, now],
   )
   const sharedPerformance = realizedPerformance.value !== null ? realizedPerformance : unrealizedPerformance
 
@@ -285,9 +270,9 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
       <Section
         title="Live Positions"
         action={
-          positions.length > 0 && (
-            <button onClick={onViewPositions} className="text-[12px] text-muted-foreground hover:text-foreground">
-              Open positions panel →
+          recentPositions.length > 0 && (
+            <button type="button" aria-label="View all open positions" onClick={onViewPositions} className="text-[12px] text-muted-foreground hover:text-foreground">
+              View all →
             </button>
           )
         }
@@ -296,102 +281,68 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
         {!positionsError && positionsLoading && positions.length === 0 && (
           <p className="text-[12px] text-muted-foreground">Loading positions…</p>
         )}
-        {!positionsLoading && positions.length === 0 && (
+        {!positionsLoading && recentPositions.length === 0 && (
           <p className="text-[12px] text-muted-foreground">No live positions yet.</p>
         )}
         {recentPositions.length > 0 && (
-          <div className="rounded border border-border overflow-hidden">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="text-muted-foreground text-left bg-white/[0.02]">
-                  <th className="px-3 py-2 font-medium">Asset</th>
-                  <th className="px-3 py-2 font-medium">State</th>
-                  <th className="px-3 py-2 font-medium text-right">Notional</th>
-                  <th className="px-3 py-2 font-medium text-right">Basis Δ</th>
-                  <th className="px-3 py-2 font-medium text-right">{privateView ? 'Return' : 'P&L'}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentPositions.map((p) => {
-                  const cat = categorize(p)
-                  const stateColor =
-                    cat === 'degraded' ? 'text-red-400' : cat === 'open' ? 'text-green-400' : 'text-muted-foreground'
-                  return (
-                    <tr key={p.id} className="border-t border-border">
-                      <td className="px-3 py-2 font-medium text-foreground">
-                        <div className="flex items-center gap-2"><AssetIcon asset={p.asset} size="sm" />{p.asset}</div>
-                      </td>
-                      <td className={`px-3 py-2 ${stateColor}`}>{p.state}</td>
-                      <td className="px-3 py-2 text-right font-mono text-foreground">{privateView ? MASKED_VALUE : fmtUsd(p.notional)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-muted-foreground">{fmtPct(p.basis_change)}</td>
-                      <td
-                        className={`px-3 py-2 text-right font-mono ${
-                          p.total_pnl > 0 ? 'text-green-400' : p.total_pnl < 0 ? 'text-red-400' : 'text-foreground'
-                        }`}
-                      >
-                        {privateView
-                          ? fmtReturn(portfolioPerformance([p], openedAt).value)
-                          : fmtUsd(p.total_pnl)}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+          <div className="divide-y divide-border/70 border-y border-border/70">
+            {recentPositions.map((position) => {
+              const category = categorize(position)
+              const statusTone = category === 'degraded' ? 'text-orange-400' : position.state === 'pending' || position.state === 'closing' ? 'text-yellow-400' : 'text-green-400'
+              return (
+                <button
+                  key={position.id}
+                  type="button"
+                  onClick={() => onOpenPosition(position)}
+                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-1 py-3 text-left outline-none transition-colors hover:bg-white/[0.025] focus-visible:bg-white/[0.04] sm:grid-cols-[minmax(0,1fr)_120px_130px]"
+                >
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <AssetIcon asset={position.asset} size="sm" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-foreground">{position.asset}</span>
+                      <span className={`mt-0.5 flex items-center gap-1.5 text-[11px] capitalize ${statusTone}`}><span className="size-1.5 rounded-full bg-current" />{position.state}</span>
+                    </span>
+                  </span>
+                  <span className="hidden text-right font-mono text-xs text-muted-foreground sm:block">{privateView ? MASKED_VALUE : fmtUsd(position.notional)}</span>
+                  <span className={`text-right font-mono text-xs ${position.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {privateView ? fmtReturn(portfolioPerformance([position], now).value) : fmtUsd(position.total_pnl)}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         )}
       </Section>
 
-      {/* Recent activity — sourced from live positions we already fetched.
-          Honest label: we don't have a per-fill event log yet; each row is
-          the most recent state change on a live position. */}
-      <Section title="Recent Activity">
-        {recentActivity.length === 0 ? (
-          <p className="text-[12px] text-muted-foreground">No live activity yet.</p>
-        ) : (
-          <div className="rounded border border-border overflow-hidden">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="text-muted-foreground text-left bg-white/[0.02]">
-                  <th className="px-3 py-2 font-medium">When</th>
-                  <th className="px-3 py-2 font-medium">Asset</th>
-                  <th className="px-3 py-2 font-medium">Action</th>
-                  <th className="px-3 py-2 font-medium">Venues</th>
-                  <th className="px-3 py-2 font-medium text-right">Notional</th>
-                  <th className="px-3 py-2 font-medium text-right">{privateView ? 'Return' : 'P&L'}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentActivity.map((p) => {
-                  const closed = !!p.completed_at
-                  const action = closed ? 'Closed' : actionLabel(p.state)
-                  const ts = closed ? p.completed_at! : p.updated_at || p.opened_at || p.started_at
-                  const isTerminal = closed
-                  return (
-                    <tr key={p.id} className="border-t border-border">
-                      <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">{fmtRelative(ts, openedAt)}</td>
-                      <td className="px-3 py-2 font-medium text-foreground">
-                        <div className="flex items-center gap-2"><AssetIcon asset={p.asset} size="sm" />{p.asset}</div>
-                      </td>
-                      <td className={`px-3 py-2 ${isTerminal ? 'text-muted-foreground' : 'text-foreground'}`}>{action}</td>
-                      <td className="px-3 py-2 text-muted-foreground capitalize">
-                        {p.venue_a} · {p.venue_b}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-foreground">{privateView ? MASKED_VALUE : fmtUsd(p.notional)}</td>
-                      <td
-                        className={`px-3 py-2 text-right font-mono ${
-                          p.total_pnl > 0 ? 'text-green-400' : p.total_pnl < 0 ? 'text-red-400' : 'text-muted-foreground'
-                        }`}
-                      >
-                        {privateView
-                          ? fmtReturn(portfolioPerformance([p], openedAt).value)
-                          : fmtUsd(p.total_pnl)}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+      <Section title="Activity">
+        {activity.loading && activity.items.length === 0 && <p className="py-3 text-[12px] text-muted-foreground">Loading activity...</p>}
+        {activity.error && activity.items.length === 0 && (
+          <div className="flex items-center justify-between gap-3 py-3 text-[12px]"><span className="text-red-400">{activity.error}</span><button type="button" onClick={activity.refetch} className="text-cyan-400 hover:text-cyan-300">Retry</button></div>
+        )}
+        {!activity.loading && !activity.error && activity.items.length === 0 && <p className="py-3 text-[12px] text-muted-foreground">No activity yet.</p>}
+        {activity.items.length > 0 && (
+          <div className="divide-y divide-border/70 border-y border-border/70">
+            {activity.items.map((item) => (
+              <ActivityRow
+                key={item.id}
+                item={item}
+                 now={now}
+                onOpenPosition={onOpenPosition}
+                onOpenClosed={setSelectedClosedPosition}
+                 onShare={(position) => setClosedShare({ position })}
+              />
+            ))}
+          </div>
+        )}
+        {activity.nextCursor && (
+          <button type="button" onClick={activity.loadMore} disabled={activity.loadingMore} className="mt-2 self-start text-[12px] text-cyan-400 hover:text-cyan-300 disabled:opacity-50">
+            {activity.loadingMore ? 'Loading...' : 'Load more'}
+          </button>
+        )}
+        {activity.error && activity.items.length > 0 && (
+          <div className="mt-2 flex items-center gap-3 text-[12px]">
+            <span className="text-red-400">{activity.error}</span>
+            <button type="button" onClick={activity.refetch} className="text-cyan-400 hover:text-cyan-300">Refresh</button>
           </div>
         )}
       </Section>
@@ -400,6 +351,21 @@ export function Portfolio({ onConnectWallets, onViewPositions }: Props) {
         onOpenChange={setShareOpen}
         performance={sharePerformance}
       />
+      {selectedClosedPosition && (
+        <LivePositionDetail
+          position={selectedClosedPosition}
+          onClose={() => setSelectedClosedPosition(null)}
+          onShare={(position, fills) => setClosedShare({ position, fills })}
+        />
+      )}
+      {closedShare && (
+        <ClosedPositionShareDialog
+          open
+          onOpenChange={(open) => { if (!open) setClosedShare(null) }}
+          position={closedShare.position}
+          fills={closedShare.fills}
+        />
+      )}
     </div>
   )
 }
@@ -680,6 +646,65 @@ function PortfolioShareDialog({
   )
 }
 
+function ActivityRow({ item, now, onOpenPosition, onOpenClosed, onShare }: {
+  item: LiveActivityItem
+  now: number
+  onOpenPosition: (position: LivePosition) => void
+  onOpenClosed: (position: LivePosition) => void
+  onShare: (position: LivePosition) => void
+}) {
+  const position = item.position
+  const active = isActivePositionState(position.state)
+  const closed = isClosedPositionState(position.state)
+  const performance = portfolioPerformance([position], now)
+  const metric = performance.value === null ? '--' : fmtReturn(performance.value)
+  const activate = () => active ? onOpenPosition(position) : onOpenClosed(position)
+  const label = actionLabel(item.type || position.state)
+  const statusTone = closed ? 'text-slate-400' : position.state === 'degraded' ? 'text-orange-400' : 'text-cyan-400'
+
+  return (
+    <div
+      className="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-1 py-3 transition-colors hover:bg-white/[0.025] sm:grid-cols-[minmax(0,1fr)_minmax(150px,0.7fr)_130px_auto]"
+    >
+      <button
+        type="button"
+        aria-label={`${label} ${position.asset} position`}
+        onClick={activate}
+        className="col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-left outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60 sm:col-span-3 sm:grid-cols-[minmax(0,1fr)_minmax(150px,0.7fr)_130px]"
+      >
+        <span className="flex min-w-0 items-center gap-2.5">
+          <AssetIcon asset={position.asset} size="sm" />
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-medium text-foreground">{position.asset}</span>
+            <span className="mt-0.5 block truncate text-[11px] capitalize text-muted-foreground">{position.venue_a} / {position.venue_b}</span>
+            <span className={`mt-1 flex items-center gap-1.5 text-[10px] sm:hidden ${statusTone}`}><span className="size-1.5 rounded-full bg-current" />{label} · {fmtRelative(item.at, now)}</span>
+          </span>
+        </span>
+        <span className="hidden min-w-0 sm:block">
+          <span className={`flex items-center gap-1.5 text-xs ${statusTone}`}><span className="size-1.5 rounded-full bg-current" />{label}</span>
+          <span className="mt-0.5 block text-[10px] text-muted-foreground">{fmtRelative(item.at, now)}</span>
+        </span>
+        <span className="text-right">
+          <span className={`block font-mono text-xs ${position.total_pnl < 0 ? 'text-red-400' : 'text-green-400'}`}>{metric}</span>
+          <span className="mt-0.5 block text-[10px] text-muted-foreground">{performance.annualized ? 'APR' : 'ROI'}</span>
+        </span>
+      </button>
+      {closed ? (
+        <button
+          type="button"
+          aria-label={`Share ${position.asset} closed position`}
+          onClick={() => onShare(position)}
+          className="col-start-2 row-start-2 flex items-center gap-1 justify-self-end text-[11px] text-muted-foreground transition-colors hover:text-cyan-300 sm:col-start-4 sm:row-start-1"
+        >
+          <Share2Icon className="size-3.5" /> Share
+        </button>
+      ) : (
+        <span className="hidden sm:block" aria-hidden="true" />
+      )}
+    </div>
+  )
+}
+
 function Tile({
   label,
   value,
@@ -699,7 +724,7 @@ function Tile({
       <span className={`pointer-events-none absolute inset-x-0 top-0 h-px ${style.line}`} />
       <div className="relative">
         <p className="text-[11px] text-muted-foreground">{label}</p>
-        <p className={`mt-1 text-lg font-mono ${valueClassName ?? 'text-foreground'}`}>{value}</p>
+        <p className={`mt-1 text-lg font-mono ${valueClassName || 'text-foreground'}`}>{value}</p>
         {hint && <p className="mt-0.5 text-[11px] text-muted-foreground/70">{hint}</p>}
       </div>
     </div>
@@ -729,13 +754,13 @@ const TILE_TONES: Record<TileTone, { surface: string; line: string }> = {
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-2">
+    <section aria-label={title} className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <h2 className="text-[13px] font-semibold text-foreground">{title}</h2>
         {action}
       </div>
       {children}
-    </div>
+    </section>
   )
 }
 

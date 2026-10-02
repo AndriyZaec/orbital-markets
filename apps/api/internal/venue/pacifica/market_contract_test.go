@@ -2,14 +2,61 @@ package pacifica
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
+
+func TestConnectAndListenSendsHeartbeat(t *testing.T) {
+	heartbeat := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(response, request, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer connection.Close()
+		_ = connection.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		for {
+			_, raw, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message struct {
+				Method string `json:"method"`
+			}
+			if err := json.Unmarshal(raw, &message); err == nil && message.Method == "ping" {
+				heartbeat <- struct{}{}
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	adapter := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	adapter.wsURL = "ws" + strings.TrimPrefix(server.URL, "http")
+	adapter.heartbeatInterval = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = adapter.connectAndListen(ctx) }()
+
+	select {
+	case <-heartbeat:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Pacifica websocket heartbeat was not sent")
+	}
+}
 
 func TestFetchMarketDataReportsPriceComponentsBeforeFirstBookUpdate(t *testing.T) {
 	receivedAt := time.Date(2026, time.September, 25, 13, 0, 1, 0, time.UTC)

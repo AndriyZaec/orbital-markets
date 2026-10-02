@@ -10,6 +10,27 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 )
 
+func TestWriteExecutionDataNotReadyHidesInternalHealth(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeExecutionDataNotReady(recorder)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["code"] != livePrepareExecutionDataNotReady || response["retryable"] != true {
+		t.Fatalf("response = %+v", response)
+	}
+	for _, internal := range []string{"venue", "symbol", "status", "reason", "open_interest"} {
+		if _, found := response[internal]; found {
+			t.Fatalf("response exposed %q: %+v", internal, response)
+		}
+	}
+}
+
 func TestWritePlanErrorIncludesOpportunityHealth(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writePlanError(recorder, http.StatusUnprocessableEntity, &scanner.OpportunityStatusError{
