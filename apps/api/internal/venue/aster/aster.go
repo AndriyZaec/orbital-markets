@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -204,6 +205,9 @@ type Adapter struct {
 	openInterestFlightMu  sync.Mutex
 	openInterestFlights   map[string]*openInterestRefreshCall
 	openInterestScheduled bool
+	openInterestRequests  atomic.Uint64
+	openInterestFailures  atomic.Uint64
+	openInterestRetries   atomic.Uint64
 }
 
 func New(logger *slog.Logger) *Adapter {
@@ -452,6 +456,7 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 			a.lastStreamReceivedAt = a.now()
 		}
 	}
+	oiFresh, oiStale, oiExpired, oiMissing, oiQueued := a.openInterestCacheCountsLocked(a.now())
 	a.mu.Unlock()
 	a.logger.Info("aster REST market data reconciled",
 		"previous_symbols", previousCount,
@@ -466,6 +471,16 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 		"metadata_omitted_symbols", metadataOmitted,
 		"removed_symbols", removed,
 		"known_symbols", len(markets),
+		"oi_demanded", oiFresh+oiStale+oiExpired+oiMissing,
+		"oi_fresh", oiFresh,
+		"oi_stale", oiStale,
+		"oi_expired", oiExpired,
+		"oi_missing", oiMissing,
+		"oi_queued", oiQueued,
+		"oi_requests", a.openInterestRequests.Load(),
+		"oi_failures", a.openInterestFailures.Load(),
+		"oi_retries", a.openInterestRetries.Load(),
+		"oi_in_flight", a.openInterestInFlight(),
 	)
 	return nil
 }
@@ -1011,7 +1026,13 @@ func (a *Adapter) openInterestRefreshLoop(ctx context.Context) {
 				continue
 			}
 			if err := a.refreshOpenInterestMarket(ctx, marketKey); err != nil && ctx.Err() == nil {
-				a.logger.Warn("aster open interest refresh failed", "market", marketKey, "err", err)
+				a.logger.Warn("aster open interest refresh failed",
+					"market", marketKey,
+					"err", err,
+					"requests", a.openInterestRequests.Load(),
+					"failures", a.openInterestFailures.Load(),
+					"retries", a.openInterestRetries.Load(),
+				)
 			}
 			nextRequest = a.now().Add(openInterestRequestPace)
 		}
@@ -1066,6 +1087,35 @@ func (a *Adapter) rebalanceOpenInterestScheduleLocked(now time.Time) bool {
 	return true
 }
 
+func (a *Adapter) openInterestCacheCountsLocked(now time.Time) (fresh, stale, expired, missing, queued int) {
+	for marketKey := range a.openInterestDemand {
+		state, found := a.markets[marketKey]
+		if !found || !state.openInterestKnown || state.openInterestAt.IsZero() {
+			missing++
+		} else {
+			age := now.Sub(state.openInterestAt)
+			switch {
+			case age > openInterestExecutionAge || age < -maxClockSkew:
+				expired++
+			case age > openInterestRefreshAge:
+				stale++
+			default:
+				fresh++
+			}
+		}
+		if state.openInterestNext.IsZero() || !state.openInterestNext.After(now) {
+			queued++
+		}
+	}
+	return fresh, stale, expired, missing, queued
+}
+
+func (a *Adapter) openInterestInFlight() int {
+	a.openInterestFlightMu.Lock()
+	defer a.openInterestFlightMu.Unlock()
+	return len(a.openInterestFlights)
+}
+
 func openInterestRetryDelay(marketKey string, failures int) time.Duration {
 	if failures < 1 {
 		failures = 1
@@ -1102,10 +1152,14 @@ func (a *Adapter) refreshOpenInterestMarket(ctx context.Context, marketKey strin
 	}()
 
 	a.mu.RLock()
-	_, found := a.markets[marketKey]
+	state, found := a.markets[marketKey]
 	a.mu.RUnlock()
 	if !found {
 		return fmt.Errorf("unknown Aster market %s", marketKey)
+	}
+	a.openInterestRequests.Add(1)
+	if state.openInterestFails > 0 {
+		a.openInterestRetries.Add(1)
 	}
 
 	var response openInterestResponse
@@ -1114,6 +1168,9 @@ func (a *Adapter) refreshOpenInterestMarket(ctx context.Context, marketKey strin
 	now := a.now()
 	if err == nil && (response.Symbol != marketKey || !valid) {
 		err = fmt.Errorf("invalid Aster open interest for %s", marketKey)
+	}
+	if err != nil {
+		a.openInterestFailures.Add(1)
 	}
 
 	a.mu.Lock()

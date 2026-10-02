@@ -125,6 +125,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeExecutionDataNotReady(w)
 		return
 	}
+	s.logger.Info("live prepare: execution data ready", "opportunity_id", req.OpportunityID)
 	planVenues := livePlanVenues(plan)
 	if err := bindings.requireAccountsFor(planVenues); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

@@ -387,11 +387,17 @@ func TestOpenInterestRefreshTargetsDemandedMarketsAndPreservesLastValue(t *testi
 	if calls := serverState.openInterestCalls.Load(); calls != 1 {
 		t.Fatalf("fresh execution preflight made another request; calls = %d", calls)
 	}
+	if requests := adapter.openInterestRequests.Load(); requests != 1 {
+		t.Fatalf("observed OI requests = %d, want one", requests)
+	}
 
 	serverState.failETHOpenInterest.Store(true)
 	adapter.now = func() time.Time { return mutableMarketNow.Add(openInterestExecutionAge + time.Second) }
 	if err := adapter.RefreshExecutionData(context.Background(), "ETHUSDT"); err == nil {
 		t.Fatal("execution refresh succeeded during upstream failure")
+	}
+	if requests, failures := adapter.openInterestRequests.Load(), adapter.openInterestFailures.Load(); requests != 2 || failures != 1 {
+		t.Fatalf("OI request metrics = requests %d failures %d, want 2/1", requests, failures)
 	}
 	market := adapter.markets["ETHUSDT"]
 	if !market.openInterestKnown || market.openInterest != 1000 || !market.openInterestAt.Equal(mutableMarketNow) {
