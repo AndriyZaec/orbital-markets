@@ -71,13 +71,25 @@ func (k accountFeedKey) String() string {
 }
 
 type accountFeedEntry struct {
-	key       accountFeedKey
-	feed      liveAccountFeed
-	cancel    context.CancelFunc
-	refs      int
-	lastUsed  time.Time
-	operation sync.Mutex
-	mutations atomic.Uint64
+	key        accountFeedKey
+	feed       liveAccountFeed
+	cancel     context.CancelFunc
+	refs       int
+	lastUsed   time.Time
+	operation  sync.Mutex
+	submission accountSubmissionGate
+	mutations  atomic.Uint64
+}
+
+type accountSubmissionWaiter struct {
+	ready chan struct{}
+}
+
+type accountSubmissionGate struct {
+	mu              sync.Mutex
+	active          bool
+	priorityWaiters []*accountSubmissionWaiter
+	waiters         []*accountSubmissionWaiter
 }
 
 type accountFeedRegistry struct {
@@ -196,6 +208,79 @@ func (r *accountFeedRegistry) acquire(venue, account string, recovery bool) (*ac
 	}
 	r.entries[key] = entry
 	return &accountFeedLease{registry: r, entry: entry, created: true}, nil
+}
+
+func lockAccountSubmission(ctx context.Context, lease *accountFeedLease, priority bool) (func(), error) {
+	if lease == nil || lease.entry == nil {
+		return func() {}, nil
+	}
+	return lease.entry.submission.lock(ctx, priority)
+}
+
+func (g *accountSubmissionGate) lock(ctx context.Context, priority bool) (func(), error) {
+	waiter := &accountSubmissionWaiter{ready: make(chan struct{})}
+	g.mu.Lock()
+	if !g.active {
+		g.active = true
+		g.mu.Unlock()
+		return g.unlockFunc(), nil
+	}
+	if priority {
+		g.priorityWaiters = append(g.priorityWaiters, waiter)
+	} else {
+		g.waiters = append(g.waiters, waiter)
+	}
+	g.mu.Unlock()
+
+	select {
+	case <-waiter.ready:
+		return g.unlockFunc(), nil
+	case <-ctx.Done():
+		g.mu.Lock()
+		removed := removeSubmissionWaiter(&g.priorityWaiters, waiter) || removeSubmissionWaiter(&g.waiters, waiter)
+		if !removed {
+			g.unlockLocked()
+		}
+		g.mu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
+func (g *accountSubmissionGate) unlockFunc() func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			g.unlockLocked()
+		})
+	}
+}
+
+func (g *accountSubmissionGate) unlockLocked() {
+	var next *accountSubmissionWaiter
+	if len(g.priorityWaiters) > 0 {
+		next = g.priorityWaiters[0]
+		g.priorityWaiters = g.priorityWaiters[1:]
+	} else if len(g.waiters) > 0 {
+		next = g.waiters[0]
+		g.waiters = g.waiters[1:]
+	}
+	if next == nil {
+		g.active = false
+		return
+	}
+	close(next.ready)
+}
+
+func removeSubmissionWaiter(waiters *[]*accountSubmissionWaiter, target *accountSubmissionWaiter) bool {
+	for i, waiter := range *waiters {
+		if waiter == target {
+			*waiters = append((*waiters)[:i], (*waiters)[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // Lookup leases an existing feed without starting one for an arbitrary read request.

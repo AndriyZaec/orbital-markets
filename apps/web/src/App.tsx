@@ -48,8 +48,14 @@ const Portfolio = lazy(() => import('@/components/Portfolio').then((module) => (
 const ConnectAccounts = lazy(() => import('@/components/ConnectAccounts').then((module) => ({ default: module.ConnectAccounts })))
 const FundingChart = lazy(() => import('@/components/FundingChart').then((module) => ({ default: module.FundingChart })))
 
-function DeferredSurface({ label }: { label: string }) {
-  return <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">{label}</div>
+export function DeferredSurface({ label, className = 'w-full' }: { label: string; className?: string }) {
+  return (
+    <div className={`flex h-full items-center justify-center ${className}`} role="status" aria-label={label}>
+      <div className="animate-[loader-pulse_2s_ease-in-out_infinite]" aria-hidden="true">
+        <OrbitalLogo />
+      </div>
+    </div>
+  )
 }
 
 // Per-venue raw funding rate (single funding period, signed).
@@ -410,7 +416,7 @@ export default function App() {
 
         {activeView === 'trade' && selected && !selectedPosition && (
           <DeferredBoundary label="Execution panel">
-            <Suspense fallback={<DeferredSurface label="Loading execution panel..." />}>
+            <Suspense fallback={<DeferredSurface label="Loading execution panel" className="w-[340px] shrink-0 border-l border-border bg-card" />}>
               <OpportunityPanel
                 opportunity={selected}
                 lastUpdated={lastUpdated}
@@ -431,7 +437,7 @@ export default function App() {
 
         {activeView === 'trade' && selectedPosition && (
           <DeferredBoundary label="Position controls">
-            <Suspense fallback={<DeferredSurface label="Loading position controls..." />}>
+            <Suspense fallback={<DeferredSurface label="Loading position controls" className="w-[360px] shrink-0 border-l border-border bg-card" />}>
               <LivePositionPanel
                 position={selectedPosition}
                 onClose={() => setSelection(null)}
@@ -442,7 +448,7 @@ export default function App() {
 
         {showAccounts && (
           <DeferredBoundary label="Account management">
-            <Suspense fallback={<DeferredSurface label="Loading account management..." />}>
+            <Suspense fallback={<DeferredSurface label="Loading account management" className="w-[340px] shrink-0 border-l border-border bg-card" />}>
               <ConnectAccounts open onClose={() => setShowAccounts(false)} />
             </Suspense>
           </DeferredBoundary>
@@ -847,10 +853,10 @@ function OpportunityDetail({ opportunity: opp, notional, onNotionalChange, onBac
       <div className="px-5 py-2.5 flex items-center gap-6 border-b border-border shrink-0 overflow-x-auto">
         <DetailStatItem label="Long"><DetailVenueIcon venue={longVenue} /></DetailStatItem>
         <DetailStatItem label="Short"><DetailVenueIcon venue={shortVenue} /></DetailStatItem>
-        <DetailStatItem label="Max Leverage" value={maxLev === null ? (leverageIssue ?? 'Unavailable') : `${maxLev}x`} />
+        {(maxLev !== null || leverageIssue) && <DetailStatItem label="Max Leverage" value={maxLev === null ? leverageIssue! : `${maxLev}x`} />}
         <DetailStatItem label="1h Spread" value={fmtRate(opp.funding_spread)} mono />
         <DetailStatItem label="APR" value={fmtPct(opp.annualized_gross_edge)} mono />
-        <DetailStatItem label="APR x Max Lev" value={maxLev === null ? 'Unavailable' : fmtPct(opp.annualized_gross_edge * maxLev)} mono />
+        {maxLev !== null && <DetailStatItem label="APR x Max Lev" value={fmtPct(opp.annualized_gross_edge * maxLev)} mono />}
         <DetailStatItem label="Price Spread" value={fmtPct(opp.entry_spread_estimate, 4)} mono negative={opp.entry_spread_estimate < 0} />
         <DetailStatItem label="Best Price Capacity" value={fmtUsd(opp.best_price_capacity)} mono />
         <DetailStatItem label="Open Interest" value={fmtUsd(opp.available_notional)} mono />

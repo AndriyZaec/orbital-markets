@@ -21,7 +21,8 @@ import {
   type PortfolioPerformance,
 } from '@/lib/portfolio-performance'
 import { LivePositionDetail } from '@/components/LivePositionDetail'
-import { ClosedPositionShareDialog } from '@/components/ClosedPositionShareDialog'
+import { PositionShareDialog } from '@/components/PositionShareDialog'
+import type { PositionShareKind } from '@/lib/position-share'
 
 // Portfolio is the primary account/position surface for closed-beta users.
 
@@ -97,7 +98,12 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
   const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
   const activity = useLiveActivity()
   const [selectedClosedPosition, setSelectedClosedPosition] = useState<LivePosition | null>(null)
-  const [closedShare, setClosedShare] = useState<{ position: LivePosition; fills?: LiveFillDetail[] } | null>(null)
+  const [positionShare, setPositionShare] = useState<{
+    kind: PositionShareKind
+    position: LivePosition
+    fills?: LiveFillDetail[]
+    trigger?: HTMLButtonElement
+  } | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -329,7 +335,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
                  now={now}
                 onOpenPosition={onOpenPosition}
                 onOpenClosed={setSelectedClosedPosition}
-                 onShare={(position) => setClosedShare({ position })}
+                 onShare={(kind, position, trigger) => setPositionShare({ kind, position, trigger })}
               />
             ))}
           </div>
@@ -355,15 +361,22 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
         <LivePositionDetail
           position={selectedClosedPosition}
           onClose={() => setSelectedClosedPosition(null)}
-          onShare={(position, fills) => setClosedShare({ position, fills })}
+          onShare={(position, fills) => setPositionShare({ kind: 'closed', position, fills })}
         />
       )}
-      {closedShare && (
-        <ClosedPositionShareDialog
+      {positionShare && (
+        <PositionShareDialog
+          key={`${positionShare.kind}:${positionShare.position.id}`}
           open
-          onOpenChange={(open) => { if (!open) setClosedShare(null) }}
-          position={closedShare.position}
-          fills={closedShare.fills}
+          onOpenChange={(open) => {
+            if (open) return
+            const trigger = positionShare.trigger
+            setPositionShare(null)
+            window.requestAnimationFrame(() => trigger?.focus())
+          }}
+          kind={positionShare.kind}
+          position={positionShare.position}
+          fills={positionShare.fills}
         />
       )}
     </div>
@@ -651,11 +664,12 @@ function ActivityRow({ item, now, onOpenPosition, onOpenClosed, onShare }: {
   now: number
   onOpenPosition: (position: LivePosition) => void
   onOpenClosed: (position: LivePosition) => void
-  onShare: (position: LivePosition) => void
+  onShare: (kind: PositionShareKind, position: LivePosition, trigger: HTMLButtonElement) => void
 }) {
   const position = item.position
-  const active = isActivePositionState(position.state)
-  const closed = isClosedPositionState(position.state)
+  const closed = item.type === 'closed' || isClosedPositionState(position.state)
+  const active = !closed
+  const shareKind: PositionShareKind = closed ? 'closed' : 'active'
   const performance = portfolioPerformance([position], now)
   const metric = performance.value === null ? '--' : fmtReturn(performance.value)
   const activate = () => active ? onOpenPosition(position) : onOpenClosed(position)
@@ -664,7 +678,7 @@ function ActivityRow({ item, now, onOpenPosition, onOpenClosed, onShare }: {
 
   return (
     <div
-      className="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-1 py-3 transition-colors hover:bg-white/[0.025] sm:grid-cols-[minmax(0,1fr)_minmax(150px,0.7fr)_130px_auto]"
+      className="group grid grid-cols-[minmax(0,1fr)_80px] items-center gap-3 px-1 py-3 transition-colors hover:bg-white/[0.025] sm:grid-cols-[minmax(0,1fr)_minmax(150px,0.7fr)_130px_80px]"
     >
       <button
         type="button"
@@ -689,18 +703,18 @@ function ActivityRow({ item, now, onOpenPosition, onOpenClosed, onShare }: {
           <span className="mt-0.5 block text-[10px] text-muted-foreground">{performance.annualized ? 'APR' : 'ROI'}</span>
         </span>
       </button>
-      {closed ? (
-        <button
-          type="button"
-          aria-label={`Share ${position.asset} closed position`}
-          onClick={() => onShare(position)}
-          className="col-start-2 row-start-2 flex items-center gap-1 justify-self-end text-[11px] text-muted-foreground transition-colors hover:text-cyan-300 sm:col-start-4 sm:row-start-1"
-        >
-          <Share2Icon className="size-3.5" /> Share
-        </button>
-      ) : (
-        <span className="hidden sm:block" aria-hidden="true" />
-      )}
+      <button
+        type="button"
+        aria-label={`Share ${position.asset} ${shareKind} position`}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onShare(shareKind, position, event.currentTarget)
+        }}
+        className="col-start-2 row-start-2 flex w-20 items-center justify-end gap-1 text-[11px] text-muted-foreground transition-colors hover:text-cyan-300 sm:col-start-4 sm:row-start-1"
+      >
+        <Share2Icon className="size-3.5" /> Share
+      </button>
     </div>
   )
 }

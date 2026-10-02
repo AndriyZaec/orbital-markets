@@ -678,7 +678,11 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errLiveSubmissionNotSent) {
 			s.live.signingStore.Store(sigReq)
 			s.logger.Warn("live submit: request not sent", "request_id", signed.RequestID, "err", err)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":     "Order submission did not start. Try again.",
+				"code":      "SUBMISSION_NOT_SENT",
+				"retryable": true,
+			})
 			return
 		}
 		s.trackAmbiguousCloseSubmission(sigReq, err.Error())
@@ -1085,6 +1089,14 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "position not found"})
 		return
 	}
+	if pos.State == string(executor.ExecStateClosed) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"position_id":       id,
+			"reconciled_closed": true,
+			"signing_requests":  []any{},
+		})
+		return
+	}
 
 	if pos.State != string(executor.ExecStateOpen) && pos.State != string(executor.ExecStateDegraded) &&
 		pos.State != string(executor.ExecStateClosing) {
@@ -1094,21 +1106,6 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reconciledClosed, err := s.reconcilePositionAbsentFromVenues(
-		r.Context(), pos,
-	)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reconcile venue exposure"})
-		return
-	}
-	if reconciledClosed {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"position_id":       id,
-			"reconciled_closed": true,
-			"signing_requests":  []any{},
-		})
-		return
-	}
 	if pos.State == string(executor.ExecStateClosing) {
 		progress, progressErr := s.liveStore.GetCloseProgress(r.Context(), id)
 		if progressErr != nil {
@@ -1116,8 +1113,10 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if progress.Pending > 0 {
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error": "position close is still being reconciled; venue exposure remains or fresh venue state is unavailable",
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":     "Position close is still being reconciled. Try again shortly.",
+				"code":      "CLOSE_RECONCILING",
+				"retryable": true,
 			})
 			return
 		}
@@ -1135,6 +1134,21 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "trading agent authorization not registered; reauthorize both agents"})
 		return
 	}
+	if prepared, found, inProgress := s.live.signingStore.ExistingCloseBatch(id); found {
+		if inProgress {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":     "Position close submission is already in progress.",
+				"code":      "CLOSE_PREPARATION_IN_PROGRESS",
+				"retryable": true,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"position_id":      id,
+			"signing_requests": prepared,
+		})
+		return
+	}
 
 	fills, err := s.liveStore.GetFills(r.Context(), id)
 	if err != nil {
@@ -1147,63 +1161,58 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	closeFills := fills
-	venueDerived := false
-	if pos.State == string(executor.ExecStateDegraded) && s.live.accounts != nil {
-		closeFills, err = s.freshVenueExposureFills(
-			r.Context(), pos,
-		)
-		if err != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-			return
-		}
-		venueDerived = true
-	}
-
 	var signingRequests []*domain.SigningRequest
-	for _, fill := range closeFills {
-		if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
+	for _, fill := range fills {
+		if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
 			continue
+		}
+		if fill.Side != string(domain.SideLong) && fill.Side != string(domain.SideShort) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":     "Current close exposure is not ready. Try again shortly.",
+				"code":      "CLOSE_EXPOSURE_NOT_READY",
+				"retryable": true,
+			})
+			return
 		}
 		cloid := closeClientOrderID("close", id, fill.Leg, time.Now())
 		sigReq, err := s.buildCloseSigningRequestForBindings(r.Context(), fill, pos.Asset, cloid, bindings, false)
 		if err != nil {
 			s.logger.Error("live close: build close payload", "err", err, "id", id, "leg", fill.Leg)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{
-				"error": fmt.Sprintf("leg %d close payload failed: %s", fill.Leg, err),
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":     "Close preparation is temporarily unavailable. Try again shortly.",
+				"code":      "CLOSE_PREPARATION_UNAVAILABLE",
+				"retryable": true,
 			})
 			return
 		}
 		sigReq.PositionID = id
 		sigReq.Leg = fill.Leg
-		s.live.signingStore.Store(sigReq)
 		signingRequests = append(signingRequests, sigReq)
 	}
-	if len(signingRequests) == 0 && venueDerived {
-		changed, err := s.liveStore.MarkClosed(r.Context(), id)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to reconcile venue exposure"})
-			return
-		}
-		if changed {
-			s.trackLivePositionClosed(pos, "venue_reconciled")
-		}
-		s.liveStore.InsertEvent(r.Context(), id, "venue_reconciled_closed", executor.ExecStateClosed,
-			"fresh venue state shows no remaining position on either venue")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"position_id": id, "reconciled_closed": true, "signing_requests": []any{},
+
+	if len(signingRequests) == 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":     "Current close exposure is not ready. Try again shortly.",
+			"code":      "CLOSE_EXPOSURE_NOT_READY",
+			"retryable": true,
+		})
+		return
+	}
+	signingRequests, reused, inProgress := s.live.signingStore.ReuseOrStoreCloseBatch(id, signingRequests)
+	if inProgress {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":     "Position close submission is already in progress.",
+			"code":      "CLOSE_PREPARATION_IN_PROGRESS",
+			"retryable": true,
 		})
 		return
 	}
 
-	if len(signingRequests) == 0 {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "no filled legs to close"})
-		return
+	if !reused {
+		s.liveStore.InsertEvent(r.Context(), id, "close_prepared",
+			executor.ExecState(pos.State),
+			fmt.Sprintf("%d close orders prepared", len(signingRequests)))
 	}
-
-	s.liveStore.InsertEvent(r.Context(), id, "close_prepared",
-		executor.ExecState(pos.State),
-		fmt.Sprintf("%d close orders prepared", len(signingRequests)))
 
 	s.logger.Info("live close: signing requests ready",
 		"id", id, "asset", pos.Asset, "legs", len(signingRequests))
@@ -1285,17 +1294,6 @@ func (s *Server) freshVenueExposureFills(
 		})
 	}
 	return fills, nil
-}
-
-func (s *Server) reconcilePositionAbsentFromVenues(
-	ctx context.Context,
-	position *executor.LivePosition,
-) (bool, error) {
-	state, err := s.inspectPositionAfterCloseActivity(ctx, position)
-	if err != nil || state != positionExposureFlat {
-		return false, err
-	}
-	return s.markPositionClosedFromVenueTruth(ctx, position)
 }
 
 func (s *Server) inspectPositionAfterCloseActivity(
@@ -1709,7 +1707,9 @@ func (s *Server) buildCloseSigningRequestForBindings(
 		if s.closeMarkets == nil {
 			return nil, fmt.Errorf("current %s BBO for %s unavailable", fill.Venue, fill.Symbol)
 		}
-		market, marketErr := s.closeMarkets.MarketSnapshot(ctx, fill.Venue, marketAsset)
+		marketCtx, cancelMarket := context.WithTimeout(ctx, 3*time.Second)
+		defer cancelMarket()
+		market, marketErr := s.closeMarkets.MarketSnapshot(marketCtx, fill.Venue, marketAsset)
 		if marketErr != nil {
 			return nil, fmt.Errorf("current %s BBO for %s unavailable: %w", fill.Venue, fill.Symbol, marketErr)
 		}

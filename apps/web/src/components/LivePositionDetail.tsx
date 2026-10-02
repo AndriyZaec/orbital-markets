@@ -86,10 +86,10 @@ function closeProgress(state: CloseState, positionState: string) {
   switch (state.phase) {
     case 'preparing':
       return {
-        title: positionState === 'open' ? 'Preparing the close' : 'Checking venue exposure',
+        title: 'Preparing the close',
         detail: positionState === 'open'
-          ? 'Checking both venues and preparing the close orders.'
-          : 'Refreshing both venues before closing any remaining exposure.',
+          ? 'Preparing reduce-only close orders.'
+          : 'Preparing reduce-only orders for the recorded exposure.',
         progress: 12,
       }
     case 'signing':
@@ -119,7 +119,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh, onShare 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
       <div className="flex h-[90vh] w-[min(580px,calc(100vw-1rem))] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
-        <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} onShare={onShare} />
+        <LivePositionContent key={pos.id} position={pos} onDismiss={onClose} onRefresh={onRefresh} onShare={onShare} />
       </div>
     </div>
   )
@@ -128,7 +128,7 @@ export function LivePositionDetail({ position: pos, onClose, onRefresh, onShare 
 export function LivePositionPanel({ position: pos, onClose, onRefresh, onShare }: Props) {
   return (
     <aside className="flex h-full w-[360px] shrink-0 border-l border-border bg-card">
-      <LivePositionContent position={pos} onDismiss={onClose} onRefresh={onRefresh} onShare={onShare} compact />
+      <LivePositionContent key={pos.id} position={pos} onDismiss={onClose} onRefresh={onRefresh} onShare={onShare} compact />
     </aside>
   )
 }
@@ -164,6 +164,11 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
 
   const handleClose = () => {
     setConfirmClose(false)
+    liveClose.closePosition(pos.id, [pos.venue_a, pos.venue_b])
+  }
+
+  const handleRetryClose = () => {
+    liveClose.reset()
     liveClose.closePosition(pos.id, [pos.venue_a, pos.venue_b])
   }
 
@@ -324,7 +329,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
               <div className="flex flex-col gap-3">
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
                   {pos.state !== 'open'
-                    ? 'Refresh both venues and close any position for this asset? This may include exposure opened outside Orbital.'
+                    ? 'Close the remaining exposure recorded for this position?'
                     : 'Close both legs of this position?'}
                 </p>
                 <div className="grid grid-cols-2 gap-2">
@@ -348,7 +353,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
             {closeDone && liveClose.state.failed === 0 && (
               <p className="text-[11px] leading-relaxed text-green-400">
                 {liveClose.state.reconciled
-                  ? 'Venue state verified; no remaining exposure was found.'
+                  ? 'Position is already recorded as closed.'
                   : 'Position closed with all leg fills confirmed.'}
               </p>
             )}
@@ -358,6 +363,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
                 {liveClose.state.outcomes.filter((outcome) => outcome.status === 'failed').map((outcome, index) => (
                   <CloseFailure key={`${outcome.venue}-${outcome.symbol}-${index}`} outcome={outcome} />
                 ))}
+                <Button variant="secondary" size="sm" className="mt-2" onClick={handleRetryClose}>Try Close Again</Button>
               </div>
             )}
             {liveClose.state.phase === 'error' && (

@@ -202,6 +202,7 @@ type Adapter struct {
 	pendingBooks          map[string]marketState
 	openInterestDemand    map[string]struct{}
 	openInterestWake      chan struct{}
+	marketDataUpdates     chan struct{}
 	openInterestFlightMu  sync.Mutex
 	openInterestFlights   map[string]*openInterestRefreshCall
 	openInterestScheduled bool
@@ -224,11 +225,14 @@ func New(logger *slog.Logger) *Adapter {
 		pendingBooks:         make(map[string]marketState),
 		openInterestDemand:   make(map[string]struct{}),
 		openInterestWake:     make(chan struct{}, 1),
+		marketDataUpdates:    make(chan struct{}, 1),
 		openInterestFlights:  make(map[string]*openInterestRefreshCall),
 	}
 }
 
 func (a *Adapter) Name() string { return venueName }
+
+func (a *Adapter) MarketDataUpdates() <-chan struct{} { return a.marketDataUpdates }
 
 func (a *Adapter) SetOpenInterestDemandMarketKeys(marketKeys []string) {
 	demand := make(map[string]struct{}, len(marketKeys))
@@ -261,6 +265,7 @@ func (a *Adapter) SetOpenInterestDemandMarketKeys(marketKeys []string) {
 	a.logger.Info("aster open interest demand updated", "markets", len(demand))
 	if synchronized {
 		a.logger.Info("aster open interest demand synchronized", "markets", len(demand))
+		a.notifyMarketDataUpdate()
 	}
 	select {
 	case a.openInterestWake <- struct{}{}:
@@ -1196,8 +1201,16 @@ func (a *Adapter) refreshOpenInterestMarket(ctx context.Context, marketKey strin
 	a.mu.Unlock()
 	if synchronized {
 		a.logger.Info("aster open interest demand synchronized", "markets", demandCount)
+		a.notifyMarketDataUpdate()
 	}
 	return err
+}
+
+func (a *Adapter) notifyMarketDataUpdate() {
+	select {
+	case a.marketDataUpdates <- struct{}{}:
+	default:
+	}
 }
 
 func (a *Adapter) getJSON(ctx context.Context, path string, target any) error {

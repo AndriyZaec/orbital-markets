@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Portfolio } from '../src/components/Portfolio'
 import type { LivePosition } from '../src/hooks/useLivePositions'
+import type { LiveActivityItem } from '../src/hooks/useLiveActivity'
 
 const mocks = vi.hoisted(() => ({
   positions: [] as LivePosition[],
+  activityItems: [] as LiveActivityItem[],
 }))
 
 vi.mock('@/hooks/useLivePositions', () => ({
@@ -14,9 +16,18 @@ vi.mock('@/hooks/useLivePositions', () => ({
 
 vi.mock('@/hooks/useLiveActivity', () => ({
   useLiveActivity: () => ({
-    items: [], nextCursor: null, loading: false, loadingMore: false, error: null,
+    items: mocks.activityItems, nextCursor: null, loading: false, loadingMore: false, error: null,
     loadMore: vi.fn(), refetch: vi.fn(),
   }),
+}))
+
+vi.mock('@/components/PositionShareDialog', () => ({
+  PositionShareDialog: ({ kind, onOpenChange }: { kind: string; onOpenChange: (open: boolean) => void }) => (
+    <div role="dialog" aria-label={`Share ${kind} position`}>
+      <span>{kind === 'active' ? 'Active Position' : 'Closed Position'}</span>
+      <button type="button" onClick={() => onOpenChange(false)}>Close share</button>
+    </div>
+  ),
 }))
 
 vi.mock('@/hooks/useVenueReadiness', () => ({
@@ -75,6 +86,44 @@ const position = (id: string, state: string, asset: string): LivePosition => ({
 afterEach(() => {
   cleanup()
   mocks.positions = []
+  mocks.activityItems = []
+})
+
+describe('Portfolio activity sharing', () => {
+  it('shares active and closed positions without changing the action-column geometry', async () => {
+    const active = position('active-position', 'open', 'SOL')
+    const closed = { ...position('closed-position', 'closed', 'BTC'), completed_at: '2026-09-30T13:00:00Z' }
+    mocks.activityItems = [
+      { id: 'opened-active', type: 'opened', at: active.started_at, position: active },
+      { id: 'closed-complete', type: 'closed', at: closed.completed_at, position: closed },
+    ]
+    const onOpenPosition = vi.fn()
+
+    render(
+      <Portfolio
+        onConnectWallets={() => {}}
+        onViewPositions={() => {}}
+        onOpenPosition={onOpenPosition}
+      />,
+    )
+
+    const activeShare = screen.getByRole('button', { name: 'Share SOL active position' })
+    const closedShare = screen.getByRole('button', { name: 'Share BTC closed position' })
+    expect(activeShare.className).toContain('w-20')
+    expect(closedShare.className).toContain('w-20')
+
+    await userEvent.click(activeShare)
+    expect(screen.getByRole('dialog', { name: 'Share active position' })).toBeTruthy()
+    expect(screen.getByText('Active Position')).toBeTruthy()
+    expect(onOpenPosition).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close share' }))
+    await waitFor(() => expect(document.activeElement).toBe(activeShare))
+
+    await userEvent.click(closedShare)
+    expect(screen.getByRole('dialog', { name: 'Share closed position' })).toBeTruthy()
+    expect(screen.getByText('Closed Position')).toBeTruthy()
+  })
 })
 
 describe('Portfolio position navigation', () => {

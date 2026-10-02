@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { waitForClosedPosition } from '../src/lib/live-close.ts'
+import { withClosePreparationTimeout, waitForClosedPosition } from '../src/lib/live-close.ts'
 import { submitSignedActionsConcurrently } from '../src/lib/signed-submissions.ts'
 import type { SignedAction, SigningRequest, SubmissionResult } from '../src/types/signing.ts'
 
@@ -100,4 +100,22 @@ test('starts every signed close submission before waiting for the slowest venue'
   const settled = await submissions
   assert.deepEqual(settled.map(({ request }) => request.id), ['1', '2'])
   assert.ok(settled.every(({ outcome }) => outcome.status === 'fulfilled'))
+})
+
+test('bounds close preparation and states that no order was submitted', async () => {
+  await assert.rejects(
+    withClosePreparationTimeout((signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    }), 5),
+    /No close order was submitted/,
+  )
+})
+
+test('maps a close preparation network failure without exposing Failed to fetch', async () => {
+  await assert.rejects(
+    withClosePreparationTimeout(async () => {
+      throw new TypeError('Failed to fetch')
+    }),
+    /Unable to reach Orbital while preparing the close\. No close order was submitted/,
+  )
 })

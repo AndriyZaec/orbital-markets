@@ -35,16 +35,51 @@ func New(logger *slog.Logger, adapters ...venue.Adapter) *Scanner {
 func (s *Scanner) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	marketDataUpdates := s.marketDataUpdates(ctx)
 
 	s.scan(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-marketDataUpdates:
+			s.scan(ctx)
 		case <-ticker.C:
 			s.scan(ctx)
 		}
 	}
+}
+
+func (s *Scanner) marketDataUpdates(ctx context.Context) <-chan struct{} {
+	updates := make(chan struct{}, 1)
+	found := false
+	for _, adapter := range s.adapters {
+		notifier, ok := adapter.(venue.MarketDataUpdateNotifier)
+		if !ok {
+			continue
+		}
+		found = true
+		go func(source <-chan struct{}) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case _, open := <-source:
+					if !open {
+						return
+					}
+					select {
+					case updates <- struct{}{}:
+					default:
+					}
+				}
+			}
+		}(notifier.MarketDataUpdates())
+	}
+	if !found {
+		return nil
+	}
+	return updates
 }
 
 func (s *Scanner) Opportunities() []domain.Opportunity {

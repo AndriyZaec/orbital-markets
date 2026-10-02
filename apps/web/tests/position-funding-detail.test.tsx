@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   positionsRefetch: vi.fn(),
   closePosition: vi.fn(),
+  resetClose: vi.fn(),
   events: [] as LiveEventDetail[],
   fills: [] as LiveFillDetail[],
   closeState: {
@@ -48,6 +49,7 @@ vi.mock('@/hooks/useLiveClose', () => ({
   useLiveClose: () => ({
     state: mocks.closeState,
     closePosition: mocks.closePosition,
+    reset: mocks.resetClose,
   }),
 }))
 
@@ -273,7 +275,7 @@ describe('position-backed funding chart', () => {
   })
 
   it.each([
-    ['preparing', 0, 0, 'Preparing the close', 'Checking both venues and preparing the close orders.'],
+    ['preparing', 0, 0, 'Preparing the close', 'Preparing reduce-only close orders.'],
     ['signing', 0, 2, 'Authorizing close orders', 'Authorizing order 1 of 2.'],
     ['submitting', 1, 2, 'Closing both legs', '1 of 2 close orders submitted.'],
     ['confirming', 2, 2, 'Confirming the close', 'Waiting for both venues to report the final fills.'],

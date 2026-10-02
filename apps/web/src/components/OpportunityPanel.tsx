@@ -368,13 +368,13 @@ export function OpportunityPanel({
         </div>
 
         {/* Shared leverage */}
-        <div className="px-5 py-4 border-b border-border">
+        {(maxLev !== null || leverageIssue || plan) && <div className="px-5 py-4 border-b border-border">
           <div className="mb-2">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Leverage</span>
-              <span className="text-[11px] text-muted-foreground/70">
-                {maxLev === null ? (leverageIssue ?? 'Leverage unavailable') : `Pair max ${maxLev}x`}
-              </span>
+              {(maxLev !== null || leverageIssue) && <span className="text-[11px] text-muted-foreground/70">
+                {maxLev === null ? leverageIssue : `Pair max ${maxLev}x`}
+              </span>}
             </div>
             {plan && (
               <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70">
@@ -391,7 +391,7 @@ export function OpportunityPanel({
               onChange={setLeverage}
             />
           )}
-        </div>
+        </div>}
 
         {/* Entry Type */}
         <div className="px-5 py-4 border-b border-border">
@@ -526,7 +526,7 @@ export function OpportunityPanel({
             disabled={!marketAvailable || !plan?.executable || executing || planUpdating || !notionalValid}
             onClick={handleExecute}
           >
-            {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+            {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : leverageCapabilityBlocked ? 'Execution Unavailable' : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
           </Button>
         ) : (
           <>
@@ -547,7 +547,7 @@ export function OpportunityPanel({
               {!marketAvailable
                 ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}`
                 : isFullyReady
-                ? hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
+                ? leverageCapabilityBlocked ? 'Execution Unavailable' : hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
                 : noSelectedWallets
                   ? 'Connect Wallets to Go Live'
                   : 'Accounts Not Ready'}

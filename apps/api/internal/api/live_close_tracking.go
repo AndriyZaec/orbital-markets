@@ -30,12 +30,14 @@ func (s *Server) trackCloseSubmission(req *domain.SigningRequest, result *domain
 	}
 	if !result.Accepted {
 		s.markCloseFailed(s.ctx, req, result.Error)
+		s.live.signingStore.CompleteCloseSubmission(req)
 		return
 	}
 	if err := s.liveStore.MarkClosing(s.ctx, req.PositionID); err != nil {
 		s.markCloseDegraded(s.ctx, req.PositionID)
 		return
 	}
+	s.live.signingStore.CompleteCloseSubmission(req)
 	s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_leg_submitted", executor.ExecStateClosing,
 		fmt.Sprintf("leg=%d venue=%s client_order_id=%s", req.Leg, req.Venue, req.ClientOrderID))
 
@@ -65,6 +67,7 @@ func (s *Server) recordAmbiguousCloseSubmission(req *domain.SigningRequest, reas
 		s.markCloseDegraded(s.ctx, req.PositionID)
 		return false
 	}
+	s.live.signingStore.CompleteCloseSubmission(req)
 	s.liveStore.InsertEvent(s.ctx, req.PositionID, "close_leg_uncertain", executor.ExecStateClosing,
 		fmt.Sprintf("leg=%d venue=%s client_order_id=%s", req.Leg, req.Venue, req.ClientOrderID))
 	return true

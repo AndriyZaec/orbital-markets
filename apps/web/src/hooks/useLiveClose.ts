@@ -1,9 +1,9 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { apiError, apiFetch, apiResponseError } from '@/lib/api'
 import { useVenueAuthority } from './useVenueAuthority'
 import type { SigningRequest, SignedAction, SubmissionResult } from '@/types/signing'
 import { useTradingAgents } from './useTradingAgents'
-import { waitForClosedPosition } from '@/lib/live-close'
+import { waitForClosedPosition, withClosePreparationTimeout } from '@/lib/live-close'
 import { liveAccountsQuery, liveVenueBindingsBody } from '@/lib/live-bindings'
 import { submitSignedActionsConcurrently } from '@/lib/signed-submissions'
 import type { Venue } from '@/agents/types'
@@ -43,6 +43,8 @@ const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 const closeConfirmationAttempts = 12
 const closeConfirmationPollMs = 2_000
 
+class CloseSubmissionNotSentError extends Error {}
+
 async function waitForClose(positionId: string, accounts: Record<string, string>): Promise<void> {
   const query = liveAccountsQuery(accounts)
   await waitForClosedPosition({
@@ -62,6 +64,7 @@ async function waitForClose(positionId: string, accounts: Record<string, string>
 
 export function useLiveClose() {
   const [state, setState] = useState<CloseState>(INITIAL)
+  const closingRef = useRef(false)
   const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
   const tradingAgents = useTradingAgents()
 
@@ -69,6 +72,8 @@ export function useLiveClose() {
     positionId: string,
     venues: [Venue, Venue] = ['pacifica', 'hyperliquid'],
   ) => {
+    if (closingRef.current) return
+    closingRef.current = true
     const authorityByVenue: Record<Venue, string | null> = {
       pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
     }
@@ -79,6 +84,7 @@ export function useLiveClose() {
     }
     if (venues.some((venue) => !authorityByVenue[venue])) {
       setState({ ...INITIAL, phase: 'error', errors: ['Both venue accounts must be connected'] })
+      closingRef.current = false
       return
     }
     const accounts = Object.fromEntries(venues.map((venue) => [venue, authorityByVenue[venue]!]))
@@ -86,14 +92,15 @@ export function useLiveClose() {
     setState({ ...INITIAL, phase: 'preparing' })
 
     try {
-      const resp = await apiFetch(`/api/v1/live/close/${positionId}`, {
+      const resp = await withClosePreparationTimeout((signal) => apiFetch(`/api/v1/live/close/${positionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(liveVenueBindingsBody(
           accounts,
           agents,
         )),
-      })
+        signal,
+      }))
       if (!resp.ok) {
         const b = await resp.json().catch(() => ({}))
         throw apiError(resp.status, 'Unable to prepare the position close. Please try again.', b)
@@ -129,13 +136,16 @@ export function useLiveClose() {
           body: JSON.stringify(signed),
         })
         if (!submitResp.ok) {
-          const b = await submitResp.json().catch(() => ({}))
+          const b: { code?: string; error?: string } = await submitResp.json().catch(() => ({}))
+          const error = apiError(submitResp.status, 'Order submission failed. Check the position before retrying.', b)
+          if (b.code === 'SUBMISSION_NOT_SENT') throw new CloseSubmissionNotSentError(error.message)
+          if (submitResp.status >= 500) throw error
           return {
             request_id: signed.request_id,
             client_order_id: signed.client_order_id,
             venue: signed.venue,
             accepted: false,
-            error: apiError(submitResp.status, 'Order submission failed. Check the position before retrying.', b).message,
+            error: error.message,
             submitted_at: '',
             responded_at: '',
           }
@@ -145,8 +155,14 @@ export function useLiveClose() {
 
       for (const { request: req, outcome } of submittedActions) {
         if (outcome.status === 'rejected') {
-          errors.push(`${req.venue} ${req.symbol}: submission response uncertain; checking position state`)
-          outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'uncertain' })
+          if (outcome.reason instanceof CloseSubmissionNotSentError) {
+            failed++
+            errors.push(`${req.venue} ${req.symbol}: ${outcome.reason.message}`)
+            outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'failed', error: outcome.reason.message })
+          } else {
+            errors.push(`${req.venue} ${req.symbol}: submission response uncertain; checking position state`)
+            outcomes.push({ venue: req.venue, symbol: req.symbol, status: 'uncertain' })
+          }
         } else {
           const result = outcome.value
           if (!result.accepted && !result.uncertain) {
@@ -185,10 +201,15 @@ export function useLiveClose() {
         phase: 'error',
         errors: [e instanceof Error ? e.message : 'Unknown error'],
       }))
+    } finally {
+      closingRef.current = false
     }
   }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
 
-  const reset = useCallback(() => setState(INITIAL), [])
+  const reset = useCallback(() => {
+    closingRef.current = false
+    setState(INITIAL)
+  }, [])
 
   return { state, closePosition, reset }
 }

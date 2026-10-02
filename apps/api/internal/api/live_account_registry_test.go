@@ -103,6 +103,96 @@ func TestAccountSubmissionInvalidatesUnlockedRecoveryRead(t *testing.T) {
 	}
 }
 
+func TestReduceOnlySubmissionDoesNotWaitForAccountOperationLock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	feed := &fakeAccountFeed{submitResult: &domain.SubmissionResult{Accepted: true}}
+	registry := newAccountFeedRegistry(ctx, map[string]accountFeedFactory{
+		"venue": &fixedAccountFeedFactory{feed: feed},
+	}, accountFeedRegistryConfig{})
+	lease, err := registry.Acquire("venue", "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	unblockBackground := lockAccountFeeds(lease)
+	defer unblockBackground()
+
+	server := &Server{live: &LiveDeps{accounts: registry}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := server.submitSignedAction(ctx, domain.SignedAction{
+			Venue: "venue", SignerAddress: "account-a",
+		}, &domain.SigningRequest{
+			Venue: "venue", Account: "account-a", ReduceOnly: true, Action: "close",
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("reduce-only submission waited for the account operation lock")
+	}
+}
+
+func TestAccountSubmissionGatePrioritizesQueuedClose(t *testing.T) {
+	var gate accountSubmissionGate
+	unlockActive, err := gate.lock(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type acquired struct {
+		name   string
+		unlock func()
+	}
+	result := make(chan acquired, 2)
+	go func() {
+		unlock, lockErr := gate.lock(context.Background(), false)
+		if lockErr == nil {
+			result <- acquired{name: "open", unlock: unlock}
+		}
+	}()
+	waitForSubmissionQueues(t, &gate, 0, 1)
+	go func() {
+		unlock, lockErr := gate.lock(context.Background(), true)
+		if lockErr == nil {
+			result <- acquired{name: "close", unlock: unlock}
+		}
+	}()
+	waitForSubmissionQueues(t, &gate, 1, 1)
+
+	unlockActive()
+	first := <-result
+	if first.name != "close" {
+		t.Fatalf("first queued submission = %q, want close", first.name)
+	}
+	first.unlock()
+	second := <-result
+	if second.name != "open" {
+		t.Fatalf("second queued submission = %q, want open", second.name)
+	}
+	second.unlock()
+}
+
+func waitForSubmissionQueues(t *testing.T, gate *accountSubmissionGate, priority, normal int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		gate.mu.Lock()
+		ready := len(gate.priorityWaiters) == priority && len(gate.waiters) == normal
+		gate.mu.Unlock()
+		if ready {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("submission queues did not reach priority=%d normal=%d", priority, normal)
+}
+
 type fakeAccountFeedFactory struct {
 	starts           atomic.Int64
 	stops            atomic.Int64

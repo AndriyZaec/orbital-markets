@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -50,7 +51,108 @@ func TestLiveCloseUsesPersistedResidualExposure(t *testing.T) {
 	}
 }
 
-func TestLiveCloseReconcilesRecordedExposureAbsentFromBothVenues(t *testing.T) {
+func TestLiveCloseReusesPreparedSigningRequests(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	prepare := func() []domain.SigningRequest {
+		request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+			"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+			"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
+		}))
+		response := httptest.NewRecorder()
+		server.handleLiveClose(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+		}
+		var body struct {
+			SigningRequests []domain.SigningRequest `json:"signing_requests"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.SigningRequests
+	}
+
+	first := prepare()
+	server.closeMarkets = closeQuoteTestSource{err: errors.New("market source unavailable")}
+	second := prepare()
+	if len(first) != 1 || len(second) != 1 || first[0].ID != second[0].ID || first[0].ClientOrderID != second[0].ClientOrderID {
+		t.Fatalf("prepared requests were not reused: first=%+v second=%+v", first, second)
+	}
+	if _, err := server.live.signingStore.ValidateAndConsume(domain.SignedAction{
+		RequestID: first[0].ID, ClientOrderID: first[0].ClientOrderID, Venue: first[0].Venue,
+		SignerAddress: first[0].Signer, Signature: "signature",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveClose(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "CLOSE_PREPARATION_IN_PROGRESS") {
+		t.Fatalf("status = %d body = %s, want retryable in-progress conflict", response.Code, response.Body.String())
+	}
+}
+
+func TestLiveCloseIsIdempotentAfterPositionClosed(t *testing.T) {
+	server, database := newResidualExposureServer(t)
+	if _, err := database.Exec(`UPDATE live_positions SET state = 'closed' WHERE id = 'position-residual'`); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+	}))
+	response := httptest.NewRecorder()
+	server.handleLiveClose(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reconciled_closed":true`) {
+		t.Fatalf("status = %d body = %s, want reconciled closed", response.Code, response.Body.String())
+	}
+}
+
+func TestLiveCloseDoesNotWaitForAccountOperationLock(t *testing.T) {
+	server, _ := newResidualExposureServer(t)
+	registryCtx, cancelRegistry := context.WithCancel(context.Background())
+	t.Cleanup(cancelRegistry)
+	server.live.accounts = newAccountFeedRegistry(registryCtx, map[string]accountFeedFactory{
+		"pacifica":    &fakeAccountFeedFactory{},
+		"hyperliquid": &fakeAccountFeedFactory{},
+	}, accountFeedRegistryConfig{})
+
+	accounts, err := server.live.acquireAccountContext(map[string]string{
+		"pacifica": "sol-wallet", "hyperliquid": "0xwallet",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer accounts.Release()
+	unlock := accounts.Lock()
+
+	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
+		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
+	}))
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.handleLiveClose(response, request)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		unlock()
+	case <-time.After(100 * time.Millisecond):
+		unlock()
+		<-done
+		t.Fatal("live close waited for the account operation lock")
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestLiveCloseUsesPersistedExposureWithoutVenueRefresh(t *testing.T) {
 	server, database := newResidualExposureServer(t)
 	registryCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -66,6 +168,7 @@ func TestLiveCloseReconcilesRecordedExposureAbsentFromBothVenues(t *testing.T) {
 
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
@@ -80,19 +183,19 @@ func TestLiveCloseReconcilesRecordedExposureAbsentFromBothVenues(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if !body.ReconciledClosed || len(body.SigningRequests) != 0 {
-		t.Fatalf("body = %+v, want venue-reconciled close without signing", body)
+	if body.ReconciledClosed || len(body.SigningRequests) != 1 {
+		t.Fatalf("body = %+v, want a close request from persisted exposure", body)
 	}
 	var state string
 	if err := database.QueryRow(`SELECT state FROM live_positions WHERE id = 'position-residual'`).Scan(&state); err != nil {
 		t.Fatal(err)
 	}
-	if state != string(executor.ExecStateClosed) {
-		t.Fatalf("state = %q, want closed", state)
+	if state != string(executor.ExecStateDegraded) {
+		t.Fatalf("state = %q, want degraded until a close order is accepted", state)
 	}
 }
 
-func TestLiveCloseReconcilesStaleClosingPositionAbsentFromBothVenues(t *testing.T) {
+func TestLiveClosePreparesStaleClosingPositionWithoutVenueRefresh(t *testing.T) {
 	server, database := newResidualExposureServer(t)
 	if _, err := database.Exec(`UPDATE live_positions SET state = 'closing' WHERE id = 'position-residual'`); err != nil {
 		t.Fatal(err)
@@ -111,11 +214,12 @@ func TestLiveCloseReconcilesStaleClosingPositionAbsentFromBothVenues(t *testing.
 
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
 
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reconciled_closed":true`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"signing_requests":[{`) {
 		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
 }
@@ -174,7 +278,8 @@ func TestLiveCloseDoesNotRetryPendingClosingPosition(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
 
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "still being reconciled") {
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "CLOSE_RECONCILING") ||
+		!strings.Contains(response.Body.String(), `"retryable":true`) {
 		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
 }
@@ -215,7 +320,7 @@ func TestStartupRecoveryClosesPendingPositionAbsentFromVenues(t *testing.T) {
 	}
 }
 
-func TestLiveCloseIgnoresFreshMonitorTimestampAfterOldCloseAttempt(t *testing.T) {
+func TestLiveCloseRetriesOldResolvedCloseWithoutVenueRefresh(t *testing.T) {
 	server, database := newResidualExposureServer(t)
 	if _, err := database.Exec(`
 		UPDATE live_positions SET updated_at = ? WHERE id = 'position-residual';
@@ -240,11 +345,12 @@ func TestLiveCloseIgnoresFreshMonitorTimestampAfterOldCloseAttempt(t *testing.T)
 
 	request := httptest.NewRequest("POST", "/api/v1/live/close/position-residual", jsonBody(t, map[string]string{
 		"account_pacifica": "sol-wallet", "account_hyperliquid": "0xwallet",
+		"agent_pacifica": "sol-agent", "agent_hyperliquid": "0xagent",
 	}))
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
 
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reconciled_closed":true`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"signing_requests":[{`) {
 		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
 }
@@ -291,11 +397,11 @@ func TestLiveCloseKeepsRecordedExposureWhenVenuePositionExists(t *testing.T) {
 		t.Fatal(err)
 	}
 	if state != string(executor.ExecStateDegraded) {
-		t.Fatalf("state = %q, want degraded", state)
+		t.Fatalf("state = %q, want degraded until a close order is accepted", state)
 	}
 }
 
-func TestLiveCloseUsesFreshVenueExposureWhenRecordedFillsAreMissing(t *testing.T) {
+func TestLiveCloseReturnsRetryableErrorWhenRecordedFillsAreMissing(t *testing.T) {
 	server, database := newResidualExposureServer(t)
 	if _, err := database.Exec(`DELETE FROM live_fills WHERE position_id = 'position-residual'`); err != nil {
 		t.Fatal(err)
@@ -322,17 +428,9 @@ func TestLiveCloseUsesFreshVenueExposureWhenRecordedFillsAreMissing(t *testing.T
 	response := httptest.NewRecorder()
 	server.handleLiveClose(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
-	}
-	var body struct {
-		SigningRequests []domain.SigningRequest `json:"signing_requests"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if len(body.SigningRequests) != 1 || body.SigningRequests[0].Amount != 2.75 || body.SigningRequests[0].Side != "ask" {
-		t.Fatalf("signing requests = %+v, want venue-derived Pacifica close", body.SigningRequests)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"CLOSE_EXPOSURE_NOT_READY"`) ||
+		!strings.Contains(response.Body.String(), `"retryable":true`) {
+		t.Fatalf("status = %d body = %s, want retryable exposure error", response.Code, response.Body.String())
 	}
 }
 
