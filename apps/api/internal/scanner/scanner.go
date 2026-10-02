@@ -185,17 +185,19 @@ func (s *Scanner) scan(ctx context.Context) {
 }
 
 type marketCollection struct {
-	byAsset       map[string][]venue.MarketData
-	assetsByVenue map[string]map[string]struct{}
-	fetchFailed   map[string]bool
+	byAsset         map[string][]venue.MarketData
+	assetsByVenue   map[string]map[string]struct{}
+	discoveryAssets map[string]map[string]string
+	fetchFailed     map[string]bool
 }
 
 // collectByAsset gathers snapshots from all adapters grouped by normalized asset name.
 func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
 	collection := marketCollection{
-		byAsset:       make(map[string][]venue.MarketData),
-		assetsByVenue: make(map[string]map[string]struct{}, len(s.adapters)),
-		fetchFailed:   make(map[string]bool),
+		byAsset:         make(map[string][]venue.MarketData),
+		assetsByVenue:   make(map[string]map[string]struct{}, len(s.adapters)),
+		discoveryAssets: make(map[string]map[string]string),
+		fetchFailed:     make(map[string]bool),
 	}
 	now := time.Now()
 
@@ -210,6 +212,13 @@ func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
 		s.sourceRevisions[venueName]++
 		collection.assetsByVenue[venueName] = make(map[string]struct{})
 		for _, md := range data {
+			if isDiscoverable(md, now) {
+				asset := strings.ToUpper(strings.TrimSpace(md.Asset))
+				if collection.discoveryAssets[asset] == nil {
+					collection.discoveryAssets[asset] = make(map[string]string)
+				}
+				collection.discoveryAssets[asset][venueName] = md.MarketKey
+			}
 			if !isValid(md, now) {
 				continue
 			}
@@ -217,7 +226,27 @@ func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
 			collection.assetsByVenue[venueName][md.Asset] = struct{}{}
 		}
 	}
+	collection.publishOpenInterestDemand(s.adapters)
 	return collection
+}
+
+func (c marketCollection) publishOpenInterestDemand(adapters []venue.Adapter) {
+	for _, adapter := range adapters {
+		sink, ok := adapter.(venue.OpenInterestDemandSink)
+		if !ok || c.fetchFailed[adapter.Name()] {
+			continue
+		}
+		marketKeys := make([]string, 0)
+		for _, marketsByVenue := range c.discoveryAssets {
+			marketKey, found := marketsByVenue[adapter.Name()]
+			if !found || len(marketsByVenue) < 2 {
+				continue
+			}
+			marketKeys = append(marketKeys, marketKey)
+		}
+		sort.Strings(marketKeys)
+		sink.SetOpenInterestDemandMarketKeys(marketKeys)
+	}
 }
 
 func (c marketCollection) unavailableReasons(opportunity domain.Opportunity) []domain.OpportunityAvailabilityReason {
@@ -286,21 +315,38 @@ func cloneOpportunity(opportunity domain.Opportunity) domain.Opportunity {
 	return opportunity
 }
 
-// isValid filters out snapshots that are stale or have broken data.
-func isValid(md venue.MarketData, now time.Time) bool {
-	if md.MarkPrice < minMarkPrice {
+func isDiscoverable(md venue.MarketData, now time.Time) bool {
+	if !hasBasicMarketComponents(md, now) {
 		return false
 	}
-	if md.IndexPrice < minMarkPrice {
+	if math.IsNaN(md.FundingRate) || math.IsInf(md.FundingRate, 0) {
 		return false
 	}
-	if md.OpenInterest <= 0 {
+	return positiveFinite(md.BidPrice) && positiveFinite(md.AskPrice) && md.AskPrice >= md.BidPrice &&
+		positiveFinite(md.BidSize) && positiveFinite(md.AskSize)
+}
+
+func hasBasicMarketComponents(md venue.MarketData, now time.Time) bool {
+	if math.IsNaN(md.MarkPrice) || math.IsInf(md.MarkPrice, 0) || md.MarkPrice < minMarkPrice {
+		return false
+	}
+	if math.IsNaN(md.IndexPrice) || math.IsInf(md.IndexPrice, 0) || md.IndexPrice < minMarkPrice {
 		return false
 	}
 	if !md.Timestamp.IsZero() && now.Sub(md.Timestamp) > maxSnapshotAge {
 		return false
 	}
 	return true
+}
+
+func positiveFinite(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+// isValid filters out snapshots that are stale or have broken data.
+func isValid(md venue.MarketData, now time.Time) bool {
+	return hasBasicMarketComponents(md, now) && md.OpenInterest > 0 &&
+		!math.IsNaN(md.OpenInterest) && !math.IsInf(md.OpenInterest, 0)
 }
 
 // compareSnapshots builds an opportunity from two venue snapshots of the same asset.

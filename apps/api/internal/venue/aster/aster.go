@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,16 +21,19 @@ import (
 )
 
 const (
-	venueName               = "aster"
-	defaultRESTURL          = "https://fapi.asterdex.com"
-	defaultWSURL            = "wss://fstream.asterdex.com/stream?streams=!markPrice@arr@1s/!bookTicker"
-	fullRESTRefreshPeriod   = 15 * time.Minute
-	websocketReconnectWait  = 5 * time.Second
-	maxResponseBytes        = 8 << 20
-	maxSnapshotAge          = 30 * time.Second
-	maxClockSkew            = 5 * time.Second
-	openInterestWorkers     = 8
-	maxPendingStreamSymbols = 2048
+	venueName                = "aster"
+	defaultRESTURL           = "https://fapi.asterdex.com"
+	defaultWSURL             = "wss://fstream.asterdex.com/stream?streams=!markPrice@arr@1s/!bookTicker"
+	fullRESTRefreshPeriod    = 15 * time.Minute
+	openInterestRefreshAge   = 15 * time.Minute
+	openInterestExecutionAge = 30 * time.Minute
+	openInterestRetryWait    = 30 * time.Second
+	openInterestRequestPace  = 250 * time.Millisecond
+	websocketReconnectWait   = 5 * time.Second
+	maxResponseBytes         = 8 << 20
+	maxSnapshotAge           = 30 * time.Second
+	maxClockSkew             = 5 * time.Second
+	maxPendingStreamSymbols  = 2048
 )
 
 type exchangeFilter struct {
@@ -165,6 +169,14 @@ type marketState struct {
 	bookGeneration    uint64
 	openInterest      float64
 	openInterestKnown bool
+	openInterestAt    time.Time
+	openInterestNext  time.Time
+	openInterestFails int
+}
+
+type openInterestRefreshCall struct {
+	done chan struct{}
+	err  error
 }
 
 // Adapter combines an atomic Futures V3 REST bootstrap with all-market
@@ -180,13 +192,18 @@ type Adapter struct {
 	wsDialer  *websocket.Dialer
 	now       func() time.Time
 
-	streamGeneration     uint64
-	streamConnected      bool
-	streamSynchronized   bool
-	lastStreamReceivedAt time.Time
-	unknownStreamSymbols map[string]struct{}
-	pendingMarks         map[string]marketState
-	pendingBooks         map[string]marketState
+	streamGeneration      uint64
+	streamConnected       bool
+	streamSynchronized    bool
+	lastStreamReceivedAt  time.Time
+	unknownStreamSymbols  map[string]struct{}
+	pendingMarks          map[string]marketState
+	pendingBooks          map[string]marketState
+	openInterestDemand    map[string]struct{}
+	openInterestWake      chan struct{}
+	openInterestFlightMu  sync.Mutex
+	openInterestFlights   map[string]*openInterestRefreshCall
+	openInterestScheduled bool
 }
 
 func New(logger *slog.Logger) *Adapter {
@@ -201,10 +218,69 @@ func New(logger *slog.Logger) *Adapter {
 		unknownStreamSymbols: make(map[string]struct{}),
 		pendingMarks:         make(map[string]marketState),
 		pendingBooks:         make(map[string]marketState),
+		openInterestDemand:   make(map[string]struct{}),
+		openInterestWake:     make(chan struct{}, 1),
+		openInterestFlights:  make(map[string]*openInterestRefreshCall),
 	}
 }
 
 func (a *Adapter) Name() string { return venueName }
+
+func (a *Adapter) SetOpenInterestDemandMarketKeys(marketKeys []string) {
+	demand := make(map[string]struct{}, len(marketKeys))
+	for _, marketKey := range marketKeys {
+		marketKey = strings.ToUpper(strings.TrimSpace(marketKey))
+		if marketKey != "" {
+			demand[marketKey] = struct{}{}
+		}
+	}
+
+	a.mu.Lock()
+	unchanged := len(demand) == len(a.openInterestDemand)
+	if unchanged {
+		for marketKey := range demand {
+			if _, found := a.openInterestDemand[marketKey]; !found {
+				unchanged = false
+				break
+			}
+		}
+	}
+	if unchanged {
+		a.mu.Unlock()
+		return
+	}
+	a.openInterestDemand = demand
+	a.openInterestScheduled = false
+	synchronized := a.rebalanceOpenInterestScheduleLocked(a.now())
+	a.mu.Unlock()
+
+	a.logger.Info("aster open interest demand updated", "markets", len(demand))
+	if synchronized {
+		a.logger.Info("aster open interest demand synchronized", "markets", len(demand))
+	}
+	select {
+	case a.openInterestWake <- struct{}{}:
+	default:
+	}
+}
+
+func (a *Adapter) RefreshExecutionData(ctx context.Context, marketKey string) error {
+	marketKey = strings.ToUpper(strings.TrimSpace(marketKey))
+	a.mu.RLock()
+	state, found := a.markets[marketKey]
+	now := a.now()
+	age := now.Sub(state.openInterestAt)
+	fresh := found && state.openInterestKnown &&
+		!state.openInterestAt.IsZero() && age >= -maxClockSkew && age <= openInterestExecutionAge
+	a.mu.RUnlock()
+	if fresh {
+		return nil
+	}
+	if err := a.refreshOpenInterestMarket(ctx, marketKey); err != nil {
+		return fmt.Errorf("refresh execution data: %w", err)
+	}
+	return nil
+}
 
 func (a *Adapter) OrderRules(symbol string) (OrderRules, bool) {
 	a.mu.RLock()
@@ -230,8 +306,18 @@ func (a *Adapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 		bookFreshAt := state.bookUpdatedAt
 		bookFresh := snapshotTimeFresh(state.bookUpdatedAt, now)
 		if a.streamGeneration > 0 {
-			bookFresh = streamHealthy && state.bookGeneration == a.streamGeneration
-			bookFreshAt = a.lastStreamReceivedAt
+			switch {
+			case streamHealthy:
+				bookFresh = state.bookGeneration == a.streamGeneration
+				bookFreshAt = a.lastStreamReceivedAt
+			case !a.streamConnected || !a.streamSynchronized:
+				// Keep a fresh last-known book visible while a short reconnect is
+				// reconciled. Normal component freshness still bounds this fallback.
+				bookFresh = snapshotTimeFresh(state.bookUpdatedAt, now)
+			default:
+				bookFresh = false
+				bookFreshAt = a.lastStreamReceivedAt
+			}
 		}
 		if state.fundingIntervalHours <= 0 ||
 			!snapshotTimeFresh(state.markUpdatedAt, now) ||
@@ -283,7 +369,7 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 	if err != nil {
 		return err
 	}
-	restMarkets, err := a.fetchRESTMarkets(ctx, metadata.active, !token.synchronize)
+	restMarkets, err := a.fetchRESTMarkets(ctx, metadata.active)
 	if err != nil {
 		return err
 	}
@@ -351,6 +437,9 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 			if !state.openInterestKnown && previous.openInterestKnown {
 				state.openInterest = previous.openInterest
 				state.openInterestKnown = true
+				state.openInterestAt = previous.openInterestAt
+				state.openInterestNext = previous.openInterestNext
+				state.openInterestFails = previous.openInterestFails
 			}
 		}
 		markets[symbol] = state
@@ -413,6 +502,7 @@ func (a *Adapter) Run(ctx context.Context) {
 		}
 	}
 	go a.restRefreshLoop(ctx)
+	go a.openInterestRefreshLoop(ctx)
 	for {
 		err := a.connectAndListen(ctx)
 		if ctx.Err() != nil {
@@ -812,7 +902,7 @@ func (r OrderRules) valid() bool {
 }
 
 func (a *Adapter) fetchRESTMarkets(
-	ctx context.Context, metadata map[string]marketMetadata, refreshOpenInterest bool,
+	ctx context.Context, metadata map[string]marketMetadata,
 ) (restMarketSnapshot, error) {
 	var premiums []premiumIndex
 	var books []bookTicker
@@ -880,67 +970,177 @@ func (a *Adapter) fetchRESTMarkets(
 		}
 		markets[symbol] = state
 	}
-	if refreshOpenInterest {
-		a.fetchOpenInterest(ctx, markets)
-	}
 	return restMarketSnapshot{
 		markets: markets, markCount: markCount, indexCount: indexCount,
 		fundingCount: fundingCount, bookCount: bookCount,
 	}, nil
 }
 
-func (a *Adapter) fetchOpenInterest(ctx context.Context, markets map[string]marketState) {
-	type result struct {
-		symbol string
-		value  float64
-		err    error
-	}
-	jobs := make(chan string)
-	results := make(chan result)
-	workers := min(openInterestWorkers, len(markets))
-	symbols := make([]string, 0, len(markets))
-	for symbol := range markets {
-		symbols = append(symbols, symbol)
-	}
-	var group sync.WaitGroup
-	group.Add(workers)
-	for range workers {
-		go func() {
-			defer group.Done()
-			for symbol := range jobs {
-				var response openInterestResponse
-				err := a.getJSON(ctx, "/fapi/v3/openInterest?symbol="+url.QueryEscape(symbol), &response)
-				value, valid := finiteDecimal(response.OpenInterest)
-				if err == nil && (response.Symbol != symbol || !valid || value < 0) {
-					err = fmt.Errorf("invalid Aster open interest for %s", symbol)
-				}
-				results <- result{symbol: symbol, value: value, err: err}
-			}
-		}()
-	}
-	go func() {
-		for _, symbol := range symbols {
-			jobs <- symbol
+func (a *Adapter) openInterestRefreshLoop(ctx context.Context) {
+	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
+	nextRequest := time.Time{}
+	for {
+		now := a.now()
+		marketKey, dueAt, found := a.nextOpenInterestMarket(now)
+		if !found {
+			dueAt = now.Add(time.Hour)
 		}
-		close(jobs)
-		group.Wait()
-		close(results)
+		if nextRequest.After(dueAt) {
+			dueAt = nextRequest
+		}
+		delay := dueAt.Sub(now)
+		if delay < 0 {
+			delay = 0
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.openInterestWake:
+			continue
+		case <-timer.C:
+			if !found {
+				continue
+			}
+			if err := a.refreshOpenInterestMarket(ctx, marketKey); err != nil && ctx.Err() == nil {
+				a.logger.Warn("aster open interest refresh failed", "market", marketKey, "err", err)
+			}
+			nextRequest = a.now().Add(openInterestRequestPace)
+		}
+	}
+}
+
+func (a *Adapter) nextOpenInterestMarket(now time.Time) (string, time.Time, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	marketKeys := make([]string, 0, len(a.openInterestDemand))
+	for marketKey := range a.openInterestDemand {
+		if _, found := a.markets[marketKey]; found {
+			marketKeys = append(marketKeys, marketKey)
+		}
+	}
+	sort.Strings(marketKeys)
+	var selected string
+	var selectedAt time.Time
+	for _, marketKey := range marketKeys {
+		dueAt := a.markets[marketKey].openInterestNext
+		if dueAt.IsZero() {
+			dueAt = now
+		}
+		if selected == "" || dueAt.Before(selectedAt) {
+			selected = marketKey
+			selectedAt = dueAt
+		}
+	}
+	return selected, selectedAt, selected != ""
+}
+
+func (a *Adapter) rebalanceOpenInterestScheduleLocked(now time.Time) bool {
+	if a.openInterestScheduled || len(a.openInterestDemand) == 0 {
+		return false
+	}
+	marketKeys := make([]string, 0, len(a.openInterestDemand))
+	for marketKey := range a.openInterestDemand {
+		state, found := a.markets[marketKey]
+		if !found || !state.openInterestKnown {
+			return false
+		}
+		marketKeys = append(marketKeys, marketKey)
+	}
+	sort.Strings(marketKeys)
+	spacing := openInterestRefreshAge / time.Duration(len(marketKeys))
+	for i, marketKey := range marketKeys {
+		state := a.markets[marketKey]
+		state.openInterestNext = now.Add(time.Duration(i+1) * spacing)
+		a.markets[marketKey] = state
+	}
+	a.openInterestScheduled = true
+	return true
+}
+
+func openInterestRetryDelay(marketKey string, failures int) time.Duration {
+	if failures < 1 {
+		failures = 1
+	}
+	shift := min(failures-1, 4)
+	delay := openInterestRetryWait * time.Duration(1<<shift)
+	var hash uint32
+	for _, char := range marketKey {
+		hash = hash*33 + uint32(char)
+	}
+	return delay + time.Duration(hash%uint32(delay/4+1))
+}
+
+func (a *Adapter) refreshOpenInterestMarket(ctx context.Context, marketKey string) (err error) {
+	a.openInterestFlightMu.Lock()
+	if call, found := a.openInterestFlights[marketKey]; found {
+		a.openInterestFlightMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-call.done:
+			return call.err
+		}
+	}
+	call := &openInterestRefreshCall{done: make(chan struct{})}
+	a.openInterestFlights[marketKey] = call
+	a.openInterestFlightMu.Unlock()
+	defer func() {
+		a.openInterestFlightMu.Lock()
+		call.err = err
+		delete(a.openInterestFlights, marketKey)
+		close(call.done)
+		a.openInterestFlightMu.Unlock()
 	}()
 
-	failures := 0
-	for result := range results {
-		if result.err != nil {
-			failures++
-			continue
+	a.mu.RLock()
+	_, found := a.markets[marketKey]
+	a.mu.RUnlock()
+	if !found {
+		return fmt.Errorf("unknown Aster market %s", marketKey)
+	}
+
+	var response openInterestResponse
+	err = a.getJSON(ctx, "/fapi/v3/openInterest?symbol="+url.QueryEscape(marketKey), &response)
+	value, valid := positiveDecimal(response.OpenInterest)
+	now := a.now()
+	if err == nil && (response.Symbol != marketKey || !valid) {
+		err = fmt.Errorf("invalid Aster open interest for %s", marketKey)
+	}
+
+	a.mu.Lock()
+	state, stillActive := a.markets[marketKey]
+	synchronized := false
+	demandCount := len(a.openInterestDemand)
+	if stillActive {
+		if err == nil {
+			state.openInterest = value
+			state.openInterestKnown = true
+			state.openInterestAt = now
+			state.openInterestNext = now.Add(openInterestRefreshAge)
+			state.openInterestFails = 0
+		} else {
+			state.openInterestFails++
+			state.openInterestNext = now.Add(openInterestRetryDelay(marketKey, state.openInterestFails))
 		}
-		state := markets[result.symbol]
-		state.openInterest = result.value
-		state.openInterestKnown = true
-		markets[result.symbol] = state
+		a.markets[marketKey] = state
+		if err == nil {
+			synchronized = a.rebalanceOpenInterestScheduleLocked(now)
+		}
 	}
-	if failures > 0 {
-		a.logger.Warn("aster open interest refresh incomplete", "failed", failures, "symbols", len(markets))
+	a.mu.Unlock()
+	if synchronized {
+		a.logger.Info("aster open interest demand synchronized", "markets", demandCount)
 	}
+	return err
 }
 
 func (a *Adapter) getJSON(ctx context.Context, path string, target any) error {

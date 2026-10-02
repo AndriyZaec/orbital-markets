@@ -23,6 +23,10 @@ func TestRefreshBuildsHourlyUSDTPerpetualSnapshots(t *testing.T) {
 	if err := adapter.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	adapter.SetOpenInterestDemandMarketKeys([]string{"BTCUSDT"})
+	if err := adapter.refreshOpenInterestMarket(context.Background(), "BTCUSDT"); err != nil {
+		t.Fatal(err)
+	}
 	snapshots, err := adapter.FetchMarketData(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +144,40 @@ func TestFetchMarketDataKeepsUnchangedBookWhileStreamIsHealthy(t *testing.T) {
 	}
 	if len(snapshots) != 0 {
 		t.Fatalf("disconnected stream returned snapshots: %+v", snapshots)
+	}
+}
+
+func TestFetchMarketDataKeepsFreshSnapshotDuringReconnect(t *testing.T) {
+	now := time.Date(2026, time.September, 24, 12, 0, 0, 0, time.UTC)
+	adapter := newTestAdapter("http://unused")
+	adapter.now = func() time.Time { return now }
+	adapter.streamGeneration = 8
+	adapter.streamConnected = false
+	adapter.streamSynchronized = false
+	adapter.markets["PIPPINUSDT"] = marketState{
+		marketMetadata: marketMetadata{asset: "PIPPIN", fundingIntervalHours: 8},
+		markPrice:      0.5, indexPrice: 0.5, nativeFundingRate: 0.0008,
+		bidPrice: 0.49, bidSize: 100, askPrice: 0.51, askSize: 100,
+		markUpdatedAt: now, indexUpdatedAt: now, fundingUpdatedAt: now,
+		bookUpdatedAt: now, bookGeneration: 7,
+		openInterest: 1000, openInterestKnown: true,
+	}
+
+	snapshots, err := adapter.FetchMarketData(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].MarketKey != "PIPPINUSDT" {
+		t.Fatalf("fresh reconnect snapshot = %+v, want PIPPINUSDT", snapshots)
+	}
+
+	adapter.now = func() time.Time { return now.Add(maxSnapshotAge + time.Second) }
+	snapshots, err = adapter.FetchMarketData(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 0 {
+		t.Fatalf("stale reconnect snapshot returned: %+v", snapshots)
 	}
 }
 
@@ -303,12 +341,61 @@ func TestOpenInterestFailureDoesNotDeleteValidMarket(t *testing.T) {
 	if err := adapter.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	adapter.SetOpenInterestDemandMarketKeys([]string{"ETHUSDT"})
+	if err := adapter.refreshOpenInterestMarket(context.Background(), "ETHUSDT"); err == nil {
+		t.Fatal("open-interest refresh succeeded")
+	}
 	market, ok := adapter.markets["ETHUSDT"]
 	if !ok {
 		t.Fatal("open-interest failure deleted ETHUSDT market")
 	}
 	if market.openInterestKnown || market.openInterest != 0 {
 		t.Fatalf("ETHUSDT open interest = %v, known=%t, want unavailable component", market.openInterest, market.openInterestKnown)
+	}
+}
+
+func TestOpenInterestRefreshTargetsDemandedMarketsAndPreservesLastValue(t *testing.T) {
+	serverState := &mutableMarketServerState{}
+	server := newMutableMarketServer(t, serverState)
+	defer server.Close()
+	adapter := newTestAdapter(server.URL)
+	adapter.now = func() time.Time { return mutableMarketNow }
+
+	if err := adapter.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := serverState.openInterestCalls.Load(); calls != 0 {
+		t.Fatalf("REST market refresh made %d open-interest requests, want none", calls)
+	}
+	adapter.SetOpenInterestDemandMarketKeys([]string{"ETHUSDT", "ETHUSDT"})
+	marketKey, _, found := adapter.nextOpenInterestMarket(mutableMarketNow)
+	if !found || marketKey != "ETHUSDT" {
+		t.Fatalf("next OI market = %q, found=%t, want ETHUSDT", marketKey, found)
+	}
+	if err := adapter.refreshOpenInterestMarket(context.Background(), marketKey); err != nil {
+		t.Fatal(err)
+	}
+	if calls := serverState.openInterestCalls.Load(); calls != 1 {
+		t.Fatalf("open-interest requests = %d, want one", calls)
+	}
+	if adapter.markets["BTCUSDT"].openInterestKnown {
+		t.Fatal("non-demanded BTCUSDT open interest was refreshed")
+	}
+	if err := adapter.RefreshExecutionData(context.Background(), "ETHUSDT"); err != nil {
+		t.Fatal(err)
+	}
+	if calls := serverState.openInterestCalls.Load(); calls != 1 {
+		t.Fatalf("fresh execution preflight made another request; calls = %d", calls)
+	}
+
+	serverState.failETHOpenInterest.Store(true)
+	adapter.now = func() time.Time { return mutableMarketNow.Add(openInterestExecutionAge + time.Second) }
+	if err := adapter.RefreshExecutionData(context.Background(), "ETHUSDT"); err == nil {
+		t.Fatal("execution refresh succeeded during upstream failure")
+	}
+	market := adapter.markets["ETHUSDT"]
+	if !market.openInterestKnown || market.openInterest != 1000 || !market.openInterestAt.Equal(mutableMarketNow) {
+		t.Fatalf("last valid ETHUSDT open interest was not preserved: %+v", market)
 	}
 }
 
@@ -554,6 +641,9 @@ func newTestAdapter(restURL string) *Adapter {
 		unknownStreamSymbols: make(map[string]struct{}),
 		pendingMarks:         make(map[string]marketState),
 		pendingBooks:         make(map[string]marketState),
+		openInterestDemand:   make(map[string]struct{}),
+		openInterestWake:     make(chan struct{}, 1),
+		openInterestFlights:  make(map[string]*openInterestRefreshCall),
 	}
 }
 
@@ -645,6 +735,13 @@ func TestReconnectResyncReusesKnownOpenInterest(t *testing.T) {
 	adapter.now = func() time.Time { return mutableMarketNow }
 
 	if err := adapter.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	adapter.SetOpenInterestDemandMarketKeys([]string{"BTCUSDT", "ETHUSDT"})
+	if err := adapter.refreshOpenInterestMarket(context.Background(), "BTCUSDT"); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.refreshOpenInterestMarket(context.Background(), "ETHUSDT"); err != nil {
 		t.Fatal(err)
 	}
 	serverState.openInterestCalls.Store(0)

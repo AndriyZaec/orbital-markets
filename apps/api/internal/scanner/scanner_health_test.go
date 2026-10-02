@@ -13,10 +13,11 @@ import (
 )
 
 type mutableScannerAdapter struct {
-	name    string
-	data    []venue.MarketData
-	err     error
-	fetches int
+	name      string
+	data      []venue.MarketData
+	err       error
+	fetches   int
+	oiDemands [][]string
 }
 
 func (a *mutableScannerAdapter) Name() string { return a.name }
@@ -24,6 +25,37 @@ func (a *mutableScannerAdapter) Name() string { return a.name }
 func (a *mutableScannerAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 	a.fetches++
 	return a.data, a.err
+}
+
+func (a *mutableScannerAdapter) SetOpenInterestDemandMarketKeys(marketKeys []string) {
+	a.oiDemands = append(a.oiDemands, append([]string(nil), marketKeys...))
+}
+
+func TestScanDemandsOnlySharedMarketsWithoutPublishingMissingOpenInterest(t *testing.T) {
+	now := time.Now()
+	aster := &mutableScannerAdapter{name: "aster", data: []venue.MarketData{
+		{Venue: "aster", Asset: "pippin", MarketKey: "PIPPINUSDT", MarkPrice: 1, IndexPrice: 1, BidPrice: 0.99, BidSize: 1000, AskPrice: 1.01, AskSize: 1000, OpenInterest: 0, Timestamp: now},
+		{Venue: "aster", Asset: "ASTER_ONLY", MarketKey: "ASTERONLYUSDT", MarkPrice: 1, IndexPrice: 1, BidPrice: 0.99, BidSize: 1000, AskPrice: 1.01, AskSize: 1000, OpenInterest: 0, Timestamp: now},
+	}}
+	pacifica := &mutableScannerAdapter{name: "pacifica", data: []venue.MarketData{
+		healthyMarket("pacifica", "PIPPIN", -0.001, now),
+	}}
+	scanner := New(slog.New(slog.NewTextHandler(io.Discard, nil)), aster, pacifica)
+
+	scanner.scan(context.Background())
+
+	if len(aster.oiDemands) != 1 || len(aster.oiDemands[0]) != 1 || aster.oiDemands[0][0] != "PIPPINUSDT" {
+		t.Fatalf("Aster OI demand = %+v, want only PIPPINUSDT", aster.oiDemands)
+	}
+	if opportunities := scanner.Opportunities(); len(opportunities) != 0 {
+		t.Fatalf("opportunities = %+v, want missing-OI market withheld", opportunities)
+	}
+
+	pacifica.data = nil
+	scanner.scan(context.Background())
+	if len(aster.oiDemands) != 2 || len(aster.oiDemands[1]) != 0 {
+		t.Fatalf("Aster OI demand after overlap removal = %+v, want empty replacement", aster.oiDemands)
+	}
 }
 
 func TestScanPublishesStableOpportunityHealth(t *testing.T) {
