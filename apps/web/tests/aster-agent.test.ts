@@ -56,6 +56,7 @@ test('Aster authorization relays no private key and persists only after acceptan
   const agent = await authorizeAsterAgent({
     storage,
     ownerAddress,
+    builderApproved: async () => false,
     now: () => now,
     signTypedData: async (typedData) => {
       signatures.push(typedData.primaryType === 'ApproveBuilder'
@@ -84,11 +85,34 @@ test('Aster authorization relays no private key and persists only after acceptan
   assert.equal((await storage.restore('aster', ownerAddress))?.agentAddress, agent.agentAddress)
 })
 
+test('Aster reauthorization reuses an existing builder approval', async () => {
+  const signatures: string[] = []
+  let relayed: Record<string, unknown> | undefined
+  await authorizeAsterAgent({
+    storage: new TestTradingAgentStore(),
+    ownerAddress,
+    builderApproved: async () => true,
+    signTypedData: async (typedData) => {
+      signatures.push(typedData.primaryType)
+      return ownerAccount.signTypedData(typedData)
+    },
+    prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
+    authorizeReadOnly: async () => {},
+    relay: async (request) => { relayed = request; return 'accepted' },
+    reconcile: async () => { throw new Error('reconciliation should not run') },
+  })
+
+  assert.deepEqual(signatures, ['ApproveAgent', 'ApproveAgent'])
+  assert.equal(relayed?.builderSignature, undefined)
+  assert.equal(relayed?.builder, undefined)
+})
+
 test('Aster authorization does not relay after the owner changes', async () => {
   let relayed = false
   await assert.rejects(authorizeAsterAgent({
     storage: new TestTradingAgentStore(),
     ownerAddress,
+    builderApproved: async () => false,
     signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
     prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
     authorizeReadOnly: async () => { relayed = true },
@@ -108,6 +132,7 @@ test('Aster authorization keeps the previous browser agent when execution approv
   await assert.rejects(authorizeAsterAgent({
     storage,
     ownerAddress,
+    builderApproved: async () => false,
     signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
     prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
     authorizeReadOnly: async () => { readOnlyAccepted = true },
@@ -127,6 +152,7 @@ test('Aster authorization recovers an accepted approval after the relay response
   const agent = await authorizeAsterAgent({
     storage,
     ownerAddress,
+    builderApproved: async () => false,
     signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
     prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
     authorizeReadOnly: async () => {},
@@ -151,6 +177,7 @@ test('Aster authorization retains the previous agent when reconciliation finds i
   const agent = await authorizeAsterAgent({
     storage,
     ownerAddress,
+    builderApproved: async () => false,
     signTypedData: (typedData) => ownerAccount.signTypedData(typedData),
     prepareReadOnly: async (executionAgent) => readOnlyPreparation(executionAgent, Date.now()),
     authorizeReadOnly: async () => {},
@@ -172,6 +199,7 @@ test('Aster authorization reconciles an existing pending agent without another w
   const agent = await authorizeAsterAgent({
     storage,
     ownerAddress,
+    builderApproved: async () => false,
     signTypedData: async () => { signed = true; throw new Error('wallet should not be prompted') },
     prepareReadOnly: async () => { throw new Error('new authorization should not start') },
     authorizeReadOnly: async () => { throw new Error('new authorization should not start') },

@@ -291,6 +291,7 @@ function TradingAgentSession({
       storage,
       ownerAddress,
       signTypedData: signAsterTypedData,
+      builderApproved: hasApprovedAsterBuilder,
       relay: relayAsterAuthorization,
       reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
       prepareReadOnly: (executionAgent) => prepareAsterDataAgentAuthorization({
@@ -545,6 +546,14 @@ async function reconcileAsterAuthorization(ownerAddress: string, candidates: str
   const body = await response.json() as { agent_address?: unknown }
   if (typeof body.agent_address !== 'string') throw new Error('Aster returned an invalid agent status')
   return body.agent_address
+}
+
+async function hasApprovedAsterBuilder(ownerAddress: string): Promise<boolean> {
+  const response = await apiFetch(`/api/v1/live/agents/aster/builder-approval?account=${encodeURIComponent(ownerAddress)}`)
+  if (!response.ok) throw apiError(response.status, 'Unable to verify Aster builder approval. Please try again.')
+  const body = await response.json() as { approved?: unknown }
+  if (typeof body.approved !== 'boolean') throw new Error('Aster returned an invalid builder approval status')
+  return body.approved
 }
 
 async function hasApprovedPacificaBuilderCode(ownerAddress: string): Promise<boolean> {

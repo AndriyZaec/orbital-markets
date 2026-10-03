@@ -33,14 +33,14 @@ export interface AsterApproveAgentRequest {
   canWithdraw: false
   asterChain: 'Mainnet'
   signatureChainId: typeof ownerChainId
-  builder: Address
-  maxFeeRate: string
-  builderName: typeof agentName
-  builderNonce: number
-  builderSignature: Hex
+  builder?: Address
+  maxFeeRate?: string
+  builderName?: typeof agentName
+  builderNonce?: number
+  builderSignature?: Hex
 }
 
-type AsterApproveAgentAction = Omit<AsterApproveAgentRequest, 'signature' | 'builderSignature'>
+type AsterApproveAgentAction = Required<Omit<AsterApproveAgentRequest, 'signature' | 'builderSignature'>>
 
 export function generateAsterAgent(): { privateKey: Hex; agentAddress: Address } {
   const privateKey = generatePrivateKey()
@@ -120,6 +120,7 @@ export async function authorizeAsterAgent(options: {
   storage: TradingAgentStore
   ownerAddress: string
   signTypedData: (typedData: AsterApprovalTypedData) => Promise<Hex>
+  builderApproved: (ownerAddress: string) => Promise<boolean>
   relay: (request: AsterApproveAgentRequest) => Promise<'accepted' | 'uncertain'>
   reconcile: (candidateAgentAddresses: string[]) => Promise<string>
   prepareReadOnly: (executionAgent: Address) => Promise<AsterDataAgentPreparation>
@@ -141,11 +142,15 @@ export async function authorizeAsterAgent(options: {
     options.now?.() ?? Date.now(),
   )
   const readOnly = await options.prepareReadOnly(generated.agentAddress)
+  const builderAlreadyApproved = await options.builderApproved(options.ownerAddress)
 
-  options.onSignatureStep?.(1)
-  const builderTypedData = buildAsterApproveBuilderTypedData(action)
-  const builderSignature = await options.signTypedData(builderTypedData)
-  await assertAsterOwnerSignature(builderTypedData, builderSignature, action.user)
+  let builderSignature: Hex | undefined
+  if (!builderAlreadyApproved) {
+    options.onSignatureStep?.(1)
+    const builderTypedData = buildAsterApproveBuilderTypedData(action)
+    builderSignature = await options.signTypedData(builderTypedData)
+    await assertAsterOwnerSignature(builderTypedData, builderSignature, action.user)
+  }
 
   options.onSignatureStep?.(2)
   const readOnlyTypedData = buildAsterDataAgentApprovalTypedData(readOnly.approval)
@@ -173,7 +178,12 @@ export async function authorizeAsterAgent(options: {
   let outcome: 'accepted' | 'uncertain'
   try {
     await options.authorizeReadOnly(readOnly, readOnlySignature, generated.agentAddress)
-    outcome = await options.relay({ ...action, signature, builderSignature })
+    const { builder, maxFeeRate, builderName, builderNonce, ...agentAction } = action
+    outcome = await options.relay({
+      ...agentAction,
+      signature,
+      ...(builderSignature ? { builder, maxFeeRate, builderName, builderNonce, builderSignature } : {}),
+    })
   } catch (error) {
     await options.storage.clearPending('aster', options.ownerAddress, agent.agentAddress)
     throw error
