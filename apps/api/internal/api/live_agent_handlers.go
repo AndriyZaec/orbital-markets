@@ -65,6 +65,23 @@ func (s *Server) handleAsterAgentApprove(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if request.BuilderSignature == "" {
+		if s.asterDataAgent == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Aster builder approval cannot be verified"})
+			return
+		}
+		approved, err := s.asterDataAgent.HasBuilderApproval(
+			r.Context(), request.User, s.live.asterBuilder.Address, s.live.asterBuilder.FeeRate,
+		)
+		if err != nil {
+			writeAsterDataAgentError(w, err)
+			return
+		}
+		if !approved {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "Aster builder approval is required"})
+			return
+		}
+	}
 	unlockOwner, err := s.live.lockAgentOwner("aster", request.User)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Aster owner is busy; retry authorization"})

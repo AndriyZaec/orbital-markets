@@ -9,18 +9,20 @@ import (
 	"testing"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 )
 
 type fakeAsterDataAgentProbe struct {
-	prepared  dataagent.Prepared
-	status    dataagent.ProbeStatus
-	report    dataagent.Report
-	err       error
-	account   string
-	executor  string
-	probeID   string
-	signature string
-	approval  dataagent.Approval
+	prepared        dataagent.Prepared
+	status          dataagent.ProbeStatus
+	report          dataagent.Report
+	err             error
+	account         string
+	executor        string
+	probeID         string
+	signature       string
+	approval        dataagent.Approval
+	builderApproved bool
 }
 
 func (f *fakeAsterDataAgentProbe) Prepare(_ context.Context, account, executionAgent string) (dataagent.Prepared, error) {
@@ -51,6 +53,11 @@ func (f *fakeAsterDataAgentProbe) ReconcileExecutionAgent(_ context.Context, acc
 	}
 	f.executor = candidates[0]
 	return candidates[0], f.err
+}
+
+func (f *fakeAsterDataAgentProbe) HasBuilderApproval(_ context.Context, account, _, _ string) (bool, error) {
+	f.account = account
+	return f.builderApproved, f.err
 }
 
 func TestAsterDataAgentPrepareContract(t *testing.T) {
@@ -108,6 +115,23 @@ func TestAsterDataAgentStatusAndRunContracts(t *testing.T) {
 		t.Fatalf("run response = %d %s", run.Code, run.Body.String())
 	}
 	assertNoSensitiveFields(t, run.Body.Bytes())
+}
+
+func TestAsterBuilderApprovalReturnsCurrentStatus(t *testing.T) {
+	fake := &fakeAsterDataAgentProbe{builderApproved: true}
+	server := &Server{
+		asterDataAgent: fake,
+		live: &LiveDeps{asterBuilder: &asterlive.BuilderConfig{
+			Address: "0xe625a2d279815749c647daed24df41bc8dd14bfe", FeeRate: "0.0002",
+		}},
+	}
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/live/agents/aster/builder-approval?account="+testHTTPAsterOwner, nil)
+	response := httptest.NewRecorder()
+	server.handleAsterBuilderApproval(response, request)
+	if response.Code != http.StatusOK || fake.account != testHTTPAsterOwner || response.Body.String() != "{\"approved\":true}\n" {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 
 func TestAsterDataAgentReturnsSanitizedActionableErrors(t *testing.T) {

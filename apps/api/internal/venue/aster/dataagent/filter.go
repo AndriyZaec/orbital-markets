@@ -16,6 +16,7 @@ type Probe interface {
 	Status(context.Context, string, string) (ProbeStatus, error)
 	Run(context.Context, string, string) (Report, error)
 	ReconcileExecutionAgent(context.Context, string, []string) (string, error)
+	HasBuilderApproval(context.Context, string, string, string) (bool, error)
 }
 
 func ExcludeOwner(reader Reader, owner string) Reader {
@@ -86,6 +87,13 @@ func (p excludedOwnerProbe) ReconcileExecutionAgent(ctx context.Context, owner s
 		return "", ErrNotApproved
 	}
 	return p.Probe.ReconcileExecutionAgent(ctx, owner, candidates)
+}
+
+func (p excludedOwnerProbe) HasBuilderApproval(ctx context.Context, owner, builder, requiredFeeRate string) (bool, error) {
+	if p.denied(owner) {
+		return false, ErrNotApproved
+	}
+	return p.Probe.HasBuilderApproval(ctx, owner, builder, requiredFeeRate)
 }
 
 func (r excludedOwnerReader) ReadAccount(ctx context.Context, owner string) (AccountObservation, error) {

@@ -181,6 +181,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/authorize", s.handleAsterDataAgentAuthorize)
 	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/validate", s.handleAsterDataAgentValidate)
 	s.mux.HandleFunc("GET /api/v1/live/aster/data-agent/status", s.handleAsterDataAgentStatus)
+	s.mux.HandleFunc("GET /api/v1/live/agents/aster/builder-approval", s.handleAsterBuilderApproval)
 	s.mux.HandleFunc("POST /api/v1/live/aster/data-agent/run", s.handleAsterDataAgentRun)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve", s.handleHyperliquidAgentApprove)
 	s.mux.HandleFunc("POST /api/v1/live/agents/hyperliquid/approve-builder-fee", s.handleHyperliquidBuilderFeeApprove)

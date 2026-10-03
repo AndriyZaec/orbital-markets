@@ -31,7 +31,7 @@ const (
 
 var (
 	readPaths = map[string]bool{
-		"/fapi/v3/agent": true, "/fapi/v3/accountWithJoinMargin": true,
+		"/fapi/v3/agent": true, "/fapi/v3/builder": true, "/fapi/v3/accountWithJoinMargin": true,
 		"/fapi/v3/positionRisk": true, "/fapi/v3/income": true,
 		"/fapi/v3/positionSide/dual": true, "/fapi/v3/leverageBracket": true,
 		"/fapi/v3/order": true, "/fapi/v3/userTrades": true,
@@ -237,7 +237,7 @@ func (c *Client) signedGET(ctx context.Context, path string, params []pair, owne
 
 func validReadParams(path string, params []pair) bool {
 	switch path {
-	case "/fapi/v3/agent", "/fapi/v3/accountWithJoinMargin", "/fapi/v3/positionRisk", "/fapi/v3/positionSide/dual":
+	case "/fapi/v3/agent", "/fapi/v3/builder", "/fapi/v3/accountWithJoinMargin", "/fapi/v3/positionRisk", "/fapi/v3/positionSide/dual":
 		return len(params) == 0
 	case "/fapi/v3/leverageBracket":
 		return len(params) == 0 || len(params) == 1 && params[0].key == "symbol" && readSymbolPattern.MatchString(params[0].value)

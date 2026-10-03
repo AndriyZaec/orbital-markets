@@ -105,6 +105,25 @@ func TestReaderReadsExactSymbolLeverageBrackets(t *testing.T) {
 	}
 }
 
+func TestReaderChecksExistingBuilderApproval(t *testing.T) {
+	store, now := approvedReaderService(t)
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/fapi/v3/builder" {
+			t.Fatalf("request = %s", r.URL.String())
+		}
+		fmt.Fprint(w, `[{"builderAddress":"0xe625a2d279815749c647daed24df41bc8dd14bfe","maxFeeRate":0.0002}]`)
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+
+	approved, err := reader.HasBuilderApproval(
+		context.Background(), testOwner, "0xE625A2D279815749C647DAED24DF41BC8DD14BFE", "0.0002",
+	)
+	if err != nil || !approved {
+		t.Fatalf("approved = %t, error = %v", approved, err)
+	}
+}
+
 func TestReaderReadsAllReferenceLeverageBrackets(t *testing.T) {
 	store, now := approvedReaderService(t)
 	status, err := store.StatusByOwner(context.Background(), testOwner)
