@@ -82,20 +82,24 @@ func (m *FundingMonitor) realized(ctx context.Context, position *LivePosition, s
 			return 0, false
 		}
 		m.attemptedAt[position.ID] = now
+		syncComplete := true
 		for _, venueName := range []string{position.VenueA, position.VenueB} {
 			account := position.AccountBindings[venueName]
 			source, ok := m.sources[venueName]
 			if !ok {
+				syncComplete = false
 				continue
 			}
 			if account == "" {
-				return 0, false
+				syncComplete = false
+				continue
 			}
 			for range maxFundingWindowsPerSync {
 				window, needed, err := m.store.NextFundingWindow(ctx, position.ID, venueName, account, since, until)
 				if err != nil {
 					m.logger.Warn("funding monitor: plan history window", "err", err, "id", position.ID, "venue", venueName)
-					return 0, false
+					syncComplete = false
+					break
 				}
 				if !needed {
 					break
@@ -103,18 +107,22 @@ func (m *FundingMonitor) realized(ctx context.Context, position *LivePosition, s
 				payments, err := source.FundingPayments(ctx, account, position.Asset, window.Since, window.Until)
 				if err != nil {
 					m.logger.Warn("funding monitor: fetch payments", "err", err, "id", position.ID, "venue", venueName)
-					return 0, false
+					syncComplete = false
+					break
 				}
 				if err := m.store.ApplyFundingWindow(
 					ctx, position.ID, venueName, account, position.Asset, since, window, payments,
 				); err != nil {
 					m.logger.Warn("funding monitor: persist history window", "err", err, "id", position.ID, "venue", venueName)
-					return 0, false
+					syncComplete = false
+					break
 				}
 			}
 		}
-		m.syncedAt[position.ID] = now
-		m.syncedTargets[position.ID] = until
+		if syncComplete {
+			m.syncedAt[position.ID] = now
+			m.syncedTargets[position.ID] = until
+		}
 	} else if target, ok := m.syncedTargets[position.ID]; ok {
 		reconcileTarget = target
 	}

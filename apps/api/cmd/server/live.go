@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
@@ -61,8 +62,18 @@ var _ venue.FundingHistory = asterFundingHistory{}
 
 func (history asterFundingHistory) FundingPayments(
 	ctx context.Context,
-	account, _ string,
+	account, asset string,
 	since, until time.Time,
 ) ([]venue.FundingPayment, error) {
-	return history.reader.ReadFunding(ctx, account, since, until)
+	payments, err := history.reader.ReadFunding(ctx, account, since, until)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]venue.FundingPayment, 0, len(payments))
+	for _, payment := range payments {
+		if strings.EqualFold(payment.Asset, asset) {
+			filtered = append(filtered, payment)
+		}
+	}
+	return filtered, nil
 }

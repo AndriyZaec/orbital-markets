@@ -155,6 +155,55 @@ func TestPartialFundingSyncIsNotPublished(t *testing.T) {
 	}
 }
 
+func TestFundingSyncContinuesOtherVenueAfterOneFails(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "independent-funding.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	openedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	if _, err := database.Exec(`
+		INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_bindings_json, account_bindings_key, notional, leverage,
+			started_at, opened_at, updated_at
+		) VALUES ('position-1', 'plan-1', 'opp-1', '2Z', 'aster', 'pacifica', 'open',
+			'{"aster":"0xaster","pacifica":"sol-wallet"}',
+			'{"aster":"0xaster","pacifica":"sol-wallet"}', 100, 2, ?, ?, ?)`,
+		openedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339), openedAt.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := NewStore(database, database, logger)
+	aster := &fakeFundingHistory{err: errors.New("invalid mixed-asset batch")}
+	pacifica := &fakeFundingHistory{payments: []venue.FundingPayment{{
+		ExternalID: "pac-1", Venue: "pacifica", Account: "sol-wallet", Asset: "2Z",
+		AmountUSD: 0.02, PaidAt: openedAt.Add(30 * time.Minute),
+	}}}
+	monitor := NewFundingMonitor(logger, store, map[string]venue.FundingHistory{
+		"aster": aster, "pacifica": pacifica,
+	})
+	position, err := store.GetPosition(context.Background(), "position-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := time.Now().UTC().Truncate(time.Second)
+
+	if total, complete := monitor.realized(context.Background(), position, openedAt, target, false); complete || total != 0 {
+		t.Fatalf("partial funding published: total = %v, complete = %v", total, complete)
+	}
+	var coveredThrough int64
+	if err := database.QueryRow(`
+		SELECT covered_through_ms FROM live_funding_coverage
+		WHERE position_id = 'position-1' AND venue = 'pacifica'`).Scan(&coveredThrough); err != nil {
+		t.Fatal(err)
+	}
+	if aster.calls != 1 || pacifica.calls != 1 || coveredThrough != target.UnixMilli() {
+		t.Fatalf("calls aster=%d pacifica=%d, Pacifica cursor=%d, want %d",
+			aster.calls, pacifica.calls, coveredThrough, target.UnixMilli())
+	}
+}
+
 func TestRealizedFundingSumsVenueLedgersWithoutDuplicates(t *testing.T) {
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "funding.db"))
 	if err != nil {
