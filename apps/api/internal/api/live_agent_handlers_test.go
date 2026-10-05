@@ -98,6 +98,34 @@ func TestHandleAsterAgentApproveValidatesAndRelays(t *testing.T) {
 	}
 }
 
+func TestHandleAsterAgentApproveReusesVerifiedBuilderApproval(t *testing.T) {
+	now := time.Now()
+	approver := &fakeAsterAgentApprover{}
+	probe := &fakeAsterDataAgentProbe{builderApproved: true}
+	server := &Server{asterDataAgent: probe, live: &LiveDeps{
+		asterAgentApprover: approver,
+		asterBuilder:       &asterlive.BuilderConfig{Address: "0xe625a2d279815749c647daed24df41bc8dd14bfe", FeeRate: "0.0002"},
+		accounts:           &accountFeedRegistry{factories: map[string]accountFeedFactory{}},
+	}}
+	request := validHTTPAsterAgentApproval(now)
+	request.Builder = ""
+	request.MaxFeeRate = ""
+	request.BuilderName = ""
+	request.BuilderNonce = 0
+	request.BuilderSignature = ""
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.handleAsterAgentApprove(response, httptest.NewRequest(
+		http.MethodPost, "/api/v1/live/agents/aster/approve", bytes.NewReader(body),
+	))
+	if response.Code != http.StatusNoContent || approver.request.AgentAddress != request.AgentAddress {
+		t.Fatalf("status = %d, relayed = %+v, body = %s", response.Code, approver.request, response.Body.String())
+	}
+}
+
 func validHTTPAsterAgentApproval(now time.Time) asterlive.ApproveAgentRequest {
 	return asterlive.ApproveAgentRequest{
 		User: "0x1111111111111111111111111111111111111111", Nonce: now.UnixMicro(),

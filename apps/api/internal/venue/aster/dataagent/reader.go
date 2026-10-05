@@ -40,6 +40,7 @@ type dataReader interface {
 	readAccount(context.Context, string, string, []byte) (AccountObservation, error)
 	readLeverageBrackets(context.Context, string, string, []byte, string) (asteraccount.LeverageBrackets, time.Time, error)
 	validateReadOnlyAgent(context.Context, string, string, []byte) error
+	hasBuilderApproval(context.Context, string, string, []byte, string, string) (bool, error)
 	readFunding(context.Context, string, string, []byte, time.Time, time.Time) ([]venue.FundingPayment, error)
 	lookupOrder(context.Context, string, string, []byte, string, string) (OrderStatus, error)
 }
@@ -103,6 +104,25 @@ func (s *Service) LookupOrder(ctx context.Context, owner, symbol, clientOrderID 
 		return OrderStatus{}, ErrUnavailable
 	}
 	return s.reader.lookupOrder(ctx, record.Owner, record.AgentAddress, record.PrivateKey, symbol, clientOrderID)
+}
+
+func (s *Service) HasBuilderApproval(ctx context.Context, owner, builder, requiredFeeRate string) (bool, error) {
+	if !addressPattern.MatchString(builder) {
+		return false, ErrInvalidInput
+	}
+	required, err := strconv.ParseFloat(requiredFeeRate, 64)
+	if err != nil || required < 0 {
+		return false, ErrInvalidInput
+	}
+	record, err := s.loadReadRecord(ctx, owner)
+	if err != nil {
+		return false, err
+	}
+	defer clear(record.PrivateKey)
+	if s.reader == nil {
+		return false, ErrUnavailable
+	}
+	return s.reader.hasBuilderApproval(ctx, record.Owner, record.AgentAddress, record.PrivateKey, builder, requiredFeeRate)
 }
 
 func (s *Service) ReadFunding(ctx context.Context, owner string, since, until time.Time) ([]venue.FundingPayment, error) {
@@ -242,6 +262,40 @@ func (c *Client) validateReadOnlyAgent(ctx context.Context, owner, agent string,
 		return ErrUnsafePermissions
 	}
 	return nil
+}
+
+func (c *Client) hasBuilderApproval(
+	ctx context.Context,
+	owner, agent string,
+	privateKey []byte,
+	builder, requiredFeeRate string,
+) (bool, error) {
+	body, err := c.signedGET(ctx, "/fapi/v3/builder", nil, owner, agent, privateKey, c.nextNonce())
+	if err != nil {
+		if errors.Is(err, ErrReadRejected) {
+			return false, ErrReadRejected
+		}
+		return false, fmt.Errorf("Aster builder approval read failed")
+	}
+	var approvals []struct {
+		BuilderAddress string          `json:"builderAddress"`
+		MaxFeeRate     json.RawMessage `json:"maxFeeRate"`
+	}
+	if err := json.Unmarshal(body, &approvals); err != nil {
+		return false, fmt.Errorf("Aster builder approval response was invalid")
+	}
+	required, _ := strconv.ParseFloat(requiredFeeRate, 64)
+	for _, approval := range approvals {
+		var rateText string
+		if err := json.Unmarshal(approval.MaxFeeRate, &rateText); err != nil {
+			rateText = string(approval.MaxFeeRate)
+		}
+		rate, parseErr := strconv.ParseFloat(rateText, 64)
+		if strings.EqualFold(approval.BuilderAddress, builder) && parseErr == nil && rate >= required {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Client) lookupOrder(

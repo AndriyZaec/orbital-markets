@@ -42,11 +42,11 @@ type ApproveAgentRequest struct {
 	CanWithdraw      bool   `json:"canWithdraw"`
 	AsterChain       string `json:"asterChain"`
 	SignatureChainID int    `json:"signatureChainId"`
-	Builder          string `json:"builder"`
-	MaxFeeRate       string `json:"maxFeeRate"`
-	BuilderName      string `json:"builderName"`
-	BuilderNonce     int64  `json:"builderNonce"`
-	BuilderSignature string `json:"builderSignature"`
+	Builder          string `json:"builder,omitempty"`
+	MaxFeeRate       string `json:"maxFeeRate,omitempty"`
+	BuilderName      string `json:"builderName,omitempty"`
+	BuilderNonce     int64  `json:"builderNonce,omitempty"`
+	BuilderSignature string `json:"builderSignature,omitempty"`
 }
 
 func (r ApproveAgentRequest) Validate(now time.Time, builder BuilderConfig) error {
@@ -61,9 +61,6 @@ func (r ApproveAgentRequest) Validate(now time.Time, builder BuilderConfig) erro
 	if r.CanSpotTrade || !r.CanPerpTrade || r.CanWithdraw {
 		return fmt.Errorf("Aster agent approval must be perpetual-only without withdrawals")
 	}
-	if !strings.EqualFold(r.Builder, builder.Address) || r.MaxFeeRate != builder.FeeRate || r.BuilderName != asterAgentName {
-		return fmt.Errorf("invalid Aster builder approval")
-	}
 	nonceTime := time.UnixMicro(r.Nonce)
 	if nonceTime.Before(now.Add(-maxApprovalAge)) || nonceTime.After(now.Add(maxApprovalFutureSkew)) {
 		return fmt.Errorf("Aster agent approval nonce is stale")
@@ -75,12 +72,18 @@ func (r ApproveAgentRequest) Validate(now time.Time, builder BuilderConfig) erro
 	if err := validateEthereumSignature(r.Signature); err != nil {
 		return fmt.Errorf("invalid Aster owner signature: %w", err)
 	}
-	builderNonceTime := time.UnixMicro(r.BuilderNonce)
-	if builderNonceTime.Before(now.Add(-maxApprovalAge)) || builderNonceTime.After(now.Add(maxApprovalFutureSkew)) {
-		return fmt.Errorf("Aster builder approval nonce is stale")
-	}
-	if err := validateEthereumSignature(r.BuilderSignature); err != nil {
-		return fmt.Errorf("invalid Aster builder signature: %w", err)
+	hasBuilderApproval := r.Builder != "" || r.MaxFeeRate != "" || r.BuilderName != "" || r.BuilderNonce != 0 || r.BuilderSignature != ""
+	if hasBuilderApproval {
+		if !strings.EqualFold(r.Builder, builder.Address) || r.MaxFeeRate != builder.FeeRate || r.BuilderName != asterAgentName {
+			return fmt.Errorf("invalid Aster builder approval")
+		}
+		builderNonceTime := time.UnixMicro(r.BuilderNonce)
+		if builderNonceTime.Before(now.Add(-maxApprovalAge)) || builderNonceTime.After(now.Add(maxApprovalFutureSkew)) {
+			return fmt.Errorf("Aster builder approval nonce is stale")
+		}
+		if err := validateEthereumSignature(r.BuilderSignature); err != nil {
+			return fmt.Errorf("invalid Aster builder signature: %w", err)
+		}
 	}
 	return nil
 }
@@ -111,21 +114,23 @@ func NewDefaultAgentApprover() *AgentApprover {
 }
 
 func (a *AgentApprover) ApproveAgent(ctx context.Context, request ApproveAgentRequest) error {
-	builderQuery := encodeQuery([]queryParameter{
-		{"builder", request.Builder},
-		{"maxFeeRate", request.MaxFeeRate},
-		{"builderName", request.BuilderName},
-		{"asterChain", request.AsterChain},
-		{"user", request.User},
-		{"nonce", strconv.FormatInt(request.BuilderNonce, 10)},
-		{"signatureChainId", strconv.Itoa(request.SignatureChainID)},
-		{"signature", request.BuilderSignature},
-	})
-	if err := a.postApproval(ctx, a.builderEndpoint, builderQuery, "builder"); err != nil {
-		if errors.Is(err, ErrSubmissionNotSent) || errors.Is(err, ErrSubmissionAmbiguous) {
-			return fmt.Errorf("%w: Aster builder approval did not complete: %v", ErrSubmissionNotSent, err)
+	if request.BuilderSignature != "" {
+		builderQuery := encodeQuery([]queryParameter{
+			{"builder", request.Builder},
+			{"maxFeeRate", request.MaxFeeRate},
+			{"builderName", request.BuilderName},
+			{"asterChain", request.AsterChain},
+			{"user", request.User},
+			{"nonce", strconv.FormatInt(request.BuilderNonce, 10)},
+			{"signatureChainId", strconv.Itoa(request.SignatureChainID)},
+			{"signature", request.BuilderSignature},
+		})
+		if err := a.postApproval(ctx, a.builderEndpoint, builderQuery, "builder"); err != nil {
+			if errors.Is(err, ErrSubmissionNotSent) || errors.Is(err, ErrSubmissionAmbiguous) {
+				return fmt.Errorf("%w: Aster builder approval did not complete: %v", ErrSubmissionNotSent, err)
+			}
+			return err
 		}
-		return err
 	}
 
 	agentQuery := encodeQuery([]queryParameter{

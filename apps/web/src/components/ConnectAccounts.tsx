@@ -525,9 +525,9 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
 function authorizationLabel(venue: VenueId, step?: 1 | 2 | 3): string {
   if (venue !== 'aster' || !step) return 'Authorizing…'
-  if (step === 1) return '1/3 Builder code…'
-  if (step === 2) return '2/3 Read-only agent…'
-  return '3/3 Execution agent…'
+  if (step === 1) return 'Approving builder code…'
+  if (step === 2) return 'Approving read-only agent…'
+  return 'Approving execution agent…'
 }
 
 // Centered modal for choosing which EVM wallet to connect. Uses the EIP-6963

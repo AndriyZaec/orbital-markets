@@ -19,6 +19,7 @@ type AsterDataAgentProbe interface {
 	Status(context.Context, string, string) (dataagent.ProbeStatus, error)
 	Run(context.Context, string, string) (dataagent.Report, error)
 	ReconcileExecutionAgent(context.Context, string, []string) (string, error)
+	HasBuilderApproval(context.Context, string, string, string) (bool, error)
 }
 
 func (s *Server) handleAsterDataAgentAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +119,28 @@ func (s *Server) handleAsterDataAgentStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleAsterBuilderApproval(w http.ResponseWriter, r *http.Request) {
+	if !s.asterDataAgentAvailable(w) {
+		return
+	}
+	if s.live == nil || s.live.asterBuilder == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Aster builder approval unavailable"})
+		return
+	}
+	approved, err := s.asterDataAgent.HasBuilderApproval(
+		r.Context(), r.URL.Query().Get("account"), s.live.asterBuilder.Address, s.live.asterBuilder.FeeRate,
+	)
+	if errors.Is(err, dataagent.ErrNotApproved) || errors.Is(err, dataagent.ErrReadRejected) {
+		writeJSON(w, http.StatusOK, map[string]bool{"approved": false})
+		return
+	}
+	if err != nil {
+		writeAsterDataAgentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"approved": approved})
 }
 
 func (s *Server) handleAsterDataAgentRun(w http.ResponseWriter, r *http.Request) {

@@ -24,13 +24,9 @@ type WeeklyAPRReport struct {
 	Rows        []WeeklyAPRRow `json:"rows"`
 }
 
-type weeklyFundingSample struct {
-	weekStart string
-	ticker    string
-	venueA    string
-	venueB    string
-	rateA     float64
-	rateB     float64
+type hourlyVenueFunding struct {
+	venue string
+	rate  float64
 }
 
 type weeklyAPRKey struct {
@@ -46,6 +42,12 @@ type weeklyAPRAccumulator struct {
 	samples    int
 }
 
+const weeklyAPRQuery = `
+	SELECT asset, venue, bucket_unix, funding_avg
+	FROM market_snapshots_1h INDEXED BY idx_snapshots_1h_weekly_apr
+	WHERE bucket_unix >= ? AND bucket_unix <= ?
+	ORDER BY bucket_unix, asset, venue`
+
 func LoadWeeklyAPR(ctx context.Context, db *sql.DB, now time.Time, weeks int) (*WeeklyAPRReport, error) {
 	report := &WeeklyAPRReport{
 		GeneratedAt: now.UTC().Format(time.RFC3339),
@@ -57,60 +59,72 @@ func LoadWeeklyAPR(ctx context.Context, db *sql.DB, now time.Time, weeks int) (*
 
 	currentWeek := startOfUTCWeek(now)
 	start := currentWeek.AddDate(0, 0, -7*(weeks-1))
-	rows, err := db.QueryContext(ctx, `
-		SELECT a.asset, a.venue, b.venue, a.bucket_unix, a.funding_avg, b.funding_avg
-		FROM market_snapshots_1h a
-		JOIN market_snapshots_1h b
-		  ON b.asset = a.asset
-		 AND b.bucket_unix = a.bucket_unix
-		 AND b.venue > a.venue
-		WHERE a.bucket_unix >= ? AND a.bucket_unix <= ?
-		ORDER BY a.bucket_unix, a.asset, a.venue, b.venue`, start.Unix(), now.UTC().Unix())
+	rows, err := db.QueryContext(ctx, weeklyAPRQuery, start.Unix(), now.UTC().Unix())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	samples := make([]weeklyFundingSample, 0)
+	groups := make(map[weeklyAPRKey]weeklyAPRAccumulator)
+	var currentAsset string
+	var currentBucket int64
+	var funding []hourlyVenueFunding
+	flush := func() {
+		weekStart := startOfUTCWeek(time.Unix(currentBucket, 0)).Format("2006-01-02")
+		for i := range funding {
+			for j := i + 1; j < len(funding); j++ {
+				key := weeklyAPRKey{
+					weekStart: weekStart,
+					ticker:    currentAsset,
+					venueA:    funding[i].venue,
+					venueB:    funding[j].venue,
+				}
+				accumulateWeeklyAPR(groups, key, funding[i].rate-funding[j].rate)
+			}
+		}
+	}
 	for rows.Next() {
-		var sample weeklyFundingSample
+		var asset, venueName string
 		var bucketUnix int64
-		if err := rows.Scan(&sample.ticker, &sample.venueA, &sample.venueB, &bucketUnix, &sample.rateA, &sample.rateB); err != nil {
+		var rate float64
+		if err := rows.Scan(&asset, &venueName, &bucketUnix, &rate); err != nil {
 			return nil, err
 		}
-		if math.IsNaN(sample.rateA) || math.IsNaN(sample.rateB) || math.IsInf(sample.rateA, 0) || math.IsInf(sample.rateB, 0) {
+		if asset != currentAsset || bucketUnix != currentBucket {
+			if len(funding) > 0 {
+				flush()
+			}
+			currentAsset = asset
+			currentBucket = bucketUnix
+			funding = funding[:0]
+		}
+		if math.IsNaN(rate) || math.IsInf(rate, 0) {
 			continue
 		}
-		sample.weekStart = startOfUTCWeek(time.Unix(bucketUnix, 0)).Format("2006-01-02")
-		samples = append(samples, sample)
+		funding = append(funding, hourlyVenueFunding{venue: venueName, rate: rate})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if len(funding) > 0 {
+		flush()
+	}
 
-	report.Rows = aggregateWeeklyAPR(samples)
+	report.Rows = weeklyAPRRows(groups)
 	return report, nil
 }
 
-func aggregateWeeklyAPR(samples []weeklyFundingSample) []WeeklyAPRRow {
-	groups := make(map[weeklyAPRKey]weeklyAPRAccumulator)
-	for _, sample := range samples {
-		key := weeklyAPRKey{
-			weekStart: sample.weekStart,
-			ticker:    sample.ticker,
-			venueA:    sample.venueA,
-			venueB:    sample.venueB,
-		}
-		accumulator := groups[key]
-		spread := sample.rateA - sample.rateB
-		if accumulator.samples == 0 || math.Abs(spread) > math.Abs(accumulator.peakSpread) {
-			accumulator.peakSpread = spread
-		}
-		accumulator.spreadSum += spread
-		accumulator.samples++
-		groups[key] = accumulator
+func accumulateWeeklyAPR(groups map[weeklyAPRKey]weeklyAPRAccumulator, key weeklyAPRKey, spread float64) {
+	accumulator := groups[key]
+	if accumulator.samples == 0 || math.Abs(spread) > math.Abs(accumulator.peakSpread) {
+		accumulator.peakSpread = spread
 	}
+	accumulator.spreadSum += spread
+	accumulator.samples++
+	groups[key] = accumulator
+}
 
+func weeklyAPRRows(groups map[weeklyAPRKey]weeklyAPRAccumulator) []WeeklyAPRRow {
 	result := make([]WeeklyAPRRow, 0, len(groups))
 	for key, accumulator := range groups {
 		averageSpread := accumulator.spreadSum / float64(accumulator.samples)

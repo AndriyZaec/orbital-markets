@@ -57,6 +57,31 @@ func TestAgentApproverRelaysWithoutPrivateKey(t *testing.T) {
 	}
 }
 
+func TestAgentApproverSkipsExistingBuilderApproval(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		_, _ = response.Write([]byte(`{"code":200,"msg":"success"}`))
+	}))
+	defer server.Close()
+
+	request := validApproveAgentRequest(time.Now())
+	request.Builder = ""
+	request.MaxFeeRate = ""
+	request.BuilderName = ""
+	request.BuilderNonce = 0
+	request.BuilderSignature = ""
+	if err := request.Validate(time.Now(), testAsterBuilder()); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentApprover(server.URL+"/agent", server.URL+"/builder", server.Client()).ApproveAgent(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "/agent" {
+		t.Fatalf("relayed paths = %v", paths)
+	}
+}
+
 func TestAgentApproverTreatsAgentServerFailureAsAmbiguous(t *testing.T) {
 	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
