@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,9 +21,12 @@ func TestLoadWeeklyAPRUsesPeakDirectionForSignedWeeklyAverage(t *testing.T) {
 		CREATE TABLE market_snapshots_1h (
 			venue TEXT, asset TEXT, bucket_unix INTEGER, funding_avg REAL
 		);
+		CREATE INDEX idx_snapshots_1h_weekly_apr
+			ON market_snapshots_1h(bucket_unix, asset, venue, funding_avg);
 	`); err != nil {
 		t.Fatal(err)
 	}
+	assertWeeklyAPRUsesCoveringIndex(t, db)
 
 	currentMonday := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	previousMonday := currentMonday.AddDate(0, 0, -7)
@@ -52,6 +56,65 @@ func TestLoadWeeklyAPRUsesPeakDirectionForSignedWeeklyAverage(t *testing.T) {
 	}
 	if math.Abs(btc.MaxAPR-0.07884) > 1e-9 || math.Abs(btc.WeeklyAverageAPR-0.07884) > 1e-9 {
 		t.Fatalf("BTC APR = max %v average %v", btc.MaxAPR, btc.WeeklyAverageAPR)
+	}
+}
+
+func assertWeeklyAPRUsesCoveringIndex(t *testing.T, db *sql.DB) {
+	t.Helper()
+	rows, err := db.Query(`EXPLAIN QUERY PLAN `+weeklyAPRQuery, 0, time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	details := strings.Join(plan, "\n")
+	if !strings.Contains(details, "USING COVERING INDEX idx_snapshots_1h_weekly_apr") || strings.Contains(details, "USE TEMP B-TREE") {
+		t.Fatalf("weekly APR query plan is not an ordered covering-index scan:\n%s", details)
+	}
+}
+
+func TestLoadWeeklyAPRBuildsEveryPairFromHourlyVenueRows(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:weekly-apr-pairs?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE market_snapshots_1h (
+			venue TEXT, asset TEXT, bucket_unix INTEGER, funding_avg REAL
+		);
+		CREATE INDEX idx_snapshots_1h_weekly_apr
+			ON market_snapshots_1h(bucket_unix, asset, venue, funding_avg);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	bucket := now.Add(-time.Hour).Unix()
+	if _, err := db.Exec(`INSERT INTO market_snapshots_1h VALUES
+		('aster', 'SOL', ?, -0.000003),
+		('hyperliquid', 'SOL', ?, 0.000002),
+		('pacifica', 'SOL', ?, 0.000010)`, bucket, bucket, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := LoadWeeklyAPR(context.Background(), db, now, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs := make(map[string]bool)
+	for _, row := range report.Rows {
+		pairs[row.VenueLong+"/"+row.VenueShort] = true
+	}
+	if len(report.Rows) != 3 || !pairs["aster/hyperliquid"] || !pairs["aster/pacifica"] || !pairs["hyperliquid/pacifica"] {
+		t.Fatalf("rows = %+v, want all three venue pairs", report.Rows)
 	}
 }
 
