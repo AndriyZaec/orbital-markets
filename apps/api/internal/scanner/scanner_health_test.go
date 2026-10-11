@@ -20,6 +20,29 @@ type mutableScannerAdapter struct {
 	oiDemands [][]string
 }
 
+type lifecycleScannerAdapter struct {
+	*mutableScannerAdapter
+	inactive []string
+}
+
+func (a *lifecycleScannerAdapter) InactiveAssets() []string { return a.inactive }
+
+func TestOpportunitiesHideConfirmedInactiveMarketsBeforeNextScan(t *testing.T) {
+	adapter := &lifecycleScannerAdapter{mutableScannerAdapter: &mutableScannerAdapter{name: "hyperliquid"}}
+	s := New(slog.Default(), adapter)
+	s.opps = []domain.Opportunity{
+		{ID: "hl", Asset: "OLD", VenuePair: domain.VenuePair{VenueA: "hyperliquid", VenueB: "aster"}},
+		{ID: "other", Asset: "OLD", VenuePair: domain.VenuePair{VenueA: "pacifica", VenueB: "aster"}},
+	}
+	if len(s.Opportunities()) != 2 {
+		t.Fatal("initial opportunities missing")
+	}
+	adapter.inactive = []string{"old"}
+	if opportunities := s.Opportunities(); len(opportunities) != 1 || opportunities[0].ID != "other" {
+		t.Fatalf("opportunities after delisting = %v", opportunities)
+	}
+}
+
 type notifyingDemandAdapter struct {
 	*mutableScannerAdapter
 	updates chan struct{}

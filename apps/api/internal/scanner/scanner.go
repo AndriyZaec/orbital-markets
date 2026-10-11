@@ -83,13 +83,36 @@ func (s *Scanner) marketDataUpdates(ctx context.Context) <-chan struct{} {
 }
 
 func (s *Scanner) Opportunities() []domain.Opportunity {
+	inactive := s.InactiveAssets()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]domain.Opportunity, len(s.opps))
-	for i := range s.opps {
-		out[i] = cloneOpportunity(s.opps[i])
+	out := make([]domain.Opportunity, 0, len(s.opps))
+	for _, opportunity := range s.opps {
+		asset := strings.ToUpper(opportunity.Asset)
+		if inactive[opportunity.VenuePair.VenueA][asset] || inactive[opportunity.VenuePair.VenueB][asset] {
+			continue
+		}
+		out = append(out, cloneOpportunity(opportunity))
 	}
 	return out
+}
+
+// InactiveAssets returns confirmed inactive assets grouped by venue, independent
+// of quote freshness. Adapters without explicit lifecycle signals are omitted.
+func (s *Scanner) InactiveAssets() map[string]map[string]bool {
+	inactive := make(map[string]map[string]bool)
+	for _, adapter := range s.adapters {
+		source, ok := adapter.(venue.InactiveAssetSource)
+		if !ok {
+			continue
+		}
+		assets := make(map[string]bool)
+		for _, asset := range source.InactiveAssets() {
+			assets[strings.ToUpper(asset)] = true
+		}
+		inactive[adapter.Name()] = assets
+	}
+	return inactive
 }
 
 // MarketData returns the latest snapshots from all adapters.

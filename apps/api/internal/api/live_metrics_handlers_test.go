@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
 	appdb "github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 func TestAnalyticsHandlersLogDatabaseFailures(t *testing.T) {
@@ -56,6 +59,63 @@ func TestAnalyticsHandlersLogDatabaseFailures(t *testing.T) {
 				t.Fatalf("logs = %q, want one rate-limited error", logs.String())
 			}
 		})
+	}
+}
+
+type weeklyLifecycleAdapter struct {
+	inactive []string
+}
+
+func (a *weeklyLifecycleAdapter) Name() string { return "hyperliquid" }
+func (a *weeklyLifecycleAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
+	return nil, nil
+}
+func (a *weeklyLifecycleAdapter) InactiveAssets() []string { return a.inactive }
+
+func TestWeeklyAPRFiltersDelistedPairsWithoutMutatingHistoryCache(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "weekly-lifecycle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	bucket := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Hour).Unix()
+	for _, name := range []string{"pacifica", "aster", "hyperliquid"} {
+		if _, err := database.Exec(`INSERT INTO market_snapshots_1h
+			(venue, asset, bucket_unix, open, high, low, close, funding_avg, oi_avg, bid_avg, ask_avg)
+			VALUES (?, 'OLD', ?, 1, 1, 1, 1, 0.001, 1, 1, 1)`, name, bucket); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter := &weeklyLifecycleAdapter{}
+	server := &Server{analyticsDB: database, logger: slog.Default(), scanner: scanner.New(slog.Default(), adapter)}
+	load := func() analytics.WeeklyAPRReport {
+		t.Helper()
+		response := httptest.NewRecorder()
+		server.handleWeeklyAPR(response, httptest.NewRequest(http.MethodGet, "/api/v1/analytics/weekly-apr", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+		}
+		var report analytics.WeeklyAPRReport
+		if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+			t.Fatal(err)
+		}
+		return report
+	}
+	if report := load(); len(report.Rows) != 3 {
+		t.Fatalf("initial rows = %v", report.Rows)
+	}
+	adapter.inactive = []string{"old"}
+	report := load()
+	if len(report.Rows) != 1 || report.Rows[0].VenueLong == "hyperliquid" || report.Rows[0].VenueShort == "hyperliquid" {
+		t.Fatalf("filtered rows = %v, want only Pacifica/Aster", report.Rows)
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM market_snapshots_1h").Scan(&count); err != nil || count != 3 {
+		t.Fatalf("preserved history rows = %d, err=%v", count, err)
+	}
+	adapter.inactive = nil
+	if report := load(); len(report.Rows) != 3 {
+		t.Fatalf("reactivated rows = %v; historical cache was mutated", report.Rows)
 	}
 }
 
