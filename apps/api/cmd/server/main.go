@@ -13,6 +13,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/db"
 	liveexecutor "github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster"
@@ -112,6 +113,7 @@ func main() {
 	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	srv.EnableOpportunityLiquidity(liquidity.New(ctx, logger))
 	if asterDataAgent != nil {
 		srv.EnableAsterDataAgentProbe(dataagent.ExcludeProbeOwner(asterDataAgent, referenceAccount))
 	}

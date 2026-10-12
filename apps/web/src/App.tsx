@@ -36,7 +36,7 @@ type TradeSelection =
   | { kind: 'opportunity'; id: string }
   | { kind: 'position'; position: LivePosition }
   | null
-type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
 const FILTER_VENUES = ['pacifica', 'hyperliquid', 'aster'] as const
@@ -90,7 +90,6 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
     case 'aprMaxLev': return opp.max_leverage > 0 ? opp.annualized_gross_edge * opp.max_leverage : 0
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
-    case 'capacity': return opp.best_price_capacity
     case 'fundingSpread': return Math.abs(opp.funding_spread)
     case 'pacificaRate': return fundingForVenue(opp, 'pacifica') ?? 0
     case 'hlRate': return fundingForVenue(opp, 'hyperliquid') ?? 0
@@ -760,7 +759,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 <SortTH field="apr" label="Current APR" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SignalSortTH current={sortField} dir={sortDir} onSort={handleSort} />
                 <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right divided />
-                <SortTH field="capacity" label="Liquidity" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="oi" label="Open Interest" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <TableHead className="h-9 w-8" />
               </TableRow>
             </TableHeader>
@@ -819,9 +818,8 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <MetricFlash value={opp.entry_spread_estimate}>{fmtPct(opp.entry_spread_estimate, 4)}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">price spread</p>
                     </TableCell>
-                    <TableCell className="py-3 text-right font-mono text-foreground">
-                      <MetricFlash value={opp.best_price_capacity}>{fmtUsd(opp.best_price_capacity)}</MetricFlash>
-                      <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">OI {fmtUsd(opp.available_notional)}</p>
+                    <TableCell className="py-3 text-right font-mono text-foreground" title="Lower open interest of the two venue markets">
+                      <MetricFlash value={opp.available_notional}>{fmtUsd(opp.available_notional)}</MetricFlash>
                     </TableCell>
                     <TableCell className="py-3">
                       <button

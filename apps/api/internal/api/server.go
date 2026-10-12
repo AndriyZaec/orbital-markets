@@ -33,6 +33,7 @@ type Server struct {
 	liveStore            *executor.Store // always available when DB exists — read-only live position access
 	live                 *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
 	closeMarkets         closeMarketSource
+	opportunityLiquidity liquidityQuoteSource
 	logger               *slog.Logger
 	mux                  *http.ServeMux
 	handler              http.Handler // mux wrapped in middleware (recovery → logging → auth)
@@ -141,6 +142,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/access", s.handleAccess)
 	s.mux.HandleFunc("GET /api/v1/markets", s.handleMarkets)
 	s.mux.HandleFunc("GET /api/v1/opportunities", s.handleOpportunities)
+	s.mux.HandleFunc("GET /api/v1/opportunities/{opportunityID}/liquidity", s.handleOpportunityLiquidity)
 	s.mux.HandleFunc("POST /api/v1/plan", s.handleBuildPlan)
 
 	// Paper trading
