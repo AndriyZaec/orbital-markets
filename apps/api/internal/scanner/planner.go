@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -140,7 +141,7 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if freshDirection != opp.Direction {
 		return nil, fmt.Errorf("funding direction changed for %s; refresh opportunity", opp.Asset)
 	}
-	notional := opp.RecommendedNotional
+	notional := computeSizing(snapA, snapB, opp.Direction).RecommendedNotional
 	if requestedNotional > 0 {
 		notional = requestedNotional
 	}
@@ -331,6 +332,13 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 		ExpiresAt:  now.Add(planTTL),
 	}
 
+	plan.BaseAmount = notional / max(leg1.ExpectedPrice, leg2.ExpectedPrice)
+	if plan.Executable {
+		if err := s.EvaluateExecutionLiquidity(ctx, plan, liquidity.OrderSize{Notional: notional}, false); err != nil {
+			plan.Executable = false
+			plan.Warnings = append(plan.Warnings, err.Error())
+		}
+	}
 	return plan, nil
 }
 

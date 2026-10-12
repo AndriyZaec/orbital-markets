@@ -8,6 +8,17 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
+func TestDepthLimitIsUsedInTheSignedAsterOrder(t *testing.T) {
+	module := NewLiveModule(payloadTestRules, nil)
+	request, err := module.BuildOpen(venue.LiveOrderParams{Account: testUser, Signer: testSigner, Symbol: "BTCUSDT", Side: domain.SideLong, Amount: 2, Price: 100, LimitPrice: 110.55, ClientOrderID: "depth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Price != 110.6 || !strings.Contains(string(request.UnsignedPayload), "price=110.6") {
+		t.Fatalf("signed limit ignores depth: %+v", request)
+	}
+}
+
 func TestLiveModuleBuildsAsterSigningRequests(t *testing.T) {
 	module := NewLiveModule(payloadTestRules, &BuilderConfig{Address: testBuilder, FeeRate: "0.0002"})
 	params := venue.LiveOrderParams{

@@ -25,6 +25,7 @@ interface Props {
     opportunityId: string,
     leverage: number,
     requestedNotional?: number,
+    impactAcknowledged?: boolean,
   ) => Promise<void>
   onViewPositions?: (positionId: string | null) => void
   onOpenAccounts?: () => void
@@ -170,6 +171,7 @@ export function OpportunityPanel({
     debouncedLeverageForPlan,
     debouncedNotionalForPlan,
     planAccounts,
+    opp.direction,
   )
   const planUpdating = planLoading || planInputsPending
   const maxLev = leverageCapabilityBlocked ? null : maxLeverage ?? opportunityMaxLev
@@ -227,19 +229,34 @@ export function OpportunityPanel({
   const fundingReversalReason = fundingReversalSignal
     ? `The 7-day funding direction was only ${(fundingReversalSignal.direction_consistency * 100).toFixed(0)}% consistent across ${fundingReversalSignal.samples} samples.`
     : null
-  const [riskAcknowledgement, setRiskAcknowledgement] = useState({
-    opportunityId: '',
-    acknowledged: false,
-  })
-  const fundingReversalRiskAcknowledged = !requiresFundingReversalAcknowledgement || (
-    riskAcknowledgement.opportunityId === opp.id && riskAcknowledgement.acknowledged
+  const requiresImpactAcknowledgement = plan?.liquidity?.requires_acknowledgement === true
+  const requiresFundingAck = mode === 'live' && requiresFundingReversalAcknowledgement
+  const requiresRiskAcknowledgement = requiresFundingAck || requiresImpactAcknowledgement
+  const acknowledgementKey = JSON.stringify([opp.id, opp.direction, notionalInput, leverage, requiresFundingAck, requiresImpactAcknowledgement])
+  const [riskAcknowledgement, setRiskAcknowledgement] = useState({ key: acknowledgementKey, acknowledged: false })
+  // Reset synchronously when the approved inputs or disclosed risk changes,
+  // including switching away and back to a previous size or direction.
+  if (riskAcknowledgement.key !== acknowledgementKey) {
+    setRiskAcknowledgement({ key: acknowledgementKey, acknowledged: false })
+  }
+  const risksAcknowledged = !requiresRiskAcknowledgement || (
+    riskAcknowledgement.key === acknowledgementKey && riskAcknowledgement.acknowledged
   )
+  const riskLabel = requiresFundingAck && requiresImpactAcknowledgement
+    ? 'I accept funding reversal and price impact risks'
+    : requiresImpactAcknowledgement ? 'I accept elevated price impact' : 'I accept funding reversal risk'
+  const riskReason = [
+    requiresFundingAck ? fundingReversalReason : null,
+    requiresImpactAcknowledgement
+      ? `Estimated combined depth impact is ${fmtPct(plan?.liquidity?.impact ?? 0, 3)}, excluding spread and fees. Opening price limits cover the visible depth plus the existing 0.5% movement allowance.`
+      : null,
+  ].filter(Boolean).join(' ')
   const detailWarnings = plan?.warnings ?? []
 
   const handleExecute = async () => {
     setExecuting(true)
     try {
-      await onExecute(opp.id, leverage, notionalForPlan)
+      await onExecute(opp.id, leverage, notionalForPlan, requiresImpactAcknowledgement && risksAcknowledged)
     } finally {
       setExecuting(false)
     }
@@ -247,7 +264,9 @@ export function OpportunityPanel({
 
   const executeLivePlan = (selectedPlan: NonNullable<typeof plan>) => {
     if (selectedPlan.opportunity_id !== opp.id || selectedPlan.asset.toUpperCase() !== opp.asset.toUpperCase() ||
-      selectedPlan.leverage.leverage !== leverage) return
+      selectedPlan.leverage.leverage !== leverage || selectedPlan.direction !== opp.direction ||
+      (notionalForPlan !== undefined && selectedPlan.notional !== notionalForPlan) ||
+      (selectedPlan.liquidity?.requires_acknowledgement && (!requiresImpactAcknowledgement || !risksAcknowledged))) return
     const approvedNotional = notionalForPlan ?? selectedPlan.notional
     const plannedRiskierLeg = selectedPlan.leg_1.slippage >= selectedPlan.leg_2.slippage
       ? selectedPlan.leg_1
@@ -260,6 +279,7 @@ export function OpportunityPanel({
         symbol: leg.market_key ?? opp.asset,
         side: executionIntentSide(leg.side),
         expectedPrice: leg.expected_price,
+        limitPrice: leg.limit_price,
       }
     })
     if (!intentLegs[0] || !intentLegs[1]) return
@@ -279,8 +299,9 @@ export function OpportunityPanel({
       asset: opp.asset,
       leverage,
       requestedNotional: approvedNotional,
-      approvedBaseAmount: approvedNotional / plannedRiskierLeg.expected_price,
+      approvedBaseAmount: selectedPlan.base_amount ?? approvedNotional / plannedRiskierLeg.expected_price,
       maxSlippagePct: selectedPlan.bounds.max_slippage_pct,
+      impactAcknowledged: requiresImpactAcknowledgement && risksAcknowledged,
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       legs: intentLegs as [NonNullable<(typeof intentLegs)[number]>, NonNullable<(typeof intentLegs)[number]>],
     })
@@ -292,6 +313,11 @@ export function OpportunityPanel({
 
   const handleRetryLive = async () => {
     const freshPlan = await refreshPlan()
+    if (freshPlan?.liquidity?.requires_acknowledgement && (!requiresImpactAcknowledgement || !risksAcknowledged)) {
+      setShowLiveModal(false)
+      resetLive()
+      return
+    }
     if (freshPlan) executeLivePlan(freshPlan)
   }
 
@@ -348,27 +374,23 @@ export function OpportunityPanel({
               <p className="text-sm text-foreground">USD</p>
             </div>
           </div>
-          <div className="mt-1.5 flex items-center justify-between text-[11px]">
-            {notionalInput !== '' && !notionalValid ? (
-              <span className="text-red-400">Enter a positive amount</span>
-            ) : (
-              <span className="text-muted-foreground/70">
-                Best-price capacity: {fmtUsd(plan?.best_price_capacity ?? opp.best_price_capacity)}
-              </span>
-            )}
+          <div className="mt-1.5 flex flex-col items-start gap-1 text-[11px]">
             {opp.recommended_notional > 0 && (
               <button
                 type="button"
                 onClick={() => onNotionalInputChange(String(Math.round(opp.recommended_notional)))}
-                title="25% of the weaker leg's available best-price liquidity"
+                title="90% of the weaker leg's best-price capacity"
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >
                 Suggested: {fmtUsd(opp.recommended_notional)}
               </button>
             )}
+            {notionalInput !== '' && !notionalValid && (
+              <span className="text-red-400">Enter a positive amount</span>
+            )}
           </div>
           {liquidityEstimate && (
-            <p className="mt-1 text-[11px] text-muted-foreground/70" title="Visible-depth estimate. Order sizing still uses best-price capacity.">
+            <p className="mt-1 text-[11px] text-muted-foreground/70" title="Visible-depth benchmark, not a hard size limit. Suggested size uses 90% of best-price capacity; execution checks the requested size automatically.">
               Estimated L2 capacity (0.2% impact): {fmtUsd(liquidityEstimate.capacity)}
             </p>
           )}
@@ -496,19 +518,19 @@ export function OpportunityPanel({
             Add collateral · {marginShortfalls.join(' · ')}
           </p>
         )}
-        {mode === 'live' && requiresFundingReversalAcknowledgement && (
+        {requiresRiskAcknowledgement && (
           <TooltipProvider>
             <div className="mb-3 flex items-center gap-2 text-xs">
               <label className="flex cursor-pointer items-center gap-2 text-foreground">
                 <Checkbox
-                  checked={fundingReversalRiskAcknowledged}
+                  checked={risksAcknowledged}
                   onCheckedChange={(checked) => setRiskAcknowledgement({
-                    opportunityId: opp.id,
+                    key: acknowledgementKey,
                     acknowledged: checked,
                   })}
-                  aria-label="Acknowledge frequent funding reversal risk"
+                  aria-label={requiresImpactAcknowledgement ? 'Acknowledge elevated price impact' : 'Acknowledge frequent funding reversal risk'}
                 />
-                <span>I accept funding reversal risk</span>
+                <span>{riskLabel}</span>
               </label>
               <Tooltip>
                 <TooltipTrigger
@@ -519,7 +541,7 @@ export function OpportunityPanel({
                   )}
                 />
                 <TooltipContent side="top" align="end">
-                  {fundingReversalReason}
+                  {riskReason}
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -530,7 +552,7 @@ export function OpportunityPanel({
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
-            disabled={!marketAvailable || !plan?.executable || executing || planUpdating || !notionalValid}
+            disabled={!marketAvailable || !plan?.executable || executing || planUpdating || !notionalValid || !risksAcknowledged}
             onClick={handleExecute}
           >
             {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : leverageCapabilityBlocked ? 'Execution Unavailable' : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
@@ -546,7 +568,7 @@ export function OpportunityPanel({
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
                 !marketAvailable || (isFullyReady
-                  ? !plan?.executable || planUpdating || !notionalValid || hasMarginShortfall || !fundingReversalRiskAcknowledged
+                  ? !plan?.executable || planUpdating || !notionalValid || hasMarginShortfall || !risksAcknowledged
                   : false)
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}

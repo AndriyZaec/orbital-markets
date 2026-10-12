@@ -275,6 +275,7 @@ function useLiveExecutionState() {
         body: JSON.stringify({
           opportunity_id: opportunityId,
           leverage,
+          impact_acknowledged: intent.impactAcknowledged === true,
           ...(typeof requestedNotional === 'number' && requestedNotional > 0
             ? { requested_notional: requestedNotional }
             : {}),

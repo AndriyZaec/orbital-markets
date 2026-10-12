@@ -293,6 +293,12 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 		}
 	}
 
+	if err := s.validateFreshOpenDepth(ctx, sess); err != nil {
+		sess.State = sessFailed
+		s.finishLiveSession(ctx, sess, err.Error()+"; no order submitted")
+		writeJSON(w, http.StatusOK, map[string]any{"session_id": sess.ID, "status": string(sessFailed), "reason": err.Error() + "; no order submitted"})
+		return
+	}
 	sess.State = sessLeg1Submitting
 	if err := s.saveLiveSession(ctx, sess); err != nil {
 		sess.State = sessFailed

@@ -5,14 +5,16 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/paper"
 )
 
 func (s *Server) handlePaperOpen(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OpportunityID     string   `json:"opportunity_id"`
-		Leverage          float64  `json:"leverage"`
-		RequestedNotional *float64 `json:"requested_notional,omitempty"`
+		OpportunityID      string   `json:"opportunity_id"`
+		Leverage           float64  `json:"leverage"`
+		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
+		ImpactAcknowledged bool     `json:"impact_acknowledged"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -37,6 +39,14 @@ func (s *Server) handlePaperOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	if !plan.Executable {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "plan not executable"})
+		return
+	}
+	if err := s.scanner.EvaluateExecutionLiquidity(r.Context(), plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, true); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := plan.AcknowledgeImpact(req.ImpactAcknowledged); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
 

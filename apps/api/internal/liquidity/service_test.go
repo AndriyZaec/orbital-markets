@@ -191,6 +191,43 @@ func TestCacheHasBoundedSize(t *testing.T) {
 	}
 }
 
+func TestExecutionQuoteBypassesDisplayCacheAndRefreshesCompletedBooks(t *testing.T) {
+	var requests atomic.Int32
+	var empty atomic.Bool
+	s := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if empty.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		serveTestBook(w, r)
+	})
+	pair := Pair{Market{"aster", "BTCUSDT"}, Market{"hyperliquid", "BTC"}}
+	if _, err := s.Estimate(context.Background(), pair); err != nil {
+		t.Fatal(err)
+	}
+	quote, err := s.Quote(context.Background(), pair, OrderSize{BaseAmount: 6}, false)
+	if err != nil || quote.Sufficient || requests.Load() != 2 {
+		t.Fatalf("cached books: %+v, %v, requests=%d", quote, err, requests.Load())
+	}
+	quote, err = s.Quote(context.Background(), pair, OrderSize{Notional: 500}, false)
+	if err != nil || !quote.Sufficient || quote.BaseAmount != 5 {
+		t.Fatalf("notional sizing did not use current book prices: %+v, %v", quote, err)
+	}
+	empty.Store(true)
+	if _, err := s.Quote(context.Background(), pair, OrderSize{BaseAmount: 1}, true); err == nil {
+		t.Fatal("fresh execution reused the successful display cache")
+	}
+	if requests.Load() != 4 {
+		t.Fatalf("fresh reads=%d, want 4", requests.Load())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.Quote(ctx, pair, OrderSize{BaseAmount: 1}, true); err != context.Canceled {
+		t.Fatal(err)
+	}
+}
+
 // Explicit opt-in: public market reads only, never orders or credentials.
 func TestPublicBooks(t *testing.T) {
 	if os.Getenv("ORBITAL_L2_SMOKE") != "1" {

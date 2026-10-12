@@ -79,6 +79,7 @@ func BuildOpenPayload(
 	amount float64,
 	price float64,
 	clientOrderID string,
+	limitPrice ...float64,
 ) (*domain.SigningRequest, error) {
 	return buildPayload(
 		assetMap,
@@ -90,6 +91,7 @@ func BuildOpenPayload(
 		clientOrderID,
 		"open",
 		OrbitalBuilderCode(),
+		limitPrice...,
 	)
 }
 
@@ -200,6 +202,7 @@ func buildPayload(
 	clientOrderID string,
 	action string,
 	builder *BuilderCode,
+	limitPrice ...float64,
 ) (*domain.SigningRequest, error) {
 	assetIdx, ok := assetMap.AssetIndex(symbol)
 	if !ok {
@@ -225,7 +228,11 @@ func buildPayload(
 	if isBuy {
 		slippageMul = defaultSlippageMulBuy
 	}
-	limitPx, err := normalizeHyperliquidPrice(price*slippageMul, sizeDecimals)
+	targetPrice := price * slippageMul
+	if len(limitPrice) > 0 && limitPrice[0] != 0 {
+		targetPrice = limitPrice[0]
+	}
+	limitPx, err := normalizeHyperliquidPrice(targetPrice, sizeDecimals)
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s price: %w", symbol, err)
 	}
@@ -285,6 +292,7 @@ func buildPayload(
 		Side:            venueSide,
 		Amount:          normalizedAmount,
 		Price:           price,
+		LimitPrice:      targetPrice,
 		ReduceOnly:      reduceOnly,
 		VenueAssetID:    &assetIdx,
 		UnsignedPayload: unsignedBytes,

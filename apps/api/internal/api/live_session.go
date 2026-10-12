@@ -44,10 +44,11 @@ const sessionTTL = time.Minute
 
 // legPlan captures the resolved per-leg parameters after riskier-first ordering.
 type legPlan struct {
-	venue  string
-	symbol string
-	side   domain.Side
-	price  float64
+	venue      string
+	symbol     string
+	side       domain.Side
+	price      float64
+	limitPrice float64
 }
 
 // normFill is a venue-agnostic fill summary used inside the session orchestrator.

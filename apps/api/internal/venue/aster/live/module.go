@@ -44,7 +44,7 @@ func (m *LiveModule) NormalizeAmount(symbol string, amount float64) (float64, er
 func (m *LiveModule) BuildOpen(params venue.LiveOrderParams) (*domain.SigningRequest, error) {
 	return BuildOpenPayload(
 		m.rules, params.Account, params.Signer, params.Symbol, params.Side,
-		params.Amount, params.Price, params.ClientOrderID, m.builder,
+		params.Amount, params.Price, params.ClientOrderID, m.builder, params.LimitPrice,
 	)
 }
 

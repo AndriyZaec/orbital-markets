@@ -61,16 +61,16 @@ func TestComputeSizingUsesEntryExecutableSides(t *testing.T) {
 	if longA.BestPriceCapacity != 400 {
 		t.Fatalf("long-A capacity = %v, want 400 from min(A ask, B bid)", longA.BestPriceCapacity)
 	}
-	if longA.RecommendedNotional != 100 {
-		t.Fatalf("long-A suggested size = %v, want 100", longA.RecommendedNotional)
+	if longA.RecommendedNotional != 360 {
+		t.Fatalf("long-A suggested size = %v, want 90%% BBO capacity 360", longA.RecommendedNotional)
 	}
 
 	longB := computeSizing(a, b, domain.DirectionLongB)
 	if longB.BestPriceCapacity != 20 {
 		t.Fatalf("long-B capacity = %v, want 20 from min(B ask, A bid)", longB.BestPriceCapacity)
 	}
-	if longB.RecommendedNotional != 5 {
-		t.Fatalf("long-B suggested size = %v, want 5", longB.RecommendedNotional)
+	if longB.RecommendedNotional != 18 {
+		t.Fatalf("long-B suggested size = %v, want 90%% BBO capacity 18", longB.RecommendedNotional)
 	}
 }
 

@@ -137,6 +137,56 @@ func (s *Service) estimate(pair Pair, entry *flight[Estimate]) {
 	s.mu.Unlock()
 }
 
+// Quote bypasses the display estimate cache. Fresh execution checks also bypass
+// completed book entries, but still share in-flight reads and venue budgets.
+func (s *Service) Quote(ctx context.Context, pair Pair, size OrderSize, fresh bool) (OrderQuote, error) {
+	if err := ctx.Err(); err != nil {
+		return OrderQuote{}, err
+	}
+	if pair.Long.Venue == pair.Short.Venue || pair.Long.Key == "" || pair.Short.Key == "" || s.urls[pair.Long.Venue] == "" || s.urls[pair.Short.Venue] == "" {
+		return OrderQuote{}, ErrUnavailable
+	}
+	if !((finitePositive(size.Notional) && size.BaseAmount == 0) || (finitePositive(size.BaseAmount) && size.Notional == 0)) {
+		return OrderQuote{}, ErrUnavailable
+	}
+	if fresh {
+		s.mu.Lock()
+		for _, market := range []Market{pair.Long, pair.Short} {
+			if entry := s.books[market]; entry != nil && !entry.finished.IsZero() {
+				delete(s.books, market)
+			}
+		}
+		s.mu.Unlock()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	type result struct {
+		book book
+		err  error
+	}
+	longResult := make(chan result, 1)
+	go func() { b, err := s.getBook(ctx, pair.Long); longResult <- result{b, err} }()
+	short, err := s.getBook(ctx, pair.Short)
+	long := <-longResult
+	if err != nil {
+		return OrderQuote{}, err
+	}
+	if long.err != nil {
+		return OrderQuote{}, long.err
+	}
+	if err := ctx.Err(); err != nil {
+		return OrderQuote{}, err
+	}
+	amount := size.BaseAmount
+	if size.Notional > 0 {
+		if !validBook(long.book, time.Now()) || !validBook(short, time.Now()) {
+			return OrderQuote{}, ErrUnavailable
+		}
+		amount = size.Notional / max(long.book.asks[0].price, short.bids[0].price)
+	}
+	return quoteOrder(long.book, short, amount, time.Now())
+}
+
 func (s *Service) getBook(ctx context.Context, market Market) (book, error) {
 	s.mu.Lock()
 	entry := s.books[market]

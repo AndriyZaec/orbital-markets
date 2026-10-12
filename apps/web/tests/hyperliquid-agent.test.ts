@@ -321,3 +321,15 @@ function l1ConnectionId(action: unknown, nonce: number): `0x${string}` {
   new DataView(input.buffer).setBigUint64(encoded.length, BigInt(nonce), false)
   return keccak256(input)
 }
+
+test('a Hyperliquid agent signs the depth limit bound to the prepared payload', async () => {
+  const request = hyperliquidSigningRequest()
+  request.limit_price = 90
+  const payload = request.unsigned_payload as { action: { orders: { p: string }[] }; nonce: number; message: { source: string; connectionId: string } }
+  payload.action.orders[0].p = '90'
+  payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+  await assert.doesNotReject(signHyperliquidAgentRequest(request, hyperliquidAgent()))
+  payload.action.orders[0].p = '80'
+  payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+  await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
+})

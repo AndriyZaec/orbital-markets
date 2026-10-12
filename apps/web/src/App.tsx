@@ -294,11 +294,13 @@ export default function App() {
     opportunityId: string,
     leverage: number,
     requestedNotional?: number,
+    impactAcknowledged?: boolean,
   ) => {
     try {
       const body: Record<string, unknown> = {
         opportunity_id: opportunityId,
         leverage,
+        impact_acknowledged: impactAcknowledged === true,
       }
       if (typeof requestedNotional === 'number' && requestedNotional > 0) {
         body.requested_notional = requestedNotional

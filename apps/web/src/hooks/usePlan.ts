@@ -14,6 +14,8 @@ interface Leg {
   expected_price: number
   slippage: number
   fee: number
+  depth_impact?: number
+  limit_price?: number
   // Per-leg leverage / margin. Notional is equal on both legs and lives on the
   // plan; leverage & margin are per-leg since the user picks them per-leg.
   leverage: number
@@ -44,6 +46,13 @@ interface ExecutionPlan {
   asset: string
   direction: string
   notional: number
+  base_amount?: number
+  liquidity?: {
+    status: 'bbo' | 'l2' | 'insufficient' | 'unavailable'
+    impact: number
+    requires_acknowledgement: boolean
+    observed_at: string
+  }
   best_price_capacity: number
   max_leverage: number
   leverage: LeverageConfig
@@ -65,8 +74,10 @@ export function usePlan(
   leverage: number = 1,
   requestedNotional?: number,
   accounts?: Record<string, string>,
+  direction?: string,
 ) {
   const [plan, setPlan] = useState<ExecutionPlan | null>(null)
+  const [resultKey, setResultKey] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [maxLeverageResult, setMaxLeverageResult] = useState<{ key: string; value: number | null }>({ key: '', value: null })
@@ -75,7 +86,7 @@ export function usePlan(
   const requestSequence = useRef(0)
   const pageVisible = usePageVisibility()
   const accountsKey = JSON.stringify(Object.entries(accounts ?? {}).sort(([left], [right]) => left.localeCompare(right)))
-  const planKey = JSON.stringify([opportunityId, requestedNotional ?? null, accountsKey])
+  const planKey = JSON.stringify([opportunityId, leverage, requestedNotional ?? null, accountsKey, direction ?? null])
   const maxLeverage = maxLeverageResult.key === planKey ? maxLeverageResult.value : null
   const leverageCapabilityBlocked = capabilityErrorKey === planKey
 
@@ -87,6 +98,7 @@ export function usePlan(
     requestKey?: string,
     signal?: AbortSignal,
     background = false,
+    expectedDirection?: string,
   ) => {
     const requestId = ++requestSequence.current
     try {
@@ -109,6 +121,7 @@ export function usePlan(
       if (!resp.ok) {
         const body: { error?: string; pair_max_leverage?: number; venue?: string; capability?: LeverageCapability } = await resp.json().catch(() => ({}))
         if (signal?.aborted || requestId !== requestSequence.current) return
+        setResultKey(requestKey ?? '')
         if (typeof body.pair_max_leverage === 'number') {
           setMaxLeverageResult({ key: requestKey ?? '', value: body.pair_max_leverage })
         } else {
@@ -129,7 +142,11 @@ export function usePlan(
       }
       const data: ExecutionPlan = await resp.json()
       if (signal?.aborted || requestId !== requestSequence.current) return
+      if (expectedDirection && data.direction !== expectedDirection) {
+        throw apiError(409, 'Funding direction changed. The opportunity is updating automatically.')
+      }
       setPlan(data)
+      setResultKey(requestKey ?? '')
       setMaxLeverageResult({ key: requestKey ?? '', value: data.max_leverage })
       setCapabilityErrorKey('')
       setError(null)
@@ -138,6 +155,7 @@ export function usePlan(
       if (signal?.aborted || requestId !== requestSequence.current) return
       setError(userErrorMessage(e, 'Unable to build an execution plan. Please try again.'))
       setPlan(null)
+      setResultKey(requestKey ?? '')
     } finally {
       if (!signal?.aborted && requestId === requestSequence.current) {
         setLoading(false)
@@ -150,6 +168,7 @@ export function usePlan(
       requestSequence.current++
       const resetId = window.setTimeout(() => {
         setPlan(null)
+        setLoading(false)
         setError(null)
         setMaxLeverageResult({ key: '', value: null })
         setCapabilityErrorKey('')
@@ -160,12 +179,12 @@ export function usePlan(
 
     const controller = new AbortController()
     const initialId = window.setTimeout(
-      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal),
+      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal, false, direction),
       0,
     )
 
     intervalRef.current = setInterval(
-      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal, true),
+      () => fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, controller.signal, true, direction),
       10_000,
     )
     return () => {
@@ -173,11 +192,12 @@ export function usePlan(
       window.clearTimeout(initialId)
       if (intervalRef.current) window.clearInterval(intervalRef.current)
     }
-  }, [opportunityId, leverage, requestedNotional, accountsKey, planKey, fetchPlan, pageVisible])
+  }, [opportunityId, leverage, requestedNotional, accountsKey, planKey, fetchPlan, pageVisible, direction])
 
   const clear = useCallback(() => {
     requestSequence.current++
     setPlan(null)
+    setLoading(false)
     setError(null)
     setMaxLeverageResult({ key: '', value: null })
     setCapabilityErrorKey('')
@@ -185,10 +205,15 @@ export function usePlan(
 
   const refresh = useCallback(() => {
     if (!opportunityId) return Promise.resolve(undefined)
-    return fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey)
-  }, [accountsKey, fetchPlan, leverage, opportunityId, planKey, requestedNotional])
+    return fetchPlan(opportunityId, leverage, requestedNotional, accountsKey, planKey, undefined, false, direction)
+  }, [accountsKey, fetchPlan, leverage, opportunityId, planKey, requestedNotional, direction])
 
-  return { plan, loading, error, maxLeverage, leverageCapabilityBlocked, clear, refresh }
+  return {
+    plan: resultKey === planKey ? plan : null,
+    loading: loading || Boolean(opportunityId && pageVisible && resultKey !== planKey),
+    error: resultKey === planKey ? error : null,
+    maxLeverage, leverageCapabilityBlocked, clear, refresh,
+  }
 }
 
 export type { ExecutionPlan, Leg, Bounds }

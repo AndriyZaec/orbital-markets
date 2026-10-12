@@ -18,10 +18,11 @@ var errDurableSessionOwned = errors.New("durable session recovery owned by anoth
 const sessionRecoveryLease = 90 * time.Second
 
 type durableLegPlan struct {
-	Venue  string      `json:"venue"`
-	Symbol string      `json:"symbol"`
-	Side   domain.Side `json:"side"`
-	Price  float64     `json:"price"`
+	Venue      string      `json:"venue"`
+	Symbol     string      `json:"symbol"`
+	Side       domain.Side `json:"side"`
+	Price      float64     `json:"price"`
+	LimitPrice float64     `json:"limit_price,omitempty"`
 }
 
 type durableLiveSession struct {
@@ -76,8 +77,8 @@ func marshalLiveSession(session *LiveSession) ([]byte, error) {
 	hyperliquidLeverage := session.LeverageRequests["hyperliquid"]
 	durable := durableLiveSession{
 		ID: session.ID, Plan: session.Plan,
-		Leg1:            durableLegPlan{Venue: session.Leg1.venue, Symbol: session.Leg1.symbol, Side: session.Leg1.side, Price: session.Leg1.price},
-		Leg2:            durableLegPlan{Venue: session.Leg2.venue, Symbol: session.Leg2.symbol, Side: session.Leg2.side, Price: session.Leg2.price},
+		Leg1:            durableLegPlan{Venue: session.Leg1.venue, Symbol: session.Leg1.symbol, Side: session.Leg1.side, Price: session.Leg1.price, LimitPrice: session.Leg1.limitPrice},
+		Leg2:            durableLegPlan{Venue: session.Leg2.venue, Symbol: session.Leg2.symbol, Side: session.Leg2.side, Price: session.Leg2.price, LimitPrice: session.Leg2.limitPrice},
 		Accounts:        cloneVenueBindingMap(session.Bindings.Accounts),
 		Agents:          cloneVenueBindingMap(session.Bindings.Agents),
 		AccountPacifica: session.Bindings.Accounts["pacifica"], AccountHyperliquid: session.Bindings.Accounts["hyperliquid"],
@@ -143,8 +144,8 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 	}
 	session := &LiveSession{
 		ID: durable.ID, Plan: durable.Plan,
-		Leg1: legPlan{venue: durable.Leg1.Venue, symbol: durable.Leg1.Symbol, side: durable.Leg1.Side, price: durable.Leg1.Price},
-		Leg2: legPlan{venue: durable.Leg2.Venue, symbol: durable.Leg2.Symbol, side: durable.Leg2.Side, price: durable.Leg2.Price},
+		Leg1: legPlan{venue: durable.Leg1.Venue, symbol: durable.Leg1.Symbol, side: durable.Leg1.Side, price: durable.Leg1.Price, limitPrice: durable.Leg1.LimitPrice},
+		Leg2: legPlan{venue: durable.Leg2.Venue, symbol: durable.Leg2.Symbol, side: durable.Leg2.Side, price: durable.Leg2.Price, limitPrice: durable.Leg2.LimitPrice},
 		Bindings: liveVenueBindings{
 			Accounts: accounts,
 			Agents:   agents,

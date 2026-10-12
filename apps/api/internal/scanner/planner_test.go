@@ -142,8 +142,8 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	if opps[0].BestPriceCapacity != 1000 {
 		t.Fatalf("BestPriceCapacity = %v, want 1000", opps[0].BestPriceCapacity)
 	}
-	if opps[0].RecommendedNotional != 250 {
-		t.Fatalf("RecommendedNotional = %v, want 250", opps[0].RecommendedNotional)
+	if opps[0].RecommendedNotional != 900 {
+		t.Fatalf("RecommendedNotional = %v, want 90%% BBO capacity 900", opps[0].RecommendedNotional)
 	}
 	if opps[0].SlippageEstimate <= 0 || opps[0].FeeEstimate <= 0 {
 		t.Fatalf("opportunity costs = slippage %v fee %v, want both populated", opps[0].SlippageEstimate, opps[0].FeeEstimate)
@@ -176,8 +176,8 @@ func TestBuildPlanUsesFreshPairMaximumLeverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPlan(oversized notional) error = %v", err)
 	}
-	if !blockedPlan.Executable {
-		t.Fatalf("BuildPlan(oversized notional) executable = false, warnings = %v", blockedPlan.Warnings)
+	if blockedPlan.Executable {
+		t.Fatalf("BuildPlan(oversized notional) executable = true without verified L2, warnings = %v", blockedPlan.Warnings)
 	}
 	if !containsWarning(blockedPlan.Warnings, "exceeds visible best-price capacity") {
 		t.Fatalf("oversized plan warnings = %v, want capacity blocker", blockedPlan.Warnings)

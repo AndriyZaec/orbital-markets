@@ -246,6 +246,9 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
   const amount = Number(order?.amount)
   const slippage = Number(order?.slippage_percent)
   const expectedSide = request.side === 'buy' ? 'bid' : request.side === 'sell' ? 'ask' : request.side
+  const approvedSlippage = request.action === 'open' && request.limit_price !== undefined
+    ? Math.max(0.5, Math.abs(request.limit_price / request.price - 1) * 100)
+    : request.action === 'open' ? 0.5 : 1
   const allowed =
     request.venue === 'pacifica' &&
     agent.venue === 'pacifica' &&
@@ -266,7 +269,11 @@ function allowedMarketOrder(request: SigningRequest, agent: StoredTradingAgent):
     (request.action === 'open' || order.reduce_only === true) &&
     Number.isFinite(slippage) &&
     slippage >= 0 &&
-    slippage <= (request.action === 'open' ? 0.5 : 1) &&
+    Number.isFinite(approvedSlippage) &&
+    (request.limit_price === undefined || request.action !== 'open' ||
+      (Number.isFinite(request.limit_price) && request.limit_price > 0 &&
+        (expectedSide === 'bid' ? request.limit_price >= request.price : request.limit_price <= request.price))) &&
+    slippage <= approvedSlippage + 1e-8 &&
     order?.client_order_id === request.client_order_id &&
     validPacificaBuilder(order?.builder_code, request.action, agent)
   if (!allowed) throw new Error('Pacifica payload is not an allowed market order')

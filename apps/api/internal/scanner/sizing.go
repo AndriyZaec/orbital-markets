@@ -8,9 +8,8 @@ import (
 )
 
 const (
-	// Leave room for quote movement and competing takers while keeping the
-	// suggested order inside the weaker visible best-price level.
-	suggestedBBOShare = 0.25
+	// Keep a small reserve for quote movement and competing takers.
+	suggestedBBOShare = 0.9
 
 	// Applied when bid == ask and the venue only supplied a mid-like quote.
 	minHiddenSpread = 0.0005 // 5bps
@@ -22,7 +21,7 @@ const (
 type SizingResult struct {
 	MaxAvailableNotional float64              // weaker venue's OI in quote notional, display context only
 	BestPriceCapacity    float64              // weaker executable-side BBO notional
-	RecommendedNotional  float64              // conservative share of BBO capacity
+	RecommendedNotional  float64              // 90% of weaker-side BBO capacity
 	Liquidity            domain.LiquidityTier // observable BBO quality
 }
 

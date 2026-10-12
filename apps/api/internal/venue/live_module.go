@@ -39,6 +39,7 @@ type LiveOrderParams struct {
 	Side          domain.Side
 	Amount        float64
 	Price         float64
+	LimitPrice    float64 // optional depth-derived open limit; reductions retain their existing policy
 	ClientOrderID string
 }
 

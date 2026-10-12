@@ -71,3 +71,28 @@ func TestCapacityRejectsUnusableBooks(t *testing.T) {
 		})
 	}
 }
+
+func TestOrderQuoteAllowsHighImpactButRequiresFullVisibleDepth(t *testing.T) {
+	now := time.Now()
+	long := testBook(now, []level{{99, 5}}, []level{{100, 1}, {110, 1}})
+	short := testBook(now, []level{{100, 1}, {90, 1}}, []level{{101, 5}})
+	quote, err := quoteOrder(long, short, 2, now)
+	if err != nil || !quote.Sufficient || math.Abs(quote.LongImpact+quote.ShortImpact-0.1) > 1e-12 || quote.LongWorstPrice != 110 || quote.ShortWorstPrice != 90 {
+		t.Fatalf("full high-impact order was rejected or mispriced: %+v, %v", quote, err)
+	}
+	partial, err := quoteOrder(long, short, 1.5, now)
+	if err != nil || math.Abs(partial.LongImpact-0.1/3) > 1e-12 {
+		t.Fatalf("partial level: %+v, %v", partial, err)
+	}
+	quote, err = quoteOrder(long, short, 2.01, now)
+	if err != nil || quote.Sufficient {
+		t.Fatalf("invented depth: %+v, %v", quote, err)
+	}
+	if _, err := quoteOrder(long, short, 0, now); err == nil {
+		t.Fatal("invalid amount accepted")
+	}
+	short.at = now.Add(-6 * time.Second)
+	if _, err := quoteOrder(long, short, 1, now); err == nil {
+		t.Fatal("stale execution book accepted")
+	}
+}

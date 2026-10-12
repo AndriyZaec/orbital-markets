@@ -86,6 +86,18 @@ function signingRequest(overrides: Partial<SigningRequest> = {}): SigningRequest
   }
 }
 
+test('execution intent permits disclosed L2 price limits without widening the approved amount', () => {
+  const depthIntent = { ...intent, impactAcknowledged: true, legs: [
+    { ...intent.legs[0], limitPrice: 110.55 },
+    { ...intent.legs[1], limitPrice: 89.55 },
+  ] as const }
+  const now = Date.parse('2026-09-08T12:00:00.000Z')
+  assert.doesNotThrow(() => assertExecutionIntentRequest(depthIntent, signingRequest({ price: 110.55, limit_price: 110.55 }), new Set(), now))
+  assert.throws(() => assertExecutionIntentRequest(depthIntent, signingRequest({ price: 120, limit_price: 120 }), new Set(), now), /allowed range/)
+  assert.throws(() => assertExecutionIntentRequest(depthIntent, signingRequest({ price: 110.55, limit_price: 110.55, amount: 1.1 }), new Set(), now), /approved plan/)
+  assert.throws(() => assertExecutionIntentRequest(intent, signingRequest({ limit_price: 110.55 }), new Set(), now), /allowed range/)
+})
+
 test('execution intent accepts only the prepared asset and venue pair', () => {
   assert.doesNotThrow(() => assertPreparedExecutionIntent(intent, {
     asset: 'BTC',

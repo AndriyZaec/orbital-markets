@@ -6,6 +6,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 )
 
 type liquidityQuoteSource interface {
@@ -14,6 +15,9 @@ type liquidityQuoteSource interface {
 
 func (s *Server) EnableOpportunityLiquidity(source liquidityQuoteSource) {
 	s.opportunityLiquidity = source
+	if executionSource, ok := source.(scanner.ExecutionLiquiditySource); ok && s.scanner != nil {
+		s.scanner.EnableExecutionLiquidity(executionSource)
+	}
 }
 
 func (s *Server) handleOpportunityLiquidity(w http.ResponseWriter, r *http.Request) {

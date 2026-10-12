@@ -15,14 +15,15 @@ import (
 )
 
 type Scanner struct {
-	adapters        []venue.Adapter
-	scanMu          sync.Mutex
-	mu              sync.RWMutex
-	opps            []domain.Opportunity
-	pairingReasons  map[string]string // current rejection reasons; guarded by scanMu
-	generation      uint64
-	sourceRevisions map[string]uint64
-	logger          *slog.Logger
+	adapters           []venue.Adapter
+	scanMu             sync.Mutex
+	mu                 sync.RWMutex
+	opps               []domain.Opportunity
+	pairingReasons     map[string]string // current rejection reasons; guarded by scanMu
+	generation         uint64
+	sourceRevisions    map[string]uint64
+	logger             *slog.Logger
+	executionLiquidity ExecutionLiquiditySource
 }
 
 func New(logger *slog.Logger, adapters ...venue.Adapter) *Scanner {

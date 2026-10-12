@@ -7,10 +7,11 @@ export interface ExecutionIntent {
   requestedNotional: number
   approvedBaseAmount: number
   maxSlippagePct: number
+  impactAcknowledged?: boolean
   expiresAt: string
   legs: readonly [
-    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell'; expectedPrice: number },
-    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell'; expectedPrice: number },
+    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell'; expectedPrice: number; limitPrice?: number },
+    { venue: SigningRequest['venue']; symbol: string; side: 'buy' | 'sell'; expectedPrice: number; limitPrice?: number },
   ]
 }
 
@@ -123,16 +124,33 @@ function assertExecutionIntentRequestValues(
     throw new ExecutionIntentRequestError('plan_mismatch')
   }
 
-  // The backend uses one base amount for both venues. Bind it to the riskier
-  // leg shown in the approved plan, with room only for approved quote movement.
+  // The backend uses one approved common base amount for both venues.
   const maximumAmount = intent.approvedBaseAmount / (1 - intent.maxSlippagePct)
   if (request.amount > maximumAmount) {
     throw new ExecutionIntentRequestError('plan_mismatch')
   }
-  // Open builders use 0.5% venue slippage. A 1% browser ceiling leaves room for
-  // venue tick normalization without allowing an unbounded API-provided price.
-  if (request.action === 'open' && Math.abs(request.price / leg.expectedPrice - 1) > 0.01) {
-    throw new ExecutionIntentRequestError('price_moved')
+  // Depth-aware opens bind to approved per-leg limits. Legacy intents retain
+  // their 1% ceiling for fixed 0.5% collars and venue tick normalization.
+  if (request.action === 'open') {
+    if (leg.limitPrice !== undefined) {
+      const limit = request.limit_price
+      if (!Number.isFinite(leg.limitPrice) || leg.limitPrice <= 0 ||
+        typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) {
+        throw new ExecutionIntentRequestError('plan_mismatch')
+      }
+      if (request.venue !== 'aster' && ((leg.side === 'buy' && limit < request.price) || (leg.side === 'sell' && limit > request.price))) {
+        throw new ExecutionIntentRequestError('plan_mismatch')
+      }
+      const beyondApproved = leg.side === 'buy'
+        ? limit > leg.limitPrice * (1 + intent.maxSlippagePct)
+        : limit < leg.limitPrice * (1 - intent.maxSlippagePct)
+      if (beyondApproved || (request.venue !== 'aster' && Math.abs(request.price / leg.expectedPrice - 1) > intent.maxSlippagePct)) {
+        throw new ExecutionIntentRequestError('price_moved')
+      }
+    } else if (Math.abs(request.price / leg.expectedPrice - 1) > 0.01 ||
+      (request.limit_price !== undefined && Math.abs(request.limit_price / leg.expectedPrice - 1) > 0.01)) {
+      throw new ExecutionIntentRequestError('price_moved')
+    }
   }
 }
 

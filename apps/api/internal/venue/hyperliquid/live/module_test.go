@@ -1,11 +1,27 @@
 package live
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
+
+func TestDepthLimitIsUsedInTheSignedHyperliquidOrder(t *testing.T) {
+	module := NewLiveModule(payloadTestAssetMap{index: 7, decimals: 3})
+	request, err := module.BuildOpen(venue.LiveOrderParams{Account: "owner", Signer: "agent", Symbol: "VIRTUAL", Side: domain.SideLong, Amount: 2, Price: 100, LimitPrice: 110.55, ClientOrderID: "depth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload HyperliquidUnsignedAction
+	if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if request.LimitPrice != 110.55 || payload.Action.Orders[0].LimitPx != "110.55" {
+		t.Fatalf("signed limit is not depth-derived: %+v", request)
+	}
+}
 
 func TestLiveModuleBuildsBoundSigningRequests(t *testing.T) {
 	module := NewLiveModule(payloadTestAssetMap{index: 7, decimals: 3})

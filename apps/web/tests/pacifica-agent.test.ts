@@ -66,6 +66,15 @@ test('a local Pacifica agent accepts a native side in the signing request', asyn
   assert.equal(signed.request_id, request.id)
 })
 
+test('a Pacifica agent signs depth-derived tolerance but rejects a wider payload', async () => {
+  const request = pacificaSigningRequest()
+  request.limit_price = 110.55
+  request.unsigned_payload = { ...request.unsigned_payload as object, slippage_percent: '10.55000000' }
+  await assert.doesNotReject(signPacificaAgentRequest(request, pacificaAgent()))
+  request.unsigned_payload = { ...request.unsigned_payload as object, slippage_percent: '11' }
+  await assert.rejects(signPacificaAgentRequest(request, pacificaAgent()), /not an allowed market order/)
+})
+
 test('the signing dispatcher rejects an unsupported venue before loading an agent', async () => {
   const request = { ...pacificaSigningRequest(), venue: 'dydx' } as unknown as SigningRequest
   await assert.rejects(
