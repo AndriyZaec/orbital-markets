@@ -200,6 +200,24 @@ body {
   to { transform: scaleX(1); }
 }
 
+@keyframes accounts-sidebar-enter {
+  from { margin-right: -340px; opacity: 0; }
+  to { margin-right: 0; opacity: 1; }
+}
+
+.accounts-sidebar-enter {
+  animation: accounts-sidebar-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes accounts-sidebar-exit {
+  from { margin-right: 0; opacity: 1; }
+  to { margin-right: -340px; opacity: 0; }
+}
+
+.accounts-sidebar-enter[data-state='closed'] {
+  animation: accounts-sidebar-exit 200ms ease-in both;
+}
+
 @keyframes chart-endpoint {
   from { opacity: 0; transform: translateX(-4px); }
   to { opacity: 1; transform: translateX(0); }
@@ -266,6 +284,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .chart-reveal,
   .chart-endpoint,
+  .accounts-sidebar-enter,
+  .accounts-sidebar-enter[data-state='closed'],
   .nav-glass-active,
   .orbital-brand:hover .orbital-logo i {
     animation: none;

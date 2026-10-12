@@ -170,6 +170,22 @@ export default function App() {
   const [focusPositionId, setFocusPositionId] = useState<string | null>(null)
   const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
+  const [accountsClosing, setAccountsClosing] = useState(false)
+  const openAccounts = () => {
+    setAccountsClosing(false)
+    setShowAccounts(true)
+  }
+  const closeAccounts = () => {
+    setAccountsClosing(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    setShowAccounts(false)
+  }
+
+  useEffect(() => {
+    if (!accountsClosing) return
+    // Also clean up if CSS animation events are suppressed or interrupted.
+    const timeout = window.setTimeout(() => setAccountsClosing(false), 240)
+    return () => window.clearTimeout(timeout)
+  }, [accountsClosing])
   // Header account status is driven by the same typed readiness layer used
   // by Connect Accounts and Execute Live — one source of truth for the
   // "is this trader actually ready to trade" signal.
@@ -339,7 +355,7 @@ export default function App() {
           <AccountsHeaderButton
             aggregate={accountsAggregate}
             open={showAccounts}
-            onClick={() => setShowAccounts((v) => !v)}
+            onClick={showAccounts ? closeAccounts : openAccounts}
           />
         </div>
       </header>
@@ -382,7 +398,7 @@ export default function App() {
                   onMouseDown={onResizeStart}
                 />
                 <LivePositions
-                  onConnectWallets={() => setShowAccounts(true)}
+                  onConnectWallets={openAccounts}
                   onSelectPosition={selectPosition}
                   selectedPositionId={selectedPosition?.id}
                   focusPositionId={focusPositionId}
@@ -396,7 +412,7 @@ export default function App() {
               <DeferredBoundary label="Portfolio">
                 <Suspense fallback={<DeferredSurface label="Loading portfolio..." />}>
                   <Portfolio
-                    onConnectWallets={() => setShowAccounts(true)}
+                    onConnectWallets={openAccounts}
                     onViewPositions={() => {
                       setSelection(null)
                       setFocusPositionId(null)
@@ -429,7 +445,7 @@ export default function App() {
                   if (positionId) setFocusPositionId(positionId)
                   else closeOpportunity()
                 }}
-                onOpenAccounts={() => setShowAccounts(true)}
+                onOpenAccounts={openAccounts}
               />
             </Suspense>
           </DeferredBoundary>
@@ -446,12 +462,21 @@ export default function App() {
           </DeferredBoundary>
         )}
 
-        {showAccounts && (
-          <DeferredBoundary label="Account management">
-            <Suspense fallback={<DeferredSurface label="Loading account management" className="w-[340px] shrink-0 border-l border-border bg-card" />}>
-              <ConnectAccounts open onClose={() => setShowAccounts(false)} />
-            </Suspense>
-          </DeferredBoundary>
+        {(showAccounts || accountsClosing) && (
+          <div
+            className="accounts-sidebar-enter flex w-[340px] shrink-0"
+            data-state={showAccounts ? 'open' : 'closed'}
+            inert={!showAccounts}
+            onAnimationEnd={(event) => {
+              if (event.target === event.currentTarget && !showAccounts) setAccountsClosing(false)
+            }}
+          >
+            <DeferredBoundary label="Account management">
+              <Suspense fallback={<DeferredSurface label="Loading account management" className="w-[340px] shrink-0 border-l border-border bg-card" />}>
+                <ConnectAccounts open onClose={closeAccounts} />
+              </Suspense>
+            </DeferredBoundary>
+          </div>
         )}
       </div>
 
