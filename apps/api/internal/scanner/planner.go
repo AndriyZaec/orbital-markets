@@ -130,6 +130,9 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if err != nil {
 		return nil, fmt.Errorf("fetch fresh data: %w", err)
 	}
+	if rejection := validatePairing(opp.Asset, snapA, snapB, time.Now()); rejection != nil {
+		return nil, rejection
+	}
 	freshDirection := domain.DirectionLongA
 	if snapA.FundingRate-snapB.FundingRate > 0 {
 		freshDirection = domain.DirectionLongB
