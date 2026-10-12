@@ -105,6 +105,9 @@ func NewServer(
 		recoveryOwner: uuid.NewString(),
 		historyCache:  newHistoryCache(128),
 	}
+	if sc != nil && live != nil && live.modules != nil {
+		sc.EnableAmountNormalization(live.modules.NormalizeHedgeAmount)
+	}
 	s.routes()
 
 	// Middleware order on the request path: recovery → logging → CORS → auth → mux.

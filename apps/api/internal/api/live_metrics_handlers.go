@@ -49,6 +49,22 @@ func (s *Server) handleWeeklyAPR(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unable to load weekly APR"})
 		return
 	}
+	// Filter on every request, after reading the historical cache: a delisting
+	// must take effect without waiting for the one-hour aggregation cache TTL.
+	if s.scanner != nil {
+		inactive := s.scanner.InactiveAssets()
+		filtered := &analytics.WeeklyAPRReport{
+			GeneratedAt: report.GeneratedAt,
+			Rows:        make([]analytics.WeeklyAPRRow, 0, len(report.Rows)),
+		}
+		for _, row := range report.Rows {
+			asset := strings.ToUpper(row.Ticker)
+			if !inactive[row.VenueLong][asset] && !inactive[row.VenueShort][asset] {
+				filtered.Rows = append(filtered.Rows, row)
+			}
+		}
+		report = filtered
+	}
 	writeJSON(w, http.StatusOK, report)
 }
 

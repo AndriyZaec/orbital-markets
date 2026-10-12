@@ -43,7 +43,7 @@ func (m *LiveModule) BuildOpen(params venue.LiveOrderParams) (*domain.SigningReq
 	}
 	request, err := BuildOpenPayload(
 		m.assetMap, params.Symbol, params.Side, params.Amount,
-		params.Price, params.ClientOrderID,
+		params.Price, params.ClientOrderID, params.LimitPrice,
 	)
 	return bindLiveRequest(request, params.Account, params.Signer, err)
 }

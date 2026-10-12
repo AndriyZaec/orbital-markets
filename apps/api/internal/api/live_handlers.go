@@ -16,6 +16,7 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -57,9 +58,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		liveVenueBindingsRequest
-		OpportunityID     string   `json:"opportunity_id"`
-		Leverage          float64  `json:"leverage"`
-		RequestedNotional *float64 `json:"requested_notional,omitempty"`
+		OpportunityID      string   `json:"opportunity_id"`
+		Leverage           float64  `json:"leverage"`
+		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
+		ImpactAcknowledged bool     `json:"impact_acknowledged"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -234,18 +236,15 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	// 4. Riskier leg first (higher slippage = thinner book → submit first).
 	leg1, leg2 := orderLegsByRisk(plan)
-	leg1Amount, err := liveBaseAmount(plan.Notional, leg1.price)
-	if err != nil {
-		s.logger.Error("live prepare: calculate base amount", "err", err, "notional", plan.Notional, "price", leg1.price)
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "could not size live order from dollar notional"})
-		return
-	}
-	leg1Amount, err = s.normalizeLiveHedgeAmount(leg1Amount, leg1, leg2)
+	// Preserve the quantity actually evaluated by the fresh plan, even if its
+	// L2 best prices differ from the initial BBO sizing reference.
+	leg1Amount, err := s.normalizeLiveHedgeAmount(plan.BaseAmount, leg1, leg2)
 	if err != nil {
 		s.logger.Error("live prepare: normalize hedge amount", "err", err, "asset", plan.Asset, "amount", leg1Amount)
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "requested size cannot be represented on both venues"})
 		return
 	}
+	plan.BaseAmount = leg1Amount
 	plan.Leg1.MarginRequired = leg1Amount * plan.Leg1.ExpectedPrice / plan.Leg1.Leverage
 	plan.Leg2.MarginRequired = leg1Amount * plan.Leg2.ExpectedPrice / plan.Leg2.Leverage
 	plan.Leverage.MarginRequired = plan.Leg1.MarginRequired + plan.Leg2.MarginRequired
@@ -316,6 +315,27 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
+	if err := s.scanner.EvaluateExecutionLiquidity(r.Context(), plan, liquidity.OrderSize{BaseAmount: leg1Amount}, true); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := plan.AcknowledgeImpact(req.ImpactAcknowledged); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if reasons := livePreTradeBlockers(plan, accounts); len(reasons) > 0 {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "pre-trade checks failed", "code": livePreparePreTradeBlocked, "reasons": reasons})
+		return
+	}
+	// Retain the selected venue ordering and quantity, updating only quote limits.
+	for _, candidate := range []domain.Leg{plan.Leg1, plan.Leg2} {
+		if candidate.Venue == leg1.venue {
+			leg1.price, leg1.limitPrice = candidate.ExpectedPrice, candidate.LimitPrice
+		}
+		if candidate.Venue == leg2.venue {
+			leg2.price, leg2.limitPrice = candidate.ExpectedPrice, candidate.LimitPrice
+		}
+	}
 	// Both are on the riskier leg's venue/wallet and signed together up front,
 	// so the backend holds a signature-free escape the moment leg 1 fills.
 	now := time.Now()
@@ -486,40 +506,15 @@ func liveSessionConflictResponse(message, state string) map[string]any {
 	}
 }
 
-func liveBaseAmount(notional, price float64) (float64, error) {
-	if notional <= 0 || math.IsNaN(notional) || math.IsInf(notional, 0) {
-		return 0, fmt.Errorf("invalid notional: %v", notional)
-	}
-	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
-		return 0, fmt.Errorf("invalid price: %v", price)
-	}
-	return notional / price, nil
-}
-
 func (s *Server) normalizeLiveHedgeAmount(amount float64, legs ...legPlan) (float64, error) {
 	if s.live == nil || len(legs) == 0 {
 		return 0, fmt.Errorf("live execution not configured")
 	}
-	current := amount
-	for range 8 {
-		next := current
-		for _, leg := range legs {
-			module, err := s.live.liveModule(leg.venue)
-			if err != nil {
-				return 0, err
-			}
-			normalized, err := module.NormalizeAmount(leg.symbol, current)
-			if err != nil {
-				return 0, fmt.Errorf("normalize %s amount: %w", leg.venue, err)
-			}
-			next = math.Min(next, normalized)
-		}
-		if math.Abs(next-current) <= 1e-9 {
-			return next, nil
-		}
-		current = next
+	markets := make([]domain.Leg, len(legs))
+	for i, leg := range legs {
+		markets[i] = domain.Leg{Venue: leg.venue, MarketKey: leg.symbol}
 	}
-	return 0, fmt.Errorf("could not find a common venue amount")
+	return s.live.modules.NormalizeHedgeAmount(amount, markets...)
 }
 
 func liveSessionLeg1Amount(session *LiveSession) float64 {
@@ -564,8 +559,8 @@ func venueDisplayName(venue string) string {
 // orderLegsByRisk resolves riskier-first ordering: the leg with higher slippage
 // (thinner book) is submitted first. Mirrors executor.orderLegs.
 func orderLegsByRisk(plan *domain.ExecutionPlan) (legPlan, legPlan) {
-	a := legPlan{venue: plan.Leg1.Venue, symbol: legMarketKey(plan.Leg1), side: plan.Leg1.Side, price: plan.Leg1.ExpectedPrice}
-	b := legPlan{venue: plan.Leg2.Venue, symbol: legMarketKey(plan.Leg2), side: plan.Leg2.Side, price: plan.Leg2.ExpectedPrice}
+	a := legPlan{venue: plan.Leg1.Venue, symbol: legMarketKey(plan.Leg1), side: plan.Leg1.Side, price: plan.Leg1.ExpectedPrice, limitPrice: plan.Leg1.LimitPrice}
+	b := legPlan{venue: plan.Leg2.Venue, symbol: legMarketKey(plan.Leg2), side: plan.Leg2.Side, price: plan.Leg2.ExpectedPrice, limitPrice: plan.Leg2.LimitPrice}
 	if plan.Leg1.Slippage >= plan.Leg2.Slippage {
 		return a, b
 	}
@@ -591,6 +586,7 @@ func (s *Server) buildOpenSigningRequest(
 		Account: bindings.Accounts[leg.venue],
 		Signer:  bindings.Agents[leg.venue],
 		Symbol:  leg.symbol, Side: leg.side, Amount: amount, Price: leg.price,
+		LimitPrice:    leg.limitPrice,
 		ClientOrderID: clientOrderID,
 	})
 }

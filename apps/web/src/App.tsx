@@ -36,7 +36,7 @@ type TradeSelection =
   | { kind: 'opportunity'; id: string }
   | { kind: 'position'; position: LivePosition }
   | null
-type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'capacity' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
+type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
 const FILTER_VENUES = ['pacifica', 'hyperliquid', 'aster'] as const
@@ -90,7 +90,6 @@ function getSortValue(opp: Opportunity, field: SortField): number | string {
     case 'aprMaxLev': return opp.max_leverage > 0 ? opp.annualized_gross_edge * opp.max_leverage : 0
     case 'priceSpread': return opp.entry_spread_estimate
     case 'oi': return opp.available_notional
-    case 'capacity': return opp.best_price_capacity
     case 'fundingSpread': return Math.abs(opp.funding_spread)
     case 'pacificaRate': return fundingForVenue(opp, 'pacifica') ?? 0
     case 'hlRate': return fundingForVenue(opp, 'hyperliquid') ?? 0
@@ -170,6 +169,22 @@ export default function App() {
   const [focusPositionId, setFocusPositionId] = useState<string | null>(null)
   const [opportunityQuery, setOpportunityQuery] = useState('')
   const [showAccounts, setShowAccounts] = useState(false)
+  const [accountsClosing, setAccountsClosing] = useState(false)
+  const openAccounts = () => {
+    setAccountsClosing(false)
+    setShowAccounts(true)
+  }
+  const closeAccounts = () => {
+    setAccountsClosing(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    setShowAccounts(false)
+  }
+
+  useEffect(() => {
+    if (!accountsClosing) return
+    // Also clean up if CSS animation events are suppressed or interrupted.
+    const timeout = window.setTimeout(() => setAccountsClosing(false), 240)
+    return () => window.clearTimeout(timeout)
+  }, [accountsClosing])
   // Header account status is driven by the same typed readiness layer used
   // by Connect Accounts and Execute Live — one source of truth for the
   // "is this trader actually ready to trade" signal.
@@ -279,11 +294,13 @@ export default function App() {
     opportunityId: string,
     leverage: number,
     requestedNotional?: number,
+    impactAcknowledged?: boolean,
   ) => {
     try {
       const body: Record<string, unknown> = {
         opportunity_id: opportunityId,
         leverage,
+        impact_acknowledged: impactAcknowledged === true,
       }
       if (typeof requestedNotional === 'number' && requestedNotional > 0) {
         body.requested_notional = requestedNotional
@@ -339,7 +356,7 @@ export default function App() {
           <AccountsHeaderButton
             aggregate={accountsAggregate}
             open={showAccounts}
-            onClick={() => setShowAccounts((v) => !v)}
+            onClick={showAccounts ? closeAccounts : openAccounts}
           />
         </div>
       </header>
@@ -382,7 +399,7 @@ export default function App() {
                   onMouseDown={onResizeStart}
                 />
                 <LivePositions
-                  onConnectWallets={() => setShowAccounts(true)}
+                  onConnectWallets={openAccounts}
                   onSelectPosition={selectPosition}
                   selectedPositionId={selectedPosition?.id}
                   focusPositionId={focusPositionId}
@@ -396,7 +413,7 @@ export default function App() {
               <DeferredBoundary label="Portfolio">
                 <Suspense fallback={<DeferredSurface label="Loading portfolio..." />}>
                   <Portfolio
-                    onConnectWallets={() => setShowAccounts(true)}
+                    onConnectWallets={openAccounts}
                     onViewPositions={() => {
                       setSelection(null)
                       setFocusPositionId(null)
@@ -429,7 +446,7 @@ export default function App() {
                   if (positionId) setFocusPositionId(positionId)
                   else closeOpportunity()
                 }}
-                onOpenAccounts={() => setShowAccounts(true)}
+                onOpenAccounts={openAccounts}
               />
             </Suspense>
           </DeferredBoundary>
@@ -446,12 +463,21 @@ export default function App() {
           </DeferredBoundary>
         )}
 
-        {showAccounts && (
-          <DeferredBoundary label="Account management">
-            <Suspense fallback={<DeferredSurface label="Loading account management" className="w-[340px] shrink-0 border-l border-border bg-card" />}>
-              <ConnectAccounts open onClose={() => setShowAccounts(false)} />
-            </Suspense>
-          </DeferredBoundary>
+        {(showAccounts || accountsClosing) && (
+          <div
+            className="accounts-sidebar-enter flex w-[340px] shrink-0"
+            data-state={showAccounts ? 'open' : 'closed'}
+            inert={!showAccounts}
+            onAnimationEnd={(event) => {
+              if (event.target === event.currentTarget && !showAccounts) setAccountsClosing(false)
+            }}
+          >
+            <DeferredBoundary label="Account management">
+              <Suspense fallback={<DeferredSurface label="Loading account management" className="w-[340px] shrink-0 border-l border-border bg-card" />}>
+                <ConnectAccounts open onClose={closeAccounts} />
+              </Suspense>
+            </DeferredBoundary>
+          </div>
         )}
       </div>
 
@@ -735,7 +761,7 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                 <SortTH field="apr" label="Current APR" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <SignalSortTH current={sortField} dir={sortDir} onSort={handleSort} />
                 <SortTH field="priceSpread" label="Entry" current={sortField} dir={sortDir} onSort={handleSort} right divided />
-                <SortTH field="capacity" label="Liquidity" current={sortField} dir={sortDir} onSort={handleSort} right />
+                <SortTH field="oi" label="Open Interest" current={sortField} dir={sortDir} onSort={handleSort} right />
                 <TableHead className="h-9 w-8" />
               </TableRow>
             </TableHeader>
@@ -794,9 +820,8 @@ function OpportunityTable({ opportunities, loading, error, query, onQueryChange,
                       <MetricFlash value={opp.entry_spread_estimate}>{fmtPct(opp.entry_spread_estimate, 4)}</MetricFlash>
                       <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">price spread</p>
                     </TableCell>
-                    <TableCell className="py-3 text-right font-mono text-foreground">
-                      <MetricFlash value={opp.best_price_capacity}>{fmtUsd(opp.best_price_capacity)}</MetricFlash>
-                      <p className="mt-0.5 text-[10px] font-sans text-muted-foreground">OI {fmtUsd(opp.available_notional)}</p>
+                    <TableCell className="py-3 text-right font-mono text-foreground" title="Lower open interest of the two venue markets">
+                      <MetricFlash value={opp.available_notional}>{fmtUsd(opp.available_notional)}</MetricFlash>
                     </TableCell>
                     <TableCell className="py-3">
                       <button

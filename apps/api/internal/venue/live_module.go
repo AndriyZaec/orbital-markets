@@ -39,6 +39,7 @@ type LiveOrderParams struct {
 	Side          domain.Side
 	Amount        float64
 	Price         float64
+	LimitPrice    float64 // optional depth-derived open limit; reductions retain their existing policy
 	ClientOrderID string
 }
 
@@ -135,4 +136,39 @@ func (r *LiveModuleRegistry) Names() []string {
 		return nil
 	}
 	return append([]string(nil), r.names...)
+}
+
+// NormalizeHedgeAmount finds one amount representable by both venue lot rules.
+// It only reads cached rules; callers refresh metadata before planning.
+func (r *LiveModuleRegistry) NormalizeHedgeAmount(amount float64, legs ...domain.Leg) (float64, error) {
+	if r == nil || len(legs) == 0 || amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return 0, fmt.Errorf("invalid hedge amount or venue configuration")
+	}
+	current := amount
+	for range 8 {
+		next := current
+		for _, leg := range legs {
+			module, ok := r.Module(leg.Venue)
+			if !ok {
+				return 0, fmt.Errorf("unsupported venue: %s", leg.Venue)
+			}
+			symbol := leg.MarketKey
+			if symbol == "" {
+				symbol = leg.Asset
+			}
+			normalized, err := module.NormalizeAmount(symbol, current)
+			if err != nil {
+				return 0, fmt.Errorf("normalize %s amount: %w", leg.Venue, err)
+			}
+			if normalized <= 0 || math.IsNaN(normalized) || math.IsInf(normalized, 0) {
+				return 0, fmt.Errorf("invalid normalized %s amount", leg.Venue)
+			}
+			next = math.Min(next, normalized)
+		}
+		if math.Abs(next-current) <= 1e-9 {
+			return next, nil
+		}
+		current = next
+	}
+	return 0, fmt.Errorf("could not find a common venue amount")
 }

@@ -247,6 +247,39 @@ func TestRefreshRemovesExplicitlyInactiveMarket(t *testing.T) {
 	if _, ok := adapter.markets["ETHUSDT"]; ok {
 		t.Fatal("explicitly inactive ETHUSDT market was preserved")
 	}
+	if assets := adapter.InactiveAssets(); len(assets) != 1 || assets[0] != "ETH" {
+		t.Fatalf("inactive assets = %v, want ETH", assets)
+	}
+	adapter.streamConnected = true
+	adapter.applyMarkPriceUpdates([]markPriceUpdate{{Symbol: "ETHUSDT", MarkPrice: "210", EventTime: mutableMarketNow.UnixMilli()}})
+	adapter.applyBookTickerUpdate(bookTickerUpdate{
+		Symbol: "ETHUSDT", BidPrice: "209", BidQty: "1", AskPrice: "211", AskQty: "1", EventTime: mutableMarketNow.UnixMilli(),
+	})
+	if _, ok := adapter.pendingMarks["ETHUSDT"]; ok {
+		t.Fatal("inactive market was buffered from mark stream")
+	}
+	if _, ok := adapter.pendingBooks["ETHUSDT"]; ok {
+		t.Fatal("inactive market was buffered from book stream")
+	}
+	// Omitted metadata is not evidence of reactivation.
+	serverState.omitETHMetadata.Store(true)
+	if err := adapter.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if assets := adapter.InactiveAssets(); len(assets) != 1 {
+		t.Fatalf("omitted metadata forgot inactivity: %v", assets)
+	}
+	serverState.omitETHMetadata.Store(false)
+	serverState.inactiveETH.Store(false)
+	if err := adapter.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if assets := adapter.InactiveAssets(); len(assets) != 0 {
+		t.Fatalf("reactivated market still inactive: %v", assets)
+	}
+	if _, ok := adapter.markets["ETHUSDT"]; !ok {
+		t.Fatal("reactivated market was not restored")
+	}
 }
 
 func TestStreamRecoversKnownMarketMissingFromRESTComponents(t *testing.T) {
@@ -644,6 +677,7 @@ func TestFundingParserAcceptsZeroAndRejectsNonFiniteValues(t *testing.T) {
 func newTestAdapter(restURL string) *Adapter {
 	return &Adapter{
 		markets:              make(map[string]marketState),
+		inactive:             make(map[string]string),
 		logger:               slog.New(slog.NewTextHandler(io.Discard, nil)),
 		client:               &http.Client{Timeout: time.Second},
 		restURL:              restURL,

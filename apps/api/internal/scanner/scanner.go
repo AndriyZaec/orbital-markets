@@ -15,13 +15,16 @@ import (
 )
 
 type Scanner struct {
-	adapters        []venue.Adapter
-	scanMu          sync.Mutex
-	mu              sync.RWMutex
-	opps            []domain.Opportunity
-	generation      uint64
-	sourceRevisions map[string]uint64
-	logger          *slog.Logger
+	adapters           []venue.Adapter
+	scanMu             sync.Mutex
+	mu                 sync.RWMutex
+	opps               []domain.Opportunity
+	pairingReasons     map[string]string // current rejection reasons; guarded by scanMu
+	generation         uint64
+	sourceRevisions    map[string]uint64
+	logger             *slog.Logger
+	executionLiquidity ExecutionLiquiditySource
+	normalizeAmount    AmountNormalizer
 }
 
 func New(logger *slog.Logger, adapters ...venue.Adapter) *Scanner {
@@ -83,13 +86,36 @@ func (s *Scanner) marketDataUpdates(ctx context.Context) <-chan struct{} {
 }
 
 func (s *Scanner) Opportunities() []domain.Opportunity {
+	inactive := s.InactiveAssets()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]domain.Opportunity, len(s.opps))
-	for i := range s.opps {
-		out[i] = cloneOpportunity(s.opps[i])
+	out := make([]domain.Opportunity, 0, len(s.opps))
+	for _, opportunity := range s.opps {
+		asset := strings.ToUpper(opportunity.Asset)
+		if inactive[opportunity.VenuePair.VenueA][asset] || inactive[opportunity.VenuePair.VenueB][asset] {
+			continue
+		}
+		out = append(out, cloneOpportunity(opportunity))
 	}
 	return out
+}
+
+// InactiveAssets returns confirmed inactive assets grouped by venue, independent
+// of quote freshness. Adapters without explicit lifecycle signals are omitted.
+func (s *Scanner) InactiveAssets() map[string]map[string]bool {
+	inactive := make(map[string]map[string]bool)
+	for _, adapter := range s.adapters {
+		source, ok := adapter.(venue.InactiveAssetSource)
+		if !ok {
+			continue
+		}
+		assets := make(map[string]bool)
+		for _, asset := range source.InactiveAssets() {
+			assets[strings.ToUpper(asset)] = true
+		}
+		inactive[adapter.Name()] = assets
+	}
+	return inactive
 }
 
 // MarketData returns the latest snapshots from all adapters.
@@ -160,6 +186,8 @@ func (s *Scanner) scan(ctx context.Context) {
 	var opps []domain.Opportunity
 	currentByID := make(map[string]struct{})
 	now := time.Now()
+	rejected := pairingRejections(collection.pairingAssets, now)
+	s.logPairingRejections(rejected)
 
 	for asset, snapshots := range byAsset {
 		if len(snapshots) < 2 {
@@ -169,6 +197,9 @@ func (s *Scanner) scan(ctx context.Context) {
 		for i := 0; i < len(snapshots); i++ {
 			for j := i + 1; j < len(snapshots); j++ {
 				a, b := canonicalVenuePair(snapshots[i], snapshots[j])
+				if rejected[pairID(asset, a.Venue, b.Venue)] != nil {
+					continue
+				}
 
 				opp := s.compareSnapshots(asset, a, b, now)
 				if opp == nil {
@@ -186,6 +217,9 @@ func (s *Scanner) scan(ctx context.Context) {
 		}
 	}
 	for _, old := range previous {
+		if rejected[old.ID] != nil {
+			continue
+		}
 		if _, found := currentByID[old.ID]; found {
 			continue
 		}
@@ -221,6 +255,7 @@ func (s *Scanner) scan(ctx context.Context) {
 
 type marketCollection struct {
 	byAsset         map[string][]venue.MarketData
+	pairingAssets   map[string][]venue.MarketData
 	assetsByVenue   map[string]map[string]struct{}
 	discoveryAssets map[string]map[string]string
 	fetchFailed     map[string]bool
@@ -230,6 +265,7 @@ type marketCollection struct {
 func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
 	collection := marketCollection{
 		byAsset:         make(map[string][]venue.MarketData),
+		pairingAssets:   make(map[string][]venue.MarketData),
 		assetsByVenue:   make(map[string]map[string]struct{}, len(s.adapters)),
 		discoveryAssets: make(map[string]map[string]string),
 		fetchFailed:     make(map[string]bool),
@@ -247,6 +283,7 @@ func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
 		s.sourceRevisions[venueName]++
 		collection.assetsByVenue[venueName] = make(map[string]struct{})
 		for _, md := range data {
+			collection.pairingAssets[md.Asset] = append(collection.pairingAssets[md.Asset], md)
 			if isDiscoverable(md, now) {
 				asset := strings.ToUpper(strings.TrimSpace(md.Asset))
 				if collection.discoveryAssets[asset] == nil {
@@ -487,7 +524,7 @@ func (s *Scanner) compareSnapshots(asset string, a, b venue.MarketData, now time
 		executionStatus = "blocked"
 	}
 
-	id := fmt.Sprintf("%s-%s-%s", asset, a.Venue, b.Venue)
+	id := pairID(asset, a.Venue, b.Venue)
 
 	return &domain.Opportunity{
 		ID:         id,

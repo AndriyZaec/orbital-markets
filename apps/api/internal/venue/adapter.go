@@ -83,6 +83,12 @@ type Adapter interface {
 	FetchMarketData(ctx context.Context) ([]MarketData, error)
 }
 
+// InactiveAssetSource reports assets explicitly marked inactive by venue
+// metadata. Missing quotes or failed metadata requests must not add entries.
+type InactiveAssetSource interface {
+	InactiveAssets() []string
+}
+
 // OpenInterestDemandSink accepts a complete set of venue market keys whose
 // open interest can contribute to a cross-venue opportunity. Implementations
 // must update demand without performing network I/O.

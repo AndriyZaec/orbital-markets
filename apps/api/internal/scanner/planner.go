@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -130,6 +131,9 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if err != nil {
 		return nil, fmt.Errorf("fetch fresh data: %w", err)
 	}
+	if rejection := validatePairing(opp.Asset, snapA, snapB, time.Now()); rejection != nil {
+		return nil, rejection
+	}
 	freshDirection := domain.DirectionLongA
 	if snapA.FundingRate-snapB.FundingRate > 0 {
 		freshDirection = domain.DirectionLongB
@@ -137,7 +141,7 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if freshDirection != opp.Direction {
 		return nil, fmt.Errorf("funding direction changed for %s; refresh opportunity", opp.Asset)
 	}
-	notional := opp.RecommendedNotional
+	notional := computeSizing(snapA, snapB, opp.Direction).RecommendedNotional
 	if requestedNotional > 0 {
 		notional = requestedNotional
 	}
@@ -328,6 +332,23 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 		ExpiresAt:  now.Add(planTTL),
 	}
 
+	plan.BaseAmount = notional / max(leg1.ExpectedPrice, leg2.ExpectedPrice)
+	if plan.Executable {
+		s.mu.RLock()
+		normalize := s.normalizeAmount
+		s.mu.RUnlock()
+		if normalize != nil {
+			amount, err := normalize(plan.BaseAmount, plan.Leg1, plan.Leg2)
+			if err != nil {
+				return nil, err
+			}
+			plan.BaseAmount = amount
+		}
+		if err := s.EvaluateExecutionLiquidity(ctx, plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, false); err != nil {
+			plan.Executable = false
+			plan.Warnings = append(plan.Warnings, err.Error())
+		}
+	}
 	return plan, nil
 }
 

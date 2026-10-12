@@ -122,7 +122,7 @@ type marketMetadata struct {
 
 type metadataSnapshot struct {
 	active        map[string]marketMetadata
-	inactive      map[string]struct{}
+	inactive      map[string]string // market key -> asset
 	exchangeCount int
 	fundingCount  int
 }
@@ -186,6 +186,7 @@ type Adapter struct {
 	mu        sync.RWMutex
 	refreshMu sync.Mutex
 	markets   map[string]marketState
+	inactive  map[string]string
 	logger    *slog.Logger
 	client    *http.Client
 	restURL   string
@@ -214,6 +215,7 @@ type Adapter struct {
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
 		markets:              make(map[string]marketState),
+		inactive:             make(map[string]string),
 		logger:               logger,
 		client:               &http.Client{Timeout: 10 * time.Second},
 		restURL:              defaultRESTURL,
@@ -233,6 +235,16 @@ func New(logger *slog.Logger) *Adapter {
 func (a *Adapter) Name() string { return venueName }
 
 func (a *Adapter) MarketDataUpdates() <-chan struct{} { return a.marketDataUpdates }
+
+func (a *Adapter) InactiveAssets() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	assets := make([]string, 0, len(a.inactive))
+	for _, asset := range a.inactive {
+		assets = append(assets, asset)
+	}
+	return assets
+}
 
 func (a *Adapter) SetOpenInterestDemandMarketKeys(marketKeys []string) {
 	demand := make(map[string]struct{}, len(marketKeys))
@@ -394,6 +406,14 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 		return nil
 	}
 	previousCount := len(a.markets)
+	for symbol, asset := range metadata.inactive {
+		a.inactive[symbol] = asset
+		delete(a.pendingMarks, symbol)
+		delete(a.pendingBooks, symbol)
+	}
+	for symbol := range metadata.active {
+		delete(a.inactive, symbol)
+	}
 	markets := make(map[string]marketState, len(a.markets)+len(metadata.active))
 	removed := 0
 	metadataOmitted := 0
@@ -693,6 +713,10 @@ func (a *Adapter) applyMarkPriceUpdates(updates []markPriceUpdate) {
 		}
 		updatedAt := time.UnixMilli(update.EventTime).UTC()
 		a.mu.Lock()
+		if _, inactive := a.inactive[update.Symbol]; inactive {
+			a.mu.Unlock()
+			continue
+		}
 		state, ok := a.markets[update.Symbol]
 		if ok {
 			if markOK && updatedAt.After(state.markUpdatedAt) {
@@ -746,6 +770,10 @@ func (a *Adapter) applyBookTickerUpdate(update bookTickerUpdate) {
 	}
 	updatedAt := time.UnixMilli(timestamp).UTC()
 	a.mu.Lock()
+	if _, inactive := a.inactive[update.Symbol]; inactive {
+		a.mu.Unlock()
+		return
+	}
 	state, ok := a.markets[update.Symbol]
 	newer := update.UpdateID > state.bookUpdateID ||
 		(update.UpdateID == 0 && state.bookUpdateID == 0 && updatedAt.After(state.bookUpdatedAt))
@@ -864,7 +892,7 @@ func (a *Adapter) fetchMetadata(ctx context.Context) (metadataSnapshot, error) {
 		}
 	}
 	metadata := make(map[string]marketMetadata)
-	inactive := make(map[string]struct{})
+	inactive := make(map[string]string)
 	for _, symbol := range exchange.Symbols {
 		interval := intervals[symbol.Symbol]
 		rules := parseOrderRules(symbol.Filters)
@@ -873,7 +901,7 @@ func (a *Adapter) fetchMetadata(ctx context.Context) (metadataSnapshot, error) {
 				asset: symbol.BaseAsset, fundingIntervalHours: interval, orderRules: rules,
 			}
 		} else if symbol.Status != "TRADING" && symbol.ContractType == "PERPETUAL" && symbol.QuoteAsset == "USDT" {
-			inactive[symbol.Symbol] = struct{}{}
+			inactive[symbol.Symbol] = symbol.BaseAsset
 		}
 	}
 	if len(metadata) == 0 {

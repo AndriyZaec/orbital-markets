@@ -405,7 +405,9 @@ function validateOrderAction(
   const expectedBuy = request.side === 'buy'
   const expectedPrices = new Set(
     Array.from({ length: 7 }, (_, sizeDecimals) => normalizeHyperliquidPrice(
-      request.price * (expectedBuy ? 1.005 : 0.995),
+      request.action === 'open' && request.limit_price !== undefined
+        ? request.limit_price
+        : request.price * (expectedBuy ? 1.005 : 0.995),
       sizeDecimals,
     )).map(Number),
   )

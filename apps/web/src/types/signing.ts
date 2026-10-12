@@ -13,6 +13,7 @@ export interface SigningRequest {
   side: 'buy' | 'sell' | ''
   amount: number
   price: number
+  limit_price?: number
   reduce_only: boolean
   venue_asset_id?: number
   leverage?: number

@@ -34,6 +34,7 @@ type metaAsset struct {
 	Name        string `json:"name"`
 	MaxLeverage int    `json:"maxLeverage"`
 	SzDecimals  int    `json:"szDecimals"`
+	IsDelisted  bool   `json:"isDelisted"`
 }
 
 type assetCtx struct {
@@ -94,6 +95,7 @@ type assetState struct {
 type Adapter struct {
 	mu               sync.RWMutex
 	assets           map[string]*assetState
+	inactive         map[string]bool
 	assetMap         *AssetMap
 	logger           *slog.Logger
 	client           *http.Client
@@ -112,6 +114,7 @@ type Adapter struct {
 func New(logger *slog.Logger) *Adapter {
 	return &Adapter{
 		assets:     make(map[string]*assetState),
+		inactive:   make(map[string]bool),
 		assetMap:   NewAssetMap(),
 		logger:     logger,
 		client:     &http.Client{Timeout: 10 * time.Second},
@@ -202,6 +205,16 @@ func (a *Adapter) AssetMap() *AssetMap {
 
 func (a *Adapter) Name() string {
 	return venueName
+}
+
+func (a *Adapter) InactiveAssets() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	assets := make([]string, 0, len(a.inactive))
+	for asset := range a.inactive {
+		assets = append(assets, asset)
+	}
+	return assets
 }
 
 func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, error) {
@@ -358,8 +371,21 @@ func (a *Adapter) pollREST(ctx context.Context) {
 	}
 
 	n := min(len(meta.Universe), len(ctxs))
+	// Preserve original universe indices for execution; only quote ingestion is
+	// filtered. Explicit flags remain authoritative even without an asset context.
+	for _, asset := range meta.Universe {
+		if asset.IsDelisted {
+			a.inactive[asset.Name] = true
+			delete(a.assets, asset.Name)
+		} else if completeSnapshot {
+			delete(a.inactive, asset.Name)
+		}
+	}
 	for i := 0; i < n; i++ {
 		name := meta.Universe[i].Name
+		if a.inactive[name] {
+			continue
+		}
 		c := ctxs[i]
 
 		state, exists := a.assets[name]
@@ -412,41 +438,55 @@ func (a *Adapter) connectWS(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	// Subscribe to BBO for all known assets
-	a.mu.RLock()
-	coins := make([]string, 0, len(a.assets))
-	for name := range a.assets {
-		coins = append(coins, name)
-	}
-	a.mu.RUnlock()
-
-	for _, coin := range coins {
-		sub := wsSubscription{
-			Method: "subscribe",
-			Subscription: bboSub{
-				Type: "bbo",
-				Coin: coin,
-			},
-		}
-		if err := conn.WriteJSON(sub); err != nil {
-			return fmt.Errorf("subscribe %s: %w", coin, err)
-		}
+	subscribed := make(map[string]bool)
+	if err := a.reconcileBBOSubscriptions(conn, subscribed); err != nil {
+		return err
 	}
 	generation := a.markStreamConnected()
 	defer a.markStreamDisconnected(generation)
 
-	a.logger.Info("hyperliquid ws connected", "subscriptions", len(coins))
+	a.logger.Info("hyperliquid ws connected", "subscriptions", len(subscribed))
+
+	// Keep a single writer while metadata polling changes the active market set.
+	// Deleted markets stop publishing immediately and are unsubscribed within 5s.
+	subscriptions := time.NewTicker(5 * time.Second)
+	defer subscriptions.Stop()
+	type readResult struct {
+		raw []byte
+		err error
+	}
+	reads := make(chan readResult, 1)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			_, raw, err := conn.ReadMessage()
+			select {
+			case reads <- readResult{raw: raw, err: err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	for {
+		var raw []byte
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-		}
-
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			return fmt.Errorf("read: %w", err)
+		case <-subscriptions.C:
+			if err := a.reconcileBBOSubscriptions(conn, subscribed); err != nil {
+				return err
+			}
+			continue
+		case result := <-reads:
+			if result.err != nil {
+				return fmt.Errorf("read: %w", result.err)
+			}
+			raw = result.raw
 		}
 
 		var msg wsMessage
@@ -466,6 +506,34 @@ func (a *Adapter) connectWS(ctx context.Context) error {
 
 		a.applyBBO(generation, bbo)
 	}
+}
+
+func (a *Adapter) reconcileBBOSubscriptions(conn *websocket.Conn, subscribed map[string]bool) error {
+	a.mu.RLock()
+	active := make(map[string]bool, len(a.assets))
+	for name := range a.assets {
+		active[name] = true
+	}
+	a.mu.RUnlock()
+	for name := range subscribed {
+		if active[name] {
+			continue
+		}
+		if err := conn.WriteJSON(wsSubscription{Method: "unsubscribe", Subscription: bboSub{Type: "bbo", Coin: name}}); err != nil {
+			return fmt.Errorf("unsubscribe %s: %w", name, err)
+		}
+		delete(subscribed, name)
+	}
+	for name := range active {
+		if subscribed[name] {
+			continue
+		}
+		if err := conn.WriteJSON(wsSubscription{Method: "subscribe", Subscription: bboSub{Type: "bbo", Coin: name}}); err != nil {
+			return fmt.Errorf("subscribe %s: %w", name, err)
+		}
+		subscribed[name] = true
+	}
+	return nil
 }
 
 func (a *Adapter) markStreamConnected() uint64 {

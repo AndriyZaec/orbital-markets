@@ -85,10 +85,11 @@ func BuildOpenPayload(
 	amount, price float64,
 	clientOrderID string,
 	builder *BuilderConfig,
+	limitPrice ...float64,
 ) (*domain.SigningRequest, error) {
 	return buildPayload(
 		rules, user, signer, symbol, side, amount, price, clientOrderID,
-		false, "open", openSlippageBPS, builder, time.Now(), nextAsterNonce(),
+		false, "open", openSlippageBPS, builder, time.Now(), nextAsterNonce(), limitPrice...,
 	)
 }
 
@@ -164,6 +165,7 @@ func buildPayload(
 	builder *BuilderConfig,
 	now time.Time,
 	nonce int64,
+	customLimit ...float64,
 ) (*domain.SigningRequest, error) {
 	if builder != nil {
 		if err := validateBuilder(*builder); err != nil {
@@ -194,7 +196,11 @@ func buildPayload(
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s quantity: %w", symbol, err)
 	}
-	limitPrice, priceWire, err := normalizePrice(referencePrice, side, slippageBPS, rules)
+	targetPrice := referencePrice
+	if len(customLimit) > 0 && customLimit[0] != 0 {
+		targetPrice, slippageBPS = customLimit[0], 0
+	}
+	limitPrice, priceWire, err := normalizePrice(targetPrice, side, slippageBPS, rules)
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s price: %w", symbol, err)
 	}
@@ -249,6 +255,7 @@ func buildPayload(
 		Side:            strings.ToLower(venueSide),
 		Amount:          quantity,
 		Price:           limitPrice,
+		LimitPrice:      limitPrice,
 		ReduceOnly:      reduceOnly,
 		UnsignedPayload: unsignedBytes,
 		VenueMetadata:   metaBytes,

@@ -88,8 +88,18 @@ func BuildOpenPayload(
 	amount float64,
 	price float64,
 	clientOrderID string,
+	limitPrice ...float64,
 ) (*domain.SigningRequest, error) {
-	return buildPayload(
+	slippagePct := defaultOpenSlippagePct
+	var limit float64
+	if len(limitPrice) > 0 && limitPrice[0] != 0 {
+		limit = limitPrice[0]
+		if price <= 0 || limit <= 0 || math.IsNaN(limit) || math.IsInf(limit, 0) {
+			return nil, fmt.Errorf("invalid open price limit")
+		}
+		slippagePct = strconv.FormatFloat(max(0.5, math.Abs(limit/price-1)*100), 'f', 8, 64)
+	}
+	request, err := buildPayload(
 		lotSizes,
 		account,
 		symbol,
@@ -97,11 +107,15 @@ func BuildOpenPayload(
 		amount,
 		price,
 		false,
-		defaultOpenSlippagePct,
+		slippagePct,
 		ensureUUID(clientOrderID),
 		"open",
 		OrbitalBuilder.Code,
 	)
+	if err == nil {
+		request.LimitPrice = limit
+	}
+	return request, err
 }
 
 // BuildClosePayload constructs an unsigned signing request for a Pacifica close order.
