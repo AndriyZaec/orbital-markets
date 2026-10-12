@@ -179,6 +179,19 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+        {compact && (
+          <div className="shrink-0 px-5 pt-5 pb-4 border-b border-border">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AssetIcon asset={pos.asset} size="sm" />
+                <h2 className="text-base font-bold text-foreground">{pos.asset}</h2>
+              </div>
+              <button type="button" onClick={onDismiss} aria-label="Close position panel" className="text-muted-foreground hover:text-foreground size-6 flex items-center justify-center rounded hover:bg-white/[0.06] transition-colors">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+          </div>
+        )}
         {!compact && (
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
             <div className="flex items-center gap-3">
