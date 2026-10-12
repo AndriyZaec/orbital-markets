@@ -510,26 +510,11 @@ func (s *Server) normalizeLiveHedgeAmount(amount float64, legs ...legPlan) (floa
 	if s.live == nil || len(legs) == 0 {
 		return 0, fmt.Errorf("live execution not configured")
 	}
-	current := amount
-	for range 8 {
-		next := current
-		for _, leg := range legs {
-			module, err := s.live.liveModule(leg.venue)
-			if err != nil {
-				return 0, err
-			}
-			normalized, err := module.NormalizeAmount(leg.symbol, current)
-			if err != nil {
-				return 0, fmt.Errorf("normalize %s amount: %w", leg.venue, err)
-			}
-			next = math.Min(next, normalized)
-		}
-		if math.Abs(next-current) <= 1e-9 {
-			return next, nil
-		}
-		current = next
+	markets := make([]domain.Leg, len(legs))
+	for i, leg := range legs {
+		markets[i] = domain.Leg{Venue: leg.venue, MarketKey: leg.symbol}
 	}
-	return 0, fmt.Errorf("could not find a common venue amount")
+	return s.live.modules.NormalizeHedgeAmount(amount, markets...)
 }
 
 func liveSessionLeg1Amount(session *LiveSession) float64 {

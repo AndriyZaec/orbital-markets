@@ -24,6 +24,7 @@ type Scanner struct {
 	sourceRevisions    map[string]uint64
 	logger             *slog.Logger
 	executionLiquidity ExecutionLiquiditySource
+	normalizeAmount    AmountNormalizer
 }
 
 func New(logger *slog.Logger, adapters ...venue.Adapter) *Scanner {

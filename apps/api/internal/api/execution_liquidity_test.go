@@ -19,6 +19,16 @@ type liveDepthStub struct {
 	amount float64
 }
 
+type executionQuoteAdapter struct {
+	name string
+	data venue.MarketData
+}
+
+func (a executionQuoteAdapter) Name() string { return a.name }
+func (a executionQuoteAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
+	return []venue.MarketData{a.data}, nil
+}
+
 func (d *liveDepthStub) Quote(_ context.Context, _ liquidity.Pair, size liquidity.OrderSize, fresh bool) (liquidity.OrderQuote, error) {
 	amount := size.BaseAmount
 	if size.Notional > 0 {
@@ -32,8 +42,8 @@ func (d *liveDepthStub) Quote(_ context.Context, _ liquidity.Pair, size liquidit
 
 func TestOpeningDepthIsRevalidatedForTheActualAmountAndAcknowledgement(t *testing.T) {
 	now := time.Now()
-	adapter := func(name, key string, funding float64) selectedQuoteAdapter {
-		return selectedQuoteAdapter{name, venue.MarketData{Venue: name, Asset: "BTC", MarketKey: key, MarkPrice: 100, IndexPrice: 100,
+	adapter := func(name, key string, funding float64) executionQuoteAdapter {
+		return executionQuoteAdapter{name, venue.MarketData{Venue: name, Asset: "BTC", MarketKey: key, MarkPrice: 100, IndexPrice: 100,
 			BidPrice: 99.99, AskPrice: 100.01, BidSize: 100, AskSize: 100, OpenInterest: 100000, MaxLeverage: 10, FundingRate: funding, Timestamp: now}}
 	}
 	sc := scanner.New(slog.Default(), adapter("aster", "BTCUSDT", 0.001), adapter("hyperliquid", "BTC", 0.002))

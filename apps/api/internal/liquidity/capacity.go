@@ -16,12 +16,6 @@ type book struct {
 	at         time.Time
 }
 
-type Estimate struct {
-	Notional    float64
-	BookLimited bool
-	ObservedAt  time.Time
-}
-
 type OrderQuote struct {
 	BaseAmount                      float64
 	Sufficient                      bool
@@ -112,43 +106,4 @@ func vwap(side []level, amount float64) float64 {
 		}
 	}
 	return math.Inf(1) // never extrapolate past visible levels
-}
-
-func capacity(long, short book, now time.Time) (Estimate, bool) {
-	if !validBook(long, now) || !validBook(short, now) || long.at.Sub(short.at).Abs() > maxBookSkew {
-		return Estimate{}, false
-	}
-	asks, bids := long.asks, short.bids
-	ceiling := min(quantity(asks), quantity(bids))
-	if !finitePositive(ceiling) {
-		return Estimate{}, false
-	}
-	impact := func(q float64) float64 {
-		return max(0, vwap(asks, q)/asks[0].price-1) + max(0, 1-vwap(bids, q)/bids[0].price)
-	}
-	amount := ceiling
-	bookLimited := impact(ceiling) <= PairImpactBudget
-	if !bookLimited {
-		low, high := min(asks[0].quantity, bids[0].quantity), ceiling
-		for range 60 {
-			middle := (low + high) / 2
-			if impact(middle) <= PairImpactBudget {
-				low = middle
-			} else {
-				high = middle
-			}
-		}
-		amount = low
-	}
-	// Both legs use the same native base quantity. Express table capacity as a
-	// conservative per-leg quote notional at the lower best executable price.
-	notional := amount * min(asks[0].price, bids[0].price)
-	if !finitePositive(notional) {
-		return Estimate{}, false
-	}
-	observed := long.at
-	if short.at.Before(observed) {
-		observed = short.at
-	}
-	return Estimate{Notional: notional, BookLimited: bookLimited, ObservedAt: observed}, true
 }

@@ -26,15 +26,14 @@ type quota struct {
 	slot        chan struct{}
 }
 
-// Service has no background market collection. Only selected opportunities
-// request public REST books; bounded single-flight caches share those reads.
+// Service has no background market collection. Only orders needing more than
+// fresh BBO depth request public books; bounded single-flight caches share reads.
 type Service struct {
 	mu     sync.Mutex
 	ctx    context.Context
 	logger *slog.Logger
 	client *http.Client
 	urls   map[string]string
-	pairs  map[Pair]*flight[Estimate]
 	books  map[Market]*flight[book]
 	quotas map[string]*quota
 }
@@ -46,7 +45,7 @@ func New(ctx context.Context, logger *slog.Logger) *Service {
 	s := &Service{
 		ctx: ctx, logger: logger, client: &http.Client{Transport: transport, Timeout: 2 * time.Second},
 		urls:  map[string]string{"aster": "https://fapi.asterdex.com", "hyperliquid": "https://api.hyperliquid.xyz", "pacifica": "https://api.pacifica.fi"},
-		pairs: make(map[Pair]*flight[Estimate]), books: make(map[Market]*flight[book]), quotas: make(map[string]*quota),
+		books: make(map[Market]*flight[book]), quotas: make(map[string]*quota),
 	}
 	for name := range s.urls {
 		s.quotas[name] = &quota{slot: make(chan struct{}, 1)}
@@ -72,73 +71,8 @@ func makeRoom[K comparable, V any](cache map[K]*flight[V], limit int) bool {
 	return true
 }
 
-func (s *Service) Estimate(ctx context.Context, pair Pair) (Estimate, error) {
-	if err := ctx.Err(); err != nil {
-		return Estimate{}, err
-	}
-	if pair.Long.Venue == pair.Short.Venue || pair.Long.Key == "" || pair.Short.Key == "" {
-		return Estimate{}, ErrUnavailable
-	}
-	if s.urls[pair.Long.Venue] == "" || s.urls[pair.Short.Venue] == "" {
-		return Estimate{}, ErrUnavailable
-	}
-	s.mu.Lock()
-	entry := s.pairs[pair]
-	if entry != nil && !entry.finished.IsZero() && time.Since(entry.finished) > 15*time.Second {
-		delete(s.pairs, pair)
-		entry = nil
-	}
-	if entry == nil {
-		if !makeRoom(s.pairs, 128) {
-			s.mu.Unlock()
-			return Estimate{}, ErrUnavailable
-		}
-		entry = &flight[Estimate]{done: make(chan struct{})}
-		s.pairs[pair] = entry
-		go s.estimate(pair, entry)
-	}
-	s.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return Estimate{}, ctx.Err()
-	case <-entry.done:
-		return entry.value, entry.err
-	}
-}
-
-func (s *Service) estimate(pair Pair, entry *flight[Estimate]) {
-	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
-	defer cancel()
-	type result struct {
-		book book
-		err  error
-	}
-	longResult := make(chan result, 1)
-	go func() { b, err := s.getBook(ctx, pair.Long); longResult <- result{b, err} }()
-	short, err := s.getBook(ctx, pair.Short)
-	long := <-longResult
-	value := Estimate{}
-	if err == nil {
-		err = long.err
-	}
-	if err == nil {
-		var ok bool
-		value, ok = capacity(long.book, short, time.Now())
-		if !ok {
-			err = ErrUnavailable
-		}
-	}
-	if err != nil {
-		s.logger.Debug("selected opportunity L2 unavailable", "long_venue", pair.Long.Venue, "short_venue", pair.Short.Venue, "err", err)
-	}
-	s.mu.Lock()
-	entry.value, entry.err, entry.finished = value, err, time.Now()
-	close(entry.done)
-	s.mu.Unlock()
-}
-
-// Quote bypasses the display estimate cache. Fresh execution checks also bypass
-// completed book entries, but still share in-flight reads and venue budgets.
+// Fresh execution checks bypass completed book entries, but still share
+// in-flight reads and venue budgets.
 func (s *Service) Quote(ctx context.Context, pair Pair, size OrderSize, fresh bool) (OrderQuote, error) {
 	if err := ctx.Err(); err != nil {
 		return OrderQuote{}, err
@@ -207,6 +141,9 @@ func (s *Service) getBook(ctx context.Context, market Market) (book, error) {
 			readCtx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
 			defer cancel()
 			value, err := s.fetchBook(readCtx, market)
+			if err != nil {
+				s.logger.Debug("execution L2 book unavailable", "venue", market.Venue, "market", market.Key, "err", err)
+			}
 			s.mu.Lock()
 			entry.value, entry.err, entry.finished = value, err, time.Now()
 			close(entry.done)

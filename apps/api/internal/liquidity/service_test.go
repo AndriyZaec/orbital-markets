@@ -52,8 +52,8 @@ func TestConcurrentViewsShareCachedPublicBooks(t *testing.T) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			value, err := s.Estimate(context.Background(), pair)
-			if err != nil || value.Notional != 495 {
+			value, err := s.Quote(context.Background(), pair, OrderSize{BaseAmount: 1}, false)
+			if err != nil || !value.Sufficient || value.BaseAmount != 1 {
 				t.Errorf("estimate=%+v, err=%v", value, err)
 			}
 		}()
@@ -63,7 +63,7 @@ func TestConcurrentViewsShareCachedPublicBooks(t *testing.T) {
 		t.Fatalf("requests=%d, want one per venue", requests.Load())
 	}
 	// Another pair reuses the same Aster book instead of fetching it again.
-	_, err := s.Estimate(context.Background(), Pair{pair.Long, Market{"pacifica", "BTC"}})
+	_, err := s.Quote(context.Background(), Pair{pair.Long, Market{"pacifica", "BTC"}}, OrderSize{BaseAmount: 1}, false)
 	if err != nil || requests.Load() != 3 {
 		t.Fatalf("shared book requests=%d, err=%v", requests.Load(), err)
 	}
@@ -119,7 +119,7 @@ func TestInvalidDataAndTimeoutRemainOptional(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"coin":"BTC","time":1,"levels":[[],[]]}`)
 	})
 	pair := Pair{Market{"aster", "BTCUSDT"}, Market{"hyperliquid", "BTC"}}
-	if _, err := s.Estimate(context.Background(), pair); err == nil {
+	if _, err := s.Quote(context.Background(), pair, OrderSize{BaseAmount: 1}, false); err == nil {
 		t.Fatal("invalid books accepted")
 	}
 	if _, err := decodeRESTBook("pacifica", "BTC", []byte(`{"success":true,"data":{"s":"BTC","t":1,"l":[[],[{"p":"100","a":"NaN"}]]}}`)); err == nil {
@@ -134,15 +134,15 @@ func TestInvalidDataAndTimeoutRemainOptional(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := blocked.Estimate(ctx, pair); err != context.Canceled {
+	if _, err := blocked.Quote(ctx, pair, OrderSize{BaseAmount: 1}, false); err != context.Canceled {
 		t.Fatalf("cancel error=%v", err)
 	}
-	if len(blocked.pairs) != 0 {
+	if len(blocked.books) != 0 {
 		t.Fatal("cancelled view started network work")
 	}
 	blocked.client.Timeout = 10 * time.Millisecond
 	started := time.Now()
-	if _, err := blocked.Estimate(context.Background(), pair); err == nil || time.Since(started) > time.Second {
+	if _, err := blocked.Quote(context.Background(), pair, OrderSize{BaseAmount: 1}, false); err == nil || time.Since(started) > time.Second {
 		t.Fatalf("slow venue request was not bounded: err=%v", err)
 	}
 }
@@ -162,14 +162,14 @@ func TestClosingOneViewDoesNotCancelAnotherSharedQuote(t *testing.T) {
 	pair := Pair{Market{"aster", "BTCUSDT"}, Market{"hyperliquid", "BTC"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	first := make(chan error, 1)
-	go func() { _, err := s.Estimate(ctx, pair); first <- err }()
+	go func() { _, err := s.Quote(ctx, pair, OrderSize{BaseAmount: 1}, false); first <- err }()
 	<-started
 	cancel()
 	if err := <-first; err != context.Canceled {
 		t.Fatalf("closed view error=%v", err)
 	}
 	unblock()
-	if _, err := s.Estimate(context.Background(), pair); err != nil {
+	if _, err := s.Quote(context.Background(), pair, OrderSize{BaseAmount: 1}, false); err != nil {
 		t.Fatal(err)
 	}
 	if requests.Load() != 2 {
@@ -191,7 +191,7 @@ func TestCacheHasBoundedSize(t *testing.T) {
 	}
 }
 
-func TestExecutionQuoteBypassesDisplayCacheAndRefreshesCompletedBooks(t *testing.T) {
+func TestExecutionQuoteRefreshesCompletedBooks(t *testing.T) {
 	var requests atomic.Int32
 	var empty atomic.Bool
 	s := testService(t, func(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +203,7 @@ func TestExecutionQuoteBypassesDisplayCacheAndRefreshesCompletedBooks(t *testing
 		serveTestBook(w, r)
 	})
 	pair := Pair{Market{"aster", "BTCUSDT"}, Market{"hyperliquid", "BTC"}}
-	if _, err := s.Estimate(context.Background(), pair); err != nil {
+	if _, err := s.Quote(context.Background(), pair, OrderSize{BaseAmount: 1}, false); err != nil {
 		t.Fatal(err)
 	}
 	quote, err := s.Quote(context.Background(), pair, OrderSize{BaseAmount: 6}, false)
@@ -235,10 +235,10 @@ func TestPublicBooks(t *testing.T) {
 	}
 	s := New(context.Background(), slog.Default())
 	for _, short := range []Market{{"hyperliquid", "BTC"}, {"pacifica", "BTC"}} {
-		result, err := s.Estimate(context.Background(), Pair{Market{"aster", "BTCUSDT"}, short})
+		result, err := s.Quote(context.Background(), Pair{Market{"aster", "BTCUSDT"}, short}, OrderSize{BaseAmount: 0.0001}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("BTC Aster/%s: $%.2f, book limited=%t", short.Venue, result.Notional, result.BookLimited)
+		t.Logf("BTC Aster/%s: quantity=%v, sufficient=%t, impact=%v", short.Venue, result.BaseAmount, result.Sufficient, result.LongImpact+result.ShortImpact)
 	}
 }

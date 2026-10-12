@@ -5,7 +5,6 @@ import type { Opportunity } from '../src/hooks/useOpportunities'
 import type { ExecutionPlan } from '../src/hooks/usePlan'
 
 const mocks = vi.hoisted(() => ({ execute: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined), executable: true, impact: 0.003 }))
-vi.mock('@/hooks/useOpportunityLiquidity', () => ({ useOpportunityLiquidity: () => null }))
 vi.mock('@/hooks/useLiveExecution', () => ({ useLiveExecution: () => ({ state: { phase: 'idle' }, executeLive: mocks.execute, reset: vi.fn() }) }))
 vi.mock('@/components/LiveExecutionModal', () => ({ LiveExecutionModal: () => null }))
 vi.mock('@/lib/analytics', () => ({ trackAnalytics: vi.fn() }))
@@ -52,6 +51,8 @@ describe('automatic execution depth and acknowledgement', () => {
     expect(button.disabled).toBe(true)
     expect(screen.getAllByRole('checkbox')).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /refresh.*l2/i })).toBeNull()
+    expect(screen.queryByText(/Estimated L2 capacity/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Suggested:/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('checkbox', { name: /Acknowledge elevated price impact/ }))
     expect(button.disabled).toBe(false)
     fireEvent.click(button)

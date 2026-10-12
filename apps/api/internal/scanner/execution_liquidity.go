@@ -7,10 +7,33 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 type ExecutionLiquiditySource interface {
 	Quote(context.Context, liquidity.Pair, liquidity.OrderSize, bool) (liquidity.OrderQuote, error)
+}
+
+type AmountNormalizer func(float64, ...domain.Leg) (float64, error)
+
+func (s *Scanner) EnableAmountNormalization(normalize AmountNormalizer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.normalizeAmount = normalize
+}
+
+func freshBookTime(market venue.MarketData, now time.Time) (time.Time, bool) {
+	at := market.Timestamp
+	if market.Health != nil {
+		if market.Health.Book.Status != venue.HealthAvailable {
+			return time.Time{}, false
+		}
+		at = market.Health.Book.SourceTime
+		if at.IsZero() {
+			at = market.Health.Book.ReceivedAt
+		}
+	}
+	return at, !at.IsZero() && !at.After(now.Add(time.Second)) && now.Sub(at) <= 5*time.Second
 }
 
 func (s *Scanner) EnableExecutionLiquidity(source ExecutionLiquiditySource) {
@@ -47,15 +70,30 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 	s.mu.RUnlock()
 	quote := liquidity.OrderQuote{}
 	quoteErr := liquidity.ErrUnavailable
-	if source != nil {
+	now := time.Now()
+	longAt, longFresh := freshBookTime(long, now)
+	shortAt, shortFresh := freshBookTime(short, now)
+	coveredByBBO := positiveFinite(long.AskPrice) && positiveFinite(short.BidPrice) &&
+		positiveFinite(long.AskSize) && positiveFinite(short.BidSize) &&
+		amount <= long.AskSize/long.AskPrice && amount <= short.BidSize/short.BidPrice
+	result := &domain.ExecutionLiquidity{Status: "unavailable"}
+	plan.Liquidity = result
+	if coveredByBBO {
+		if !longFresh || !shortFresh {
+			return fmt.Errorf("fresh BBO depth unavailable; checking again automatically")
+		}
+		result.Status = "bbo"
+		result.ObservedAt = minSnapshotTime(longAt, shortAt)
+		quote.BaseAmount = amount
+		quote.LongPrice, quote.ShortPrice = long.AskPrice, short.BidPrice
+		quote.LongWorstPrice, quote.ShortWorstPrice = long.AskPrice, short.BidPrice
+	} else if source != nil {
 		quote, quoteErr = source.Quote(ctx, liquidity.Pair{
 			Long:  liquidity.Market{Venue: long.Venue, Key: long.MarketKey},
 			Short: liquidity.Market{Venue: short.Venue, Key: short.MarketKey},
-		}, size, fresh)
+		}, liquidity.OrderSize{BaseAmount: amount}, fresh)
 	}
-	result := &domain.ExecutionLiquidity{Status: "unavailable"}
-	plan.Liquidity = result
-	if quoteErr == nil {
+	if !coveredByBBO && quoteErr == nil {
 		if !positiveFinite(quote.BaseAmount) {
 			return fmt.Errorf("invalid quoted order amount")
 		}
@@ -68,19 +106,11 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 		result.Status = "l2"
 		result.Impact = quote.LongImpact + quote.ShortImpact
 		result.RequiresAcknowledgement = result.Impact > liquidity.PairImpactBudget+1e-12
-	} else {
+	} else if !coveredByBBO {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if long.Timestamp.IsZero() || short.Timestamp.IsZero() || time.Since(long.Timestamp) > 5*time.Second || time.Since(short.Timestamp) > 5*time.Second ||
-			!positiveFinite(long.AskPrice) || !positiveFinite(short.BidPrice) || !positiveFinite(long.AskSize) || !positiveFinite(short.BidSize) ||
-			amount > long.AskSize/long.AskPrice || amount > short.BidSize/short.BidPrice {
-			return fmt.Errorf("depth verification unavailable for this size; checking again automatically")
-		}
-		result.Status = "bbo"
-		result.ObservedAt = minSnapshotTime(long.Timestamp, short.Timestamp)
-		quote.LongPrice, quote.ShortPrice = long.AskPrice, short.BidPrice
-		quote.LongWorstPrice, quote.ShortWorstPrice = long.AskPrice, short.BidPrice
+		return fmt.Errorf("depth verification unavailable for this size; checking again automatically")
 	}
 	for _, leg := range []*domain.Leg{&plan.Leg1, &plan.Leg2} {
 		impact, worst, price := quote.LongImpact, quote.LongWorstPrice, quote.LongPrice

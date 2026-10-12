@@ -73,6 +73,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	sc.EnableExecutionLiquidity(liquidity.New(ctx, logger))
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
@@ -113,7 +114,6 @@ func main() {
 	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
-	srv.EnableOpportunityLiquidity(liquidity.New(ctx, logger))
 	if asterDataAgent != nil {
 		srv.EnableAsterDataAgentProbe(dataagent.ExcludeProbeOwner(asterDataAgent, referenceAccount))
 	}

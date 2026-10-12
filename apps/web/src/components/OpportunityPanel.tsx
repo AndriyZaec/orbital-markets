@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
 import { usePlan } from '@/hooks/usePlan'
-import { useOpportunityLiquidity } from '@/hooks/useOpportunityLiquidity'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useVenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
@@ -156,7 +155,6 @@ export function OpportunityPanel({
       : []))
     : undefined
   const marketAvailable = opp.status === 'available'
-  const liquidityEstimate = useOpportunityLiquidity(opp.id, opp.direction, marketAvailable)
   const availabilityMessage = opp.availability_reasons?.map((reason) => {
     const venue = reason.venue ? venueLabel(reason.venue) : 'Venue'
     return reason.code === 'source_fetch_failed'
@@ -389,11 +387,6 @@ export function OpportunityPanel({
               <span className="text-red-400">Enter a positive amount</span>
             )}
           </div>
-          {liquidityEstimate && (
-            <p className="mt-1 text-[11px] text-muted-foreground/70" title="Visible-depth benchmark, not a hard size limit. Suggested size uses 90% of best-price capacity; execution checks the requested size automatically.">
-              Estimated L2 capacity (0.2% impact): {fmtUsd(liquidityEstimate.capacity)}
-            </p>
-          )}
         </div>
 
         {/* Shared leverage */}

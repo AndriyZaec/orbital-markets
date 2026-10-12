@@ -334,7 +334,17 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 
 	plan.BaseAmount = notional / max(leg1.ExpectedPrice, leg2.ExpectedPrice)
 	if plan.Executable {
-		if err := s.EvaluateExecutionLiquidity(ctx, plan, liquidity.OrderSize{Notional: notional}, false); err != nil {
+		s.mu.RLock()
+		normalize := s.normalizeAmount
+		s.mu.RUnlock()
+		if normalize != nil {
+			amount, err := normalize(plan.BaseAmount, plan.Leg1, plan.Leg2)
+			if err != nil {
+				return nil, err
+			}
+			plan.BaseAmount = amount
+		}
+		if err := s.EvaluateExecutionLiquidity(ctx, plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, false); err != nil {
 			plan.Executable = false
 			plan.Warnings = append(plan.Warnings, err.Error())
 		}
