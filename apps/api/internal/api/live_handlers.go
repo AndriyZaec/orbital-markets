@@ -55,8 +55,8 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	progress := newLivePrepareResponse(w, r, s.logger)
 	w = progress
 	defer progress.Finish()
-	progress.Stage("validating")
 	if s.live == nil {
+		progress.Stage("validating")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "live execution not configured",
 		})
@@ -73,7 +73,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		ImpactAcknowledged  bool               `json:"impact_acknowledged"`
 		ApprovedPriceLimits map[string]float64 `json:"approved_price_limits,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Read before the first response flush: Go's HTTP/1 server may otherwise
+	// drain and close an unread request body when streaming starts.
+	decodeErr := json.NewDecoder(r.Body).Decode(&req)
+	progress.Stage("validating")
+	if decodeErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
