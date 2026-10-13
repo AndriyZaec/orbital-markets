@@ -459,12 +459,13 @@ function useLiveExecutionState() {
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
-            phase: abortOk ? 'aborted' : 'degraded',
+            phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'recovering',
             reason: abortOk
               ? `Execution aborted: ${changed} wallet changed after leg 1. Armed unwind fired.`
               : `${changed} wallet changed after leg 1 and abort failed. Manual action may be required.`,
             unwound: abortResp?.unwound ?? false,
-            unwindStatus: (abortResp?.unwind_status ?? (abortOk ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+            unwindStatus: (abortResp?.unwind_status ?? null) as UnwindStatus,
+            remainingExposure: abortResp?.remaining_exposure ?? [],
           }))
           return
         }
@@ -478,11 +479,12 @@ function useLiveExecutionState() {
         const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
         setState((s) => ({
           ...s,
-          phase: 'aborted',
+          phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'recovering',
           reason: `Leg 2 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
           guardFailure: e instanceof ExecutionIntentRequestError ? e.kind : null,
           unwound: abortResp?.unwound ?? false,
-          unwindStatus: (abortResp?.unwind_status ?? 'unconfirmed') as UnwindStatus,
+          unwindStatus: (abortResp?.unwind_status ?? null) as UnwindStatus,
+          remainingExposure: abortResp?.remaining_exposure ?? [],
         }))
         return
       }
@@ -496,12 +498,13 @@ function useLiveExecutionState() {
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
-            phase: abortOk ? 'aborted' : 'degraded',
+            phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'recovering',
             reason: abortOk
               ? `Execution aborted: ${changed} wallet changed after leg 1. Armed unwind fired.`
               : `${changed} wallet changed after leg 1 and abort failed. Manual action may be required.`,
             unwound: abortResp?.unwound ?? false,
-            unwindStatus: (abortResp?.unwind_status ?? (abortOk ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+            unwindStatus: (abortResp?.unwind_status ?? null) as UnwindStatus,
+            remainingExposure: abortResp?.remaining_exposure ?? [],
           }))
           return
         }
