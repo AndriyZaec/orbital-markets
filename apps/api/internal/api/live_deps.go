@@ -484,6 +484,41 @@ func (c *liveAccountContext) Lock() func() {
 	return lockAccountFeeds(leases...)
 }
 
+// LockContext keeps prepare bounded even if recovery or another open is holding
+// an account lock. Already-acquired locks are released on cancellation.
+func (c *liveAccountContext) LockContext(ctx context.Context) (func(), error) {
+	leases := make([]*accountFeedLease, 0, len(c.leases))
+	for _, lease := range c.leases {
+		leases = append(leases, lease)
+	}
+	entries := accountFeedLockEntries(leases...)
+	locked := 0
+	unlock := func() {
+		for i := locked - 1; i >= 0; i-- {
+			entries[i].operation.Unlock()
+		}
+	}
+	for _, entry := range entries {
+		for {
+			if err := ctx.Err(); err != nil {
+				unlock()
+				return nil, err
+			}
+			if entry.operation.TryLock() {
+				locked++
+				break
+			}
+			select {
+			case <-ctx.Done():
+				unlock()
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	return unlock, nil
+}
+
 func (c *liveAccountContext) Release() {
 	if c == nil {
 		return

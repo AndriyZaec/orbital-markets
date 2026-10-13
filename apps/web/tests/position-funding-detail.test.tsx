@@ -196,7 +196,7 @@ describe('position-backed funding chart', () => {
   it('forwards the opened position id from the execution result', async () => {
     const onViewPositions = vi.fn()
     const state: LiveExecutionState = {
-      phase: 'open', asset: '2Z', sessionId: 'session-1', positionId: position.id,
+      phase: 'open', prepareStage: null, asset: '2Z', sessionId: 'session-1', positionId: position.id,
       accountPacifica: 'pacifica-account', accountHyperliquid: null,
       accounts: { pacifica: 'pacifica-account', aster: 'aster-account' },
       riskierVenue: 'aster', hedgeVenue: 'pacifica', leg1Requests: [], leg2Request: null,

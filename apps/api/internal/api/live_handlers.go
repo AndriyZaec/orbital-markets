@@ -48,13 +48,21 @@ func newLivePlanID() string {
 //
 // Returns two signing requests (one per leg) or an error.
 func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), livePrepareTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+	progress := newLivePrepareResponse(w, r, s.logger)
+	w = progress
+	defer progress.Finish()
+	progress.Stage("validating")
 	if s.live == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "live execution not configured",
 		})
 		return
 	}
-	s.cleanupExpiredLiveSessions()
+	// Global expired-session cleanup runs in the recovery loop, not on Open's
+	// critical path. The account/asset-scoped durable-session gate remains below.
 
 	var req struct {
 		liveVenueBindingsRequest
@@ -76,6 +84,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "opportunity_id required"})
 		return
 	}
+	progress.opportunityID = req.OpportunityID
 	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
 		return
@@ -99,6 +108,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		notional = *req.RequestedNotional
 	}
 	// 1. Build a fresh execution plan
+	progress.Stage("quotes")
 	plan, err := s.scanner.BuildPlanWithLeverageCaps(
 		r.Context(), req.OpportunityID, req.Leverage, notional,
 		s.live.accountLeverageResolver(bindings.Accounts),
@@ -114,8 +124,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			"opportunity_id", req.OpportunityID,
 			"warnings", plan.Warnings,
 		)
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
-			"error": "plan not executable",
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "Execution checks failed. Refresh quotes or reduce the size and try again.",
+			"code":    "PLAN_NOT_EXECUTABLE",
+			"reasons": plan.Warnings,
 		})
 		return
 	}
@@ -151,6 +163,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Acquire account-scoped feeds. Different wallet pairs can prepare in
 	// parallel, while the same accounts remain serialized through this flow.
+	progress.Stage("accounts")
 	accounts, err := s.live.acquireAccountContext(bindings.Accounts, false)
 	if err != nil {
 		s.logger.Warn("live prepare: account feeds unavailable", "err", err)
@@ -158,7 +171,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer accounts.Release()
-	unlockAccounts := accounts.Lock()
+	unlockAccounts, err := accounts.LockContext(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Account checks timed out. Try again shortly.", "code": "PREPARE_TIMEOUT"})
+		return
+	}
 	defer unlockAccounts()
 	for _, venueName := range planVenues {
 		bindings.Accounts[venueName] = accountSnapshot(accounts, venueName).Account
@@ -315,6 +332,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
+	progress.Stage("liquidity")
 	if err := s.scanner.EvaluateExecutionLiquidity(r.Context(), plan, liquidity.OrderSize{BaseAmount: leg1Amount}, true); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
@@ -338,6 +356,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	// Both are on the riskier leg's venue/wallet and signed together up front,
 	// so the backend holds a signature-free escape the moment leg 1 fills.
+	progress.Stage("signing_requests")
+	if err := r.Context().Err(); err != nil {
+		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Preparation timed out. Try again shortly.", "code": "PREPARE_TIMEOUT"})
+		return
+	}
 	now := time.Now()
 	leg1OpenCloid := fmt.Sprintf("orbital-l1open-%d", now.UnixNano())
 	leg1UnwindCloid := fmt.Sprintf("orbital-l1unwind-%d", now.UnixNano()+1)
