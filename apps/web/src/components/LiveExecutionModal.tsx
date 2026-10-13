@@ -204,7 +204,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
               </p>
             )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 text-foreground">
             {!isTerminal && state.phase !== 'idle' && <Spinner aria-label="Execution in progress" />}
             {state.expiresAt && !isTerminal && (
               <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded border ${

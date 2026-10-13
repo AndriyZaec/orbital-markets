@@ -3,6 +3,7 @@ import { apiError, apiFetch, userErrorMessage } from './api.ts'
 export const PREPARE_STAGE_LABELS = {
   validating: 'Checking execution request',
   quotes: 'Checking fresh quotes and size',
+  waiting_bbo: 'Waiting for fresh market quotes',
   accounts: 'Checking account readiness and balances',
   liquidity: 'Verifying executable liquidity',
   signing_requests: 'Preparing signing requests',

@@ -10,7 +10,7 @@ import (
 
 func TestDepthToleranceIsUsedInTheSignedPacificaOrder(t *testing.T) {
 	module := NewLiveModule(payloadTestLotSizes)
-	request, err := module.BuildOpen(venue.LiveOrderParams{Account: "owner", Signer: "agent", Symbol: "SOL", Side: domain.SideLong, Amount: 2, Price: 100, LimitPrice: 110.55, ClientOrderID: "depth"})
+	request, err := module.BuildOpen(venue.LiveOrderParams{Account: "owner", Signer: "agent", Symbol: "SOL", Side: domain.SideLong, Amount: 2, Price: 100, LimitPrice: 110.556, ClientOrderID: "depth"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +18,7 @@ func TestDepthToleranceIsUsedInTheSignedPacificaOrder(t *testing.T) {
 	if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if request.LimitPrice != 110.55 || payload.SlippagePct != "10.55000000" {
+	if request.LimitPrice != 110.556 || payload.SlippagePct != "10.55" {
 		t.Fatalf("signed tolerance ignores depth: %+v", payload)
 	}
 }

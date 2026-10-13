@@ -115,10 +115,20 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	// 1. Build a fresh execution plan
 	progress.Stage("quotes")
-	plan, err := s.scanner.BuildPlanWithLeverageCaps(
-		r.Context(), req.OpportunityID, req.Leverage, notional,
-		s.live.accountLeverageResolver(bindings.Accounts),
-	)
+	var plan *domain.ExecutionPlan
+	err = waitForLiveBBO(r.Context(), progress, func() error {
+		var err error
+		plan, err = s.scanner.BuildPlanWithLeverageCaps(
+			r.Context(), req.OpportunityID, req.Leverage, notional,
+			s.live.accountLeverageResolver(bindings.Accounts),
+		)
+		if err == nil && !plan.Executable && len(plan.Warnings) > 0 &&
+			plan.Warnings[len(plan.Warnings)-1] == scanner.ErrFreshBBOUnavailable.Error() {
+			// The planner appends this only after all other executable checks pass.
+			return scanner.ErrFreshBBOUnavailable
+		}
+		return err
+	})
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
 		writePlanError(w, http.StatusUnprocessableEntity, err)
@@ -339,7 +349,9 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
 	progress.Stage("liquidity")
-	if err := s.scanner.EvaluateExecutionLiquidity(r.Context(), plan, liquidity.OrderSize{BaseAmount: leg1Amount}, true); err != nil {
+	if err := waitForLiveBBO(r.Context(), progress, func() error {
+		return s.scanner.EvaluateExecutionLiquidity(r.Context(), plan, liquidity.OrderSize{BaseAmount: leg1Amount}, true)
+	}); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}

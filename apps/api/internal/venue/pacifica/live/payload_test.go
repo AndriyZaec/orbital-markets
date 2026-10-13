@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,46 @@ func (m testLotSizes) LotSize(symbol string) (string, bool) {
 }
 
 var payloadTestLotSizes = testLotSizes{"BTC": "0.00001", "SOL": "0.01", "VIRTUAL": "0.1"}
+
+func TestBuildOpenPayloadPacificaSlippagePrecision(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		side         domain.Side
+		price, limit float64
+		want         string
+	}{
+		{"ARB rejected short", domain.SideShort, 0.18549, 0.18456255, "0.50"},
+		{"short depth bound", domain.SideShort, 100, 99.48766, "0.51"},
+		{"long depth bound", domain.SideLong, 100, 100.51234, "0.51"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := BuildOpenPayload(testLotSizes{"ARB": "0.1"}, "owner", "ARB", test.side, 269.3, test.price, "98898e8f-da11-4830-ba47-b15c71e6b0e2", test.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var unsigned PacificaUnsignedOrder
+			if err := json.Unmarshal(request.UnsignedPayload, &unsigned); err != nil {
+				t.Fatal(err)
+			}
+			// Pacifica's live WS parser rejects more than two fractional digits,
+			// including trailing zeros, before signature/authorization validation.
+			if unsigned.SlippagePct != test.want {
+				t.Fatalf("slippage_percent=%q, want %q; Pacifica rejects this precision", unsigned.SlippagePct, test.want)
+			}
+			slippage, err := strconv.ParseFloat(unsigned.SlippagePct, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wireLimit := test.price * (1 + slippage/100)
+			if test.side == domain.SideShort {
+				wireLimit = test.price * (1 - slippage/100)
+			}
+			if test.side == domain.SideShort && wireLimit < test.limit-1e-12 || test.side == domain.SideLong && wireLimit > test.limit+1e-12 {
+				t.Fatalf("wire bound %g widens requested bound %g", wireLimit, test.limit)
+			}
+		})
+	}
+}
 
 func TestBuildClosePayloadPreservesResidualAmount(t *testing.T) {
 	request, err := BuildClosePayload(payloadTestLotSizes, "redacted-wallet", "SOL", domain.SideLong, 2.75, 100, "redacted-client-id")

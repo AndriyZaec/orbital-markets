@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -14,6 +15,8 @@ import (
 type ExecutionLiquiditySource interface {
 	Quote(context.Context, liquidity.Pair, liquidity.OrderSize, bool) (liquidity.OrderQuote, error)
 }
+
+var ErrFreshBBOUnavailable = errors.New("fresh BBO depth unavailable; checking again automatically")
 
 type AmountNormalizer func(float64, ...domain.Leg) (float64, error)
 
@@ -81,7 +84,7 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 	plan.Liquidity = result
 	if coveredByBBO {
 		if !longFresh || !shortFresh {
-			return fmt.Errorf("fresh BBO depth unavailable; checking again automatically")
+			return ErrFreshBBOUnavailable
 		}
 		result.Status = "bbo"
 		result.ObservedAt = minSnapshotTime(longAt, shortAt)

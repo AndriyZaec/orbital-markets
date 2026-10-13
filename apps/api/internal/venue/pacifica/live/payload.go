@@ -97,7 +97,10 @@ func BuildOpenPayload(
 		if price <= 0 || limit <= 0 || math.IsNaN(limit) || math.IsInf(limit, 0) {
 			return nil, fmt.Errorf("invalid open price limit")
 		}
-		slippagePct = strconv.FormatFloat(max(0.5, math.Abs(limit/price-1)*100), 'f', 8, 64)
+		// Pacifica rejects more than two fractional digits, even trailing zeros.
+		// Round down before signing so venue precision cannot widen the tolerance.
+		slippage := math.Floor(max(0.5, math.Abs(limit/price-1)*100)*100) / 100
+		slippagePct = strconv.FormatFloat(slippage, 'f', 2, 64)
 	}
 	request, err := buildPayload(
 		lotSizes,
