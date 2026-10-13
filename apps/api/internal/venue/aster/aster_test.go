@@ -519,16 +519,50 @@ func TestConnectAndListenReplaysUpdatesBeforePublishingHealthy(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	defer func() {
+		select {
+		case <-releaseREST:
+		default:
+			close(releaseREST)
+		}
+		select {
+		case <-releaseWebSocket:
+		default:
+			close(releaseWebSocket)
+		}
+	}()
 	events := make(chan string, 64)
 	adapter := newTestAdapter(server.URL)
 	adapter.logger = slog.New(channelLogHandler{events: events})
 	adapter.now = func() time.Time { return mutableMarketNow }
 	adapter.wsURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- adapter.connectAndListen(ctx) }()
 
 	waitForLog(t, events, "aster stream update for unknown symbol")
+	// The unknown-symbol log is deduplicated per symbol: the mark update alone
+	// can emit it before the book frame is read. Replay must start only once
+	// both updates are actually buffered, not merely written by the test server.
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		adapter.mu.RLock()
+		mark := adapter.pendingMarks["PIPPINUSDT"]
+		book := adapter.pendingBooks["PIPPINUSDT"]
+		adapter.mu.RUnlock()
+		if mark.markPrice == 0.5 && book.bidPrice == 0.49 && book.bookUpdateID == 20 {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatalf("stream updates were not buffered before REST resync: mark=%+v book=%+v", mark, book)
+		}
+	}
 	close(releaseREST)
 	waitForLog(t, events, "aster market websocket health changed")
 	snapshots, err := adapter.FetchMarketData(context.Background())
