@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { apiError, apiFetch } from '@/lib/api'
+import { prepareLive, type PrepareStage } from '@/lib/live-prepare'
 import { subscribeLiveSessionEvents } from '@/lib/live-events'
 import { liveAccountsQuery, liveVenueBindingsBody, type VenueAddressMap } from '@/lib/live-bindings'
 import { useVenueAuthority } from './useVenueAuthority'
@@ -68,6 +69,7 @@ export interface RemainingExposure {
 
 export interface LiveExecutionState {
   phase: ExecutionPhase
+  prepareStage: PrepareStage | null
   asset: string | null
   sessionId: string | null
   accountPacifica: string | null
@@ -93,6 +95,7 @@ export interface LiveExecutionState {
 
 const INITIAL_STATE: LiveExecutionState = {
   phase: 'idle',
+  prepareStage: null,
   asset: null,
   sessionId: null,
   accountPacifica: null,
@@ -261,7 +264,7 @@ function useLiveExecutionState() {
     if (executionInFlightRef.current) return
     executionInFlightRef.current = true
 
-    setState({ ...INITIAL_STATE, phase: 'preparing' })
+    setState({ ...INITIAL_STATE, phase: 'preparing', prepareStage: 'validating', asset: intent.asset })
 
     let exposurePossible = false
     const preparedAccounts = Object.fromEntries(venues.map((venue) => [venue, authorityByVenue[venue]!]))
@@ -269,35 +272,23 @@ function useLiveExecutionState() {
 
     try {
       // 1. Prepare — get session + leg-1 open & unwind signing requests.
-      const prepResp = await apiFetch('/api/v1/live/prepare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          opportunity_id: opportunityId,
-          leverage,
-          impact_acknowledged: intent.impactAcknowledged === true,
-          ...(typeof requestedNotional === 'number' && requestedNotional > 0
-            ? { requested_notional: requestedNotional }
-            : {}),
-          ...liveVenueBindingsBody(
-            preparedAccounts,
-            preparedAgents,
-          ),
-        }),
+      const prep = await prepareLive<PrepareResp>({
+        opportunity_id: opportunityId,
+        leverage,
+        impact_acknowledged: intent.impactAcknowledged === true,
+        ...(intent.legs.some((leg) => leg.limitPrice !== undefined)
+          ? { approved_price_limits: Object.fromEntries(intent.legs.map((leg) => [leg.venue, leg.limitPrice])) }
+          : {}),
+        ...(typeof requestedNotional === 'number' && requestedNotional > 0
+          ? { requested_notional: requestedNotional }
+          : {}),
+        ...liveVenueBindingsBody(
+          preparedAccounts,
+          preparedAgents,
+        ),
+      }, (prepareStage) => {
+        setState((current) => ({ ...current, prepareStage }))
       })
-      if (!prepResp.ok) {
-        const b: { error?: string; code?: string; reasons?: unknown } = await prepResp.json().catch(() => ({}))
-        const reasons = Array.isArray(b.reasons)
-          ? b.reasons.filter((reason): reason is string => typeof reason === 'string')
-          : []
-        const message = apiError(
-          prepResp.status,
-          'Unable to prepare live execution. Refresh the opportunity and try again.',
-          b,
-        ).message
-        throw new Error(reasons.length > 0 ? `${message}: ${reasons.join('; ')}` : message)
-      }
-      const prep: PrepareResp = await prepResp.json()
       const leg1Requests = prep.signing_requests || []
       assertPreparedExecutionIntent(intent, {
         asset: prep.asset,
@@ -468,12 +459,13 @@ function useLiveExecutionState() {
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
-            phase: abortOk ? 'aborted' : 'degraded',
+            phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'recovering',
             reason: abortOk
               ? `Execution aborted: ${changed} wallet changed after leg 1. Armed unwind fired.`
               : `${changed} wallet changed after leg 1 and abort failed. Manual action may be required.`,
             unwound: abortResp?.unwound ?? false,
-            unwindStatus: (abortResp?.unwind_status ?? (abortOk ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+            unwindStatus: (abortResp?.unwind_status ?? null) as UnwindStatus,
+            remainingExposure: abortResp?.remaining_exposure ?? [],
           }))
           return
         }
@@ -487,11 +479,12 @@ function useLiveExecutionState() {
         const abortResp = await postAdvance(preparedAccounts, { session_id: prep.session_id, abort: true }).catch(() => null)
         setState((s) => ({
           ...s,
-          phase: 'aborted',
+          phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'recovering',
           reason: `Leg 2 signing failed: ${e instanceof Error ? e.message : 'unknown error'}`,
           guardFailure: e instanceof ExecutionIntentRequestError ? e.kind : null,
           unwound: abortResp?.unwound ?? false,
-          unwindStatus: (abortResp?.unwind_status ?? 'unconfirmed') as UnwindStatus,
+          unwindStatus: (abortResp?.unwind_status ?? null) as UnwindStatus,
+          remainingExposure: abortResp?.remaining_exposure ?? [],
         }))
         return
       }
@@ -505,12 +498,13 @@ function useLiveExecutionState() {
           const abortOk = abortResp !== null
           setState((s) => ({
             ...s,
-            phase: abortOk ? 'aborted' : 'degraded',
+            phase: abortResp ? executionPhaseFromStatus(abortResp.status) : 'recovering',
             reason: abortOk
               ? `Execution aborted: ${changed} wallet changed after leg 1. Armed unwind fired.`
               : `${changed} wallet changed after leg 1 and abort failed. Manual action may be required.`,
             unwound: abortResp?.unwound ?? false,
-            unwindStatus: (abortResp?.unwind_status ?? (abortOk ? 'unconfirmed' : 'submit_failed')) as UnwindStatus,
+            unwindStatus: (abortResp?.unwind_status ?? null) as UnwindStatus,
+            remainingExposure: abortResp?.remaining_exposure ?? [],
           }))
           return
         }

@@ -233,8 +233,15 @@ func buildPayload(
 		targetPrice = limitPrice[0]
 	}
 	limitPx, err := normalizeHyperliquidPrice(targetPrice, sizeDecimals)
+	if len(limitPrice) > 0 && limitPrice[0] != 0 {
+		limitPx, err = normalizeHyperliquidLimitPrice(targetPrice, sizeDecimals, isBuy)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s price: %w", symbol, err)
+	}
+	wireLimit, err := strconv.ParseFloat(limitPx, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse normalized %s price: %w", symbol, err)
 	}
 
 	// cloid: 128-bit hex for Hyperliquid's client order tracking
@@ -292,7 +299,7 @@ func buildPayload(
 		Side:            venueSide,
 		Amount:          normalizedAmount,
 		Price:           price,
-		LimitPrice:      targetPrice,
+		LimitPrice:      wireLimit,
 		ReduceOnly:      reduceOnly,
 		VenueAssetID:    &assetIdx,
 		UnsignedPayload: unsignedBytes,
@@ -351,7 +358,44 @@ func normalizeHyperliquidPrice(price float64, sizeDecimals int) (string, error) 
 		maxDecimals = max(significantDecimals, 0)
 	}
 	wire := strconv.FormatFloat(price, 'f', maxDecimals, 64)
+	if maxDecimals == 0 {
+		return wire, nil
+	}
 	return strings.TrimRight(strings.TrimRight(wire, "0"), "."), nil
+}
+
+func normalizeHyperliquidLimitPrice(price float64, sizeDecimals int, isBuy bool) (string, error) {
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return "", fmt.Errorf("invalid price: %v", price)
+	}
+	maxDecimals := 6 - sizeDecimals
+	if maxDecimals < 0 || maxDecimals > 6 {
+		return "", fmt.Errorf("invalid size decimals: %d", sizeDecimals)
+	}
+	// Hyperliquid allows integer prices regardless of significant figures.
+	decimals := min(maxDecimals, max(0, 4-int(math.Floor(math.Log10(price)))))
+	factor := math.Pow10(decimals)
+	scaled := price * factor
+	units := math.Floor(math.Nextafter(scaled, math.Inf(1)))
+	if !isBuy {
+		units = math.Ceil(math.Nextafter(scaled, math.Inf(-1)))
+	}
+	// Correct multiplication noise at exact ticks without ever crossing the
+	// original bound (unlike adding a general rounding tolerance).
+	if isBuy && units/factor > price {
+		units--
+	}
+	if !isBuy && units/factor < price {
+		units++
+	}
+	if units <= 0 {
+		return "", fmt.Errorf("price is below minimum precision")
+	}
+	wire := strconv.FormatFloat(units/factor, 'f', decimals, 64)
+	if decimals > 0 {
+		wire = strings.TrimRight(strings.TrimRight(wire, "0"), ".")
+	}
+	return wire, nil
 }
 
 func nextHyperliquidNonce() int64 {

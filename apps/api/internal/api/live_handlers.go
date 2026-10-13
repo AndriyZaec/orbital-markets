@@ -17,6 +17,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -48,20 +49,29 @@ func newLivePlanID() string {
 //
 // Returns two signing requests (one per leg) or an error.
 func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), livePrepareTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+	progress := newLivePrepareResponse(w, r, s.logger)
+	w = progress
+	defer progress.Finish()
+	progress.Stage("validating")
 	if s.live == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "live execution not configured",
 		})
 		return
 	}
-	s.cleanupExpiredLiveSessions()
+	// Global expired-session cleanup runs in the recovery loop, not on Open's
+	// critical path. The account/asset-scoped durable-session gate remains below.
 
 	var req struct {
 		liveVenueBindingsRequest
-		OpportunityID      string   `json:"opportunity_id"`
-		Leverage           float64  `json:"leverage"`
-		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
-		ImpactAcknowledged bool     `json:"impact_acknowledged"`
+		OpportunityID       string             `json:"opportunity_id"`
+		Leverage            float64            `json:"leverage"`
+		RequestedNotional   *float64           `json:"requested_notional,omitempty"`
+		ImpactAcknowledged  bool               `json:"impact_acknowledged"`
+		ApprovedPriceLimits map[string]float64 `json:"approved_price_limits,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -76,6 +86,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "opportunity_id required"})
 		return
 	}
+	progress.opportunityID = req.OpportunityID
 	if req.RequestedNotional != nil && *req.RequestedNotional <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requested_notional must be positive"})
 		return
@@ -99,6 +110,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		notional = *req.RequestedNotional
 	}
 	// 1. Build a fresh execution plan
+	progress.Stage("quotes")
 	plan, err := s.scanner.BuildPlanWithLeverageCaps(
 		r.Context(), req.OpportunityID, req.Leverage, notional,
 		s.live.accountLeverageResolver(bindings.Accounts),
@@ -114,8 +126,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			"opportunity_id", req.OpportunityID,
 			"warnings", plan.Warnings,
 		)
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
-			"error": "plan not executable",
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "Execution checks failed. Refresh quotes or reduce the size and try again.",
+			"code":    "PLAN_NOT_EXECUTABLE",
+			"reasons": plan.Warnings,
 		})
 		return
 	}
@@ -151,6 +165,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Acquire account-scoped feeds. Different wallet pairs can prepare in
 	// parallel, while the same accounts remain serialized through this flow.
+	progress.Stage("accounts")
 	accounts, err := s.live.acquireAccountContext(bindings.Accounts, false)
 	if err != nil {
 		s.logger.Warn("live prepare: account feeds unavailable", "err", err)
@@ -158,7 +173,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer accounts.Release()
-	unlockAccounts := accounts.Lock()
+	unlockAccounts, err := accounts.LockContext(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Account checks timed out. Try again shortly.", "code": "PREPARE_TIMEOUT"})
+		return
+	}
 	defer unlockAccounts()
 	for _, venueName := range planVenues {
 		bindings.Accounts[venueName] = accountSnapshot(accounts, venueName).Account
@@ -315,6 +334,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Build leg-1 OPEN + leg-1 reduce-only UNWIND signing requests.
+	progress.Stage("liquidity")
 	if err := s.scanner.EvaluateExecutionLiquidity(r.Context(), plan, liquidity.OrderSize{BaseAmount: leg1Amount}, true); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
@@ -323,21 +343,28 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := scanner.ConstrainExecutionPrices(plan, req.ApprovedPriceLimits); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error(), "code": "PRICE_MOVED"})
+		return
+	}
 	if reasons := livePreTradeBlockers(plan, accounts); len(reasons) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "pre-trade checks failed", "code": livePreparePreTradeBlocked, "reasons": reasons})
 		return
 	}
-	// Retain the selected venue ordering and quantity, updating only quote limits.
-	for _, candidate := range []domain.Leg{plan.Leg1, plan.Leg2} {
-		if candidate.Venue == leg1.venue {
-			leg1.price, leg1.limitPrice = candidate.ExpectedPrice, candidate.LimitPrice
-		}
-		if candidate.Venue == leg2.venue {
-			leg2.price, leg2.limitPrice = candidate.ExpectedPrice, candidate.LimitPrice
-		}
+	// Relative depth impacts may have changed during account checks. Choose the
+	// riskier leg from the final quote, preserving quantity and venue baselines.
+	finalLeg1, finalLeg2 := orderLegsByRisk(plan)
+	if finalLeg1.venue != leg1.venue {
+		baselineLeg1Size, baselineLeg2Size = baselineLeg2Size, baselineLeg1Size
 	}
+	leg1, leg2 = finalLeg1, finalLeg2
 	// Both are on the riskier leg's venue/wallet and signed together up front,
 	// so the backend holds a signature-free escape the moment leg 1 fills.
+	progress.Stage("signing_requests")
+	if err := r.Context().Err(); err != nil {
+		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Preparation timed out. Try again shortly.", "code": "PREPARE_TIMEOUT"})
+		return
+	}
 	now := time.Now()
 	leg1OpenCloid := fmt.Sprintf("orbital-l1open-%d", now.UnixNano())
 	leg1UnwindCloid := fmt.Sprintf("orbital-l1unwind-%d", now.UnixNano()+1)
@@ -362,6 +389,16 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			"error": fmt.Sprintf("leg1 unwind payload build failed: %s", err),
 		})
 		return
+	}
+	// The signed IOC may be tighter after venue tick normalization. Subsequent
+	// depth checks must use that actual wire bound, not the unrounded quote.
+	if leg1Open.LimitPrice > 0 {
+		leg1.limitPrice = leg1Open.LimitPrice
+		for _, leg := range []*domain.Leg{&plan.Leg1, &plan.Leg2} {
+			if leg.Venue == leg1.venue {
+				leg.LimitPrice = leg1.limitPrice
+			}
+		}
 	}
 	if plan.Leverage.Leverage != math.Trunc(plan.Leverage.Leverage) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "live leverage must be a whole number"})

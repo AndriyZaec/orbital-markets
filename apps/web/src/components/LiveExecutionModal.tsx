@@ -4,6 +4,8 @@ import { recoveryPresentation, type RecoveryTone } from '@/lib/degraded-executio
 import { venueMetadata } from '@/lib/venue-metadata'
 import { AssetIcon } from '@/components/AssetIcon'
 import { executionGuardActionLabel } from '@/lib/live-execution-state'
+import { PREPARE_STAGE_LABELS } from '@/lib/live-prepare'
+import { Spinner } from '@/components/ui/spinner'
 
 interface Props {
   state: LiveExecutionState
@@ -152,7 +154,7 @@ function UnwindNotice({ status }: { status: UnwindStatus }) {
 }
 
 const PHASE_HINT: Partial<Record<ExecutionPhase, string>> = {
-  preparing: 'Preparing execution plan...',
+  preparing: 'Checking execution readiness...',
   awaiting_leg1: 'Local authorization is signing the riskier leg and its safety unwind',
   submitting_leg1: 'Submitting riskier leg and waiting for fill...',
   awaiting_leg2: 'Sign the hedge leg (sized from the actual fill)',
@@ -195,10 +197,15 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
               </h2>
             </div>
             {PHASE_HINT[state.phase] && (
-              <p className="text-[10px] text-muted-foreground mt-0.5">{PHASE_HINT[state.phase]}</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5" aria-live="polite">
+                {state.phase === 'preparing' && state.prepareStage
+                  ? PREPARE_STAGE_LABELS[state.prepareStage]
+                  : PHASE_HINT[state.phase]}
+              </p>
             )}
           </div>
           <div className="flex items-center gap-3">
+            {!isTerminal && state.phase !== 'idle' && <Spinner aria-label="Execution in progress" />}
             {state.expiresAt && !isTerminal && (
               <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded border ${
                 countdown <= 10 ? 'border-red-500/30 text-red-400' : 'border-border text-muted-foreground'
@@ -220,6 +227,9 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
 
         {/* Content */}
         <div className="flex-1 overflow-auto px-5 py-4">
+          {state.phase === 'preparing' && (
+            <p className="text-xs text-muted-foreground mb-4">Checking your trade before signing. No orders have been submitted.</p>
+          )}
           {state.phase !== 'idle' && (
             <div className="flex flex-col gap-3 mb-4">
               <LegCard label="Leg 1 · Riskier" venue={leg1Venue} status={leg1Status(state.phase, state.unwindStatus)} amount={leg1Amount} fill={state.leg1Fill} />

@@ -428,6 +428,18 @@ func (r *accountFeedRegistry) closeAll() {
 }
 
 func lockAccountFeeds(leases ...*accountFeedLease) func() {
+	entries := accountFeedLockEntries(leases...)
+	for _, entry := range entries {
+		entry.operation.Lock()
+	}
+	return func() {
+		for i := len(entries) - 1; i >= 0; i-- {
+			entries[i].operation.Unlock()
+		}
+	}
+}
+
+func accountFeedLockEntries(leases ...*accountFeedLease) []*accountFeedEntry {
 	unique := make(map[*accountFeedEntry]struct{}, len(leases))
 	entries := make([]*accountFeedEntry, 0, len(leases))
 	for _, lease := range leases {
@@ -443,12 +455,5 @@ func lockAccountFeeds(leases ...*accountFeedLease) func() {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].key.String() < entries[j].key.String()
 	})
-	for _, entry := range entries {
-		entry.operation.Lock()
-	}
-	return func() {
-		for i := len(entries) - 1; i >= 0; i-- {
-			entries[i].operation.Unlock()
-		}
-	}
+	return entries
 }

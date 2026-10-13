@@ -14,8 +14,29 @@ func TestDepthLimitIsUsedInTheSignedAsterOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Price != 110.6 || !strings.Contains(string(request.UnsignedPayload), "price=110.6") {
+	if request.Price != 110.5 || !strings.Contains(string(request.UnsignedPayload), "price=110.5") {
 		t.Fatalf("signed limit ignores depth: %+v", request)
+	}
+}
+
+func TestExplicitAsterLimitsRoundInwardOnBothSides(t *testing.T) {
+	module := NewLiveModule(payloadTestRules, nil)
+	for _, test := range []struct {
+		side            domain.Side
+		limit, expected float64
+	}{
+		{domain.SideLong, 110.55, 110.5},
+		{domain.SideShort, 89.55, 89.6},
+		{domain.SideLong, 100.59999999999, 100.5},
+		{domain.SideShort, 100.60000000001, 100.7},
+	} {
+		request, err := module.BuildOpen(venue.LiveOrderParams{Account: testUser, Signer: testSigner, Symbol: "BTCUSDT", Side: test.side, Amount: 2, Price: 100, LimitPrice: test.limit, ClientOrderID: "bounded"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request.Price != test.expected || request.LimitPrice != test.expected {
+			t.Fatalf("bound=%g signed=%g want=%g", test.limit, request.Price, test.expected)
+		}
 	}
 }
 

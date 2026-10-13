@@ -24,6 +24,9 @@ const (
 	infoURL           = "https://api.pacifica.fi/api/v1/info"
 	fundingHistoryURL = "https://api.pacifica.fi/api/v1/funding/history"
 	venueName         = "pacifica"
+	metadataTTL       = 5 * time.Minute
+	metadataRetryTTL  = 5 * time.Second
+	metadataTimeout   = 3 * time.Second
 )
 
 // wsMessage wraps both prices and bbo channel messages.
@@ -72,18 +75,21 @@ type assetState struct {
 }
 
 type Adapter struct {
-	mu                sync.RWMutex
-	assets            map[string]*assetState
-	logger            *slog.Logger
-	client            *http.Client
-	metadataMu        sync.Mutex
-	fundingURL        string
-	now               func() time.Time
-	streamGeneration  uint64
-	streamConnected   bool
-	streamReceivedAt  time.Time
-	wsURL             string
-	heartbeatInterval time.Duration
+	mu                 sync.RWMutex
+	assets             map[string]*assetState
+	logger             *slog.Logger
+	client             *http.Client
+	metadataMu         sync.Mutex
+	metadataFlight     *metadataRefresh
+	metadataValidUntil time.Time
+	metadataErr        error
+	fundingURL         string
+	now                func() time.Time
+	streamGeneration   uint64
+	streamConnected    bool
+	streamReceivedAt   time.Time
+	wsURL              string
+	heartbeatInterval  time.Duration
 }
 
 func New(logger *slog.Logger) *Adapter {
@@ -210,10 +216,54 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 	return out, nil
 }
 
-// RefreshMetadata loads current per-symbol execution constraints from REST.
+type metadataRefresh struct {
+	done chan struct{}
+	err  error
+}
+
+// RefreshMetadata shares one bounded REST read across callers and reuses valid
+// symbol constraints. A canceled caller does not cancel other callers' refresh.
 func (a *Adapter) RefreshMetadata(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	a.metadataMu.Lock()
-	defer a.metadataMu.Unlock()
+	if a.now().Before(a.metadataValidUntil) {
+		err := a.metadataErr
+		a.metadataMu.Unlock()
+		return err
+	}
+	flight := a.metadataFlight
+	if flight == nil {
+		flight = &metadataRefresh{done: make(chan struct{})}
+		a.metadataFlight = flight
+		go func() {
+			refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), metadataTimeout)
+			defer cancel()
+			err := a.fetchMetadata(refreshCtx)
+			a.metadataMu.Lock()
+			defer a.metadataMu.Unlock()
+			ttl := metadataTTL
+			if err != nil {
+				ttl = metadataRetryTTL
+			}
+			a.metadataErr = err
+			a.metadataValidUntil = a.now().Add(ttl)
+			a.metadataFlight = nil
+			flight.err = err
+			close(flight.done)
+		}()
+	}
+	a.metadataMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-flight.done:
+		return flight.err
+	}
+}
+
+func (a *Adapter) fetchMetadata(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, infoURL, nil)
 	if err != nil {
 		return fmt.Errorf("build symbol info request: %w", err)
@@ -264,6 +314,9 @@ func (a *Adapter) LotSize(symbol string) (string, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	state, ok := a.assets[symbol]
+	if !ok {
+		return "", false
+	}
 	return state.lotSize, ok && state.lotSize != ""
 }
 

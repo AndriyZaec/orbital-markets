@@ -2,6 +2,7 @@ package live
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -10,6 +11,61 @@ import (
 type payloadTestAssetMap struct {
 	index    int
 	decimals int
+}
+
+func TestExplicitOpenLimitsRoundInsideTheBoundAndMatchTheSignedWirePrice(t *testing.T) {
+	for _, test := range []struct {
+		side  domain.Side
+		limit float64
+		wire  string
+	}{
+		{domain.SideLong, 100.5555, "100.55"},
+		{domain.SideShort, 99.4444, "99.445"},
+		{domain.SideLong, 1.001, "1.001"},
+		{domain.SideShort, 1.001, "1.001"},
+		{domain.SideLong, 60456.123, "60456"},
+		{domain.SideLong, 100000.5, "100000"},
+		{domain.SideShort, 100000.5, "100001"},
+	} {
+		request, err := BuildOpenPayload(payloadTestAssetMap{index: 7, decimals: 3}, "BTC", test.side, 1, test.limit, "bounded", test.limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload HyperliquidUnsignedAction
+		if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		wire := payload.Action.Orders[0].LimitPx
+		value, err := strconv.ParseFloat(wire, 64)
+		if err != nil || wire != test.wire || request.LimitPrice != value {
+			t.Fatalf("limit=%g wire=%q summary=%g", test.limit, wire, request.LimitPrice)
+		}
+		if (test.side == domain.SideLong && value > test.limit) || (test.side == domain.SideShort && value < test.limit) {
+			t.Fatal("wire price widened the explicit bound")
+		}
+	}
+}
+
+func TestReduceOnlyIntegerCollarsPreserveZeros(t *testing.T) {
+	for _, test := range []struct {
+		positionSide domain.Side
+		wire         string
+	}{
+		{domain.SideLong, "59700"},
+		{domain.SideShort, "60300"},
+	} {
+		request, err := BuildUnwindPayload(payloadTestAssetMap{index: 7, decimals: 3}, "BTC", test.positionSide, 1, 60000, "unwind")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload HyperliquidUnsignedAction
+		if err := json.Unmarshal(request.UnsignedPayload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Action.Orders[0].LimitPx != test.wire {
+			t.Fatalf("wire=%s want=%s", payload.Action.Orders[0].LimitPx, test.wire)
+		}
+	}
 }
 
 func (m payloadTestAssetMap) AssetIndex(string) (int, bool)   { return m.index, true }
