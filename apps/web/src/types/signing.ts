@@ -47,6 +47,7 @@ export interface PrepareRequest {
   opportunity_id: string
   leverage: number
   requested_notional?: number
+  approved_price_limits?: Record<string, number>
   accounts: Record<string, string>
   agents: Record<string, string>
   account_pacifica?: string

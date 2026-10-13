@@ -337,8 +337,13 @@ func normalizePrice(price float64, side domain.Side, slippageBPS int64, rules as
 	} else if side != domain.SideShort {
 		return 0, "", fmt.Errorf("invalid side: %s", side)
 	}
+	// A zero-slippage custom limit is an absolute bound: round buy down and
+	// sell up. Legacy collars and reduce-only recovery retain their behavior.
+	if slippageBPS == 0 {
+		roundUp = side == domain.SideShort
+	}
 	target := new(big.Rat).Mul(priceRat, big.NewRat(numerator, 10_000))
-	limitPrice, wire, err := quantizeRat(target, rules.TickSize, roundUp)
+	limitPrice, wire, err := quantizeRat(target, rules.TickSize, roundUp, slippageBPS == 0)
 	if err != nil {
 		return 0, "", err
 	}
@@ -391,20 +396,22 @@ func quantize(value float64, increment string, roundUp bool) (float64, string, e
 	if err != nil {
 		return 0, "", err
 	}
-	return quantizeRat(valueRat, increment, roundUp)
+	return quantizeRat(valueRat, increment, roundUp, false)
 }
 
-func quantizeRat(value *big.Rat, increment string, roundUp bool) (float64, string, error) {
+func quantizeRat(value *big.Rat, increment string, roundUp, strict bool) (float64, string, error) {
 	step, err := parseDecimal("increment", increment)
 	if err != nil || step.Sign() <= 0 {
 		return 0, "", fmt.Errorf("invalid increment: %s", increment)
 	}
 	quotient := new(big.Rat).Quo(value, step)
 	tolerance := big.NewRat(1, 1_000_000_000)
-	if roundUp {
-		quotient.Sub(quotient, tolerance)
-	} else {
-		quotient.Add(quotient, tolerance)
+	if !strict {
+		if roundUp {
+			quotient.Sub(quotient, tolerance)
+		} else {
+			quotient.Add(quotient, tolerance)
+		}
 	}
 	units, remainder := new(big.Int), new(big.Int)
 	units.QuoRem(quotient.Num(), quotient.Denom(), remainder)

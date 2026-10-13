@@ -403,13 +403,13 @@ function validateOrderAction(
   const orderType = order?.t as Record<string, unknown> | undefined
   const limit = orderType?.limit as Record<string, unknown> | undefined
   const expectedBuy = request.side === 'buy'
+  const explicitLimit = request.action === 'open' && request.limit_price !== undefined
   const expectedPrices = new Set(
-    Array.from({ length: 7 }, (_, sizeDecimals) => normalizeHyperliquidPrice(
-      request.action === 'open' && request.limit_price !== undefined
-        ? request.limit_price
-        : request.price * (expectedBuy ? 1.005 : 0.995),
-      sizeDecimals,
-    )).map(Number),
+    explicitLimit
+      ? [request.limit_price]
+      : Array.from({ length: 7 }, (_, sizeDecimals) => normalizeHyperliquidPrice(
+        request.price * (expectedBuy ? 1.005 : 0.995), sizeDecimals,
+      )).map(Number),
   )
   const amount = Number(order?.s)
   const valid =
@@ -424,6 +424,7 @@ function validateOrderAction(
     order.a === request.venue_asset_id &&
     order.b === expectedBuy &&
     typeof order.p === 'string' &&
+    Number.isFinite(Number(order.p)) && Number(order.p) > 0 &&
     expectedPrices.has(Number(order.p)) &&
     Number.isFinite(amount) &&
     Math.abs(amount - request.amount) < 1e-12 &&
@@ -468,9 +469,8 @@ function normalizeHyperliquidPrice(price: number, sizeDecimals: number): string 
   const normalized = significantDecimals < maxDecimals
     ? Math.round(decimalRounded * significantFactor) / significantFactor
     : decimalRounded
-  return normalized
-    .toFixed(Math.max(0, Math.min(maxDecimals, significantDecimals)))
-    .replace(/\.?0+$/, '')
+  const wire = normalized.toFixed(Math.max(0, Math.min(maxDecimals, significantDecimals)))
+  return wire.includes('.') ? wire.replace(/\.?0+$/, '') : wire
 }
 
 function hasOnlyKeys(value: Record<string, unknown> | undefined, keys: string[]): boolean {

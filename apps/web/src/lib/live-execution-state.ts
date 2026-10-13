@@ -141,10 +141,15 @@ function assertExecutionIntentRequestValues(
       if (request.venue !== 'aster' && ((leg.side === 'buy' && limit < request.price) || (leg.side === 'sell' && limit > request.price))) {
         throw new ExecutionIntentRequestError('plan_mismatch')
       }
+      // The approved limit already includes the movement allowance. Only
+      // floating-point representation noise, not another allowance, is valid.
+      const epsilon = Math.max(limit, leg.limitPrice) * Number.EPSILON * 8
       const beyondApproved = leg.side === 'buy'
-        ? limit > leg.limitPrice * (1 + intent.maxSlippagePct)
-        : limit < leg.limitPrice * (1 - intent.maxSlippagePct)
-      if (beyondApproved || (request.venue !== 'aster' && Math.abs(request.price / leg.expectedPrice - 1) > intent.maxSlippagePct)) {
+        ? limit - leg.limitPrice > epsilon
+        : leg.limitPrice - limit > epsilon
+      const priceEpsilon = Math.max(request.price, leg.expectedPrice) * Number.EPSILON * 8
+      const referenceMoved = Math.abs(request.price - leg.expectedPrice) > leg.expectedPrice * intent.maxSlippagePct + priceEpsilon
+      if (beyondApproved || (request.venue !== 'aster' && referenceMoved)) {
         throw new ExecutionIntentRequestError('price_moved')
       }
     } else if (Math.abs(request.price / leg.expectedPrice - 1) > 0.01 ||

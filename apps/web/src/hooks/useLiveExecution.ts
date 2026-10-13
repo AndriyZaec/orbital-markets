@@ -276,6 +276,9 @@ function useLiveExecutionState() {
         opportunity_id: opportunityId,
         leverage,
         impact_acknowledged: intent.impactAcknowledged === true,
+        ...(intent.legs.some((leg) => leg.limitPrice !== undefined)
+          ? { approved_price_limits: Object.fromEntries(intent.legs.map((leg) => [leg.venue, leg.limitPrice])) }
+          : {}),
         ...(typeof requestedNotional === 'number' && requestedNotional > 0
           ? { requested_notional: requestedNotional }
           : {}),

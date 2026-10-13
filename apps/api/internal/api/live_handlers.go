@@ -17,6 +17,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
@@ -66,10 +67,11 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		liveVenueBindingsRequest
-		OpportunityID      string   `json:"opportunity_id"`
-		Leverage           float64  `json:"leverage"`
-		RequestedNotional  *float64 `json:"requested_notional,omitempty"`
-		ImpactAcknowledged bool     `json:"impact_acknowledged"`
+		OpportunityID       string             `json:"opportunity_id"`
+		Leverage            float64            `json:"leverage"`
+		RequestedNotional   *float64           `json:"requested_notional,omitempty"`
+		ImpactAcknowledged  bool               `json:"impact_acknowledged"`
+		ApprovedPriceLimits map[string]float64 `json:"approved_price_limits,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -341,19 +343,21 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
+	if err := scanner.ConstrainExecutionPrices(plan, req.ApprovedPriceLimits); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error(), "code": "PRICE_MOVED"})
+		return
+	}
 	if reasons := livePreTradeBlockers(plan, accounts); len(reasons) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "pre-trade checks failed", "code": livePreparePreTradeBlocked, "reasons": reasons})
 		return
 	}
-	// Retain the selected venue ordering and quantity, updating only quote limits.
-	for _, candidate := range []domain.Leg{plan.Leg1, plan.Leg2} {
-		if candidate.Venue == leg1.venue {
-			leg1.price, leg1.limitPrice = candidate.ExpectedPrice, candidate.LimitPrice
-		}
-		if candidate.Venue == leg2.venue {
-			leg2.price, leg2.limitPrice = candidate.ExpectedPrice, candidate.LimitPrice
-		}
+	// Relative depth impacts may have changed during account checks. Choose the
+	// riskier leg from the final quote, preserving quantity and venue baselines.
+	finalLeg1, finalLeg2 := orderLegsByRisk(plan)
+	if finalLeg1.venue != leg1.venue {
+		baselineLeg1Size, baselineLeg2Size = baselineLeg2Size, baselineLeg1Size
 	}
+	leg1, leg2 = finalLeg1, finalLeg2
 	// Both are on the riskier leg's venue/wallet and signed together up front,
 	// so the backend holds a signature-free escape the moment leg 1 fills.
 	progress.Stage("signing_requests")
@@ -385,6 +389,16 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 			"error": fmt.Sprintf("leg1 unwind payload build failed: %s", err),
 		})
 		return
+	}
+	// The signed IOC may be tighter after venue tick normalization. Subsequent
+	// depth checks must use that actual wire bound, not the unrounded quote.
+	if leg1Open.LimitPrice > 0 {
+		leg1.limitPrice = leg1Open.LimitPrice
+		for _, leg := range []*domain.Leg{&plan.Leg1, &plan.Leg2} {
+			if leg.Venue == leg1.venue {
+				leg.LimitPrice = leg1.limitPrice
+			}
+		}
 	}
 	if plan.Leverage.Leverage != math.Trunc(plan.Leverage.Leverage) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "live leverage must be a whole number"})

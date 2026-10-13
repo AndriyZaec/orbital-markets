@@ -98,6 +98,24 @@ test('execution intent permits disclosed L2 price limits without widening the ap
   assert.throws(() => assertExecutionIntentRequest(intent, signingRequest({ limit_price: 110.55 }), new Set(), now), /allowed range/)
 })
 
+test('prepare cannot add another movement allowance to approved buy/sell limits', () => {
+  const boundedIntent = { ...intent, legs: [
+    { ...intent.legs[0], limitPrice: 100.5 },
+    { ...intent.legs[1], venue: 'hyperliquid', limitPrice: 99.5 },
+  ] as const }
+  const now = Date.parse('2026-09-08T12:00:00.000Z')
+  const buy = signingRequest({ price: 100.902, limit_price: 100.902 })
+  const sell = signingRequest({ venue: 'hyperliquid', symbol: 'BTC', side: 'sell', price: 99.6, limit_price: 99.102 })
+  assert.throws(() => assertExecutionIntentRequest(boundedIntent, buy, new Set(), now), /allowed range/)
+  assert.throws(() => assertExecutionIntentRequest(boundedIntent, sell, new Set(), now), /allowed range/)
+  assert.doesNotThrow(() => assertExecutionIntentRequest(boundedIntent, { ...buy, price: 100.5, limit_price: 100.5 }, new Set(), now))
+  assert.doesNotThrow(() => assertExecutionIntentRequest(boundedIntent, { ...sell, limit_price: 99.5 }, new Set(), now))
+  assert.doesNotThrow(() => assertExecutionIntentRequest(boundedIntent, { ...sell, price: 99.5, limit_price: 99.5 }, new Set(), now))
+  // Venue rounding that tightens the bound is valid; genuine one-tick widening is not.
+  assert.doesNotThrow(() => assertExecutionIntentRequest(boundedIntent, { ...buy, price: 100.4, limit_price: 100.4 }, new Set(), now))
+  assert.throws(() => assertExecutionIntentRequest(boundedIntent, { ...buy, price: 100.501, limit_price: 100.501 }, new Set(), now), /allowed range/)
+})
+
 test('execution intent accepts only the prepared asset and venue pair', () => {
   assert.doesNotThrow(() => assertPreparedExecutionIntent(intent, {
     asset: 'BTC',

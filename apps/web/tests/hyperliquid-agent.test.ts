@@ -333,3 +333,16 @@ test('a Hyperliquid agent signs the depth limit bound to the prepared payload', 
   payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
   await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
 })
+
+test('a Hyperliquid agent binds the exact wire limit without trimming integer zeros or rounding outward', async () => {
+  const request = hyperliquidSigningRequest()
+  request.price = 100500
+  request.limit_price = 100000
+  const payload = request.unsigned_payload as { action: { orders: { p: string }[] }; nonce: number; message: { source: string; connectionId: string } }
+  payload.action.orders[0].p = '100000'
+  payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+  await assert.doesNotReject(signHyperliquidAgentRequest(request, hyperliquidAgent()))
+  payload.action.orders[0].p = '99999'
+  payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+  await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
+})

@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -148,6 +149,43 @@ func minSnapshotTime(a, b time.Time) time.Time {
 	return b
 }
 
+// ConstrainExecutionPrices keeps a freshly evaluated quote inside the preview's
+// approved limits without another depth read. The quote's marginal prices must
+// still fit; favorable movement may tighten the limits but never widen them.
+func ConstrainExecutionPrices(plan *domain.ExecutionPlan, approved map[string]float64) error {
+	if approved == nil {
+		return nil // Legacy callers have no preview-bound price limits.
+	}
+	if len(approved) != 2 {
+		return fmt.Errorf("approved price limits required for both plan venues")
+	}
+	for _, leg := range []*domain.Leg{&plan.Leg1, &plan.Leg2} {
+		limit, ok := approved[leg.Venue]
+		if !ok || !positiveFinite(limit) {
+			return fmt.Errorf("invalid approved price limit for %s", leg.Venue)
+		}
+		multiplier := 1 + plan.Bounds.MaxSlippagePct
+		constrained := min(leg.LimitPrice, limit)
+		if leg.Side == domain.SideShort {
+			multiplier = 1 - plan.Bounds.MaxSlippagePct
+			constrained = max(leg.LimitPrice, limit)
+		}
+		worst := leg.LimitPrice / multiplier
+		if outsideExecutionPriceLimit(worst, constrained, leg.Side) {
+			return fmt.Errorf("market moved outside the approved price for %s; refresh quote and try again", leg.Venue)
+		}
+		leg.LimitPrice = constrained
+	}
+	return nil
+}
+
+func outsideExecutionPriceLimit(price, limit float64, side domain.Side) bool {
+	// Allow representation noise only, never another quote-movement allowance.
+	epsilon := max(price, limit) * (math.Nextafter(1, 2) - 1) * 8
+	return (side == domain.SideLong && price-limit > epsilon) ||
+		(side == domain.SideShort && limit-price > epsilon)
+}
+
 // ValidateExecutionLiquidity verifies actual depth without mutating or widening
 // the signed plan. Higher impact needs the previously supplied acknowledgement.
 func (s *Scanner) ValidateExecutionLiquidity(ctx context.Context, approved *domain.ExecutionPlan, amount float64) error {
@@ -167,7 +205,7 @@ func (s *Scanner) ValidateExecutionLiquidity(ctx context.Context, approved *doma
 		if leg.Side == domain.SideShort {
 			worst = leg.LimitPrice / (1 - check.Bounds.MaxSlippagePct)
 		}
-		if (leg.Side == domain.SideLong && worst > limit) || (leg.Side == domain.SideShort && worst < limit) {
+		if outsideExecutionPriceLimit(worst, limit, leg.Side) {
 			return fmt.Errorf("insufficient depth within the approved order price; quote is updating automatically")
 		}
 	}
