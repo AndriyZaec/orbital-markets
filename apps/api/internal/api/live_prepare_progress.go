@@ -13,8 +13,8 @@ import (
 
 const livePrepareTimeout = 15 * time.Second
 
-// Progress is opt-in on the same prepare request, so it creates neither an
-// extra request nor a polling loop. Legacy callers still receive normal JSON.
+// Progress is opt-in on the same prepare request, without extra progress
+// requests. Legacy callers still receive normal JSON.
 // Once streaming begins the HTTP status is 200; the result carries its own status.
 type livePrepareResponse struct {
 	http.ResponseWriter

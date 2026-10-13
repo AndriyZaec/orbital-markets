@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react'
-import { act, cleanup, renderHook } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LiveExecutionProvider, useLiveExecution } from '../src/hooks/useLiveExecution'
 import type { ExecutionIntent } from '../src/lib/live-execution-state'
 import type { SigningRequest } from '../src/types/signing'
+import { LiveExecutionModal } from '../src/components/LiveExecutionModal'
 
 const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), sign: vi.fn(),
   authority: { pacificaAddress: null as string | null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner' },
@@ -72,6 +73,40 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('prepare integration with the signing and advance flow', () => {
+  it('keeps the modal preparing with a spinner while BBO is pending, without signing or another request', async () => {
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    const encoder = new TextEncoder()
+    mocks.apiFetch.mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        stream = controller
+        controller.enqueue(encoder.encode(JSON.stringify({ type: 'progress', stage: 'waiting_bbo' }) + '\n'))
+      },
+    }), { headers: { 'Content-Type': 'application/x-ndjson' } }))
+    const { result } = renderHook(useLiveExecution, { wrapper })
+    let execution: Promise<void>
+    await act(async () => { execution = result.current.executeLive(intent()) })
+    expect(result.current.state.phase).toBe('preparing')
+    expect(result.current.state.prepareStage).toBe('waiting_bbo')
+    render(<LiveExecutionModal state={result.current.state} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
+    expect(screen.getByText('Waiting for fresh market quotes')).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Execution in progress' })).toBeTruthy()
+    expect(screen.queryByText('Execution failed')).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(result.current.state.phase).toBe('preparing')
+    expect(mocks.sign).not.toHaveBeenCalled()
+    expect(mocks.apiFetch).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      stream.enqueue(encoder.encode(JSON.stringify({ type: 'result', status: 504,
+        body: { error: 'Preparation timed out. Refresh the opportunity and try again.', code: 'PREPARE_TIMEOUT' },
+      }) + '\n'))
+      stream.close()
+      await execution
+    })
+    expect(result.current.state.phase).toBe('failed')
+    expect(mocks.sign).not.toHaveBeenCalled()
+    expect(mocks.apiFetch).toHaveBeenCalledTimes(1)
+  })
+
   it('times out before signing/submission and permits another Open', async () => {
     mocks.apiFetch.mockImplementationOnce(() => new Promise<Response>(() => {}))
     const { result } = renderHook(useLiveExecution, { wrapper })

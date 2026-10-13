@@ -30,7 +30,7 @@ func (a *prepareMarketAdapter) FetchMarketData(context.Context) ([]venue.MarketD
 	return []venue.MarketData{a.data}, nil
 }
 
-func TestPrepareExplainsBookAgingAfterExecutablePreview(t *testing.T) {
+func TestPrepareWaitsForBookAgingAfterExecutablePreview(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -74,20 +74,22 @@ func TestPrepareExplainsBookAgingAfterExecutablePreview(t *testing.T) {
 		"agents":   map[string]string{"pacifica": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "hyperliquid": "0x2222222222222222222222222222222222222222"},
 	})
 	for _, stream := range []bool{false, true} {
+		requestCtx, cancelRequest := context.WithTimeout(ctx, 30*time.Millisecond)
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/live/prepare", bytes.NewReader(body))
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/live/prepare", bytes.NewReader(body)).WithContext(requestCtx)
 		if stream {
 			r.Header.Set("Accept", "application/x-ndjson")
 		}
 		s.handleLivePrepare(w, r)
-		if !strings.Contains(w.Body.String(), "PLAN_NOT_EXECUTABLE") || !strings.Contains(w.Body.String(), "fresh BBO depth unavailable") {
-			t.Fatalf("rejection reason missing: %d %s", w.Code, w.Body.String())
+		cancelRequest()
+		if !strings.Contains(w.Body.String(), "PREPARE_TIMEOUT") {
+			t.Fatalf("missing bounded readiness timeout: %d %s", w.Code, w.Body.String())
 		}
-		if !stream && w.Code != http.StatusUnprocessableEntity {
+		if !stream && w.Code != http.StatusGatewayTimeout {
 			t.Fatalf("legacy status=%d", w.Code)
 		}
-		if stream && !strings.Contains(w.Body.String(), `"status":422`) {
-			t.Fatal("stream lost rejection status")
+		if stream && (!strings.Contains(w.Body.String(), `"status":504`) || !strings.Contains(w.Body.String(), `"stage":"waiting_bbo"`)) {
+			t.Fatal("stream lost waiting progress or timeout status")
 		}
 	}
 }
