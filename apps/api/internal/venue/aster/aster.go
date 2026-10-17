@@ -483,6 +483,9 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 	}
 	oiFresh, oiStale, oiExpired, oiMissing, oiQueued := a.openInterestCacheCountsLocked(a.now())
 	a.mu.Unlock()
+	if token.synchronize {
+		a.notifyMarketDataUpdate()
+	}
 	a.logger.Info("aster REST market data reconciled",
 		"previous_symbols", previousCount,
 		"exchange_symbols", metadata.exchangeCount,
@@ -664,6 +667,7 @@ func (a *Adapter) disconnectStreamGeneration(generation uint64) {
 	}
 	a.mu.Unlock()
 	if changed {
+		a.notifyMarketDataUpdate()
 		a.logger.Info("aster market websocket health changed",
 			"health", "unavailable",
 			"generation", generation,
@@ -672,6 +676,18 @@ func (a *Adapter) disconnectStreamGeneration(generation uint64) {
 }
 
 func (a *Adapter) applyStreamMessage(raw []byte) error {
+	// Book frames dominate this combined stream. Decode them directly instead
+	// of copying RawMessage and parsing the same object twice. The existing
+	// path below retains mark-array and malformed-message handling.
+	var book struct {
+		Stream string           `json:"stream"`
+		Data   bookTickerUpdate `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &book); err == nil && book.Stream == "!bookTicker" {
+		a.observeStreamMessage()
+		a.applyBookTickerUpdate(book.Data)
+		return nil
+	}
 	var envelope streamEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("decode stream envelope: %w", err)

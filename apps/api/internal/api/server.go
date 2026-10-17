@@ -238,9 +238,25 @@ func (s *Server) handleOpportunities(w http.ResponseWriter, r *http.Request) {
 	}
 	markets := make(map[string]marketLeverage)
 	for _, snapshot := range s.scanner.MarketData(r.Context()) {
+		if snapshot.Venue == "aster" && !(snapshot.BidPrice > 0 && snapshot.AskPrice > 0 && snapshot.BidSize > 0 && snapshot.AskSize > 0) {
+			continue
+		}
 		key := strings.ToLower(snapshot.Venue) + "\x00" + strings.ToUpper(snapshot.Asset)
 		markets[key] = marketLeverage{marketKey: snapshot.MarketKey, maximum: snapshot.MaxLeverage}
 	}
+	// A cached scan can still advertise Aster after its current snapshots become
+	// unavailable. Omit those rows rather than exposing loading/health states.
+	visible := opps[:0]
+	for _, opp := range opps {
+		if opp.VenuePair.VenueA == "aster" || opp.VenuePair.VenueB == "aster" {
+			_, ready := markets["aster\x00"+strings.ToUpper(opp.Asset)]
+			if !ready || opp.Status != domain.OpportunityAvailable {
+				continue
+			}
+		}
+		visible = append(visible, opp)
+	}
+	opps = visible
 	for i := range opps {
 		keyA := strings.ToLower(opps[i].VenuePair.VenueA) + "\x00" + strings.ToUpper(opps[i].Asset)
 		keyB := strings.ToLower(opps[i].VenuePair.VenueB) + "\x00" + strings.ToUpper(opps[i].Asset)
