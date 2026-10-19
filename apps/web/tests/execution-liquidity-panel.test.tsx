@@ -4,7 +4,7 @@ import { OpportunityPanel } from '../src/components/OpportunityPanel'
 import type { Opportunity } from '../src/hooks/useOpportunities'
 import type { ExecutionPlan } from '../src/hooks/usePlan'
 
-const mocks = vi.hoisted(() => ({ execute: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined), executable: true, impact: 0.003 }))
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined), executable: true, impact: 0.003, planReady: true }))
 vi.mock('@/hooks/useLiveExecution', () => ({ useLiveExecution: () => ({ state: { phase: 'idle' }, executeLive: mocks.execute, reset: vi.fn() }) }))
 vi.mock('@/components/LiveExecutionModal', () => ({ LiveExecutionModal: () => null }))
 vi.mock('@/lib/analytics', () => ({ trackAnalytics: vi.fn() }))
@@ -15,7 +15,7 @@ vi.mock('@/hooks/useVenueReadiness', () => ({ useVenueReadiness: () => ({
   refreshBalances: mocks.refresh,
 }) }))
 vi.mock('@/hooks/usePlan', () => ({ usePlan: (_id: string, leverage: number, notional: number) => ({
-  plan: makePlan(leverage, notional), loading: false, error: null, maxLeverage: null, leverageCapabilityBlocked: false, refresh: mocks.refresh,
+  plan: mocks.planReady ? makePlan(leverage, notional) : null, loading: !mocks.planReady, error: null, maxLeverage: null, leverageCapabilityBlocked: false, refresh: mocks.refresh,
 }) }))
 
 function makePlan(leverage = 2, notional = 500): ExecutionPlan {
@@ -42,9 +42,21 @@ const opportunity: Opportunity = { id: 'opp', asset: 'BTC', detected_at: '', ven
   signal_7d: null, signal_7d_state: 'unavailable', signal_7d_version: 0,
 }
 const props = { opportunity, lastUpdated: null, mode: 'live' as const, notionalInput: '500', onNotionalInputChange: vi.fn(), onClose: vi.fn(), onExecute: vi.fn() }
-afterEach(() => { cleanup(); mocks.execute.mockClear(); mocks.executable = true; mocks.impact = 0.003 })
+afterEach(() => { cleanup(); mocks.execute.mockClear(); mocks.executable = true; mocks.impact = 0.003; mocks.planReady = true })
 
 describe('automatic execution depth and acknowledgement', () => {
+  it('keeps the margin summary slot mounted while the opening plan loads', () => {
+    mocks.planReady = false
+    const view = render(<OpportunityPanel {...props} />)
+    const summary = screen.getByText('Margin --').parentElement
+    expect(summary?.getAttribute('aria-hidden')).toBe('true')
+    mocks.planReady = true
+    view.rerender(<OpportunityPanel {...props} />)
+    expect(screen.getByText('Margin $500.00').parentElement).toBe(summary)
+    expect(screen.getByText('Exposure $1.0K').parentElement).toBe(summary)
+    expect(summary?.getAttribute('aria-hidden')).toBe('false')
+  })
+
   it('uses one acknowledgement above Execute and carries the approval into execution', async () => {
     render(<OpportunityPanel {...props} />)
     const button = screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement

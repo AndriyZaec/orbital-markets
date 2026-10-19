@@ -12,6 +12,7 @@ import { trackAnalytics } from '@/lib/analytics'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { knownMaxLeverage, leverageCapabilityMessage, reconcileLeverageSelection } from '@/lib/leverage'
 import { executionIntentSide } from '@/lib/live-execution-state'
+import { cn } from '@/lib/utils'
 
 interface Props {
   opportunity: Opportunity
@@ -398,12 +399,13 @@ export function OpportunityPanel({
                 {maxLev === null ? leverageIssue : `Pair max ${maxLev}x`}
               </span>}
             </div>
-            {plan && (
-              <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70">
-                <span>Margin {fmtUsd(plan.leverage.margin_required)}</span>
-                <span>Exposure {fmtUsd(plan.leverage.gross_exposure)}</span>
-              </div>
-            )}
+            <div
+              aria-hidden={!plan}
+              className={cn('mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70', !plan && 'invisible')}
+            >
+              <span>Margin {plan ? fmtUsd(plan.leverage.margin_required) : '--'}</span>
+              <span>Exposure {plan ? fmtUsd(plan.leverage.gross_exposure) : '--'}</span>
+            </div>
           </div>
           {maxLev !== null && (
             <LeverageRow
