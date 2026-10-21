@@ -18,4 +18,5 @@ export interface AvailablePositionChartContext {
   slippage_estimate: number
   projection_source: 'execution_plan' | 'fills_fallback'
   projection_warning?: string
+  entry_price_spread?: number
 }

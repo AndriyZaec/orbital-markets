@@ -66,6 +66,10 @@ export function PositionFundingDetail({ position, onBack }: Props) {
               feeEstimate={chartContext.fee_estimate}
               slippageEstimate={chartContext.slippage_estimate}
               showPotentialReturn={false}
+              spreadEntry={chartContext.entry_price_spread === undefined ? undefined : {
+                value: chartContext.entry_price_spread,
+                time: (data?.position ?? position).opened_at,
+              }}
             />
           </>
         )}

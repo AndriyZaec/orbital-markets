@@ -4,6 +4,7 @@ import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 export interface HistoryPoint {
   t: string
   basis: number
+  price_spread?: number | null
   edge: number
   funding_a: number
   funding_b: number

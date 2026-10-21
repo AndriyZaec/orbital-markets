@@ -10,6 +10,8 @@ import {
   type ReturnProjection,
 } from '@/lib/funding-chart'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { cn } from '@/lib/utils'
+import { PriceSpreadChart, type SpreadEntry, type SpreadRange } from '@/components/PriceSpreadChart'
 
 interface Props {
   asset: string
@@ -23,10 +25,11 @@ interface Props {
   feeEstimate: number
   slippageEstimate: number
   showPotentialReturn?: boolean
+  spreadEntry?: SpreadEntry
 }
 
 type Timeframe = 'D' | 'W' | 'M'
-type ChartView = 'funding' | 'return'
+type ChartView = 'funding' | 'return' | 'spread'
 
 const rangeMap: Record<Timeframe, string> = { D: '24h', W: '7d', M: '30d' }
 const averageLabel: Record<Timeframe, string> = { D: '24H Average', W: '7D Average', M: '30D Average' }
@@ -81,13 +84,15 @@ export function FundingChart({
   feeEstimate,
   slippageEstimate,
   showPotentialReturn = true,
+  spreadEntry,
 }: Props) {
   const [view, setView] = useState<ChartView>('funding')
   const [tf, setTf] = useState<Timeframe>('W')
+  const [spreadRange, setSpreadRange] = useState<SpreadRange>('24h')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const defaultNotional = Math.max(1, recommendedNotional || selectedNotional || 10_000)
   const notional = selectedNotional > 0 ? selectedNotional : defaultNotional
-  const { data, loading, error } = useHistory(asset, venueA, venueB, rangeMap[tf])
+  const { data, loading, error } = useHistory(asset, venueA, venueB, view === 'spread' ? spreadRange : rangeMap[tf])
 
   const stats = useMemo(() => calculateFundingStats(data, direction), [data, direction])
   const projection = useMemo(
@@ -130,9 +135,21 @@ export function FundingChart({
               Potential Return
             </ChartTab>
           )}
+          <ChartTab active={view === 'spread'} onClick={() => changeView('spread')}>
+            Price Spread
+          </ChartTab>
         </div>
         <div className="mb-2 flex gap-0.5 rounded bg-white/[0.04] p-0.5">
-          {(['D', 'W', 'M'] as Timeframe[]).map((timeframe) => (
+          {view === 'spread' ? (['1h', '24h', '7d'] as SpreadRange[]).map((range) => (
+            <button
+              key={range}
+              aria-pressed={spreadRange === range}
+              onClick={() => setSpreadRange(range)}
+              className={cn('rounded px-2 py-0.5 text-[10px] font-medium transition-colors', spreadRange === range ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground')}
+            >
+              {range.toUpperCase()}
+            </button>
+          )) : (['D', 'W', 'M'] as Timeframe[]).map((timeframe) => (
             <button
               key={timeframe}
               onClick={() => { setTf(timeframe); setHoverIdx(null) }}
@@ -151,8 +168,17 @@ export function FundingChart({
           <ChartLoading />
         ) : error || data.length === 0 ? (
           <div className="flex h-[272px] items-center justify-center text-xs text-muted-foreground">
-            {error ? `Error: ${error}` : 'No history yet. Funding snapshots will appear here as they accumulate.'}
+            {error ? `Error: ${error}` : view === 'spread' ? 'No price spread history for this period.' : 'No history yet. Funding snapshots will appear here as they accumulate.'}
           </div>
+        ) : view === 'spread' ? (
+          <PriceSpreadChart
+            key={`${asset}-${venueA}-${venueB}-${direction}-${spreadRange}`}
+            data={data}
+            direction={direction}
+            range={spreadRange}
+            directionLabel={directionLabel}
+            entry={spreadEntry}
+          />
         ) : view === 'funding' && stats ? (
           <>
             <div className="grid grid-cols-3 gap-3 mb-3 max-w-xl">
