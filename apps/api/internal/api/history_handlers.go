@@ -12,11 +12,12 @@ import (
 )
 
 type historyPoint struct {
-	T        string  `json:"t"`
-	Basis    float64 `json:"basis"`
-	Edge     float64 `json:"edge"`
-	FundingA float64 `json:"funding_a"`
-	FundingB float64 `json:"funding_b"`
+	T           string   `json:"t"`
+	Basis       float64  `json:"basis"`
+	PriceSpread *float64 `json:"price_spread"`
+	Edge        float64  `json:"edge"`
+	FundingA    float64  `json:"funding_a"`
+	FundingB    float64  `json:"funding_b"`
 }
 
 type historyResponse struct {
@@ -309,13 +310,27 @@ func pairHistoryRows(a, b []historyRow, src historySource) []historyPoint {
 		edge := domain.AnnualizedGrossEdge(sa.FundingRate, sb.FundingRate)
 
 		points = append(points, historyPoint{
-			T:        ta.Format(time.RFC3339),
-			Basis:    basis,
-			Edge:     edge,
-			FundingA: sa.FundingRate,
-			FundingB: sb.FundingRate,
+			T:           ta.Format(time.RFC3339),
+			Basis:       basis,
+			PriceSpread: midpointPriceSpread(sa.MarkPrice, sb.MarkPrice),
+			Edge:        edge,
+			FundingA:    sa.FundingRate,
+			FundingB:    sb.FundingRate,
 		})
 	}
 
 	return points
+}
+
+// midpointPriceSpread is positive when price B is above price A. A symmetric
+// denominator lets the chart reverse long/short direction by changing the sign.
+func midpointPriceSpread(a, b float64) *float64 {
+	if a <= 0 || b <= 0 || !finite(a) || !finite(b) {
+		return nil
+	}
+	spread := (b - a) / (a/2 + b/2)
+	if !finite(spread) {
+		return nil
+	}
+	return &spread
 }

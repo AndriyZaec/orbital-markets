@@ -8,6 +8,7 @@ import (
 
 func TestChartRangesUseBoundedHistorySources(t *testing.T) {
 	tests := map[string]historySource{
+		"1h":  sourceRaw,
 		"24h": source5m,
 		"7d":  source1h,
 		"30d": source1h,
@@ -30,12 +31,24 @@ func TestPairHistoryRowsIncludesVenueFunding(t *testing.T) {
 		t.Fatalf("points = %d, want 1", len(points))
 	}
 	point := points[0]
+	if point.PriceSpread == nil || math.Abs(*point.PriceSpread-1/100.5) > 1e-12 {
+		t.Fatalf("price spread = %v, want 1/100.5", point.PriceSpread)
+	}
 	if point.FundingA != 0.0002 || point.FundingB != -0.0001 {
 		t.Fatalf("funding = %v/%v, want 0.0002/-0.0001", point.FundingA, point.FundingB)
 	}
 	wantEdge := 0.0003 * 8760
 	if math.Abs(point.Edge-wantEdge) > 1e-9 {
 		t.Fatalf("edge = %v, want %v", point.Edge, wantEdge)
+	}
+}
+
+func TestHistoryPriceSpreadDoesNotFabricateMissingPrices(t *testing.T) {
+	for _, price := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+		points := pairHistoryRows([]historyRow{{TsUnix: 100, MarkPrice: price}}, []historyRow{{TsUnix: 100, MarkPrice: 100}}, sourceRaw)
+		if len(points) != 1 || points[0].PriceSpread != nil {
+			t.Fatalf("invalid price %v must not produce a spread: %+v", price, points)
+		}
 	}
 }
 

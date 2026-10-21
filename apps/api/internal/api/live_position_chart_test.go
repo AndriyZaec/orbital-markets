@@ -147,3 +147,30 @@ func TestBuildPositionChartContextRejectsIncompleteOrConflictingFills(t *testing
 		})
 	}
 }
+
+func TestPositionEntrySpreadUsesWeightedFillPricesAndDirection(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		position := &executor.LivePosition{Asset: "SOL", VenueA: "aster", VenueB: "pacifica", Notional: 100}
+		sideA, sideB := "long", "short"
+		if reverse {
+			sideA, sideB = sideB, sideA
+		}
+		fills := []executor.LiveFill{
+			{Venue: "aster", Side: sideA, Filled: true, FilledAmount: 1, AvgFillPrice: 98},
+			{Venue: "aster", Side: sideA, Filled: true, FilledAmount: 3, AvgFillPrice: 102},
+			{Venue: "pacifica", Side: sideB, Filled: true, FilledAmount: 4, AvgFillPrice: 103},
+		}
+		context := buildPositionChartContext(position, fills, nil)
+		want := 2.0 / 102
+		if reverse {
+			want = -want
+		}
+		if context.EntryPriceSpread == nil || math.Abs(*context.EntryPriceSpread-want) > 1e-12 {
+			t.Fatalf("reverse=%v entry spread=%v, want %v", reverse, context.EntryPriceSpread, want)
+		}
+		fills[0].AvgFillPrice = 0
+		if got := buildPositionChartContext(position, fills, nil); !got.Available || got.EntryPriceSpread != nil {
+			t.Fatalf("missing fill price must omit entry level, not hide funding history: %+v", got)
+		}
+	}
+}
