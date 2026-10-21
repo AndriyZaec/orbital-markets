@@ -54,9 +54,6 @@ func buildPositionChartContext(position *executor.LivePosition, fills []executor
 	}
 
 	sides := map[string]string{}
-	quantities := map[string]float64{}
-	fillValues := map[string]float64{}
-	validPrices := true
 	fillFees := 0.0
 	for _, fill := range fills {
 		if !fill.Filled || fill.FilledAmount <= 0 {
@@ -74,12 +71,6 @@ func buildPositionChartContext(position *executor.LivePosition, fills []executor
 			return context
 		}
 		sides[venue] = side
-		if fill.AvgFillPrice <= 0 || !finite(fill.AvgFillPrice) || !finite(fill.FilledAmount) {
-			validPrices = false
-		} else {
-			quantities[venue] += fill.FilledAmount
-			fillValues[venue] += fill.AvgFillPrice * fill.FilledAmount
-		}
 		if finite(fill.Fee) {
 			fillFees += math.Abs(fill.Fee)
 		}
@@ -102,12 +93,7 @@ func buildPositionChartContext(position *executor.LivePosition, fills []executor
 		Direction: direction, CurrentAPR: position.CurrentSpread, Notional: position.Notional,
 		FeeEstimate: fillFees / position.Notional, ProjectionSource: "fills_fallback",
 		ProjectionWarning: "opening slippage assumptions are unavailable; projection includes recorded fill fees only",
-	}
-	if validPrices {
-		context.EntryPriceSpread = midpointPriceSpread(fillValues[venueA]/quantities[venueA], fillValues[venueB]/quantities[venueB])
-		if context.EntryPriceSpread != nil && direction == "long_b_short_a" {
-			*context.EntryPriceSpread = -*context.EntryPriceSpread
-		}
+		EntryPriceSpread:  executor.EntryPriceSpread(fills),
 	}
 
 	var persisted persistedChartPlan

@@ -15,6 +15,8 @@ type historyPoint struct {
 	T           string   `json:"t"`
 	Basis       float64  `json:"basis"`
 	PriceSpread *float64 `json:"price_spread"`
+	MarkPriceA  *float64 `json:"mark_price_a,omitempty"`
+	MarkPriceB  *float64 `json:"mark_price_b,omitempty"`
 	Edge        float64  `json:"edge"`
 	FundingA    float64  `json:"funding_a"`
 	FundingB    float64  `json:"funding_b"`
@@ -25,14 +27,17 @@ type historyResponse struct {
 	VenueA string         `json:"venue_a"`
 	VenueB string         `json:"venue_b"`
 	Points []historyPoint `json:"points"`
+	Start  string         `json:"start"`
+	End    string         `json:"end"`
 }
 
 type historyLoadParams struct {
-	asset    string
-	venueA   string
-	venueB   string
-	rangeStr string
-	spec     struct {
+	asset       string
+	venueA      string
+	venueB      string
+	rangeStr    string
+	priceSpread bool
+	spec        struct {
 		dur    time.Duration
 		source historySource
 	}
@@ -87,7 +92,22 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := historyLoadParams{asset: asset, venueA: venueA, venueB: venueB, rangeStr: rangeStr, spec: spec}
-	key := historyCacheKey{asset: asset, venueA: venueA, venueB: venueB, range_: rangeStr}
+	switch r.URL.Query().Get("series") {
+	case "":
+	case "price_spread":
+		if rangeStr != "24h" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "price spread range must be 24h"})
+			return
+		}
+		// Raw snapshots retain adapter timestamps. These constrain row pairing,
+		// but do not certify book freshness or historical size coverage.
+		params.priceSpread = true
+		params.spec.source = sourceRaw
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown history series"})
+		return
+	}
+	key := historyCacheKey{asset: asset, venueA: venueA, venueB: venueB, range_: rangeStr, priceSpread: params.priceSpread}
 	refreshCtx := s.ctx
 	if refreshCtx == nil {
 		refreshCtx = context.Background()
@@ -96,7 +116,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		refreshCtx,
 		key,
-		historyCacheTTL(spec.source),
+		historyCacheTTL(params.spec.source),
 		func(ctx context.Context) (historyResponse, error) {
 			started := time.Now()
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -131,6 +151,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
 		return
 	}
+	// Cache age must not shrink the selected window or hide a recent entry.
+	now := time.Now().UTC()
+	response.Start = now.Add(-spec.dur).Format(time.RFC3339)
+	response.End = now.Format(time.RFC3339)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -169,7 +193,13 @@ func (s *Server) loadHistory(ctx context.Context, params historyLoadParams) (his
 	}
 
 	pairStarted := time.Now()
-	points := downsampleHistoryPoints(pairHistoryRows(rowsA, rowsB, params.spec.source), 200)
+	var points []historyPoint
+	if params.priceSpread {
+		points = pairPriceHistoryRows(rowsA, rowsB)
+	} else {
+		points = pairHistoryRows(rowsA, rowsB, params.spec.source)
+	}
+	points = downsampleHistoryPoints(points, 200)
 	pairDuration := time.Since(pairStarted)
 	totalDuration := time.Since(requestStarted)
 	logArgs := []any{
@@ -201,7 +231,8 @@ func (s *Server) loadHistory(ctx context.Context, params historyLoadParams) (his
 		s.logger.Info("history: cache rebuild complete", logArgs...)
 	}
 
-	return historyResponse{Asset: params.asset, VenueA: params.venueA, VenueB: params.venueB, Points: points}, nil
+	return historyResponse{Asset: params.asset, VenueA: params.venueA, VenueB: params.venueB, Points: points,
+		Start: start.Format(time.RFC3339), End: now.Format(time.RFC3339)}, nil
 }
 
 func downsampleHistoryPoints(points []historyPoint, maxPoints int) []historyPoint {
@@ -267,10 +298,6 @@ func fetchHistoryRows(ctx context.Context, q *sqlc.Queries, src historySource, v
 }
 
 func pairHistoryRows(a, b []historyRow, src historySource) []historyPoint {
-	if len(a) == 0 || len(b) == 0 {
-		return nil
-	}
-
 	// Tolerance scales with source granularity so paired points actually land in
 	// the same bucket: 2m for 1-min raw, ~½ bucket for aggregated sources.
 	tolerance := 2 * time.Minute
@@ -279,6 +306,19 @@ func pairHistoryRows(a, b []historyRow, src historySource) []historyPoint {
 		tolerance = 3 * time.Minute
 	case source1h:
 		tolerance = 30 * time.Minute
+	}
+	return pairHistoryRowsWithin(a, b, tolerance, false)
+}
+
+func pairPriceHistoryRows(a, b []historyRow) []historyPoint {
+	// The recorder runs once a minute, but adapters retain their own source
+	// timestamps. Permit small feed skew, never pair across missing minutes.
+	return pairHistoryRowsWithin(a, b, 5*time.Second, true)
+}
+
+func pairHistoryRowsWithin(a, b []historyRow, tolerance time.Duration, priceSpread bool) []historyPoint {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
 	}
 
 	var points []historyPoint
@@ -309,28 +349,27 @@ func pairHistoryRows(a, b []historyRow, src historySource) []historyPoint {
 		}
 		edge := domain.AnnualizedGrossEdge(sa.FundingRate, sb.FundingRate)
 
-		points = append(points, historyPoint{
-			T:           ta.Format(time.RFC3339),
-			Basis:       basis,
-			PriceSpread: midpointPriceSpread(sa.MarkPrice, sb.MarkPrice),
-			Edge:        edge,
-			FundingA:    sa.FundingRate,
-			FundingB:    sb.FundingRate,
-		})
+		point := historyPoint{
+			T:        ta.Format(time.RFC3339),
+			Basis:    basis,
+			Edge:     edge,
+			FundingA: sa.FundingRate,
+			FundingB: sb.FundingRate,
+		}
+		if priceSpread {
+			point.PriceSpread = domain.MidpointPriceSpread(sa.MarkPrice, sb.MarkPrice)
+			if point.PriceSpread != nil {
+				point.MarkPriceA = &sa.MarkPrice
+				point.MarkPriceB = &sb.MarkPrice
+			}
+			// The earlier source time ensures a "since entry" sample cannot
+			// accidentally contain a price observed before that entry.
+			if tb.Before(ta) {
+				point.T = tb.UTC().Format(time.RFC3339)
+			}
+		}
+		points = append(points, point)
 	}
 
 	return points
-}
-
-// midpointPriceSpread is positive when price B is above price A. A symmetric
-// denominator lets the chart reverse long/short direction by changing the sign.
-func midpointPriceSpread(a, b float64) *float64 {
-	if a <= 0 || b <= 0 || !finite(a) || !finite(b) {
-		return nil
-	}
-	spread := (b - a) / (a/2 + b/2)
-	if !finite(spread) {
-		return nil
-	}
-	return &spread
 }

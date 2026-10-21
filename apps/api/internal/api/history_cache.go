@@ -7,10 +7,11 @@ import (
 )
 
 type historyCacheKey struct {
-	asset  string
-	venueA string
-	venueB string
-	range_ string
+	asset       string
+	venueA      string
+	venueB      string
+	range_      string
+	priceSpread bool
 }
 
 type historyCacheEntry struct {

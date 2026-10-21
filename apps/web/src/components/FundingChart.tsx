@@ -10,8 +10,9 @@ import {
   type ReturnProjection,
 } from '@/lib/funding-chart'
 import { venueMetadata } from '@/lib/venue-metadata'
-import { cn } from '@/lib/utils'
-import { PriceSpreadChart, type SpreadEntry, type SpreadRange } from '@/components/PriceSpreadChart'
+import { monotonePath } from '@/lib/chart-path'
+import { PriceSpreadChart, type SpreadEntry } from '@/components/PriceSpreadChart'
+import { VenuePriceChart } from '@/components/VenuePriceChart'
 
 interface Props {
   asset: string
@@ -88,11 +89,10 @@ export function FundingChart({
 }: Props) {
   const [view, setView] = useState<ChartView>('funding')
   const [tf, setTf] = useState<Timeframe>('W')
-  const [spreadRange, setSpreadRange] = useState<SpreadRange>('24h')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const defaultNotional = Math.max(1, recommendedNotional || selectedNotional || 10_000)
   const notional = selectedNotional > 0 ? selectedNotional : defaultNotional
-  const { data, loading, error } = useHistory(asset, venueA, venueB, view === 'spread' ? spreadRange : rangeMap[tf])
+  const { data, window, loading, error } = useHistory(asset, venueA, venueB, view === 'spread' ? '24h' : rangeMap[tf], view === 'spread' ? 'price_spread' : 'funding')
 
   const stats = useMemo(() => calculateFundingStats(data, direction), [data, direction])
   const projection = useMemo(
@@ -136,20 +136,13 @@ export function FundingChart({
             </ChartTab>
           )}
           <ChartTab active={view === 'spread'} onClick={() => changeView('spread')}>
-            Price Spread
+            {showPotentialReturn ? 'Price Basis' : 'Price Spread'}
           </ChartTab>
         </div>
         <div className="mb-2 flex gap-0.5 rounded bg-white/[0.04] p-0.5">
-          {view === 'spread' ? (['1h', '24h', '7d'] as SpreadRange[]).map((range) => (
-            <button
-              key={range}
-              aria-pressed={spreadRange === range}
-              onClick={() => setSpreadRange(range)}
-              className={cn('rounded px-2 py-0.5 text-[10px] font-medium transition-colors', spreadRange === range ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground')}
-            >
-              {range.toUpperCase()}
-            </button>
-          )) : (['D', 'W', 'M'] as Timeframe[]).map((timeframe) => (
+          {view === 'spread' ? (
+            <span className="px-2 py-0.5 text-[10px] font-medium text-muted-foreground">Last 24H</span>
+          ) : (['D', 'W', 'M'] as Timeframe[]).map((timeframe) => (
             <button
               key={timeframe}
               onClick={() => { setTf(timeframe); setHoverIdx(null) }}
@@ -170,14 +163,26 @@ export function FundingChart({
           <div className="flex h-[272px] items-center justify-center text-xs text-muted-foreground">
             {error ? `Error: ${error}` : view === 'spread' ? 'No price spread history for this period.' : 'No history yet. Funding snapshots will appear here as they accumulate.'}
           </div>
-        ) : view === 'spread' ? (
-          <PriceSpreadChart
-            key={`${asset}-${venueA}-${venueB}-${direction}-${spreadRange}`}
+        ) : view === 'spread' && showPotentialReturn ? (
+          <VenuePriceChart
+            key={`${asset}-${venueA}-${venueB}-${direction}`}
             data={data}
             direction={direction}
-            range={spreadRange}
+            venueA={venueA}
+            venueB={venueB}
+            window={window}
+          />
+        ) : view === 'spread' ? (
+          <PriceSpreadChart
+            key={`${asset}-${venueA}-${venueB}-${direction}`}
+            data={data}
+            direction={direction}
             directionLabel={directionLabel}
             entry={spreadEntry}
+            window={window}
+            showPremiumSummary={showPotentialReturn}
+            longLabel={isLongA ? labelA : labelB}
+            shortLabel={isLongA ? labelB : labelA}
           />
         ) : view === 'funding' && stats ? (
           <>
@@ -306,11 +311,6 @@ function ChartLoading() {
       <div className="size-5 animate-spin rounded-full border border-slate-500/40 border-t-cyan-400" />
     </div>
   )
-}
-
-interface PlotPoint {
-  x: number
-  y: number
 }
 
 function FundingRateChart({ data, tf, hoverIdx, setHoverIdx, colorA, colorB, direction }: {
@@ -571,41 +571,4 @@ function nearestTimestampIndex(timestamps: number[], target: number) {
     }
   })
   return nearest
-}
-
-// Fritsch-Carlson tangents keep the visual smoothing inside each data segment,
-// avoiding the invented peaks produced by ordinary chart splines.
-function monotonePath(points: PlotPoint[]) {
-  if (points.length === 0) return ''
-  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
-
-  const slopes = points.slice(1).map((point, index) => (point.y - points[index].y) / Math.max(0.0001, point.x - points[index].x))
-  const tangents = points.map((_, index) => {
-    if (index === 0) return slopes[0]
-    if (index === points.length - 1) return slopes[slopes.length - 1]
-    if (slopes[index - 1] * slopes[index] <= 0) return 0
-    return (slopes[index - 1] + slopes[index]) / 2
-  })
-
-  slopes.forEach((slope, index) => {
-    if (slope === 0) {
-      tangents[index] = 0
-      tangents[index + 1] = 0
-      return
-    }
-    const alpha = tangents[index] / slope
-    const beta = tangents[index + 1] / slope
-    const magnitude = alpha * alpha + beta * beta
-    if (magnitude > 9) {
-      const scale = 3 / Math.sqrt(magnitude)
-      tangents[index] = scale * alpha * slope
-      tangents[index + 1] = scale * beta * slope
-    }
-  })
-
-  return points.slice(1).reduce((path, point, index) => {
-    const previous = points[index]
-    const dx = point.x - previous.x
-    return `${path} C ${previous.x + dx / 3} ${previous.y + tangents[index] * dx / 3}, ${point.x - dx / 3} ${point.y - tangents[index + 1] * dx / 3}, ${point.x} ${point.y}`
-  }, `M ${points[0].x} ${points[0].y}`)
 }

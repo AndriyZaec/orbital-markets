@@ -152,7 +152,7 @@ describe('position-backed funding chart', () => {
     expect(screen.getByText('Long Aster / Short Pacifica')).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Funding Rates' })).toBeTruthy()
     expect(screen.queryByRole('tab', { name: 'Potential Return' })).toBeNull()
-    expect(mocks.useHistory).toHaveBeenCalledWith('2Z', 'aster', 'pacifica', '7d')
+    expect(mocks.useHistory).toHaveBeenCalledWith('2Z', 'aster', 'pacifica', '7d', 'funding')
   })
 
   it('shows an explicit unavailable state without requesting history', () => {
