@@ -14,19 +14,20 @@ const (
 )
 
 type positionChartContext struct {
-	Available         bool     `json:"available"`
-	UnavailableReason string   `json:"unavailable_reason,omitempty"`
-	Asset             string   `json:"asset,omitempty"`
-	VenueA            string   `json:"venue_a,omitempty"`
-	VenueB            string   `json:"venue_b,omitempty"`
-	Direction         string   `json:"direction,omitempty"`
-	CurrentAPR        float64  `json:"current_apr"`
-	Notional          float64  `json:"notional"`
-	FeeEstimate       float64  `json:"fee_estimate"`
-	SlippageEstimate  float64  `json:"slippage_estimate"`
-	ProjectionSource  string   `json:"projection_source,omitempty"`
-	ProjectionWarning string   `json:"projection_warning,omitempty"`
-	EntryPriceSpread  *float64 `json:"entry_price_spread,omitempty"`
+	Available         bool                     `json:"available"`
+	UnavailableReason string                   `json:"unavailable_reason,omitempty"`
+	Asset             string                   `json:"asset,omitempty"`
+	VenueA            string                   `json:"venue_a,omitempty"`
+	VenueB            string                   `json:"venue_b,omitempty"`
+	Direction         string                   `json:"direction,omitempty"`
+	CurrentAPR        float64                  `json:"current_apr"`
+	Notional          float64                  `json:"notional"`
+	FeeEstimate       float64                  `json:"fee_estimate"`
+	SlippageEstimate  float64                  `json:"slippage_estimate"`
+	ProjectionSource  string                   `json:"projection_source,omitempty"`
+	ProjectionWarning string                   `json:"projection_warning,omitempty"`
+	EntryPriceSpread  *float64                 `json:"entry_price_spread,omitempty"`
+	PricePnL          *positionPricePnLContext `json:"price_pnl,omitempty"`
 }
 
 type persistedChartPlan struct {
@@ -94,6 +95,7 @@ func buildPositionChartContext(position *executor.LivePosition, fills []executor
 		FeeEstimate: fillFees / position.Notional, ProjectionSource: "fills_fallback",
 		ProjectionWarning: "opening slippage assumptions are unavailable; projection includes recorded fill fees only",
 		EntryPriceSpread:  executor.EntryPriceSpread(fills),
+		PricePnL:          buildPositionPricePnLContext(position, fills),
 	}
 
 	var persisted persistedChartPlan

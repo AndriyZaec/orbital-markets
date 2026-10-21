@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type PointerEvent } from 'react'
+import { useId, useMemo, useState, type PointerEvent, type ReactNode } from 'react'
 import { useHistory, type HistoryPoint } from '@/hooks/useHistory'
 import {
   annualizeFunding,
@@ -27,6 +27,7 @@ interface Props {
   slippageEstimate: number
   showPotentialReturn?: boolean
   spreadEntry?: SpreadEntry
+  positionPriceChart?: ReactNode
 }
 
 type Timeframe = 'D' | 'W' | 'M'
@@ -86,13 +87,15 @@ export function FundingChart({
   slippageEstimate,
   showPotentialReturn = true,
   spreadEntry,
+  positionPriceChart,
 }: Props) {
   const [view, setView] = useState<ChartView>('funding')
   const [tf, setTf] = useState<Timeframe>('W')
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const defaultNotional = Math.max(1, recommendedNotional || selectedNotional || 10_000)
   const notional = selectedNotional > 0 ? selectedNotional : defaultNotional
-  const { data, window, loading, error } = useHistory(asset, venueA, venueB, view === 'spread' ? '24h' : rangeMap[tf], view === 'spread' ? 'price_spread' : 'funding')
+  const positionPnLView = view === 'spread' && positionPriceChart !== undefined
+  const { data, window, loading, error } = useHistory(asset, venueA, venueB, view === 'spread' ? '24h' : rangeMap[tf], positionPnLView ? null : view === 'spread' ? 'price_spread' : 'funding')
 
   const stats = useMemo(() => calculateFundingStats(data, direction), [data, direction])
   const projection = useMemo(
@@ -136,7 +139,7 @@ export function FundingChart({
             </ChartTab>
           )}
           <ChartTab active={view === 'spread'} onClick={() => changeView('spread')}>
-            {showPotentialReturn ? 'Price Basis' : 'Price Spread'}
+            {positionPriceChart !== undefined ? 'Price PnL' : showPotentialReturn ? 'Price Basis' : 'Price Spread'}
           </ChartTab>
         </div>
         <div className="mb-2 flex gap-0.5 rounded bg-white/[0.04] p-0.5">
@@ -157,7 +160,7 @@ export function FundingChart({
       </div>
 
       <div className="p-4">
-        {loading ? (
+        {positionPnLView ? positionPriceChart : loading ? (
           <ChartLoading />
         ) : error || data.length === 0 ? (
           <div className="flex h-[272px] items-center justify-center text-xs text-muted-foreground">

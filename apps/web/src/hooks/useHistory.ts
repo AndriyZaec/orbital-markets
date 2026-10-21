@@ -26,7 +26,7 @@ export interface HistoryWindow {
   end: string
 }
 
-export function useHistory(asset: string, venueA: string, venueB: string, range_: string, series: 'funding' | 'price_spread' = 'funding') {
+export function useHistory(asset: string, venueA: string, venueB: string, range_: string, series: 'funding' | 'price_spread' | null = 'funding') {
   const queryKey = JSON.stringify([asset, venueA, venueB, range_, series])
   const [history, setHistory] = useState<{ key: string; data: HistoryPoint[]; window?: HistoryWindow }>({ key: '', data: [] })
   const [loading, setLoading] = useState(true)
@@ -34,6 +34,7 @@ export function useHistory(asset: string, venueA: string, venueB: string, range_
   const requestSequence = useRef(0)
 
   const fetchHistory = useCallback(async () => {
+    if (series === null) return
     const requestId = ++requestSequence.current
     try {
       setLoading(true)
@@ -57,10 +58,11 @@ export function useHistory(asset: string, venueA: string, venueB: string, range_
   }, [asset, venueA, venueB, range_, series, queryKey])
 
   useEffect(() => {
+    if (series === null) return
     const initialId = window.setTimeout(fetchHistory, 0)
     return () => window.clearTimeout(initialId)
-  }, [fetchHistory])
+  }, [fetchHistory, series])
 
   const current = history.key === queryKey
-  return { data: current ? history.data : [], window: current ? history.window : undefined, loading: loading || !current, error: current ? error : null }
+  return { data: current ? history.data : [], window: current ? history.window : undefined, loading: series !== null && (loading || !current), error: series !== null && current ? error : null }
 }

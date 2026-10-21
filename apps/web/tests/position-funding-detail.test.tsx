@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PositionFundingDetail } from '../src/components/PositionFundingDetail'
 import { LivePositionPanel } from '../src/components/LivePositionDetail'
@@ -14,6 +14,8 @@ import type { LiveExecutionState } from '../src/hooks/useLiveExecution'
 const mocks = vi.hoisted(() => ({
   chartContext: null as LivePositionChartContext | null,
   useHistory: vi.fn(),
+  usePriceHistory: vi.fn(),
+  positionOverride: null as LivePosition | null,
   refetch: vi.fn(),
   positionsRefetch: vi.fn(),
   closePosition: vi.fn(),
@@ -55,7 +57,7 @@ vi.mock('@/hooks/useLiveClose', () => ({
 
 vi.mock('@/hooks/useLivePositionDetail', () => ({
   useLivePositionDetail: () => ({
-    data: mocks.chartContext ? { position, fills: mocks.fills, events: mocks.events, chart_context: mocks.chartContext } : null,
+    data: mocks.chartContext ? { position: mocks.positionOverride ?? position, fills: mocks.fills, events: mocks.events, chart_context: mocks.chartContext } : null,
     loading: false,
     error: null,
     refetch: mocks.refetch,
@@ -65,6 +67,7 @@ vi.mock('@/hooks/useLivePositionDetail', () => ({
 vi.mock('@/hooks/useHistory', () => ({
   useHistory: mocks.useHistory,
 }))
+vi.mock('@/hooks/usePositionPriceHistory', () => ({ usePositionPriceHistory: mocks.usePriceHistory }))
 
 const position: LivePosition = {
   id: 'plan-fbdae6a2-6368-481f-bd9a-6180e0feff0e',
@@ -124,6 +127,8 @@ afterEach(() => {
   cleanup()
   mocks.chartContext = null
   mocks.useHistory.mockReset()
+  mocks.usePriceHistory.mockReset()
+  mocks.positionOverride = null
   mocks.refetch.mockReset()
   mocks.positionsRefetch.mockReset()
   mocks.closePosition.mockReset()
@@ -136,6 +141,39 @@ afterEach(() => {
 })
 
 describe('position-backed funding chart', () => {
+  it('keeps graph endpoint and panel Price PnL identical as the live snapshot updates', async () => {
+    mocks.positionOverride = { ...position, price_pnl: 7.5 }
+    mocks.chartContext = { ...availableContext, price_pnl: {
+      available: true, long_venue: 'aster', short_venue: 'pacifica', valuation_key: 'fills-v1', opened_at: '2026-09-22T10:00:00Z',
+      latest: { t: '2026-09-22T12:00:00Z', long_pnl: 12, short_pnl: -4.5, price_pnl: 7.5 },
+    } }
+    mocks.useHistory.mockReturnValue({ data: [], loading: false, error: null })
+    mocks.usePriceHistory.mockReturnValue({ loading: false, error: null, data: { points: [
+      { t: '2026-09-22T11:00:00Z', long_pnl: 5, short_pnl: -6, price_pnl: -1 },
+      { t: '2026-09-22T12:01:00Z', long_pnl: 999, short_pnl: 0, price_pnl: 999 },
+    ] } })
+    const tree = () => <><PositionFundingDetail position={position} onBack={() => {}} /><LivePositionPanel position={position} onClose={() => {}} /></>
+    const view = render(tree())
+    await userEvent.click(screen.getByRole('tab', { name: 'Price PnL' }))
+    expect(screen.getAllByText('Price PnL', { selector: 'p' }).map((p) => p.parentElement?.textContent)).toEqual(['Price PnL+$7.50', 'Price PnL+$7.50'])
+    expect(screen.getByLabelText('Current Price PnL').getAttribute('data-value')).toBe('7.5')
+    const svg = screen.getByRole('img', { name: 'Position Price PnL history' })
+    svg.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 1100, bottom: 210, width: 1100, height: 210, toJSON: () => ({}) })
+    fireEvent.pointerMove(svg, { clientX: 583 })
+    expect(screen.getByText(/Long Aster \+\$5.00 · Short Pacifica -\$6.00 · Price PnL -\$1.00/)).toBeTruthy()
+    const marker = screen.getByLabelText('PnL observation').querySelector('circle')!
+    expect(screen.getByLabelText('Price PnL curve').getAttribute('d')).toContain(`${marker.getAttribute('cx')} ${marker.getAttribute('cy')}`)
+    expect(mocks.useHistory).toHaveBeenLastCalledWith('2Z', 'aster', 'pacifica', '24h', null)
+    mocks.positionOverride = { ...position, price_pnl: -2.25 }
+    mocks.chartContext = { ...availableContext, price_pnl: {
+      available: true, long_venue: 'aster', short_venue: 'pacifica', valuation_key: 'fills-v1', opened_at: '2026-09-22T10:00:00Z',
+      latest: { t: '2026-09-22T12:00:10Z', long_pnl: 1, short_pnl: -3.25, price_pnl: -2.25 },
+    } }
+    view.rerender(tree())
+    expect(screen.getAllByText('Price PnL', { selector: 'p' }).map((p) => p.parentElement?.textContent)).toEqual(['Price PnL-$2.25', 'Price PnL-$2.25'])
+    expect(screen.getByLabelText('Current Price PnL').getAttribute('data-value')).toBe('-2.25')
+  })
+
   it('renders the persisted 2Z direction and history pair without a pre-trade return view', () => {
     mocks.chartContext = availableContext
     mocks.useHistory.mockReturnValue({

@@ -172,6 +172,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/live/activity", s.handleLiveActivity)
 	s.mux.HandleFunc("POST /api/v1/live/accounts/ensure", s.handleLiveAccountsEnsure)
 	s.mux.HandleFunc("GET /api/v1/live/positions", s.handleLivePositions)
+	s.mux.HandleFunc("GET /api/v1/live/positions/{id}/price-pnl", s.handlePositionPricePnLHistory)
 	s.mux.HandleFunc("GET /api/v1/live/positions/", s.handleLivePosition)
 	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
 	s.mux.HandleFunc("POST /api/v1/live/kill", s.handleLiveKill)

@@ -12,6 +12,13 @@ vi.mock('@/lib/api', () => ({
 afterEach(() => { cleanup(); mocks.fetch.mockReset() })
 
 describe('history series selection', () => {
+  it('does not request redundant market history when a position Price PnL chart is active', async () => {
+    const view = renderHook(() => useHistory('SOL', 'aster', 'pacifica', '24h', null))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1)) })
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(view.result.current.loading).toBe(false)
+  })
+
   it('requests aligned price history without showing cached funding data during the switch', async () => {
     const point = { t: '2026-10-20T10:00:00Z', basis: 0, edge: 0, funding_a: 0.001, funding_b: 0.002, price_spread: null }
     mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ points: [point] })))

@@ -107,13 +107,31 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown history series"})
 		return
 	}
+	response, cacheResult, err := s.cachedHistory(r.Context(), params)
+	s.logger.Info("history cache", "result", cacheResult, "asset", asset, "venue_a", venueA, "venue_b", venueB, "range", rangeStr)
+	if err != nil {
+		s.logger.Error("history: load", "err", err, "cache_result", cacheResult)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
+		return
+	}
+	// Cache age must not shrink the selected window or hide a recent entry.
+	now := time.Now().UTC()
+	response.Start = now.Add(-spec.dur).Format(time.RFC3339)
+	response.End = now.Format(time.RFC3339)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// Share the market-only cache across opportunity and position charts. Position
+// fills and valuations never become part of this cache or its key.
+func (s *Server) cachedHistory(ctx context.Context, params historyLoadParams) (historyResponse, historyCacheResult, error) {
+	asset, venueA, venueB, rangeStr := params.asset, params.venueA, params.venueB, params.rangeStr
 	key := historyCacheKey{asset: asset, venueA: venueA, venueB: venueB, range_: rangeStr, priceSpread: params.priceSpread}
 	refreshCtx := s.ctx
 	if refreshCtx == nil {
 		refreshCtx = context.Background()
 	}
-	response, cacheResult, err := s.historyCache.get(
-		r.Context(),
+	return s.historyCache.get(
+		ctx,
 		refreshCtx,
 		key,
 		historyCacheTTL(params.spec.source),
@@ -145,17 +163,6 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 			return response, err
 		},
 	)
-	s.logger.Info("history cache", "result", cacheResult, "asset", asset, "venue_a", venueA, "venue_b", venueB, "range", rangeStr)
-	if err != nil {
-		s.logger.Error("history: load", "err", err, "cache_result", cacheResult)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch data"})
-		return
-	}
-	// Cache age must not shrink the selected window or hide a recent entry.
-	now := time.Now().UTC()
-	response.Start = now.Add(-spec.dur).Format(time.RFC3339)
-	response.End = now.Format(time.RFC3339)
-	writeJSON(w, http.StatusOK, response)
 }
 
 func historyCacheTTL(source historySource) time.Duration {
