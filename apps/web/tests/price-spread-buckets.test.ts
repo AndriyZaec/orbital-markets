@@ -43,3 +43,15 @@ test('paired venue prices are selected from the same actual observation', () => 
     assert.equal(point.shortPrice, observed?.shortPrice)
   }
 })
+
+test('server segment boundaries survive compression without splitting healthy downsampled intervals', () => {
+  const samples = [
+    { time: 0, value: 1, segment: 0 },
+    { time: 7 * 60_000, value: 2, segment: 0 },
+    { time: 14 * 60_000, value: 3, segment: 1 },
+    { time: 21 * 60_000, value: 4, segment: 1 },
+  ]
+  const segments = bucketSpreadSamples(samples)
+  assert.equal(segments.length, 2)
+  assert.deepEqual(segments.map((segment) => segment.map((point) => point.time)), [[0, 420000], [840000, 1260000]])
+})

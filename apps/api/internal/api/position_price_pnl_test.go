@@ -68,8 +68,8 @@ func TestPositionPricePnLHistoryReusesMarketCacheAndEnforcesOwnership(t *testing
 	a, b := 110.0, 112.0
 	market := historyResponse{Asset: "SOL", VenueA: "pacifica", VenueB: "hyperliquid", Points: []historyPoint{
 		{T: opened.Add(5 * time.Second).Format(time.RFC3339), MarkPriceA: &a, MarkPriceB: &b}, // before leg 2
-		{T: opened.Add(time.Minute).Format(time.RFC3339), MarkPriceA: &a, MarkPriceB: &b},
-		{T: opened.Add(2 * time.Minute).Format(time.RFC3339)}, // explicit missing quote
+		{T: opened.Add(time.Minute).Format(time.RFC3339), MarkPriceA: &a, MarkPriceB: &b, Segment: 7},
+		{T: opened.Add(2 * time.Minute).Format(time.RFC3339), Segment: 8}, // explicit missing quote
 	}}
 	s.historyCache = newHistoryCache(8)
 	key := historyCacheKey{asset: "SOL", venueA: "pacifica", venueB: "hyperliquid", range_: "24h", priceSpread: true}
@@ -94,6 +94,9 @@ func TestPositionPricePnLHistoryReusesMarketCacheAndEnforcesOwnership(t *testing
 	}
 	if len(response.Points) != 2 || response.Key == "" || response.Points[1].PricePnL != nil {
 		t.Fatalf("entry filtering, gaps or version are wrong: %+v", response)
+	}
+	if response.Points[0].Segment == nil || *response.Points[0].Segment != 7 || response.Points[1].Segment == nil || *response.Points[1].Segment != 8 {
+		t.Fatal("Price PnL projection lost the shared market history gap boundaries")
 	}
 	pos, _ := s.liveStore.GetPosition(context.Background(), "position-residual")
 	if *response.Points[0].PricePnL != pos.PricePnL || *response.Points[0].LongPnL+*response.Points[0].ShortPnL != pos.PricePnL {

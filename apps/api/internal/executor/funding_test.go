@@ -412,6 +412,66 @@ func TestPriceAndFundingUpdatesRecomputeTotalAtomically(t *testing.T) {
 	}
 }
 
+func TestFundingOnlyUpdatesPreservePriceSnapshotTime(t *testing.T) {
+	for _, method := range []string{"reconcile", "direct"} {
+		t.Run(method, func(t *testing.T) {
+			database, err := appdb.Open(filepath.Join(t.TempDir(), "price-time.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			opened := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+			priceAt := opened.Add(20 * time.Minute).Format(time.RFC3339)
+			_, err = database.Exec(`INSERT INTO live_positions
+				(id,plan_id,opportunity_id,asset,venue_a,venue_b,state,notional,leverage,started_at,opened_at,updated_at,monitor_at,price_pnl,leg1_current_price,leg2_current_price)
+				VALUES ('p','plan','opp','SOL','pacifica','hyperliquid','open',100,2,?,?,?,?, -1.4,101,102)`,
+				opened.Format(time.RFC3339), opened.Format(time.RFC3339), priceAt, priceAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := NewStore(database, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			position, err := store.GetPosition(context.Background(), "p")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if method == "direct" {
+				err = store.UpdateRealizedFunding(context.Background(), "p", 1)
+			} else {
+				for _, venueName := range []string{"pacifica", "hyperliquid"} {
+					_, err = database.Exec(`INSERT INTO live_funding_coverage (position_id,venue,account,coverage_start_ms,covered_through_ms,amount_usd,updated_at)
+						VALUES ('p',?,'owner',?,?,0.5,?)`, venueName, opened.UnixMilli(), opened.Add(30*time.Minute).UnixMilli(), priceAt)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				_, complete, reconcileErr := store.ReconcileFunding(context.Background(), position, opened.Add(30*time.Minute), false)
+				err = reconcileErr
+				if !complete {
+					t.Fatal("funding reconciliation incomplete")
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, err := store.GetPosition(context.Background(), "p")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.MonitorAt != priceAt || updated.PricePnL != -1.4 || updated.Leg1CurPrice != 101 || updated.Leg2CurPrice != 102 {
+				t.Fatalf("funding-only update changed the price snapshot: time=%s want=%s price=%g marks=%g/%g", updated.MonitorAt, priceAt, updated.PricePnL, updated.Leg1CurPrice, updated.Leg2CurPrice)
+			}
+			if updated.FundingPnL != 1 || math.Abs(updated.TotalPnL+0.4) > 1e-12 || updated.UpdatedAt == priceAt {
+				t.Fatal("funding/total freshness did not advance")
+			}
+			store.UpdateMonitoring(context.Background(), "p", MonitorUpdate{PricePnL: 2, Leg1CurPrice: 103, Leg2CurPrice: 104})
+			updated, _ = store.GetPosition(context.Background(), "p")
+			if updated.MonitorAt == priceAt || updated.PricePnL != 2 {
+				t.Fatal("a real price update did not advance its snapshot")
+			}
+		})
+	}
+}
+
 func TestAsterIncomeSyncClaimIsAccountScopedAndHourly(t *testing.T) {
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "income-claim.db"))
 	if err != nil {

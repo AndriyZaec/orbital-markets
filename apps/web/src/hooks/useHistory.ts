@@ -3,6 +3,7 @@ import { apiFetch, apiResponseError, userErrorMessage } from '@/lib/api'
 
 export interface HistoryPoint {
   t: string
+  segment?: number
   basis: number
   price_spread?: number | null
   mark_price_a?: number | null

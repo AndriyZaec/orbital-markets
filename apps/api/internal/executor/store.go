@@ -894,8 +894,8 @@ func (s *Store) ReconcileFunding(ctx context.Context, position *LivePosition, ta
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE live_positions SET funding_pnl = ?, funding_pnl_source = 'realized',
-			total_pnl = price_pnl + ?, monitor_at = ?, updated_at = ?
-		WHERE id = ?`, total, total, now, now, position.ID); err != nil {
+			total_pnl = price_pnl + ?, updated_at = ?
+		WHERE id = ?`, total, total, now, position.ID); err != nil {
 		return 0, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -1105,8 +1105,8 @@ func (s *Store) UpdateRealizedFunding(ctx context.Context, positionID string, fu
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE live_positions SET funding_pnl = ?, funding_pnl_source = 'realized',
-			total_pnl = price_pnl + ?, monitor_at = ?, updated_at = ?
-		WHERE id = ?`, fundingPnL, fundingPnL, now, now, positionID)
+			total_pnl = price_pnl + ?, updated_at = ?
+		WHERE id = ?`, fundingPnL, fundingPnL, now, positionID)
 	return err
 }
 

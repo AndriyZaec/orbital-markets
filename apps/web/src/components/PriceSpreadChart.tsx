@@ -38,6 +38,7 @@ export function PriceSpreadChart({ data, direction, directionLabel, entry, windo
   const windowEnd = window ? Date.parse(window.end) : NaN
   const samples = data.map((point) => ({
     time: Date.parse(point.t),
+    segment: point.segment,
     value: typeof point.price_spread === 'number' && Number.isFinite(point.price_spread) ? point.price_spread * sign : null,
     priceA: validPrice(point.mark_price_a),
     priceB: validPrice(point.mark_price_b),

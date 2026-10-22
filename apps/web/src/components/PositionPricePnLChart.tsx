@@ -51,7 +51,7 @@ function PricePnLPlot({ points, openedAt, longLabel, shortLabel }: {
 }) {
   const [hoverTime, setHoverTime] = useState<number | null>(null)
   const clipId = useId().replace(/:/g, '')
-  const samples = points.map((point) => ({ time: Date.parse(point.t),
+  const samples = points.map((point) => ({ time: Date.parse(point.t), segment: point.segment,
     value: typeof point.price_pnl === 'number' && Number.isFinite(point.price_pnl) &&
       typeof point.long_pnl === 'number' && Number.isFinite(point.long_pnl) &&
       typeof point.short_pnl === 'number' && Number.isFinite(point.short_pnl) ? point.price_pnl : null,
@@ -64,7 +64,8 @@ function PricePnLPlot({ points, openedAt, longLabel, shortLabel }: {
       continue
     }
     let segment = segments[segments.length - 1]
-    if (!segment || (segment.length && sample.time - segment[segment.length - 1].time > 15 * 60_000)) {
+    const previous = segment?.[segment.length - 1]
+    if (!segment || (previous && (sample.segment !== previous.segment || sample.time - previous.time > 15 * 60_000))) {
       segment = []
       segments.push(segment)
     }

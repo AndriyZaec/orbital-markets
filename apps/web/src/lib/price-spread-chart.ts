@@ -1,6 +1,7 @@
 export interface SpreadSample {
   time: number
   value: number | null
+  segment?: number
 }
 
 export type SpreadBucket<T extends SpreadSample = SpreadSample> = T & { value: number; low: number; high: number }
@@ -35,7 +36,7 @@ export function bucketSpreadSamples<T extends SpreadSample>(samples: T[]): Sprea
       flushSegment()
       continue
     }
-    if (last && sample.time - last.time > 15 * 60_000) flushSegment()
+    if (last && (sample.segment !== last.segment || sample.time - last.time > 15 * 60_000)) flushSegment()
     if (bucket.length > 0 && Math.floor(sample.time / 120_000) !== Math.floor(bucket[0].time / 120_000)) flushBucket()
     bucket.push({ ...sample, value: sample.value })
     const point = { ...sample, value: sample.value, low: sample.value, high: sample.value }

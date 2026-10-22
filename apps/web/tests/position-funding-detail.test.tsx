@@ -172,6 +172,14 @@ describe('position-backed funding chart', () => {
     view.rerender(tree())
     expect(screen.getAllByText('Price PnL', { selector: 'p' }).map((p) => p.parentElement?.textContent)).toEqual(['Price PnL-$2.25', 'Price PnL-$2.25'])
     expect(screen.getByLabelText('Current Price PnL').getAttribute('data-value')).toBe('-2.25')
+    mocks.usePriceHistory.mockReturnValue({ loading: false, error: null, data: { points: [
+      { t: '2026-09-22T11:50:00Z', long_pnl: 5, short_pnl: -6, price_pnl: -1, segment: 0 },
+      { t: '2026-09-22T11:57:00Z', long_pnl: 6, short_pnl: -6, price_pnl: 0, segment: 1 },
+    ] } })
+    view.rerender(tree())
+    expect(screen.getByLabelText('Price PnL curve').getAttribute('d')?.match(/M /g)).toHaveLength(2)
+    fireEvent.pointerMove(svg, { clientX: 1020 })
+    expect(screen.queryByLabelText('PnL observation')).toBeNull()
   })
 
   it('renders the persisted 2Z direction and history pair without a pre-trade return view', () => {

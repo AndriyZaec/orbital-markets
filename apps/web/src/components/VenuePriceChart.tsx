@@ -34,6 +34,7 @@ export function VenuePriceChart({ data, direction, venueA, venueB, window }: {
       && typeof b === 'number' && Number.isFinite(b) && b > 0
     return {
       time: Date.parse(point.t),
+      segment: point.segment,
       value: valid ? (isLongA ? a : b) : null,
       shortPrice: valid ? (isLongA ? b : a) : NaN,
       basis: typeof point.price_spread === 'number' && Number.isFinite(point.price_spread) ? point.price_spread * (isLongA ? 1 : -1) : null,

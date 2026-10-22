@@ -72,4 +72,17 @@ describe('venue-labelled opportunity prices', () => {
     expect(screen.getByText('No paired price history for this pair.')).toBeTruthy()
     expect(screen.queryByRole('img')).toBeNull()
   })
+
+  it('preserves backend gap boundaries even when sampled observations are less than 15 minutes apart', () => {
+    render(<VenuePriceChart {...props} data={[
+      { ...sample(0, 100, 100.2), segment: 0 },
+      { ...sample(420, 101, 101.2), segment: 0 },
+      { ...sample(840, 102, 102.2), segment: 1 },
+      { ...sample(1260, 103, 103.2), segment: 1 },
+    ]} />)
+    expect(screen.getByLabelText('Hyperliquid Long price curve').getAttribute('d')?.match(/M /g)).toHaveLength(2)
+    expect(screen.getByLabelText('Aster Short price curve').getAttribute('d')?.match(/M /g)).toHaveLength(2)
+    movePointer(565)
+    expect(screen.queryByLabelText('Price observation')).toBeNull()
+  })
 })

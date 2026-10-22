@@ -11,6 +11,7 @@ import (
 
 type positionPricePnLPoint struct {
 	T        string   `json:"t"`
+	Segment  *int     `json:"segment,omitempty"`
 	LongPnL  *float64 `json:"long_pnl"`
 	ShortPnL *float64 `json:"short_pnl"`
 	PricePnL *float64 `json:"price_pnl"`
@@ -144,11 +145,12 @@ func (s *Server) handlePositionPricePnLHistory(w http.ResponseWriter, r *http.Re
 		if !strings.EqualFold(model.leg1.Venue, pos.VenueA) {
 			mark1, mark2 = mark2, mark1
 		}
-		if mark1 == nil || mark2 == nil {
-			points = append(points, positionPricePnLPoint{T: sample.T})
-		} else {
-			points = append(points, model.point(at, *mark1, *mark2))
+		point := positionPricePnLPoint{T: sample.T}
+		if mark1 != nil && mark2 != nil {
+			point = model.point(at, *mark1, *mark2)
 		}
+		point.Segment = &sample.Segment
+		points = append(points, point)
 	}
 	now := time.Now().UTC()
 	writeJSON(w, http.StatusOK, map[string]any{"position_id": pos.ID, "valuation_key": model.key(), "points": points,

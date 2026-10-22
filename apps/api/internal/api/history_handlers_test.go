@@ -156,3 +156,48 @@ func TestDownsampleHistoryPointsCapsResponse(t *testing.T) {
 		t.Fatal("downsampled points must preserve the first and latest samples")
 	}
 }
+
+func TestPriceHistoryPreservesGapSegmentsThroughDownsampling(t *testing.T) {
+	for _, kind := range []string{"unpaired", "invalid", "both_missing", "healthy"} {
+		t.Run(kind, func(t *testing.T) {
+			var a, b []historyRow
+			for i := 0; i < 1440; i++ {
+				row := historyRow{TsUnix: int64(i * 60), MarkPrice: 100}
+				if i == 720 && kind == "both_missing" {
+					continue
+				}
+				if i == 720 && kind == "invalid" {
+					row.MarkPrice = 0
+				}
+				a = append(a, row)
+				if i == 720 && kind == "unpaired" {
+					continue
+				}
+				b = append(b, historyRow{TsUnix: int64(i * 60), MarkPrice: 101})
+			}
+			points := downsampleHistoryPoints(pairPriceHistoryRows(a, b), 200)
+			encoded, err := json.Marshal(points)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rows []map[string]any
+			if err = json.Unmarshal(encoded, &rows); err != nil {
+				t.Fatal(err)
+			}
+			ids := map[any]bool{}
+			for _, row := range rows {
+				ids[row["segment"]] = true
+			}
+			want := 2
+			if kind == "healthy" {
+				want = 1
+			}
+			if len(ids) != want {
+				t.Fatalf("%s: output lost gap boundaries: segments=%d want=%d, points=%d", kind, len(ids), want, len(rows))
+			}
+			if len(points) > 200 {
+				t.Fatal("gap preservation exceeded the response cap")
+			}
+		})
+	}
+}

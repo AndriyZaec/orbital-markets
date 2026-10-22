@@ -13,6 +13,7 @@ import (
 
 type historyPoint struct {
 	T           string   `json:"t"`
+	Segment     int      `json:"segment"`
 	Basis       float64  `json:"basis"`
 	PriceSpread *float64 `json:"price_spread"`
 	MarkPriceA  *float64 `json:"mark_price_a,omitempty"`
@@ -330,6 +331,9 @@ func pairHistoryRowsWithin(a, b []historyRow, tolerance time.Duration, priceSpre
 
 	var points []historyPoint
 	j := 0
+	segment := 0
+	priceGap := false
+	var lastPriceTime time.Time
 
 	for _, sa := range a {
 		ta := time.Unix(sa.TsUnix, 0).UTC()
@@ -346,6 +350,9 @@ func pairHistoryRowsWithin(a, b []historyRow, tolerance time.Duration, priceSpre
 
 		tb := time.Unix(b[j].TsUnix, 0)
 		if math.Abs(float64(ta.Sub(tb))) > float64(tolerance) {
+			if priceSpread {
+				priceGap = true
+			}
 			continue
 		}
 
@@ -365,15 +372,28 @@ func pairHistoryRowsWithin(a, b []historyRow, tolerance time.Duration, priceSpre
 		}
 		if priceSpread {
 			point.PriceSpread = domain.MidpointPriceSpread(sa.MarkPrice, sb.MarkPrice)
+			pairedAt := ta
+			if tb.Before(pairedAt) {
+				pairedAt = tb
+			}
 			if point.PriceSpread != nil {
+				// Classify gaps before downsampling, which otherwise hides null
+				// observations or makes missing minutes look like normal sampling.
+				// Capture runs every minute; allow up to 30s timestamp jitter.
+				if priceGap || (!lastPriceTime.IsZero() && pairedAt.Sub(lastPriceTime) > 90*time.Second) {
+					segment++
+				}
+				priceGap = false
+				lastPriceTime = pairedAt
 				point.MarkPriceA = &sa.MarkPrice
 				point.MarkPriceB = &sb.MarkPrice
+			} else {
+				priceGap = true
 			}
+			point.Segment = segment
 			// The earlier source time ensures a "since entry" sample cannot
 			// accidentally contain a price observed before that entry.
-			if tb.Before(ta) {
-				point.T = tb.UTC().Format(time.RFC3339)
-			}
+			point.T = pairedAt.UTC().Format(time.RFC3339)
 		}
 		points = append(points, point)
 	}
