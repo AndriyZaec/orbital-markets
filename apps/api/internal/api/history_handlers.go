@@ -350,9 +350,6 @@ func pairHistoryRowsWithin(a, b []historyRow, tolerance time.Duration, priceSpre
 
 		tb := time.Unix(b[j].TsUnix, 0)
 		if math.Abs(float64(ta.Sub(tb))) > float64(tolerance) {
-			if priceSpread {
-				priceGap = true
-			}
 			continue
 		}
 
@@ -377,10 +374,10 @@ func pairHistoryRowsWithin(a, b []historyRow, tolerance time.Duration, priceSpre
 				pairedAt = tb
 			}
 			if point.PriceSpread != nil {
-				// Classify gaps before downsampling, which otherwise hides null
-				// observations or makes missing minutes look like normal sampling.
-				// Capture runs every minute; allow up to 30s timestamp jitter.
-				if priceGap || (!lastPriceTime.IsZero() && pairedAt.Sub(lastPriceTime) > 90*time.Second) {
+				// Keep brief capture/skew gaps connected, using the same 15-minute
+				// visual gap budget as the charts. Classify outages before sampling
+				// so discarded rows cannot hide them. Invalid quotes still split.
+				if priceGap || (!lastPriceTime.IsZero() && pairedAt.Sub(lastPriceTime) > 15*time.Minute) {
 					segment++
 				}
 				priceGap = false

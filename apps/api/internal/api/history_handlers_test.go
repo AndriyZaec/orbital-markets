@@ -157,20 +157,50 @@ func TestDownsampleHistoryPointsCapsResponse(t *testing.T) {
 	}
 }
 
+func TestPriceHistoryShortCaptureGapsDoNotFragmentDailyChart(t *testing.T) {
+	for _, kind := range []string{"source_skew", "capture_jitter"} {
+		t.Run(kind, func(t *testing.T) {
+			var a, b []historyRow
+			for i := 0; i < 1440; i++ {
+				ts := int64(i * 60)
+				if kind == "capture_jitter" && i%7 == 3 {
+					ts += 33
+				}
+				a = append(a, historyRow{TsUnix: ts, MarkPrice: 100})
+				if kind == "source_skew" && i%7 == 3 {
+					ts += 7
+				}
+				b = append(b, historyRow{TsUnix: ts, MarkPrice: 101})
+			}
+			points := downsampleHistoryPoints(pairPriceHistoryRows(a, b), 200)
+			segments := map[int]bool{}
+			for _, point := range points {
+				segments[point.Segment] = true
+				if point.MarkPriceA == nil || point.MarkPriceB == nil {
+					t.Fatal("short capture gaps must not fabricate prices")
+				}
+			}
+			if len(segments) != 1 {
+				t.Fatalf("24h chart fragmented into %d segments by brief capture gaps", len(segments))
+			}
+		})
+	}
+}
+
 func TestPriceHistoryPreservesGapSegmentsThroughDownsampling(t *testing.T) {
 	for _, kind := range []string{"unpaired", "invalid", "both_missing", "healthy"} {
 		t.Run(kind, func(t *testing.T) {
 			var a, b []historyRow
 			for i := 0; i < 1440; i++ {
 				row := historyRow{TsUnix: int64(i * 60), MarkPrice: 100}
-				if i == 720 && kind == "both_missing" {
+				if i >= 720 && i < 740 && kind == "both_missing" {
 					continue
 				}
 				if i == 720 && kind == "invalid" {
 					row.MarkPrice = 0
 				}
 				a = append(a, row)
-				if i == 720 && kind == "unpaired" {
+				if i >= 720 && i < 740 && kind == "unpaired" {
 					continue
 				}
 				b = append(b, historyRow{TsUnix: int64(i * 60), MarkPrice: 101})
