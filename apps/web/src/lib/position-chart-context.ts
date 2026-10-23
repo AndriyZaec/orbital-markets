@@ -1,5 +1,6 @@
 import type { Venue } from '@/agents/types'
 import type { FundingDirection } from '@/lib/funding-chart'
+import type { PositionPricePnLContext } from '@/lib/position-price-pnl'
 
 export type LivePositionChartContext = {
   available: false
@@ -18,4 +19,6 @@ export interface AvailablePositionChartContext {
   slippage_estimate: number
   projection_source: 'execution_plan' | 'fills_fallback'
   projection_warning?: string
+  entry_price_spread?: number
+  price_pnl?: PositionPricePnLContext
 }

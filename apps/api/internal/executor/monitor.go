@@ -73,14 +73,7 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 		return
 	}
 
-	var leg1, leg2 *LiveFill
-	for i := range fills {
-		if fills[i].Leg == 1 {
-			leg1 = &fills[i]
-		} else if fills[i].Leg == 2 {
-			leg2 = &fills[i]
-		}
-	}
+	leg1, leg2 := MonitoredPriceLegs(fills)
 
 	if leg1 == nil || leg2 == nil || !leg1.Filled || !leg2.Filled {
 		return
@@ -118,8 +111,7 @@ func (m *Monitor) evaluate(ctx context.Context, pos *LivePosition) {
 	update.Leg1CurPrice = leg1Snap.MarkPrice
 	update.Leg2CurPrice = leg2Snap.MarkPrice
 
-	update.PricePnL = legPricePnL(leg1Side, leg1.AvgFillPrice, update.Leg1CurPrice, leg1.FilledAmount) +
-		legPricePnL(leg2Side, leg2.AvgFillPrice, update.Leg2CurPrice, leg2.FilledAmount)
+	update.PricePnL = PricePnLAtMarks(*leg1, *leg2, update.Leg1CurPrice, update.Leg2CurPrice).Total
 
 	// Basis: relative price gap between venues
 	if update.Leg1CurPrice > 0 && update.Leg2CurPrice > 0 {

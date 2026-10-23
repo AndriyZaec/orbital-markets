@@ -284,7 +284,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
         )}
 
         {/* PnL — only for open positions */}
-        {pos.state === 'open' && (pos.price_pnl !== 0 || pos.funding_pnl !== 0) && (
+        {pos.state === 'open' && (pos.price_pnl !== 0 || pos.funding_pnl !== 0 || (data?.chart_context.available && data.chart_context.price_pnl?.available)) && (
           <div className="px-5 py-4 border-b border-border">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
             <div className={`grid gap-4 ${compact ? 'grid-cols-2' : 'grid-cols-3'}`}>

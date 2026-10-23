@@ -1,5 +1,6 @@
 import { AssetIcon } from '@/components/AssetIcon'
 import { FundingChart } from '@/components/FundingChart'
+import { PositionPricePnLChart } from '@/components/PositionPricePnLChart'
 import { DetailStatItem, DetailVenueIcon } from '@/components/DetailStatItem'
 import { Badge } from '@/components/ui/badge'
 import { useLivePositionDetail } from '@/hooks/useLivePositionDetail'
@@ -11,7 +12,7 @@ interface Props {
 }
 
 export function PositionFundingDetail({ position, onBack }: Props) {
-  const { data, loading, error, refetch } = useLivePositionDetail(position.id, [position.venue_a, position.venue_b])
+  const { data, loading, error, refetch, accounts } = useLivePositionDetail(position.id, [position.venue_a, position.venue_b])
   const chartContext = data?.chart_context
   const longVenue = chartContext?.available
     ? (chartContext.direction === 'long_a_short_b' ? chartContext.venue_a : chartContext.venue_b)
@@ -66,6 +67,7 @@ export function PositionFundingDetail({ position, onBack }: Props) {
               feeEstimate={chartContext.fee_estimate}
               slippageEstimate={chartContext.slippage_estimate}
               showPotentialReturn={false}
+              positionPriceChart={<PositionPricePnLChart position={data?.position ?? position} context={chartContext.price_pnl} accounts={accounts} />}
             />
           </>
         )}

@@ -69,6 +69,7 @@ export function useLivePositionDetail(positionId: string | null, venues: [Venue,
   })
 
   return {
+    accounts,
     data: query.data ?? null,
     loading: enabled && query.isLoading,
     error: query.error ? userErrorMessage(query.error, 'Unable to load position details. Please try again.') : null,
