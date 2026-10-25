@@ -1,8 +1,12 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+const BUILD_ORDER_REQUEST: &[u8] = br#"{"protocol_version":1,"request_id":"order-1","operation":"build_order","payload":{"action":"open","owner_authority":"11111111111111111111111111111111","position_authority":"So11111111111111111111111111111111111111112","fee_payer":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","symbol":"SOL","side":"bid","num_base_lots":100,"price_limit_ticks":12345,"reduce_only":false,"client_order_id":42,"last_valid_slot":123456,"recent_blockhash":"11111111111111111111111111111111","last_valid_block_height":999999,"metadata_generation":7,"accounts":{"perp_asset_map":"PhUsd11YkbjSaWjFncfAAmatntsjx3MgDR9B6g1ks3A","orderbook":"EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy","spline_collection":"RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj","global_trader_index":["F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"],"active_trader_buffer":["phDEVv4w6BcfkLrLNeXr8HhhgQxnxziVGXpGPcaadMf"]}}}
+"#;
+
 fn run_helper(input: &[u8]) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_phoenix-helper"))
+        .env_remove("PHOENIX_ENV")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -57,7 +61,7 @@ fn unsupported_protocol_version_is_a_request_error() {
 #[test]
 fn unknown_operation_is_a_request_error() {
     let output = run_helper(
-        br#"{"protocol_version":1,"request_id":"operation-1","operation":"build_order"}
+        br#"{"protocol_version":1,"request_id":"operation-1","operation":"cancel_order"}
 "#,
     );
 
@@ -67,7 +71,131 @@ fn unknown_operation_is_a_request_error() {
         concat!(
             "{\"protocol_version\":1,\"request_id\":\"operation-1\",",
             "\"ok\":false,\"error\":{\"code\":\"unsupported_operation\",",
-            "\"message\":\"unsupported operation: build_order\"}}\n"
+            "\"message\":\"unsupported operation: cancel_order\"}}\n"
         )
     );
+}
+
+#[test]
+fn build_order_returns_a_deterministic_cross_margin_message() {
+    let first = run_helper(BUILD_ORDER_REQUEST);
+    let second = run_helper(BUILD_ORDER_REQUEST);
+
+    assert!(first.status.success());
+    assert_eq!(first.stdout, second.stdout);
+
+    let response: serde_json::Value =
+        serde_json::from_slice(&first.stdout).expect("response should be json");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["request_id"], "order-1");
+    assert_eq!(response["result"]["trader_pda_index"], 0);
+    assert_eq!(response["result"]["subaccount_index"], 0);
+    assert_eq!(response["result"]["last_valid_block_height"], 999999);
+    assert_eq!(response["result"]["metadata_generation"], 7);
+    assert_eq!(
+        response["result"]["trader_account"],
+        "8f1SJ8oVHyhTvxSYTCsGszbwLW5QYYGLCmvtTcn2qPEZ"
+    );
+    assert_eq!(response["result"]["trader_bump"], 255);
+    assert_eq!(
+        response["result"]["message_sha256"],
+        "b69de19e308fd670468416e2c26ebfb8a640923cd171273be05c7af371fd38e8"
+    );
+    assert!(
+        response["result"]["message_base64"]
+            .as_str()
+            .is_some_and(|message| message.len() > 400)
+    );
+    assert_eq!(
+        response["result"]["required_signers"],
+        serde_json::json!([
+            {
+                "index": 0,
+                "pubkey": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "role": "fee_payer"
+            },
+            {
+                "index": 1,
+                "pubkey": "So11111111111111111111111111111111111111112",
+                "role": "position_authority"
+            }
+        ])
+    );
+    assert_eq!(response["result"]["manifest"]["intent_action"], "open");
+    assert_eq!(response["result"]["manifest"]["requested_symbol"], "SOL");
+    assert_eq!(
+        response["result"]["manifest"]["orderbook"],
+        "EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy"
+    );
+    assert_eq!(response["result"]["manifest"]["reduce_only"], false);
+    assert_eq!(response["result"]["manifest"]["num_base_lots"], 100);
+    assert_eq!(response["result"]["manifest"]["price_limit_ticks"], 12345);
+    assert_eq!(
+        response["result"]["manifest"]["phoenix_program_id"],
+        "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih"
+    );
+}
+
+#[test]
+fn build_order_rejects_open_reduce_only_intent() {
+    let request = String::from_utf8(BUILD_ORDER_REQUEST.to_vec())
+        .expect("fixture should be utf-8")
+        .replace("\"reduce_only\":false", "\"reduce_only\":true");
+    let output = run_helper(request.as_bytes());
+
+    assert!(output.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("response should be json");
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "invalid_order_request");
+    assert_eq!(
+        response["error"]["message"],
+        "open must not be reduce-only; safety actions must be reduce-only"
+    );
+}
+
+#[test]
+fn malformed_frame_does_not_stop_following_requests() {
+    let output = run_helper(
+        br#"not-json
+{"protocol_version":1,"request_id":"health-after-error","operation":"health"}
+"#,
+    );
+
+    assert!(output.status.success());
+    let responses = String::from_utf8(output.stdout).expect("responses should be utf-8");
+    let mut lines = responses.lines();
+    let error: serde_json::Value =
+        serde_json::from_str(lines.next().expect("error response")).expect("error should be json");
+    let health: serde_json::Value = serde_json::from_str(lines.next().expect("health response"))
+        .expect("health should be json");
+
+    assert_eq!(error["error"]["code"], "invalid_request");
+    assert_eq!(health["request_id"], "health-after-error");
+    assert_eq!(health["ok"], true);
+    assert!(lines.next().is_none());
+}
+
+#[test]
+fn oversized_frame_is_drained_before_following_requests() {
+    let mut request = vec![b'x'; 64 * 1_024 + 1];
+    request.extend_from_slice(
+        br#"
+{"protocol_version":1,"request_id":"health-after-large","operation":"health"}
+"#,
+    );
+    let output = run_helper(&request);
+
+    assert!(output.status.success());
+    let responses = String::from_utf8(output.stdout).expect("responses should be utf-8");
+    let mut lines = responses.lines();
+    let error: serde_json::Value =
+        serde_json::from_str(lines.next().expect("error response")).expect("error should be json");
+    let health: serde_json::Value = serde_json::from_str(lines.next().expect("health response"))
+        .expect("health should be json");
+
+    assert_eq!(error["error"]["code"], "request_too_large");
+    assert_eq!(health["request_id"], "health-after-large");
+    assert_eq!(health["ok"], true);
+    assert!(lines.next().is_none());
 }

@@ -1,9 +1,13 @@
 use std::io::{self, BufRead, BufWriter, Write};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+mod order;
 
 const PROTOCOL_VERSION: u32 = 1;
 const PHOENIX_RISE_VERSION: &str = "0.6.13";
+const MAX_REQUEST_BYTES: usize = 64 * 1_024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -11,14 +15,16 @@ struct Request {
     protocol_version: u32,
     request_id: String,
     operation: String,
+    #[serde(default)]
+    payload: Option<Value>,
 }
 
 #[derive(Serialize)]
-struct SuccessResponse<'a> {
+struct SuccessResponse<'a, T> {
     protocol_version: u32,
     request_id: &'a str,
     ok: bool,
-    result: HealthResult<'a>,
+    result: T,
 }
 
 #[derive(Serialize)]
@@ -51,17 +57,80 @@ fn write_json_line(
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let stdin = io::stdin();
-    let mut stdout = BufWriter::new(io::stdout().lock());
+fn read_frame(reader: &mut impl BufRead, frame: &mut Vec<u8>) -> io::Result<Option<bool>> {
+    frame.clear();
+    let mut oversized = false;
 
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return if frame.is_empty() && !oversized {
+                Ok(None)
+            } else {
+                Ok(Some(oversized))
+            };
         }
 
-        let request: Request = serde_json::from_str(&line)?;
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        if !oversized {
+            if frame.len() + consumed > MAX_REQUEST_BYTES {
+                oversized = true;
+            } else {
+                frame.extend_from_slice(&available[..consumed]);
+            }
+        }
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            return Ok(Some(oversized));
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let mut stdout = BufWriter::new(io::stdout().lock());
+    let mut frame = Vec::with_capacity(4_096);
+
+    while let Some(oversized) = read_frame(&mut input, &mut frame)? {
+        if oversized {
+            write_json_line(
+                &mut stdout,
+                &ErrorResponse {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: "",
+                    ok: false,
+                    error: ErrorDetails {
+                        code: "request_too_large",
+                        message: format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+                    },
+                },
+            )?;
+            continue;
+        }
+        if frame.iter().all(|byte| byte.is_ascii_whitespace()) {
+            continue;
+        }
+        let request: Request = match serde_json::from_slice(&frame) {
+            Ok(request) => request,
+            Err(error) => {
+                write_json_line(
+                    &mut stdout,
+                    &ErrorResponse {
+                        protocol_version: PROTOCOL_VERSION,
+                        request_id: "",
+                        ok: false,
+                        error: ErrorDetails {
+                            code: "invalid_request",
+                            message: format!("invalid protocol request: {error}"),
+                        },
+                    },
+                )?;
+                continue;
+            }
+        };
         if request.protocol_version != PROTOCOL_VERSION {
             write_json_line(
                 &mut stdout,
@@ -92,6 +161,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                     },
                 )?;
+            }
+            "build_order" => {
+                let result = request
+                    .payload
+                    .ok_or_else(|| "build_order requires payload".to_string())
+                    .and_then(|payload| {
+                        serde_json::from_value::<order::BuildOrderRequest>(payload)
+                            .map_err(|error| format!("invalid build_order payload: {error}"))
+                    })
+                    .and_then(order::build_order);
+                match result {
+                    Ok(result) => write_json_line(
+                        &mut stdout,
+                        &SuccessResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: true,
+                            result,
+                        },
+                    )?,
+                    Err(message) => write_json_line(
+                        &mut stdout,
+                        &ErrorResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: false,
+                            error: ErrorDetails {
+                                code: "invalid_order_request",
+                                message,
+                            },
+                        },
+                    )?,
+                }
             }
             operation => {
                 write_json_line(
