@@ -3,6 +3,10 @@ use std::str::FromStr;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use phoenix_rise::ix::constants::{PROD_PHOENIX_PROGRAM_ID, phoenix_program_id};
+use phoenix_rise::ix::flight::{
+    FLIGHT_PROGRAM_ID, ProxyInstructionParams, create_proxy_instruction_ix,
+    get_flight_builder_state_address,
+};
 use phoenix_rise::ix::market_order::{MarketOrderParams, create_place_market_order_ix};
 use phoenix_rise::ix::types::{OrderFlags, SelfTradeBehavior, Side as PhoenixSide};
 use serde::{Deserialize, Serialize};
@@ -12,6 +16,7 @@ use solana_message::legacy::Message;
 use solana_pubkey::Pubkey;
 
 const MAX_TRANSACTION_BYTES: usize = 1_232;
+const EXPECTED_FLIGHT_FEE_BPS: u64 = 2;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +25,7 @@ pub struct BuildOrderRequest {
     owner_authority: String,
     position_authority: String,
     fee_payer: String,
+    builder_authority: Option<String>,
     symbol: String,
     side: Side,
     num_base_lots: u64,
@@ -40,6 +46,12 @@ enum Action {
     Close,
     Unwind,
     EmergencyClose,
+}
+
+impl Action {
+    fn uses_flight(self) -> bool {
+        matches!(self, Self::Open | Self::Close)
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -85,6 +97,8 @@ struct RequiredSigner {
 struct OrderManifest {
     format: &'static str,
     phoenix_program_id: String,
+    routing: Routing,
+    flight: Option<FlightManifest>,
     intent_action: Action,
     owner_authority: String,
     position_authority: String,
@@ -104,6 +118,25 @@ struct OrderManifest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Routing {
+    Native,
+    Flight,
+}
+
+#[derive(Serialize)]
+struct FlightManifest {
+    flight_program_id: String,
+    builder_authority: String,
+    builder_trader_account: String,
+    builder_state: String,
+    builder_pda_index: u8,
+    builder_subaccount_index: u8,
+    expected_registered_fee_bps: u64,
+    uses_fee_override: bool,
+}
+
+#[derive(Serialize)]
 struct AccountManifest {
     index: usize,
     pubkey: String,
@@ -113,6 +146,7 @@ struct AccountManifest {
 
 #[derive(Serialize)]
 struct InstructionManifest {
+    program_id: String,
     program_id_index: u8,
     account_indexes: Vec<u8>,
     data_base64: String,
@@ -148,6 +182,9 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
     let owner_authority = parse_pubkey("owner_authority", &request.owner_authority)?;
     let position_authority = parse_pubkey("position_authority", &request.position_authority)?;
     let fee_payer = parse_pubkey("fee_payer", &request.fee_payer)?;
+    if owner_authority == position_authority {
+        return Err("position_authority must differ from owner_authority".to_string());
+    }
     if fee_payer == position_authority {
         return Err("fee_payer must differ from position_authority".to_string());
     }
@@ -169,11 +206,7 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
         &request.accounts.active_trader_buffer,
     )?;
 
-    let pda_schema = [0_u8, 0_u8];
-    let (trader_account, trader_bump) = Pubkey::find_program_address(
-        &[b"trader", owner_authority.as_ref(), &pda_schema],
-        &PROD_PHOENIX_PROGRAM_ID,
-    );
+    let (trader_account, trader_bump) = derive_cross_margin_trader(&owner_authority);
     let side = match request.side {
         Side::Bid => PhoenixSide::Bid,
         Side::Ask => PhoenixSide::Ask,
@@ -204,9 +237,51 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
         .subaccount_index(0)
         .build()
         .map_err(|error| format!("invalid market order: {error}"))?;
-    let instruction: solana_instruction::Instruction = create_place_market_order_ix(params)
-        .map_err(|error| format!("failed to build market order: {error}"))?
-        .into();
+    let phoenix_instruction = create_place_market_order_ix(params)
+        .map_err(|error| format!("failed to build market order: {error}"))?;
+    let (instruction, routing, flight) = if request.action.uses_flight() {
+        let builder_authority = request
+            .builder_authority
+            .as_deref()
+            .ok_or_else(|| "normal open and close require builder_authority".to_string())
+            .and_then(|value| parse_pubkey("builder_authority", value))?;
+        let (builder_trader_account, _) = derive_cross_margin_trader(&builder_authority);
+        let builder_state = get_flight_builder_state_address(&builder_authority)
+            .map_err(|error| format!("failed to derive Flight builder state: {error}"))?;
+        let proxy_params = ProxyInstructionParams::builder()
+            .builder_authority(builder_authority)
+            .builder_trader_account(builder_trader_account)
+            .trader_wallet(position_authority)
+            .root_authority(owner_authority)
+            .inner_instruction(phoenix_instruction)
+            .build()
+            .map_err(|error| format!("invalid Flight proxy order: {error}"))?;
+        let proxy_instruction = create_proxy_instruction_ix(proxy_params)
+            .map_err(|error| format!("failed to build Flight proxy order: {error}"))?;
+        (
+            proxy_instruction.into(),
+            Routing::Flight,
+            Some(FlightManifest {
+                flight_program_id: FLIGHT_PROGRAM_ID.to_string(),
+                builder_authority: builder_authority.to_string(),
+                builder_trader_account: builder_trader_account.to_string(),
+                builder_state: builder_state.to_string(),
+                builder_pda_index: 0,
+                builder_subaccount_index: 0,
+                expected_registered_fee_bps: EXPECTED_FLIGHT_FEE_BPS,
+                uses_fee_override: false,
+            }),
+        )
+    } else {
+        if request.builder_authority.is_some() {
+            return Err("unwind and emergency_close must not use builder_authority".to_string());
+        }
+        (
+            solana_instruction::Instruction::from(phoenix_instruction),
+            Routing::Native,
+            None,
+        )
+    };
     let message = Message::new_with_blockhash(&[instruction], Some(&fee_payer), &recent_blockhash);
     let message_bytes = bincode::serialize(&message)
         .map_err(|error| format!("failed to serialize message: {error}"))?;
@@ -270,6 +345,7 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
         .instructions
         .iter()
         .map(|instruction| InstructionManifest {
+            program_id: message.account_keys[usize::from(instruction.program_id_index)].to_string(),
             program_id_index: instruction.program_id_index,
             account_indexes: instruction.accounts.clone(),
             data_base64: STANDARD.encode(&instruction.data),
@@ -291,6 +367,8 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
         manifest: OrderManifest {
             format: "solana_legacy_message",
             phoenix_program_id: PROD_PHOENIX_PROGRAM_ID.to_string(),
+            routing,
+            flight,
             intent_action: request.action,
             owner_authority: owner_authority.to_string(),
             position_authority: position_authority.to_string(),
@@ -313,6 +391,14 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
 
 fn parse_pubkey(field: &str, value: &str) -> Result<Pubkey, String> {
     Pubkey::from_str(value).map_err(|error| format!("invalid {field}: {error}"))
+}
+
+fn derive_cross_margin_trader(authority: &Pubkey) -> (Pubkey, u8) {
+    let pda_schema = [0_u8, 0_u8];
+    Pubkey::find_program_address(
+        &[b"trader", authority.as_ref(), &pda_schema],
+        &PROD_PHOENIX_PROGRAM_ID,
+    )
 }
 
 fn parse_pubkeys(field: &str, values: &[String]) -> Result<Vec<Pubkey>, String> {

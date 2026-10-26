@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-const BUILD_ORDER_REQUEST: &[u8] = br#"{"protocol_version":1,"request_id":"order-1","operation":"build_order","payload":{"action":"open","owner_authority":"11111111111111111111111111111111","position_authority":"So11111111111111111111111111111111111111112","fee_payer":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","symbol":"SOL","side":"bid","num_base_lots":100,"price_limit_ticks":12345,"reduce_only":false,"client_order_id":42,"last_valid_slot":123456,"recent_blockhash":"11111111111111111111111111111111","last_valid_block_height":999999,"metadata_generation":7,"accounts":{"perp_asset_map":"PhUsd11YkbjSaWjFncfAAmatntsjx3MgDR9B6g1ks3A","orderbook":"EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy","spline_collection":"RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj","global_trader_index":["F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"],"active_trader_buffer":["phDEVv4w6BcfkLrLNeXr8HhhgQxnxziVGXpGPcaadMf"]}}}
+const BUILD_ORDER_REQUEST: &[u8] = br#"{"protocol_version":1,"request_id":"order-1","operation":"build_order","payload":{"action":"open","owner_authority":"11111111111111111111111111111111","position_authority":"So11111111111111111111111111111111111111112","fee_payer":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","builder_authority":"Vote111111111111111111111111111111111111111","symbol":"SOL","side":"bid","num_base_lots":100,"price_limit_ticks":12345,"reduce_only":false,"client_order_id":42,"last_valid_slot":123456,"recent_blockhash":"11111111111111111111111111111111","last_valid_block_height":999999,"metadata_generation":7,"accounts":{"perp_asset_map":"PhUsd11YkbjSaWjFncfAAmatntsjx3MgDR9B6g1ks3A","orderbook":"EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy","spline_collection":"RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj","global_trader_index":["F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"],"active_trader_buffer":["phDEVv4w6BcfkLrLNeXr8HhhgQxnxziVGXpGPcaadMf"]}}}
 "#;
 
 fn run_helper(input: &[u8]) -> std::process::Output {
@@ -20,6 +20,17 @@ fn run_helper(input: &[u8]) -> std::process::Output {
         .expect("request should be written");
 
     child.wait_with_output().expect("helper should exit")
+}
+
+fn safety_order_request(action: &str) -> String {
+    String::from_utf8(BUILD_ORDER_REQUEST.to_vec())
+        .expect("fixture should be utf-8")
+        .replace("\"action\":\"open\"", &format!("\"action\":\"{action}\""))
+        .replace("\"reduce_only\":false", "\"reduce_only\":true")
+        .replace(
+            ",\"builder_authority\":\"Vote111111111111111111111111111111111111111\"",
+            "",
+        )
 }
 
 #[test]
@@ -99,7 +110,7 @@ fn build_order_returns_a_deterministic_cross_margin_message() {
     assert_eq!(response["result"]["trader_bump"], 255);
     assert_eq!(
         response["result"]["message_sha256"],
-        "b69de19e308fd670468416e2c26ebfb8a640923cd171273be05c7af371fd38e8"
+        "0a009f7f2a2d4be1984d44a9574b81182bf73874313f3f685873eeb64e0ca7dc"
     );
     assert!(
         response["result"]["message_base64"]
@@ -122,6 +133,31 @@ fn build_order_returns_a_deterministic_cross_margin_message() {
         ])
     );
     assert_eq!(response["result"]["manifest"]["intent_action"], "open");
+    assert_eq!(response["result"]["manifest"]["routing"], "flight");
+    assert_eq!(
+        response["result"]["manifest"]["flight"]["builder_authority"],
+        "Vote111111111111111111111111111111111111111"
+    );
+    assert_eq!(
+        response["result"]["manifest"]["flight"]["flight_program_id"],
+        "F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"
+    );
+    assert_eq!(
+        response["result"]["manifest"]["flight"]["builder_pda_index"],
+        0
+    );
+    assert_eq!(
+        response["result"]["manifest"]["flight"]["builder_subaccount_index"],
+        0
+    );
+    assert_eq!(
+        response["result"]["manifest"]["flight"]["expected_registered_fee_bps"],
+        2
+    );
+    assert_eq!(
+        response["result"]["manifest"]["flight"]["uses_fee_override"],
+        false
+    );
     assert_eq!(response["result"]["manifest"]["requested_symbol"], "SOL");
     assert_eq!(
         response["result"]["manifest"]["orderbook"],
@@ -133,6 +169,69 @@ fn build_order_returns_a_deterministic_cross_margin_message() {
     assert_eq!(
         response["result"]["manifest"]["phoenix_program_id"],
         "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih"
+    );
+    assert_eq!(
+        response["result"]["manifest"]["instructions"][0]["program_id"],
+        "F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"
+    );
+}
+
+#[test]
+fn unwind_order_bypasses_flight() {
+    let request = safety_order_request("unwind");
+    let output = run_helper(request.as_bytes());
+
+    assert!(output.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("response should be json");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["result"]["manifest"]["intent_action"], "unwind");
+    assert_eq!(response["result"]["manifest"]["routing"], "native");
+    assert!(response["result"]["manifest"]["flight"].is_null());
+    assert_eq!(
+        response["result"]["manifest"]["instructions"][0]["program_id"],
+        "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih"
+    );
+}
+
+#[test]
+fn emergency_close_bypasses_flight() {
+    let request = safety_order_request("emergency_close");
+    let output = run_helper(request.as_bytes());
+
+    assert!(output.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("response should be json");
+    assert_eq!(response["ok"], true);
+    assert_eq!(
+        response["result"]["manifest"]["intent_action"],
+        "emergency_close"
+    );
+    assert_eq!(response["result"]["manifest"]["routing"], "native");
+    assert!(response["result"]["manifest"]["flight"].is_null());
+    assert_eq!(
+        response["result"]["manifest"]["instructions"][0]["program_id"],
+        "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih"
+    );
+}
+
+#[test]
+fn normal_close_uses_flight() {
+    let request = String::from_utf8(BUILD_ORDER_REQUEST.to_vec())
+        .expect("fixture should be utf-8")
+        .replace("\"action\":\"open\"", "\"action\":\"close\"")
+        .replace("\"reduce_only\":false", "\"reduce_only\":true");
+    let output = run_helper(request.as_bytes());
+
+    assert!(output.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("response should be json");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["result"]["manifest"]["intent_action"], "close");
+    assert_eq!(response["result"]["manifest"]["routing"], "flight");
+    assert_eq!(
+        response["result"]["manifest"]["instructions"][0]["program_id"],
+        "F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"
     );
 }
 
@@ -151,6 +250,27 @@ fn build_order_rejects_open_reduce_only_intent() {
     assert_eq!(
         response["error"]["message"],
         "open must not be reduce-only; safety actions must be reduce-only"
+    );
+}
+
+#[test]
+fn build_order_rejects_owner_as_position_authority() {
+    let request = String::from_utf8(BUILD_ORDER_REQUEST.to_vec())
+        .expect("fixture should be utf-8")
+        .replace(
+            "\"owner_authority\":\"11111111111111111111111111111111\"",
+            "\"owner_authority\":\"So11111111111111111111111111111111111111112\"",
+        );
+    let output = run_helper(request.as_bytes());
+
+    assert!(output.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("response should be json");
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "invalid_order_request");
+    assert_eq!(
+        response["error"]["message"],
+        "position_authority must differ from owner_authority"
     );
 }
 
