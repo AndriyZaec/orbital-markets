@@ -38,14 +38,29 @@ type LiveMarketStats struct {
 	Generation        uint64
 }
 
+// LiveBook is the latest executable-band Phoenix best bid and offer.
+type LiveBook struct {
+	Symbol     string
+	BidPrice   float64
+	BidSizeUSD float64
+	AskPrice   float64
+	AskSizeUSD float64
+	ReceivedAt time.Time
+	Generation uint64
+}
+
 // MarketStreamSnapshot is an immutable copy of Phoenix public market state.
 type MarketStreamSnapshot struct {
-	Metadata     ExchangeMetadata
-	Stats        map[string]LiveMarketStats
-	Connected    bool
-	Synchronized bool
-	Generation   uint64
-	Sequence     uint64
+	Metadata           ExchangeMetadata
+	Stats              map[string]LiveMarketStats
+	Books              map[string]LiveBook
+	Connected          bool
+	Synchronized       bool
+	Generation         uint64
+	Sequence           uint64
+	MetadataGeneration uint64
+	MetadataReceivedAt time.Time
+	LastReceivedAt     time.Time
 }
 
 // MarketStream maintains sequence-consistent Phoenix metadata and market stats.
@@ -61,10 +76,15 @@ type MarketStream struct {
 	accounts             ExchangeAccounts
 	markets              map[string]MarketMetadata
 	stats                map[string]LiveMarketStats
+	books                map[string]LiveBook
+	updates              chan struct{}
 	connected            bool
 	synchronized         bool
 	generation           uint64
 	sequence             uint64
+	metadataGeneration   uint64
+	metadataReceivedAt   time.Time
+	lastReceivedAt       time.Time
 	haveExchangeSnapshot bool
 }
 
@@ -123,6 +143,18 @@ type marketStatsV2Wire struct {
 	CurrentFundingRate float64 `json:"currentFundingRate"`
 }
 
+type orderbookEnvelope struct {
+	Channel             string        `json:"channel"`
+	Symbol              string        `json:"symbol"`
+	Orderbook           orderbookWire `json:"orderbook"`
+	BypassExecutionBand bool          `json:"bypassExecutionBand"`
+}
+
+type orderbookWire struct {
+	Bids [][]float64 `json:"bids"`
+	Asks [][]float64 `json:"asks"`
+}
+
 func NewMarketStream(client *Client, logger *slog.Logger) *MarketStream {
 	if logger == nil {
 		logger = slog.Default()
@@ -136,8 +168,13 @@ func NewMarketStream(client *Client, logger *slog.Logger) *MarketStream {
 		reconnectWait: websocketReconnectWait,
 		markets:       make(map[string]MarketMetadata),
 		stats:         make(map[string]LiveMarketStats),
+		books:         make(map[string]LiveBook),
+		updates:       make(chan struct{}, 1),
 	}
 }
+
+// Updates signals lifecycle changes that can affect scanner publication.
+func (s *MarketStream) Updates() <-chan struct{} { return s.updates }
 
 // Run reconnects the public stream until the context is cancelled.
 func (s *MarketStream) Run(ctx context.Context) error {
@@ -175,13 +212,19 @@ func (s *MarketStream) Snapshot() MarketStreamSnapshot {
 	for symbol, state := range s.stats {
 		stats[symbol] = state
 	}
+	books := make(map[string]LiveBook, len(s.books))
+	for symbol, state := range s.books {
+		books[symbol] = state
+	}
 	return MarketStreamSnapshot{
 		Metadata: ExchangeMetadata{
 			Accounts: cloneExchangeAccounts(s.accounts),
 			Markets:  markets,
 		},
-		Stats: stats, Connected: s.connected, Synchronized: s.synchronized,
+		Stats: stats, Books: books, Connected: s.connected, Synchronized: s.synchronized,
 		Generation: s.generation, Sequence: s.sequence,
+		MetadataGeneration: s.metadataGeneration, MetadataReceivedAt: s.metadataReceivedAt,
+		LastReceivedAt: s.lastReceivedAt,
 	}
 }
 
@@ -225,6 +268,7 @@ func (s *MarketStream) connectAndListen(ctx context.Context) error {
 	}
 	generation := s.markConnected()
 	defer s.markDisconnected(generation)
+	orderbooks := make(map[string]bool)
 
 	for {
 		_, raw, err := connection.ReadMessage()
@@ -235,6 +279,9 @@ func (s *MarketStream) connectAndListen(ctx context.Context) error {
 			return fmt.Errorf("refresh Phoenix market websocket read deadline: %w", err)
 		}
 		if err := s.applyMessage(generation, raw); err != nil {
+			return err
+		}
+		if err := s.reconcileOrderbookSubscriptions(connection, orderbooks); err != nil {
 			return err
 		}
 	}
@@ -258,6 +305,12 @@ func (s *MarketStream) applyMessage(generation uint64, raw []byte) error {
 			return fmt.Errorf("decode Phoenix market stats: %w", err)
 		}
 		return s.applyMarketStats(generation, message)
+	case envelope.Channel == "orderbook":
+		var message orderbookEnvelope
+		if err := json.Unmarshal(raw, &message); err != nil {
+			return fmt.Errorf("decode Phoenix orderbook: %w", err)
+		}
+		return s.applyOrderbook(generation, message)
 	case envelope.Channel == "error":
 		return fmt.Errorf("Phoenix websocket server error %v: %s", envelope.Code, envelope.Error)
 	case envelope.Type == "subscriptionError":
@@ -265,7 +318,7 @@ func (s *MarketStream) applyMessage(generation uint64, raw []byte) error {
 	case envelope.Type == "subscriptionConfirmed":
 		return nil
 	case envelope.Channel == "subscriptionStatus":
-		if envelope.Status != "subscribed" {
+		if envelope.Status != "subscribed" && envelope.Status != "unsubscribed" {
 			return fmt.Errorf("Phoenix websocket subscription status %q", envelope.Status)
 		}
 		return nil
@@ -297,9 +350,9 @@ func (s *MarketStream) applyExchangeMessage(generation uint64, message exchangeE
 			return errors.New("Phoenix exchange sent a second snapshot in one connection generation")
 		}
 		s.accounts = metadata.Accounts
-		s.markets = marketsBySymbol(metadata.Markets)
-		s.stats = make(map[string]LiveMarketStats)
+		s.replaceMarketsLocked(marketsBySymbol(metadata.Markets))
 		s.sequence = sequence
+		s.lastReceivedAt = s.now().UTC()
 		s.haveExchangeSnapshot = true
 		s.synchronized = false
 		return nil
@@ -312,17 +365,19 @@ func (s *MarketStream) applyExchangeMessage(generation uint64, message exchangeE
 
 func (s *MarketStream) applyExchangeDelta(generation, sequence uint64, rawOps []json.RawMessage) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.generation != generation || !s.connected {
+		s.mu.Unlock()
 		return nil
 	}
 	if !s.haveExchangeSnapshot || s.sequence == math.MaxUint64 || sequence != s.sequence+1 {
+		s.mu.Unlock()
 		return fmt.Errorf("%w: received %d after %d", errExchangeSequenceGap, sequence, s.sequence)
 	}
 	accounts := cloneExchangeAccounts(s.accounts)
 	markets := cloneMarkets(s.markets)
 	for _, raw := range rawOps {
 		if err := applyExchangeOp(&accounts, markets, raw); err != nil {
+			s.mu.Unlock()
 			return err
 		}
 	}
@@ -333,12 +388,22 @@ func (s *MarketStream) applyExchangeDelta(generation, sequence uint64, rawOps []
 		market, ok := markets[symbol]
 		if !ok {
 			delete(s.stats, symbol)
+			delete(s.books, symbol)
 			continue
 		}
 		stats := s.stats[symbol]
 		stats.HourlyFundingRate = stats.NativeFundingRate / market.FundingInterval.Hours()
 		s.stats[symbol] = stats
 	}
+	for symbol := range s.books {
+		market, ok := markets[symbol]
+		if !ok || market.Status != "active" {
+			delete(s.books, symbol)
+		}
+	}
+	s.lastReceivedAt = s.now().UTC()
+	s.mu.Unlock()
+	s.notify()
 	return nil
 }
 
@@ -354,6 +419,7 @@ func (s *MarketStream) applyMarketStats(generation uint64, message marketStatsV2
 	}
 	stats := cloneStats(s.stats)
 	applied := 0
+	becamePublishable := false
 	for _, update := range message.Stats {
 		market, known := s.markets[update.Symbol]
 		if !known {
@@ -379,11 +445,113 @@ func (s *MarketStream) applyMarketStats(generation uint64, message marketStatsV2
 			NativeFundingRate: update.CurrentFundingRate, OpenInterest: update.OpenInterest,
 			SourceTime: sourceTime, ReceivedAt: receivedAt, Generation: generation,
 		}
+		if !exists {
+			_, hasBook := s.books[update.Symbol]
+			becamePublishable = becamePublishable || hasBook
+		}
 		applied++
 	}
 	if applied > 0 && s.haveExchangeSnapshot {
+		becameSynchronized := !s.synchronized
 		s.stats = stats
 		s.synchronized = true
+		s.lastReceivedAt = receivedAt
+		if becameSynchronized || becamePublishable {
+			s.notify()
+		}
+	}
+	return nil
+}
+
+func (s *MarketStream) applyOrderbook(generation uint64, message orderbookEnvelope) error {
+	if message.BypassExecutionBand {
+		return fmt.Errorf("Phoenix orderbook for %q bypasses the execution band", message.Symbol)
+	}
+	if len(message.Orderbook.Bids) == 0 || len(message.Orderbook.Asks) == 0 {
+		s.mu.Lock()
+		changed := false
+		if s.generation == generation && s.connected {
+			_, changed = s.books[message.Symbol]
+			delete(s.books, message.Symbol)
+			s.lastReceivedAt = s.now().UTC()
+		}
+		s.mu.Unlock()
+		if changed {
+			s.notify()
+		}
+		return nil
+	}
+	bid, ask := message.Orderbook.Bids[0], message.Orderbook.Asks[0]
+	if len(bid) != 2 || len(ask) != 2 || !positiveFinite(bid[0]) || !positiveFinite(bid[1]) ||
+		!positiveFinite(ask[0]) || !positiveFinite(ask[1]) || ask[0] < bid[0] {
+		return fmt.Errorf("invalid Phoenix orderbook BBO for %q", message.Symbol)
+	}
+	bidSizeUSD, askSizeUSD := bid[0]*bid[1], ask[0]*ask[1]
+	if !positiveFinite(bidSizeUSD) || !positiveFinite(askSizeUSD) {
+		return fmt.Errorf("invalid Phoenix orderbook notional for %q", message.Symbol)
+	}
+	receivedAt := s.now().UTC()
+	s.mu.Lock()
+	if s.generation != generation || !s.connected {
+		s.mu.Unlock()
+		return nil
+	}
+	market, known := s.markets[message.Symbol]
+	if !known || market.Status != "active" {
+		s.mu.Unlock()
+		return nil
+	}
+	_, existed := s.books[message.Symbol]
+	s.books[message.Symbol] = LiveBook{
+		Symbol: message.Symbol, BidPrice: bid[0], BidSizeUSD: bidSizeUSD,
+		AskPrice: ask[0], AskSizeUSD: askSizeUSD, ReceivedAt: receivedAt, Generation: generation,
+	}
+	s.lastReceivedAt = receivedAt
+	synchronized := s.synchronized
+	s.mu.Unlock()
+	if !existed && synchronized {
+		s.notify()
+	}
+	return nil
+}
+
+func (s *MarketStream) reconcileOrderbookSubscriptions(connection *websocket.Conn, subscribed map[string]bool) error {
+	s.mu.RLock()
+	active := make(map[string]bool)
+	if s.haveExchangeSnapshot {
+		for symbol, market := range s.markets {
+			if market.Status == "active" {
+				active[symbol] = true
+			}
+		}
+	}
+	s.mu.RUnlock()
+	for symbol := range subscribed {
+		if active[symbol] {
+			continue
+		}
+		if err := writeOrderbookSubscription(connection, "unsubscribe", symbol); err != nil {
+			return err
+		}
+		delete(subscribed, symbol)
+	}
+	for symbol := range active {
+		if subscribed[symbol] {
+			continue
+		}
+		if err := writeOrderbookSubscription(connection, "subscribe", symbol); err != nil {
+			return err
+		}
+		subscribed[symbol] = true
+	}
+	return nil
+}
+
+func writeOrderbookSubscription(connection *websocket.Conn, action, symbol string) error {
+	if err := connection.WriteJSON(map[string]any{
+		"type": action, "subscription": map[string]any{"channel": "orderbook", "symbol": symbol},
+	}); err != nil {
+		return fmt.Errorf("%s Phoenix orderbook %q: %w", action, symbol, err)
 	}
 	return nil
 }
@@ -392,7 +560,28 @@ func (s *MarketStream) replaceMetadata(metadata ExchangeMetadata) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.accounts = cloneExchangeAccounts(metadata.Accounts)
-	s.markets = marketsBySymbol(metadata.Markets)
+	s.replaceMarketsLocked(marketsBySymbol(metadata.Markets))
+	s.metadataGeneration++
+	s.metadataReceivedAt = s.now().UTC()
+}
+
+func (s *MarketStream) replaceMarketsLocked(markets map[string]MarketMetadata) {
+	s.markets = markets
+	for symbol, stats := range s.stats {
+		market, ok := markets[symbol]
+		if !ok {
+			delete(s.stats, symbol)
+			continue
+		}
+		stats.HourlyFundingRate = stats.NativeFundingRate / market.FundingInterval.Hours()
+		s.stats[symbol] = stats
+	}
+	for symbol := range s.books {
+		market, ok := markets[symbol]
+		if !ok || market.Status != "active" {
+			delete(s.books, symbol)
+		}
+	}
 }
 
 func (s *MarketStream) markConnected() uint64 {
@@ -403,16 +592,28 @@ func (s *MarketStream) markConnected() uint64 {
 	s.synchronized = false
 	s.sequence = 0
 	s.haveExchangeSnapshot = false
-	s.stats = make(map[string]LiveMarketStats)
+	s.lastReceivedAt = time.Time{}
 	return s.generation
 }
 
 func (s *MarketStream) markDisconnected(generation uint64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	changed := false
 	if s.generation == generation {
+		changed = s.connected || s.synchronized
 		s.connected = false
 		s.synchronized = false
+	}
+	s.mu.Unlock()
+	if changed {
+		s.notify()
+	}
+}
+
+func (s *MarketStream) notify() {
+	select {
+	case s.updates <- struct{}{}:
+	default:
 	}
 }
 

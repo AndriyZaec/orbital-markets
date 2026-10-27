@@ -30,11 +30,15 @@ func TestMarketStreamAppliesExchangeSnapshotAndMarketStats(t *testing.T) {
 			}
 			defer connection.Close()
 			assertSubscriptions(t, connection)
-			messages := []string{
-				`{"channel":"exchange","messageType":"snapshot","version":1,"sequenceNumber":"41","exchange":{"perpAssetMap":"ws-map","globalTraderIndex":["ws-index"],"activeTraderBuffer":["ws-buffer"]},"markets":[{"symbol":"SOL","marketStatus":"active","marketPubkey":"ws-market","splinePubkey":"ws-spline","tickSize":100,"baseLotsDecimals":2,"fundingConfig":{"fundingIntervalSeconds":7200},"leverageTiers":[{"maxLeverage":20}]}]}`,
-				`{"channel":"marketStatsV2","stats":[{"symbol":"SOL","timestamp":1793020205,"openInterest":65520.02,"markPrice":101.33,"midPrice":101.345,"oraclePrice":101.31,"currentFundingRate":0.0002}]}`,
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(`{"channel":"exchange","messageType":"snapshot","version":1,"sequenceNumber":"41","exchange":{"perpAssetMap":"ws-map","globalTraderIndex":["ws-index"],"activeTraderBuffer":["ws-buffer"]},"markets":[{"symbol":"SOL","marketStatus":"active","marketPubkey":"ws-market","splinePubkey":"ws-spline","tickSize":100,"baseLotsDecimals":2,"fundingConfig":{"fundingIntervalSeconds":7200},"leverageTiers":[{"maxLeverage":20}]}]}`)); err != nil {
+				t.Errorf("write exchange snapshot: %v", err)
+				return
 			}
-			for _, message := range messages {
+			assertOrderbookSubscription(t, connection, "subscribe", "SOL")
+			for _, message := range []string{
+				`{"channel":"marketStatsV2","stats":[{"symbol":"SOL","timestamp":1793020205,"openInterest":65520.02,"markPrice":101.33,"midPrice":101.345,"oraclePrice":101.31,"currentFundingRate":0.0002}]}`,
+				`{"channel":"orderbook","symbol":"SOL","orderbook":{"bids":[[100,2]],"asks":[[102,3]],"mid":101}}`,
+			} {
 				if err := connection.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
 					t.Errorf("write websocket message: %v", err)
 					return
@@ -57,7 +61,9 @@ func TestMarketStreamAppliesExchangeSnapshotAndMarketStats(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- stream.Run(ctx) }()
-	waitForSnapshot(t, stream, func(snapshot MarketStreamSnapshot) bool { return snapshot.Synchronized })
+	waitForSnapshot(t, stream, func(snapshot MarketStreamSnapshot) bool {
+		return snapshot.Synchronized && snapshot.Books["SOL"].BidPrice > 0
+	})
 
 	snapshot := stream.Snapshot()
 	if snapshot.Sequence != 41 || snapshot.Generation != 1 || !snapshot.Connected {
@@ -76,6 +82,10 @@ func TestMarketStreamAppliesExchangeSnapshotAndMarketStats(t *testing.T) {
 	}
 	if stats.SourceTime != time.Unix(1793020205, 0).UTC() || stats.ReceivedAt != time.Unix(1793020210, 0).UTC() {
 		t.Fatalf("unexpected market stat times: %+v", stats)
+	}
+	book := snapshot.Books["SOL"]
+	if book.BidPrice != 100 || book.BidSizeUSD != 200 || book.AskPrice != 102 || book.AskSizeUSD != 306 {
+		t.Fatalf("unexpected BBO: %+v", book)
 	}
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
@@ -148,6 +158,46 @@ func TestMarketStreamRejectsStatsBatchAtomically(t *testing.T) {
 	}
 	if got := stream.Snapshot().Stats["SOL"].MarkPrice; got != 100 {
 		t.Fatalf("rejected batch changed SOL mark to %v", got)
+	}
+}
+
+func TestMarketStreamClearsBBOWhenBookSideBecomesEmpty(t *testing.T) {
+	stream := NewMarketStream(nil, discardLogger())
+	generation := stream.markConnected()
+	stream.mu.Lock()
+	stream.markets["SOL"] = MarketMetadata{Symbol: "SOL", Status: "active"}
+	stream.books["SOL"] = LiveBook{Symbol: "SOL", BidPrice: 100, AskPrice: 101}
+	stream.mu.Unlock()
+
+	if err := stream.applyOrderbook(generation, orderbookEnvelope{
+		Symbol: "SOL", Orderbook: orderbookWire{Asks: [][]float64{{101, 2}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stream.Snapshot().Books["SOL"]; ok {
+		t.Fatal("empty bid side retained stale BBO")
+	}
+}
+
+func TestMarketStreamNotifiesWhenDynamicMarketBecomesPublishable(t *testing.T) {
+	stream := NewMarketStream(nil, discardLogger())
+	generation := stream.markConnected()
+	stream.mu.Lock()
+	stream.haveExchangeSnapshot = true
+	stream.synchronized = true
+	stream.markets["SOL"] = MarketMetadata{Symbol: "SOL", Status: "active", FundingInterval: time.Hour}
+	stream.books["SOL"] = LiveBook{Symbol: "SOL", BidPrice: 100, AskPrice: 101}
+	stream.mu.Unlock()
+
+	if err := stream.applyMarketStats(generation, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{
+		Symbol: "SOL", Timestamp: 10, OpenInterest: 1, MarkPrice: 100, OraclePrice: 100,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stream.Updates():
+	default:
+		t.Fatal("publishable market did not notify scanner")
 	}
 }
 
@@ -236,6 +286,23 @@ func assertSubscriptions(t *testing.T, connection *websocket.Conn) {
 	}
 	if _, ok := channels["marketStatsV2"]; !ok {
 		t.Fatal("missing marketStatsV2 subscription")
+	}
+}
+
+func assertOrderbookSubscription(t *testing.T, connection *websocket.Conn, action, symbol string) {
+	t.Helper()
+	var request struct {
+		Type         string `json:"type"`
+		Subscription struct {
+			Channel string `json:"channel"`
+			Symbol  string `json:"symbol"`
+		} `json:"subscription"`
+	}
+	if err := connection.ReadJSON(&request); err != nil {
+		t.Fatalf("read orderbook subscription: %v", err)
+	}
+	if request.Type != action || request.Subscription.Channel != "orderbook" || request.Subscription.Symbol != symbol {
+		t.Fatalf("unexpected orderbook subscription: %+v", request)
 	}
 }
 

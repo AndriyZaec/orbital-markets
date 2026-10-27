@@ -69,6 +69,10 @@ function venueLabel(venue: string): string {
   return venueMetadata(venue).label
 }
 
+function isLiveVenue(venue: string): venue is VenueId {
+  return venue === 'pacifica' || venue === 'hyperliquid' || venue === 'aster'
+}
+
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
   const [remaining, setRemaining] = useState(intervalSec)
   useEffect(() => {
@@ -115,7 +119,9 @@ export function OpportunityPanel({
   const leverageIssue = leverageCapabilityMessage(opp.leverage_capabilities)
   const initialLeverage = opportunityMaxLev ?? 1
   const venuePair = `${longVenue}_${shortVenue}`
-  const liveVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()] as [VenueId, VenueId]
+  const opportunityVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()]
+  const liveExecutionSupported = opportunityVenues.every(isLiveVenue)
+  const liveVenues = opportunityVenues.filter(isLiveVenue)
 
   const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: initialLeverage })
   const leverage = leverageSelection.opportunityId === opp.id
@@ -150,7 +156,7 @@ export function OpportunityPanel({
     aster: asterReadiness,
   }
   const selectedReadiness = liveVenues.map((venue) => readinessByVenue[venue])
-  const planAccounts = mode === 'live'
+  const planAccounts = mode === 'live' && liveExecutionSupported
     ? Object.fromEntries(selectedReadiness.flatMap((readiness) => readiness.address
       ? [[readiness.venue, readiness.address]]
       : []))
@@ -162,7 +168,7 @@ export function OpportunityPanel({
       ? `${venue} market feed is unreachable.`
       : `${venue} market data is temporarily unavailable.`
   }).join(' ') || 'Market data is temporarily unavailable.'
-  const canRequestPlan = marketAvailable && (mode !== 'live' ||
+  const canRequestPlan = marketAvailable && (mode !== 'live' || liveExecutionSupported) && (mode !== 'live' ||
     !liveVenues.includes('aster') ||
     Boolean(asterReadiness.address))
   const { plan, loading: planLoading, error: planError, maxLeverage, leverageCapabilityBlocked, refresh: refreshPlan } = usePlan(
@@ -182,8 +188,8 @@ export function OpportunityPanel({
   }, [maxLeverage, opp.id, opportunityMaxLev])
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
-  const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
-  const noSelectedWallets = selectedReadiness.every((readiness) => readiness.status === 'disconnected')
+  const isFullyReady = liveExecutionSupported && selectedReadiness.every((readiness) => readiness.status === 'ready')
+  const noSelectedWallets = liveExecutionSupported && selectedReadiness.every((readiness) => readiness.status === 'disconnected')
   const balanceByVenue = (venue: string): number | null => {
     const v = venue.toLowerCase()
     if (v === 'pacifica') return pacReadiness.available
@@ -562,7 +568,7 @@ export function OpportunityPanel({
               // route the click to open Connect Accounts. Plan/notional
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
-                !marketAvailable || (isFullyReady
+                !marketAvailable || !liveExecutionSupported || (isFullyReady
                   ? !plan?.executable || planUpdating || !notionalValid || hasMarginShortfall || !risksAcknowledged
                   : false)
               }
@@ -570,6 +576,8 @@ export function OpportunityPanel({
             >
               {!marketAvailable
                 ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}`
+                : !liveExecutionSupported
+                ? 'Live Execution Coming Soon'
                 : isFullyReady
                 ? leverageCapabilityBlocked ? 'Execution Unavailable' : hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
                 : noSelectedWallets
