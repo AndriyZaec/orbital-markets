@@ -77,6 +77,10 @@ func (s *Service) fetchBook(ctx context.Context, market Market) (book, error) {
 		path = "/api/v1/book?" + url.Values{"symbol": {market.Key}, "agg_level": {"1"}}.Encode()
 	case "aster":
 		path = "/fapi/v3/depth?" + url.Values{"symbol": {market.Key}, "limit": {"50"}}.Encode()
+	case "phoenix":
+		path = "/v1/view/orderbook/" + url.PathEscape(market.Key) + "?" + url.Values{
+			"include_splines": {"true"}, "bypass_execution_band": {"false"},
+		}.Encode()
 	default:
 		return book{}, ErrUnavailable
 	}
@@ -88,6 +92,7 @@ func (s *Service) fetchBook(ctx context.Context, market Market) (book, error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	requestedAt := time.Now()
 	response, err := s.client.Do(req)
 	if err != nil {
 		return book{}, err
@@ -101,7 +106,49 @@ func (s *Service) fetchBook(ctx context.Context, market Market) (book, error) {
 	if err != nil {
 		return book{}, err
 	}
+	if market.Venue == "phoenix" {
+		return decodePhoenixBook(market.Key, raw, requestedAt)
+	}
 	return decodeRESTBook(market.Venue, market.Key, raw)
+}
+
+// Phoenix exposes a slot, not a wall-clock source timestamp. Bound freshness
+// from the request start so network latency cannot extend the observation's
+// lifetime. This is observation freshness, not proof of indexer/chain freshness.
+func decodePhoenixBook(key string, raw []byte, requestedAt time.Time) (book, error) {
+	var data struct {
+		Slot   *uint64     `json:"slot"`
+		Symbol string      `json:"symbol"`
+		Bids   [][]float64 `json:"bids"`
+		Asks   [][]float64 `json:"asks"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return book{}, err
+	}
+	if data.Symbol != key || data.Slot == nil || *data.Slot == 0 {
+		return book{}, ErrUnavailable
+	}
+	result := book{at: requestedAt}
+	for i, rows := range [][][]float64{data.Bids, data.Asks} {
+		// The endpoint has no depth limit. Keep only the nearest 50 levels,
+		// matching other venues; never extrapolate past this visible prefix.
+		var parsed []level
+		for _, row := range rows[:min(len(rows), 50)] {
+			if len(row) != 2 || !finitePositive(row[0]) || !finitePositive(row[1]) {
+				return book{}, ErrUnavailable
+			}
+			parsed = append(parsed, level{row[0], row[1]})
+		}
+		if i == 0 {
+			result.bids = parsed
+		} else {
+			result.asks = parsed
+		}
+	}
+	if !validBook(result, time.Now()) {
+		return book{}, ErrUnavailable
+	}
+	return result, nil
 }
 
 func decimalLevel(price, amount string) (level, error) {

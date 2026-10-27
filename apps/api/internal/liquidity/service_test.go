@@ -23,6 +23,8 @@ func serveTestBook(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `{"coin":%q,"time":%d,"levels":[[{"px":"99","sz":"5"}],[{"px":"100","sz":"5"}]]}`, request.Coin, now)
 	case "/api/v1/book":
 		_, _ = fmt.Fprintf(w, `{"success":true,"data":{"s":%q,"t":%d,"l":[[{"p":"99","a":"5"}],[{"p":"100","a":"5"}]]}}`, r.URL.Query().Get("symbol"), now)
+	case "/v1/view/orderbook/BTC":
+		_, _ = fmt.Fprint(w, `{"slot":462087144,"symbol":"BTC","bids":[[99,5]],"asks":[[100,5]]}`)
 	default:
 		_, _ = fmt.Fprintf(w, `{"E":%d,"bids":[["99","5"]],"asks":[["100","5"]]}`, now)
 	}
@@ -234,7 +236,7 @@ func TestPublicBooks(t *testing.T) {
 		t.Skip("set ORBITAL_L2_SMOKE=1 for public REST smoke check")
 	}
 	s := New(context.Background(), slog.Default())
-	for _, short := range []Market{{"hyperliquid", "BTC"}, {"pacifica", "BTC"}} {
+	for _, short := range []Market{{"hyperliquid", "BTC"}, {"pacifica", "BTC"}, {"phoenix", "BTC"}} {
 		result, err := s.Quote(context.Background(), Pair{Market{"aster", "BTCUSDT"}, short}, OrderSize{BaseAmount: 0.0001}, true)
 		if err != nil {
 			t.Fatal(err)

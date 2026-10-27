@@ -44,7 +44,7 @@ func New(ctx context.Context, logger *slog.Logger) *Service {
 	transport.IdleConnTimeout = 30 * time.Second
 	s := &Service{
 		ctx: ctx, logger: logger, client: &http.Client{Transport: transport, Timeout: 2 * time.Second},
-		urls:  map[string]string{"aster": "https://fapi.asterdex.com", "hyperliquid": "https://api.hyperliquid.xyz", "pacifica": "https://api.pacifica.fi"},
+		urls:  map[string]string{"aster": "https://fapi.asterdex.com", "hyperliquid": "https://api.hyperliquid.xyz", "pacifica": "https://api.pacifica.fi", "phoenix": "https://perp-api.phoenix.trade"},
 		books: make(map[Market]*flight[book]), quotas: make(map[string]*quota),
 	}
 	for name := range s.urls {
@@ -171,7 +171,9 @@ func (s *Service) allow(name string, now time.Time) bool {
 		q.requests = q.requests[1:]
 	}
 	limit := 100 // HL: 200 weight/min; Aster depth50: 200 weight/min
-	if name == "pacifica" {
+	// Phoenix publishes no numeric public quota; keep optional depth reads at
+	// the same conservative local budget as Pacifica.
+	if name == "pacifica" || name == "phoenix" {
 		limit = 30
 	}
 	if len(q.requests) >= limit {
