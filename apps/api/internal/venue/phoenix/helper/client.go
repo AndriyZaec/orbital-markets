@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -56,6 +57,20 @@ func Start(ctx context.Context, path string, requestTimeout time.Duration) (*Cli
 func startClient(ctx context.Context, cmd *exec.Cmd, requestTimeout time.Duration) (*Client, error) {
 	if requestTimeout <= 0 {
 		return nil, errors.New("phoenix helper request timeout must be positive")
+	}
+	environment := cmd.Env
+	if environment == nil {
+		environment = os.Environ()
+	}
+	cmd.Env = make([]string, 0, len(environment))
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "PHOENIX_RELAYER_PRIVATE_KEY", "HELIUS_RPC_URL", "HELIUS_WS_URL":
+			// Only Go owns relayer/RPC credentials; the helper needs none of them.
+		default:
+			cmd.Env = append(cmd.Env, entry)
+		}
 	}
 
 	stdin, err := cmd.StdinPipe()

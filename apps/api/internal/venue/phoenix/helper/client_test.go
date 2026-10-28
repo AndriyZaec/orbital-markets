@@ -32,6 +32,17 @@ func TestStartPerformsCompatibleHealthHandshake(t *testing.T) {
 	}
 }
 
+func TestHelperDoesNotInheritGoCredentials(t *testing.T) {
+	for _, name := range []string{"PHOENIX_RELAYER_PRIVATE_KEY", "HELIUS_RPC_URL", "HELIUS_WS_URL"} {
+		t.Setenv(name, "test-secret-must-not-reach-helper")
+	}
+	client, err := startClient(context.Background(), fakeHelperCommand(t, "no_go_credentials"), time.Second)
+	if err != nil {
+		t.Fatalf("helper credential isolation: %v", err)
+	}
+	t.Cleanup(client.Close)
+}
+
 func TestStartRejectsIncompatibleProtocol(t *testing.T) {
 	_, err := startClient(context.Background(), fakeHelperCommand(t, "wrong_protocol"), time.Second)
 	if err == nil {
@@ -182,6 +193,13 @@ func TestHelperProcess(t *testing.T) {
 	}
 
 	mode := os.Getenv("ORBITAL_FAKE_PHOENIX_HELPER_MODE")
+	if mode == "no_go_credentials" {
+		for _, name := range []string{"PHOENIX_RELAYER_PRIVATE_KEY", "HELIUS_RPC_URL", "HELIUS_WS_URL"} {
+			if _, present := os.LookupEnv(name); present {
+				os.Exit(6)
+			}
+		}
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var request struct {
