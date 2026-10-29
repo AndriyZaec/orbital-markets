@@ -104,7 +104,27 @@ func (s *Service) CoSign(ctx context.Context, built helper.BuildOrderResult, exp
 	if err != nil {
 		return nil, err
 	}
-	if built.LastValidBlockHeight == 0 {
+	return s.gateAndAssemble(ctx, message, agentSignature, built.LastValidBlockHeight, minSlot)
+}
+
+// CoSignDelegation uses the same network fee, balance and expiry gates as orders,
+// but requires the bound owner wallet's signature. It does not activate/revoke
+// a browser agent; that requires on-chain authority confirmation by the caller.
+func (s *Service) CoSignDelegation(ctx context.Context, built helper.BuildDelegationResult, expectedOwner, signature string, minSlot uint64) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	message, ownerSignature, err := s.signer.verifyDelegation(built, expectedOwner, signature)
+	if err != nil {
+		return nil, err
+	}
+	return s.gateAndAssemble(ctx, message, ownerSignature, built.LastValidBlockHeight, minSlot)
+}
+
+func (s *Service) gateAndAssemble(ctx context.Context, message, signature []byte, lastValidHeight, minSlot uint64) ([]byte, error) {
+	if lastValidHeight == 0 {
 		return nil, ErrInvalidMessage
 	}
 	checkHeight := func() error {
@@ -112,7 +132,7 @@ func (s *Service) CoSign(ctx context.Context, built helper.BuildOrderResult, exp
 		if err != nil {
 			return err
 		}
-		if height > built.LastValidBlockHeight {
+		if height > lastValidHeight {
 			return rpc.ErrExpired
 		}
 		return nil
@@ -143,5 +163,5 @@ func (s *Service) CoSign(ctx context.Context, built helper.BuildOrderResult, exp
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return s.signer.assemble(message, agentSignature), nil
+	return s.signer.assemble(message, signature), nil
 }

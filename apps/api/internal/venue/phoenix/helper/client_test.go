@@ -251,6 +251,18 @@ func TestHelperProcess(t *testing.T) {
 			})
 			continue
 		}
+		if request.Operation == "build_delegation" {
+			var delegation BuildDelegationRequest
+			if err := json.Unmarshal(request.Payload, &delegation); err != nil {
+				os.Exit(7)
+			}
+			result := fakeDelegationResult(delegation)
+			if mode == "delegation_wrong_owner" {
+				result.RequiredSigners[1].Role = "position_authority"
+			}
+			writeFakeResponse(map[string]any{"protocol_version": ProtocolVersion, "request_id": request.RequestID, "ok": true, "result": result})
+			continue
+		}
 
 		var order BuildOrderRequest
 		if err := json.Unmarshal(request.Payload, &order); err != nil {

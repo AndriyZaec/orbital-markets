@@ -24,7 +24,7 @@ var (
 	ErrInvalidKey       = errors.New("invalid Phoenix relayer private key: expected base58 Solana 64-byte keypair")
 	ErrInvalidMessage   = errors.New("invalid Phoenix helper message")
 	ErrSignerMismatch   = errors.New("Phoenix message signer set does not match relayer and expected agent")
-	ErrInvalidSignature = errors.New("invalid Phoenix agent signature")
+	ErrInvalidSignature = errors.New("invalid Phoenix signer signature")
 )
 
 type Signer struct {
@@ -67,15 +67,33 @@ func (s *Signer) CoSign(built helper.BuildOrderResult, expectedAgent, signature 
 }
 
 func (s *Signer) verify(built helper.BuildOrderResult, expectedAgent, signature string) ([]byte, []byte, error) {
-	if len(built.MessageBase64) > base64.StdEncoding.EncodedLen(maxMessageSize) {
+	return s.verifyMessage(built.MessageBase64, built.MessageSHA256, built.RecentBlockhash, built.RequiredSigners, expectedAgent, "position_authority", signature)
+}
+
+// CoSignDelegation verifies the bound owner's signature, not the existing or
+// new agent's. built is the original server-stored build_delegation result.
+func (s *Signer) CoSignDelegation(built helper.BuildDelegationResult, expectedOwner, signature string) ([]byte, error) {
+	message, ownerSignature, err := s.verifyDelegation(built, expectedOwner, signature)
+	if err != nil {
+		return nil, err
+	}
+	return s.assemble(message, ownerSignature), nil
+}
+
+func (s *Signer) verifyDelegation(built helper.BuildDelegationResult, expectedOwner, signature string) ([]byte, []byte, error) {
+	return s.verifyMessage(built.MessageBase64, built.MessageSHA256, built.RecentBlockhash, built.RequiredSigners, expectedOwner, "owner_authority", signature)
+}
+
+func (s *Signer) verifyMessage(messageBase64, messageSHA256, recentBlockhash string, requiredSigners []helper.RequiredSigner, expectedSigner, role, signature string) ([]byte, []byte, error) {
+	if len(messageBase64) > base64.StdEncoding.EncodedLen(maxMessageSize) {
 		return nil, nil, ErrInvalidMessage
 	}
-	message, err := base64.StdEncoding.DecodeString(built.MessageBase64)
+	message, err := base64.StdEncoding.DecodeString(messageBase64)
 	if err != nil || len(message) > maxMessageSize {
 		return nil, nil, ErrInvalidMessage
 	}
 	digest := sha256.Sum256(message)
-	expectedDigest, err := hex.DecodeString(built.MessageSHA256)
+	expectedDigest, err := hex.DecodeString(messageSHA256)
 	if err != nil || !bytes.Equal(expectedDigest, digest[:]) {
 		return nil, nil, ErrInvalidMessage
 	}
@@ -83,22 +101,22 @@ func (s *Signer) verify(built helper.BuildOrderResult, expectedAgent, signature 
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(expectedAgent) > 44 {
+	if len(expectedSigner) > 44 {
 		return nil, nil, ErrSignerMismatch
 	}
-	agent, err := base58.Decode(expectedAgent)
+	agent, err := base58.Decode(expectedSigner)
 	if err != nil || len(agent) != ed25519.PublicKeySize ||
 		!bytes.Equal(keys[:32], s.key[ed25519.SeedSize:]) ||
 		!bytes.Equal(keys[32:64], agent) || bytes.Equal(keys[:32], agent) ||
-		len(built.RequiredSigners) != 2 ||
-		built.RequiredSigners[0] != (helper.RequiredSigner{Index: 0, Pubkey: s.address, Role: "fee_payer"}) ||
-		built.RequiredSigners[1] != (helper.RequiredSigner{Index: 1, Pubkey: expectedAgent, Role: "position_authority"}) {
+		len(requiredSigners) != 2 ||
+		requiredSigners[0] != (helper.RequiredSigner{Index: 0, Pubkey: s.address, Role: "fee_payer"}) ||
+		requiredSigners[1] != (helper.RequiredSigner{Index: 1, Pubkey: expectedSigner, Role: role}) {
 		return nil, nil, ErrSignerMismatch
 	}
-	if len(built.RecentBlockhash) > 44 {
+	if len(recentBlockhash) > 44 {
 		return nil, nil, ErrInvalidMessage
 	}
-	expectedHash, err := base58.Decode(built.RecentBlockhash)
+	expectedHash, err := base58.Decode(recentBlockhash)
 	if err != nil || len(expectedHash) != 32 || !bytes.Equal(blockhash, expectedHash) {
 		return nil, nil, ErrInvalidMessage
 	}

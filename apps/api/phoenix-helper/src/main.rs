@@ -3,6 +3,8 @@ use std::io::{self, BufRead, BufWriter, Write};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod delegation;
+mod message;
 mod order;
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -189,6 +191,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ok: false,
                             error: ErrorDetails {
                                 code: "invalid_order_request",
+                                message,
+                            },
+                        },
+                    )?,
+                }
+            }
+            "build_delegation" => {
+                let result = request
+                    .payload
+                    .ok_or_else(|| "build_delegation requires payload".to_string())
+                    .and_then(|payload| {
+                        serde_json::from_value::<delegation::BuildDelegationRequest>(payload)
+                            .map_err(|e| format!("invalid build_delegation payload: {e}"))
+                    })
+                    .and_then(delegation::build_delegation);
+                match result {
+                    Ok(result) => write_json_line(
+                        &mut stdout,
+                        &SuccessResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: true,
+                            result,
+                        },
+                    )?,
+                    Err(message) => write_json_line(
+                        &mut stdout,
+                        &ErrorResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: false,
+                            error: ErrorDetails {
+                                code: "invalid_delegation_request",
                                 message,
                             },
                         },

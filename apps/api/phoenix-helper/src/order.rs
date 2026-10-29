@@ -15,6 +15,8 @@ use solana_hash::Hash;
 use solana_message::legacy::Message;
 use solana_pubkey::Pubkey;
 
+use crate::message::{AccountManifest, InstructionManifest, RequiredSigner, describe};
+
 const MAX_TRANSACTION_BYTES: usize = 1_232;
 const EXPECTED_FLIGHT_FEE_BPS: u64 = 2;
 
@@ -87,13 +89,6 @@ pub struct BuildOrderResult {
 }
 
 #[derive(Serialize)]
-struct RequiredSigner {
-    index: usize,
-    pubkey: String,
-    role: &'static str,
-}
-
-#[derive(Serialize)]
 struct OrderManifest {
     format: &'static str,
     phoenix_program_id: String,
@@ -134,22 +129,6 @@ struct FlightManifest {
     builder_subaccount_index: u8,
     expected_registered_fee_bps: u64,
     uses_fee_override: bool,
-}
-
-#[derive(Serialize)]
-struct AccountManifest {
-    index: usize,
-    pubkey: String,
-    signer: bool,
-    writable: bool,
-}
-
-#[derive(Serialize)]
-struct InstructionManifest {
-    program_id: String,
-    program_id_index: u8,
-    account_indexes: Vec<u8>,
-    data_base64: String,
 }
 
 pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, String> {
@@ -319,38 +298,7 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
         return Err("message requires an unexpected signer set".to_string());
     }
 
-    let account_keys = message
-        .account_keys
-        .iter()
-        .enumerate()
-        .map(|(index, pubkey)| {
-            let signer = index < required_signatures;
-            let writable = if signer {
-                index
-                    < required_signatures - usize::from(message.header.num_readonly_signed_accounts)
-            } else {
-                index
-                    < message.account_keys.len()
-                        - usize::from(message.header.num_readonly_unsigned_accounts)
-            };
-            AccountManifest {
-                index,
-                pubkey: pubkey.to_string(),
-                signer,
-                writable,
-            }
-        })
-        .collect();
-    let instructions = message
-        .instructions
-        .iter()
-        .map(|instruction| InstructionManifest {
-            program_id: message.account_keys[usize::from(instruction.program_id_index)].to_string(),
-            program_id_index: instruction.program_id_index,
-            account_indexes: instruction.accounts.clone(),
-            data_base64: STANDARD.encode(&instruction.data),
-        })
-        .collect();
+    let (account_keys, instructions) = describe(&message);
     let message_sha256 = format!("{:x}", Sha256::digest(&message_bytes));
 
     Ok(BuildOrderResult {
@@ -389,11 +337,11 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
     })
 }
 
-fn parse_pubkey(field: &str, value: &str) -> Result<Pubkey, String> {
+pub(crate) fn parse_pubkey(field: &str, value: &str) -> Result<Pubkey, String> {
     Pubkey::from_str(value).map_err(|error| format!("invalid {field}: {error}"))
 }
 
-fn derive_cross_margin_trader(authority: &Pubkey) -> (Pubkey, u8) {
+pub(crate) fn derive_cross_margin_trader(authority: &Pubkey) -> (Pubkey, u8) {
     let pda_schema = [0_u8, 0_u8];
     Pubkey::find_program_address(
         &[b"trader", authority.as_ref(), &pda_schema],

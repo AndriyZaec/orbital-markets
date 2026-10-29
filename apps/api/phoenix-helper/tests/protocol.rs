@@ -22,6 +22,126 @@ fn run_helper(input: &[u8]) -> std::process::Output {
     child.wait_with_output().expect("helper should exit")
 }
 
+fn delegation_request(action: &str) -> serde_json::Value {
+    let owner = "11111111111111111111111111111111";
+    serde_json::json!({
+        "protocol_version": 1, "request_id": "delegation-1", "operation": "build_delegation",
+        "payload": {"action":action, "owner_authority":owner,
+            "new_position_authority":if action == "revoke" {owner} else {"So11111111111111111111111111111111111111112"},
+            "fee_payer":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "recent_blockhash":owner, "last_valid_block_height":999999}
+    })
+}
+
+#[test]
+fn delegation_and_revoke_match_official_owner_signed_instructions() {
+    use base64::Engine as _;
+    use phoenix_rise::ix::delegate_trader::{DelegateTraderParams, create_delegate_trader_ix};
+    use sha2::{Digest, Sha256};
+    use solana_hash::Hash;
+    use solana_message::legacy::Message;
+    use solana_pubkey::Pubkey;
+    use std::str::FromStr;
+
+    for action in ["delegate", "revoke"] {
+        let request = delegation_request(action);
+        let bytes = serde_json::to_vec(&request).unwrap();
+        let first = run_helper(&bytes);
+        let second = run_helper(&bytes);
+        assert!(first.status.success());
+        assert_eq!(first.stdout, second.stdout);
+        let response: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+        assert_eq!(response["ok"], true, "{response}");
+        let result = &response["result"];
+        assert_eq!(
+            result["trader_account"],
+            "8f1SJ8oVHyhTvxSYTCsGszbwLW5QYYGLCmvtTcn2qPEZ"
+        );
+        assert_eq!(result["trader_pda_index"], 0);
+        assert_eq!(result["subaccount_index"], 0);
+        assert_eq!(result["last_valid_block_height"], 999999);
+        let payload = &request["payload"];
+        let owner = Pubkey::from_str(payload["owner_authority"].as_str().unwrap()).unwrap();
+        let payer = Pubkey::from_str(payload["fee_payer"].as_str().unwrap()).unwrap();
+        let target = Pubkey::from_str(payload["new_position_authority"].as_str().unwrap()).unwrap();
+        let trader = Pubkey::from_str("8f1SJ8oVHyhTvxSYTCsGszbwLW5QYYGLCmvtTcn2qPEZ").unwrap();
+        let ix = create_delegate_trader_ix(
+            DelegateTraderParams::builder()
+                .trader_wallet(owner)
+                .trader_account(trader)
+                .new_position_authority(target)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+        let expected = Message::new_with_blockhash(
+            &[ix.into()],
+            Some(&payer),
+            &Hash::from_str(payload["recent_blockhash"].as_str().unwrap()).unwrap(),
+        );
+        let wire = base64::engine::general_purpose::STANDARD
+            .decode(result["message_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(wire, bincode::serialize(&expected).unwrap());
+        assert_eq!(
+            result["message_sha256"],
+            format!("{:x}", Sha256::digest(&wire))
+        );
+        assert_eq!(
+            result["required_signers"],
+            serde_json::json!([
+                {"index":0,"pubkey":payer.to_string(),"role":"fee_payer"},
+                {"index":1,"pubkey":owner.to_string(),"role":"owner_authority"}
+            ])
+        );
+        assert_eq!(result["manifest"]["action"], action);
+        assert_eq!(
+            result["manifest"]["instructions"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(expected.header.num_required_signatures, 2);
+        if action == "delegate" {
+            assert!(!expected.account_keys[..2].contains(&target));
+        }
+    }
+}
+
+#[test]
+fn delegation_rejects_wrong_authority_scope_or_signers() {
+    for (field, value) in [
+        ("action", serde_json::json!("open")),
+        ("owner_authority", serde_json::json!("invalid")),
+        (
+            "new_position_authority",
+            serde_json::json!("11111111111111111111111111111111"),
+        ),
+        (
+            "fee_payer",
+            serde_json::json!("11111111111111111111111111111111"),
+        ),
+        (
+            "fee_payer",
+            serde_json::json!("So11111111111111111111111111111111111111112"),
+        ),
+        ("recent_blockhash", serde_json::json!("invalid")),
+        ("last_valid_block_height", serde_json::json!(0)),
+        ("subaccount_index", serde_json::json!(1)),
+    ] {
+        let mut request = delegation_request("delegate");
+        request["payload"][field] = value;
+        let output = run_helper(&serde_json::to_vec(&request).unwrap());
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "invalid_delegation_request");
+    }
+    let mut request = delegation_request("revoke");
+    request["payload"]["new_position_authority"] =
+        serde_json::json!("So11111111111111111111111111111111111111112");
+    let output = run_helper(&serde_json::to_vec(&request).unwrap());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["ok"], false);
+}
+
 fn safety_order_request(action: &str) -> String {
     String::from_utf8(BUILD_ORDER_REQUEST.to_vec())
         .expect("fixture should be utf-8")
