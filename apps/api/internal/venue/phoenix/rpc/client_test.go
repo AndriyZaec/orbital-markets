@@ -344,3 +344,32 @@ func TestInvalidInputsDoNotStartRPC(t *testing.T) {
 		t.Fatal("missing expiry accepted")
 	}
 }
+
+func TestFeeForExactMessageContract(t *testing.T) {
+	message := []byte("exact serialized helper message")
+	for _, tc := range []struct {
+		name    string
+		value   any
+		slot    uint64
+		want    uint64
+		wantErr bool
+	}{
+		{"quoted", uint64(10000), 100, 10000, false},
+		{"blockhash unavailable", nil, 100, 0, true},
+		{"zero", uint64(0), 100, 0, true},
+		{"stale context", uint64(10000), 99, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testClient(t, func(r testRequest) any {
+				if r.Method != "getFeeForMessage" || string(r.Params[0]) != fmt.Sprintf("%q", base64.StdEncoding.EncodeToString(message)) || string(r.Params[1]) != `{"commitment":"confirmed","minContextSlot":100}` {
+					t.Errorf("fee request=%+v", r)
+				}
+				return map[string]any{"context": map[string]uint64{"slot": tc.slot}, "value": tc.value}
+			})
+			fee, err := c.FeeForMessage(context.Background(), message, 100)
+			if fee != tc.want || (err != nil) != tc.wantErr {
+				t.Fatalf("fee=%d err=%v", fee, err)
+			}
+		})
+	}
+}

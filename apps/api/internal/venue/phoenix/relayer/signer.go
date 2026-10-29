@@ -59,24 +59,32 @@ func (s *Signer) Address() string { return s.address }
 // request, not the browser. Neither a digest nor the manifest authorizes intent.
 // The live caller still owns one-shot/intent/expiry/fee checks and submission.
 func (s *Signer) CoSign(built helper.BuildOrderResult, expectedAgent, signature string) ([]byte, error) {
+	message, agentSignature, err := s.verify(built, expectedAgent, signature)
+	if err != nil {
+		return nil, err
+	}
+	return s.assemble(message, agentSignature), nil
+}
+
+func (s *Signer) verify(built helper.BuildOrderResult, expectedAgent, signature string) ([]byte, []byte, error) {
 	if len(built.MessageBase64) > base64.StdEncoding.EncodedLen(maxMessageSize) {
-		return nil, ErrInvalidMessage
+		return nil, nil, ErrInvalidMessage
 	}
 	message, err := base64.StdEncoding.DecodeString(built.MessageBase64)
 	if err != nil || len(message) > maxMessageSize {
-		return nil, ErrInvalidMessage
+		return nil, nil, ErrInvalidMessage
 	}
 	digest := sha256.Sum256(message)
 	expectedDigest, err := hex.DecodeString(built.MessageSHA256)
 	if err != nil || !bytes.Equal(expectedDigest, digest[:]) {
-		return nil, ErrInvalidMessage
+		return nil, nil, ErrInvalidMessage
 	}
 	keys, blockhash, err := messageEnvelope(message)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(expectedAgent) > 44 {
-		return nil, ErrSignerMismatch
+		return nil, nil, ErrSignerMismatch
 	}
 	agent, err := base58.Decode(expectedAgent)
 	if err != nil || len(agent) != ed25519.PublicKeySize ||
@@ -85,28 +93,32 @@ func (s *Signer) CoSign(built helper.BuildOrderResult, expectedAgent, signature 
 		len(built.RequiredSigners) != 2 ||
 		built.RequiredSigners[0] != (helper.RequiredSigner{Index: 0, Pubkey: s.address, Role: "fee_payer"}) ||
 		built.RequiredSigners[1] != (helper.RequiredSigner{Index: 1, Pubkey: expectedAgent, Role: "position_authority"}) {
-		return nil, ErrSignerMismatch
+		return nil, nil, ErrSignerMismatch
 	}
 	if len(built.RecentBlockhash) > 44 {
-		return nil, ErrInvalidMessage
+		return nil, nil, ErrInvalidMessage
 	}
 	expectedHash, err := base58.Decode(built.RecentBlockhash)
 	if err != nil || len(expectedHash) != 32 || !bytes.Equal(blockhash, expectedHash) {
-		return nil, ErrInvalidMessage
+		return nil, nil, ErrInvalidMessage
 	}
 	if len(signature) > 88 {
-		return nil, ErrInvalidSignature
+		return nil, nil, ErrInvalidSignature
 	}
 	agentSignature, err := base58.Decode(signature)
 	if err != nil || len(agentSignature) != ed25519.SignatureSize || !ed25519.Verify(agent, message, agentSignature) {
-		return nil, ErrInvalidSignature
+		return nil, nil, ErrInvalidSignature
 	}
+	return message, agentSignature, nil
+}
+
+func (s *Signer) assemble(message, agentSignature []byte) []byte {
 	transaction := make([]byte, transactionPrefixSize+len(message))
 	transaction[0] = 2 // canonical shortvec signature count
 	copy(transaction[1:65], ed25519.Sign(s.key, message))
 	copy(transaction[65:129], agentSignature)
 	copy(transaction[transactionPrefixSize:], message)
-	return transaction, nil
+	return transaction
 }
 
 // Read only the legacy header, account-key vector and blockhash needed to bind

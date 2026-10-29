@@ -168,6 +168,26 @@ func (c *Client) Balance(ctx context.Context, address string) (uint64, error) {
 	return *result.Value, nil
 }
 
+// FeeForMessage quotes the total network fee (including priority fees) for the
+// exact serialized message. A null fee means its blockhash is unavailable;
+// never replace that with a zero-fee estimate or a different blockhash.
+func (c *Client) FeeForMessage(ctx context.Context, message []byte, minSlot uint64) (uint64, error) {
+	if len(message) == 0 || len(message) > 1232 {
+		return 0, errors.New("invalid transaction message")
+	}
+	var result rpcValue[uint64]
+	err := c.call(ctx, "getFeeForMessage", []any{base64.StdEncoding.EncodeToString(message), map[string]any{
+		"commitment": "confirmed", "minContextSlot": minSlot,
+	}}, &result)
+	if err != nil {
+		return 0, err
+	}
+	if result.Value == nil || *result.Value == 0 || result.Context.Slot == 0 || result.Context.Slot < minSlot {
+		return 0, ErrInvalidResponse
+	}
+	return *result.Value, nil
+}
+
 type SignatureStatus struct {
 	Slot               uint64          `json:"slot"`
 	Err                json.RawMessage `json:"err"`
