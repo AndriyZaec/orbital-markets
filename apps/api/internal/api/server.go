@@ -24,33 +24,34 @@ import (
 )
 
 type Server struct {
-	ctx                  context.Context // server-lifetime context, not per-request
-	scanner              *scanner.Scanner
-	executor             *paper.Executor
-	store                *paper.DBStore
-	analyticsDB          *sql.DB
-	analyticsDBDisabled  bool
-	liveStore            *executor.Store // always available when DB exists — read-only live position access
-	live                 *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
-	closeMarkets         closeMarketSource
-	logger               *slog.Logger
-	mux                  *http.ServeMux
-	handler              http.Handler // mux wrapped in middleware (recovery → logging → auth)
-	recoveryOwner        string
-	telegramLinks        TelegramLinker
-	productAnalytics     *analytics.Emitter
-	analyticsAccessToken string
-	asterDataAgent       AsterDataAgentProbe
-	asterReference       *bracketcache.Cache
-	metricsMu            sync.Mutex
-	metricsCache         *analytics.LiveMetrics
-	metricsCachedAt      time.Time
-	publicMetricsLogAt   time.Time
-	weeklyAPRMu          sync.Mutex
-	weeklyAPRCache       *analytics.WeeklyAPRReport
-	weeklyAPRCachedAt    time.Time
-	signals              opportunitySignalProjection
-	historyCache         *historyCache
+	ctx                   context.Context // server-lifetime context, not per-request
+	scanner               *scanner.Scanner
+	executor              *paper.Executor
+	store                 *paper.DBStore
+	analyticsDB           *sql.DB
+	analyticsDBDisabled   bool
+	liveStore             *executor.Store // always available when DB exists — read-only live position access
+	live                  *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
+	closeMarkets          closeMarketSource
+	logger                *slog.Logger
+	mux                   *http.ServeMux
+	handler               http.Handler // mux wrapped in middleware (recovery → logging → auth)
+	recoveryOwner         string
+	telegramLinks         TelegramLinker
+	productAnalytics      *analytics.Emitter
+	analyticsAccessToken  string
+	asterDataAgent        AsterDataAgentProbe
+	asterReference        *bracketcache.Cache
+	phoenixInfrastructure PhoenixInfrastructure
+	metricsMu             sync.Mutex
+	metricsCache          *analytics.LiveMetrics
+	metricsCachedAt       time.Time
+	publicMetricsLogAt    time.Time
+	weeklyAPRMu           sync.Mutex
+	weeklyAPRCache        *analytics.WeeklyAPRReport
+	weeklyAPRCachedAt     time.Time
+	signals               opportunitySignalProjection
+	historyCache          *historyCache
 }
 
 // EnableProductAnalytics configures optional best-effort product milestone
@@ -167,6 +168,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/live/sessions/", s.handleLiveSessionStatus)
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
 	s.mux.HandleFunc("GET /api/v1/live/balances", s.handleLiveBalances)
+	s.mux.HandleFunc("GET /api/v1/live/phoenix/status", s.handlePhoenixInfrastructure)
 	s.mux.HandleFunc("GET /api/v1/live/accounts/events", s.handleLiveAccountEvents)
 	s.mux.HandleFunc("GET /api/v1/live/events", s.handleLiveEvents)
 	s.mux.HandleFunc("GET /api/v1/live/activity", s.handleLiveActivity)

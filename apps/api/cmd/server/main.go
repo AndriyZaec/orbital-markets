@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
@@ -73,8 +74,12 @@ func main() {
 	executor := paper.NewExecutor(logger, store, sc)
 	monitor := paper.NewMonitor(logger, executor, store, sc)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	phoenixInfrastructure := startPhoenixInfrastructure(ctx, logger)
+	if phoenixInfrastructure != nil {
+		defer phoenixInfrastructure.Close()
+	}
 	sc.EnableExecutionLiquidity(liquidity.New(ctx, logger))
 
 	go pac.Connect(ctx)
@@ -117,6 +122,9 @@ func main() {
 	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	if phoenixInfrastructure != nil {
+		srv.EnablePhoenixInfrastructure(phoenixInfrastructure)
+	}
 	if asterDataAgent != nil {
 		srv.EnableAsterDataAgentProbe(dataagent.ExcludeProbeOwner(asterDataAgent, referenceAccount))
 	}
@@ -155,6 +163,10 @@ func main() {
 
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		logger.Error("server error", "err", err)
+		cancel()
+		if phoenixInfrastructure != nil {
+			phoenixInfrastructure.Close()
+		}
 		os.Exit(1)
 	}
 }
