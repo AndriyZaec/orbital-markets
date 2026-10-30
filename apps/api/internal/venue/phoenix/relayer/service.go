@@ -39,6 +39,8 @@ type Service struct {
 	logger *slog.Logger
 }
 
+func (s *Service) Address() string { return s.signer.Address() }
+
 func NewService(signer *Signer, chain Chain, policy Policy, logger *slog.Logger) (*Service, error) {
 	if signer == nil || len(signer.key) == 0 || chain == nil || logger == nil || policy.MaxTransactionFeeLamports == 0 {
 		return nil, errors.New("Phoenix relayer requires signer, chain, logger and positive network fee cap")

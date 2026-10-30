@@ -36,11 +36,30 @@ func (h *fakeHelper) Health(ctx context.Context) (helper.HealthResult, error) {
 	return helper.HealthResult{HelperVersion: "0.1.0", PhoenixRiseVersion: helper.PhoenixRiseVersion}, nil
 }
 func (h *fakeHelper) Close() { h.closed.Add(1) }
+func (h *fakeHelper) BuildDelegation(context.Context, helper.BuildDelegationRequest) (helper.BuildDelegationResult, error) {
+	return helper.BuildDelegationResult{}, errors.New("unused")
+}
+func (h *fakeHelper) DecodeTraderAuthority(context.Context, helper.DecodeAuthorityRequest) (helper.AuthorityResult, error) {
+	return helper.AuthorityResult{}, errors.New("unused")
+}
 
 type fakeChain struct {
 	balance atomic.Uint64
 	failure atomic.Int32
 	reads   atomic.Int32
+}
+
+func (c *fakeChain) AccountInfo(context.Context, string, uint64, bool) (rpc.AccountInfo, error) {
+	return rpc.AccountInfo{}, errors.New("unused")
+}
+func (c *fakeChain) SimulateAndSend(context.Context, []byte, uint64, uint64) (string, error) {
+	return "", errors.New("unused")
+}
+func (c *fakeChain) SignatureStatus(context.Context, string) (*rpc.SignatureStatus, error) {
+	return nil, errors.New("unused")
+}
+func (c *fakeChain) FinalizedBlockhashValidity(context.Context, string, uint64) (rpc.BlockhashValidity, error) {
+	return rpc.BlockhashValidity{}, errors.New("unused")
 }
 
 func (c *fakeChain) BlockHeight(context.Context, uint64) (uint64, error)           { return 100, nil }

@@ -24,6 +24,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/delegation"
 )
 
 func main() {
@@ -124,6 +125,11 @@ func main() {
 	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
 	if phoenixInfrastructure != nil {
 		srv.EnablePhoenixInfrastructure(phoenixInfrastructure)
+		if delegationStore, err := delegation.NewStore(database, operationalDatabase); err != nil {
+			logger.Warn("Phoenix delegation disabled", "reason", err)
+		} else {
+			srv.EnablePhoenixDelegation(delegation.NewService(delegationStore, phoenixInfrastructure))
+		}
 	}
 	if asterDataAgent != nil {
 		srv.EnableAsterDataAgentProbe(dataagent.ExcludeProbeOwner(asterDataAgent, referenceAccount))

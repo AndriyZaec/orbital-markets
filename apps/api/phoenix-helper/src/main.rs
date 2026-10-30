@@ -3,6 +3,7 @@ use std::io::{self, BufRead, BufWriter, Write};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod authority;
 mod delegation;
 mod message;
 mod order;
@@ -224,6 +225,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ok: false,
                             error: ErrorDetails {
                                 code: "invalid_delegation_request",
+                                message,
+                            },
+                        },
+                    )?,
+                }
+            }
+            "decode_trader_authority" => {
+                let result = request
+                    .payload
+                    .ok_or_else(|| "decode_trader_authority requires payload".to_string())
+                    .and_then(|payload| {
+                        serde_json::from_value::<authority::DecodeAuthorityRequest>(payload)
+                            .map_err(|e| format!("invalid authority payload: {e}"))
+                    })
+                    .and_then(authority::decode_authority);
+                match result {
+                    Ok(result) => write_json_line(
+                        &mut stdout,
+                        &SuccessResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: true,
+                            result,
+                        },
+                    )?,
+                    Err(message) => write_json_line(
+                        &mut stdout,
+                        &ErrorResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: false,
+                            error: ErrorDetails {
+                                code: "invalid_trader_account",
                                 message,
                             },
                         },

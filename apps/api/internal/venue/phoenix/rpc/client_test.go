@@ -373,3 +373,76 @@ func TestFeeForExactMessageContract(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountInfoStandardRPCAndFinalizedReads(t *testing.T) {
+	address := base58.Encode(make([]byte, 32))
+	data := base64.StdEncoding.EncodeToString([]byte("account bytes decoded by Rust"))
+	for _, final := range []bool{false, true} {
+		c := testClient(t, func(r testRequest) any {
+			if r.Method == "isBlockhashValid" {
+				return testValue(false)
+			}
+			var config struct {
+				Commitment, Encoding string
+				MinContextSlot       uint64
+			}
+			_ = json.Unmarshal(r.Params[1], &config)
+			want := "confirmed"
+			if final {
+				want = "finalized"
+			}
+			if r.Method != "getAccountInfo" || config.Commitment != want || config.Encoding != "base64" || config.MinContextSlot != 100 {
+				t.Errorf("account request=%+v", r)
+			}
+			return testValue(map[string]any{"owner": address, "executable": false, "data": []string{data, "base64"}})
+		})
+		account, err := c.AccountInfo(context.Background(), address, 100, final)
+		if err != nil || account.DataBase64 != data || account.Slot != 100 || account.Owner != address {
+			t.Fatalf("account=%+v err=%v", account, err)
+		}
+		if validity, err := c.FinalizedBlockhashValidity(context.Background(), address, 100); err != nil || validity.Valid || validity.Slot != 100 {
+			t.Fatalf("validity=%+v err=%v", validity, err)
+		}
+	}
+}
+
+func TestAccountInfoFailsClosed(t *testing.T) {
+	address := base58.Encode(make([]byte, 32))
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  error
+	}{
+		{"missing", nil, ErrAccountNotFound},
+		{"missing executable", map[string]any{"owner": address, "data": []string{"YQ==", "base64"}}, ErrInvalidResponse},
+		{"executable", map[string]any{"owner": address, "executable": true, "data": []string{"YQ==", "base64"}}, ErrInvalidResponse},
+		{"wrong encoding", map[string]any{"owner": address, "executable": false, "data": []string{"YQ==", "base58"}}, ErrInvalidResponse},
+		{"malformed data", map[string]any{"owner": address, "executable": false, "data": []string{"!", "base64"}}, ErrInvalidResponse},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testClient(t, func(testRequest) any { return testValue(tc.value) })
+			if _, err := c.AccountInfo(context.Background(), address, 100, false); !errors.Is(err, tc.want) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+func TestFinalizedBlockhashProofRejectsMissingAndStaleBank(t *testing.T) {
+	for _, tc := range []struct {
+		slot  uint64
+		value any
+	}{
+		{99, false}, {100, nil},
+	} {
+		c := testClient(t, func(r testRequest) any {
+			if r.Method != "isBlockhashValid" || string(r.Params[1]) != `{"commitment":"finalized","minContextSlot":100}` {
+				t.Errorf("proof request=%+v", r)
+			}
+			return map[string]any{"context": map[string]uint64{"slot": tc.slot}, "value": tc.value}
+		})
+		if _, err := c.FinalizedBlockhashValidity(context.Background(), base58.Encode(make([]byte, 32)), 100); !errors.Is(err, ErrInvalidResponse) {
+			t.Fatalf("invalid proof accepted: %v", err)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/delegation"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/relayer"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/rpc"
@@ -22,11 +23,59 @@ type Config struct {
 type healthHelper interface {
 	Health(context.Context) (helper.HealthResult, error)
 	Close()
+	BuildDelegation(context.Context, helper.BuildDelegationRequest) (helper.BuildDelegationResult, error)
+	DecodeTraderAuthority(context.Context, helper.DecodeAuthorityRequest) (helper.AuthorityResult, error)
 }
 
 type chain interface {
 	relayer.Chain
 	LatestBlockhash(context.Context) (rpc.Blockhash, error)
+	AccountInfo(context.Context, string, uint64, bool) (rpc.AccountInfo, error)
+	SimulateAndSend(context.Context, []byte, uint64, uint64) (string, error)
+	SignatureStatus(context.Context, string) (*rpc.SignatureStatus, error)
+	FinalizedBlockhashValidity(context.Context, string, uint64) (rpc.BlockhashValidity, error)
+}
+
+var _ delegation.Backend = (*Runtime)(nil)
+
+func (r *Runtime) Address() string { return r.relayer.Address() }
+func (r *Runtime) LatestBlockhash(ctx context.Context) (rpc.Blockhash, error) {
+	return r.chain.LatestBlockhash(ctx)
+}
+func (r *Runtime) BuildDelegation(ctx context.Context, q helper.BuildDelegationRequest) (helper.BuildDelegationResult, error) {
+	return r.helper.BuildDelegation(ctx, q)
+}
+func (r *Runtime) SignatureStatus(ctx context.Context, sig string) (*rpc.SignatureStatus, error) {
+	return r.chain.SignatureStatus(ctx, sig)
+}
+func (r *Runtime) FinalizedBlockhashValidity(ctx context.Context, hash string, slot uint64) (rpc.BlockhashValidity, error) {
+	return r.chain.FinalizedBlockhashValidity(ctx, hash, slot)
+}
+func (r *Runtime) CoSignDelegation(ctx context.Context, b helper.BuildDelegationResult, owner, sig string, slot uint64) ([]byte, error) {
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.relayer.CoSignDelegation(ctx, b, owner, sig, slot)
+}
+func (r *Runtime) SimulateAndSend(ctx context.Context, p []byte, height, slot uint64) (string, error) {
+	if err := r.ctx.Err(); err != nil {
+		return "", err
+	}
+	return r.chain.SimulateAndSend(ctx, p, height, slot)
+}
+func (r *Runtime) ReadAuthority(ctx context.Context, owner, trader string, slot uint64, finalized bool) (delegation.Authority, error) {
+	a, err := r.chain.AccountInfo(ctx, trader, slot, finalized)
+	if err != nil {
+		return delegation.Authority{}, err
+	}
+	if a.Owner != helper.PhoenixProgramID {
+		return delegation.Authority{}, rpc.ErrInvalidResponse
+	}
+	decoded, err := r.helper.DecodeTraderAuthority(ctx, helper.DecodeAuthorityRequest{OwnerAuthority: owner, TraderAccount: trader, AccountOwner: a.Owner, DataBase64: a.DataBase64})
+	if err != nil {
+		return delegation.Authority{}, err
+	}
+	return delegation.Authority{PositionAuthority: decoded.PositionAuthority, Slot: a.Slot}, nil
 }
 
 type Runtime struct {

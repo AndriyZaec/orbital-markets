@@ -251,6 +251,18 @@ func TestHelperProcess(t *testing.T) {
 			})
 			continue
 		}
+		if request.Operation == "decode_trader_authority" {
+			var q DecodeAuthorityRequest
+			if err := json.Unmarshal(request.Payload, &q); err != nil {
+				os.Exit(8)
+			}
+			result := AuthorityResult{OwnerAuthority: q.OwnerAuthority, TraderAccount: q.TraderAccount, PositionAuthority: "So11111111111111111111111111111111111111112"}
+			if mode == "authority_wrong_owner" {
+				result.OwnerAuthority = "other"
+			}
+			writeFakeResponse(map[string]any{"protocol_version": ProtocolVersion, "request_id": request.RequestID, "ok": true, "result": result})
+			continue
+		}
 		if request.Operation == "build_delegation" {
 			var delegation BuildDelegationRequest
 			if err := json.Unmarshal(request.Payload, &delegation); err != nil {

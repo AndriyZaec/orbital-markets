@@ -24,6 +24,7 @@ var (
 	ErrInvalidResponse = errors.New("phoenix RPC invalid response")
 	ErrExpired         = errors.New("phoenix transaction blockhash expired")
 	ErrSimulation      = errors.New("phoenix transaction simulation failed")
+	ErrAccountNotFound = errors.New("Solana account not found")
 )
 
 type Client struct {
@@ -151,6 +152,68 @@ func (c *Client) BlockHeight(ctx context.Context, minSlot uint64) (uint64, error
 		err = ErrInvalidResponse
 	}
 	return height, err
+}
+
+type BlockhashValidity struct {
+	Valid bool
+	Slot  uint64
+}
+
+// FinalizedBlockhashValidity binds invalidity proof to its bank slot. Requiring
+// at least the preparation slot avoids mistaking a not-yet-finalized new hash
+// for an expired one. Authority reads must use at least the returned slot.
+func (c *Client) FinalizedBlockhashValidity(ctx context.Context, hash string, minSlot uint64) (BlockhashValidity, error) {
+	if !validBase58(hash, 32) {
+		return BlockhashValidity{}, ErrInvalidResponse
+	}
+	var result rpcValue[bool]
+	if err := c.call(ctx, "isBlockhashValid", []any{hash, map[string]any{"commitment": "finalized", "minContextSlot": minSlot}}, &result); err != nil {
+		return BlockhashValidity{}, err
+	}
+	if result.Value == nil || result.Context.Slot < minSlot || result.Context.Slot == 0 {
+		return BlockhashValidity{}, ErrInvalidResponse
+	}
+	return BlockhashValidity{Valid: *result.Value, Slot: result.Context.Slot}, nil
+}
+
+type AccountInfo struct {
+	Slot       uint64
+	Owner      string
+	DataBase64 string
+}
+
+// AccountInfo reads standard Solana account state. finalized is used when
+// proving that an unknown, expired submission can no longer execute.
+func (c *Client) AccountInfo(ctx context.Context, address string, minSlot uint64, finalized bool) (AccountInfo, error) {
+	if !validBase58(address, 32) {
+		return AccountInfo{}, errors.New("invalid account address")
+	}
+	commitment := "confirmed"
+	if finalized {
+		commitment = "finalized"
+	}
+	var result rpcValue[struct {
+		Owner      string   `json:"owner"`
+		Executable *bool    `json:"executable"`
+		Data       []string `json:"data"`
+	}]
+	if err := c.call(ctx, "getAccountInfo", []any{address, map[string]any{"encoding": "base64", "commitment": commitment, "minContextSlot": minSlot}}, &result); err != nil {
+		return AccountInfo{}, err
+	}
+	if result.Context.Slot == 0 || result.Context.Slot < minSlot {
+		return AccountInfo{}, ErrInvalidResponse
+	}
+	if result.Value == nil {
+		return AccountInfo{}, ErrAccountNotFound
+	}
+	v := result.Value
+	if v.Executable == nil || *v.Executable || !validBase58(v.Owner, 32) || len(v.Data) != 2 || v.Data[1] != "base64" || len(v.Data[0]) > base64.StdEncoding.EncodedLen(32<<10) {
+		return AccountInfo{}, ErrInvalidResponse
+	}
+	if raw, err := base64.StdEncoding.DecodeString(v.Data[0]); err != nil || len(raw) == 0 || len(raw) > 32<<10 {
+		return AccountInfo{}, ErrInvalidResponse
+	}
+	return AccountInfo{Slot: result.Context.Slot, Owner: v.Owner, DataBase64: v.Data[0]}, nil
 }
 
 // Balance returns lamports (integer units), including a valid zero balance.

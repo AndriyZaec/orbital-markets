@@ -43,6 +43,7 @@ type Server struct {
 	asterDataAgent        AsterDataAgentProbe
 	asterReference        *bracketcache.Cache
 	phoenixInfrastructure PhoenixInfrastructure
+	phoenixDelegation     PhoenixDelegation
 	metricsMu             sync.Mutex
 	metricsCache          *analytics.LiveMetrics
 	metricsCachedAt       time.Time
@@ -169,6 +170,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/submit", s.handleLiveSubmit)
 	s.mux.HandleFunc("GET /api/v1/live/balances", s.handleLiveBalances)
 	s.mux.HandleFunc("GET /api/v1/live/phoenix/status", s.handlePhoenixInfrastructure)
+	s.mux.HandleFunc("POST /api/v1/live/phoenix/delegation/prepare", s.handlePhoenixDelegationPrepare)
+	s.mux.HandleFunc("POST /api/v1/live/phoenix/delegation/submit", s.handlePhoenixDelegationSubmit)
+	s.mux.HandleFunc("POST /api/v1/live/phoenix/delegation/reconcile", s.handlePhoenixDelegationReconcile)
 	s.mux.HandleFunc("GET /api/v1/live/accounts/events", s.handleLiveAccountEvents)
 	s.mux.HandleFunc("GET /api/v1/live/events", s.handleLiveEvents)
 	s.mux.HandleFunc("GET /api/v1/live/activity", s.handleLiveActivity)
