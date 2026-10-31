@@ -223,6 +223,11 @@ func TestReplacementAndAuthorityChangeGuards(t *testing.T) {
 		t.Fatalf("replacement guard=%+v %v", result, err)
 	}
 	q.ReplaceExistingDelegate = true
+	q.ExpectedPositionAuthority = address(5)
+	if _, err := s.Prepare(context.Background(), q); !errors.Is(err, ErrReplacementRequired) {
+		t.Fatalf("stale replacement confirmation accepted: %v", err)
+	}
+	q.ExpectedPositionAuthority = address(4)
 	r, err := s.Prepare(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
@@ -383,5 +388,29 @@ func TestPreparedExpiryAndOwnerRequestBinding(t *testing.T) {
 	}
 	if _, err := s.Submit(context.Background(), r.Owner, signed(t, r)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("old request remained signable: %v", err)
+	}
+}
+
+func TestAuthorityStatusRestoresWithoutAnOldRequestAndNeverRegisters(t *testing.T) {
+	s, b, database := setup(t)
+	b.current = address(2)
+	status, err := s.Status(context.Background(), address(1), address(2))
+	if err != nil || status.Authorized || status.PositionAuthority != address(2) {
+		t.Fatalf("unregistered status=%+v %v", status, err)
+	}
+	if authorization(t, database) != "" {
+		t.Fatal("read-only status registered an agent")
+	}
+	if _, err := database.Exec(`INSERT INTO agent_authorizations VALUES('phoenix',?,?,?)`, address(1), address(2), time.Now().String()); err != nil {
+		t.Fatal(err)
+	}
+	status, err = s.Status(context.Background(), address(1), address(2))
+	if err != nil || !status.Authorized {
+		t.Fatalf("registered status=%+v %v", status, err)
+	}
+	b.current = address(4)
+	status, err = s.Status(context.Background(), address(1), address(2))
+	if err != nil || status.Authorized {
+		t.Fatalf("superseded status=%+v %v", status, err)
 	}
 }

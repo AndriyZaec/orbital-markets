@@ -17,6 +17,10 @@ type fakePhoenixDelegation struct {
 	err   error
 }
 
+func (f *fakePhoenixDelegation) Status(context.Context, string, string) (delegation.AuthorityStatus, error) {
+	return delegation.AuthorityStatus{}, nil
+}
+
 func (f *fakePhoenixDelegation) Prepare(context.Context, delegation.PrepareRequest) (delegation.Result, error) {
 	f.calls++
 	return delegation.Result{State: f.state}, f.err

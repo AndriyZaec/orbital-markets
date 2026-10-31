@@ -12,9 +12,30 @@ import (
 )
 
 type PhoenixDelegation interface {
+	Status(context.Context, string, string) (delegation.AuthorityStatus, error)
 	Prepare(context.Context, delegation.PrepareRequest) (delegation.Result, error)
 	Submit(context.Context, string, domain.SignedAction) (delegation.Result, error)
 	Reconcile(context.Context, string, string) (delegation.Result, error)
+}
+
+func (s *Server) handlePhoenixAuthority(w http.ResponseWriter, r *http.Request) {
+	if s.phoenixDelegation == nil {
+		writeJSON(w, 503, map[string]string{"error": "Phoenix delegation unavailable"})
+		return
+	}
+	var q struct {
+		Owner string `json:"owner"`
+		Agent string `json:"agent"`
+	}
+	if !decodeStrictJSON(w, r, &q) {
+		return
+	}
+	status, err := s.phoenixDelegation.Status(r.Context(), q.Owner, q.Agent)
+	if err != nil {
+		s.writePhoenixDelegation(w, delegation.Result{}, err)
+		return
+	}
+	writeJSON(w, 200, status)
 }
 
 func (s *Server) EnablePhoenixDelegation(service PhoenixDelegation) { s.phoenixDelegation = service }

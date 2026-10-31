@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import telegramLogo from '@/assets/telegram-logo.svg'
+import { PhoenixAuthorization } from './PhoenixAuthorization'
 
 // Static venue presentation. Runtime
 // readiness comes from useVenueReadiness — the single typed layer that
@@ -327,6 +328,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             const isReady = readiness?.status === 'ready'
             const isErr = readiness?.status === 'error'
             const disconnectBlocked = agentChangeBlocked || readiness?.agentStatus === 'restoring'
+              || (venue.id === 'pacifica' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))
               || readiness?.agentStatus === 'authorizing' || readiness?.agentStatus === 'disconnecting'
               || (venue.id !== 'pacifica' && (hyperliquid.agentStatus === 'restoring'
                 || hyperliquid.agentStatus === 'authorizing' || hyperliquid.agentStatus === 'disconnecting'
@@ -407,7 +409,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       {!readiness.agentReady && (
                         <button
                           onClick={() => handleAuthorize(venue.id as VenueId)}
-                          disabled={readiness.agentStatus === 'restoring' || readiness.agentStatus === 'authorizing' || !readiness.signerReady}
+                          disabled={readiness.agentStatus === 'restoring' || readiness.agentStatus === 'authorizing' || !readiness.signerReady || (venue.id === 'pacifica' && ['authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))}
                           className="px-3 py-1 rounded text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
                           {readiness.agentStatus === 'restoring'
@@ -449,6 +451,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
               </div>
             )
           })}
+
+          <PhoenixAuthorization key={tradingAgents.phoenix.ownerAddress ?? 'no-owner'} disabled={agentChangeBlocked || ['authorizing', 'disconnecting'].includes(tradingAgents.pacifica.status)} onConnect={() => handleConnect('pacifica')} />
 
           {showTelegram && (
             <div className="py-1 animate-in fade-in-0 duration-200">

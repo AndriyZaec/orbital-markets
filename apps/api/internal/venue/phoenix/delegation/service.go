@@ -4,6 +4,7 @@ package delegation
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -48,10 +49,11 @@ func NewService(store *Store, backend Backend) *Service {
 }
 
 type PrepareRequest struct {
-	Owner                   string                  `json:"owner"`
-	Agent                   string                  `json:"agent"`
-	Action                  helper.DelegationAction `json:"action"`
-	ReplaceExistingDelegate bool                    `json:"replace_existing_delegate"`
+	Owner                     string                  `json:"owner"`
+	Agent                     string                  `json:"agent"`
+	Action                    helper.DelegationAction `json:"action"`
+	ReplaceExistingDelegate   bool                    `json:"replace_existing_delegate"`
+	ExpectedPositionAuthority string                  `json:"expected_position_authority,omitempty"`
 }
 
 type Result struct {
@@ -72,6 +74,41 @@ type record struct {
 	Built                 helper.BuildDelegationResult
 	Request               domain.SigningRequest
 	State, Signature      string
+}
+
+type AuthorityStatus struct {
+	Owner             string `json:"owner"`
+	Agent             string `json:"agent"`
+	PositionAuthority string `json:"position_authority"`
+	Authorized        bool   `json:"authorized"`
+}
+
+// Status checks current authority independently of historical request IDs. It
+// never registers an agent: owner-signed confirmation still owns that mutation.
+func (s *Service) Status(ctx context.Context, owner, agent string) (AuthorityStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if !validKey(owner) || !validKey(agent) || owner == agent {
+		return AuthorityStatus{}, ErrInvalid
+	}
+	hash, err := s.backend.LatestBlockhash(ctx)
+	if err != nil {
+		return AuthorityStatus{}, err
+	}
+	built, err := s.backend.BuildDelegation(ctx, helper.BuildDelegationRequest{Action: helper.ActionRevoke, OwnerAuthority: owner, NewPositionAuthority: owner, FeePayer: s.backend.Address(), RecentBlockhash: hash.Hash, LastValidBlockHeight: hash.LastValidBlockHeight})
+	if err != nil {
+		return AuthorityStatus{}, err
+	}
+	a, err := s.backend.ReadAuthority(ctx, owner, built.TraderAccount, hash.Slot, false)
+	if err != nil {
+		return AuthorityStatus{}, err
+	}
+	var registered string
+	err = s.store.reader.QueryRowContext(ctx, `SELECT agent_address FROM agent_authorizations WHERE venue='phoenix' AND owner_account=?`, owner).Scan(&registered)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return AuthorityStatus{}, err
+	}
+	return AuthorityStatus{Owner: owner, Agent: agent, PositionAuthority: a.PositionAuthority, Authorized: a.PositionAuthority == agent && registered == agent}, nil
 }
 
 func (r record) result() Result {
@@ -130,8 +167,10 @@ func (s *Service) Prepare(ctx context.Context, q PrepareRequest) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	if q.Action == helper.ActionDelegate && current.PositionAuthority != q.Owner && current.PositionAuthority != target && !q.ReplaceExistingDelegate {
-		return Result{CurrentAuthority: current.PositionAuthority}, ErrReplacementRequired
+	if q.Action == helper.ActionDelegate && current.PositionAuthority != q.Owner && current.PositionAuthority != target {
+		if !q.ReplaceExistingDelegate || q.ExpectedPositionAuthority != current.PositionAuthority {
+			return Result{CurrentAuthority: current.PositionAuthority}, ErrReplacementRequired
+		}
 	}
 	if q.Action == helper.ActionRevoke && current.PositionAuthority != q.Agent && current.PositionAuthority != q.Owner {
 		return Result{CurrentAuthority: current.PositionAuthority}, ErrAuthorityChanged
@@ -200,6 +239,9 @@ func (s *Service) Submit(ctx context.Context, owner string, signed domain.Signed
 		return r.result(), err
 	}
 	r.State, r.Signature = "pending", signature
+	if !time.Now().Before(r.Request.ExpiresAt) {
+		return s.finish(ctx, r, "expired")
+	}
 	sent, sendErr := s.backend.SimulateAndSend(ctx, packet, r.Built.LastValidBlockHeight, r.Slot)
 	if sendErr != nil && sent == "" {
 		return s.finish(ctx, r, "failed")

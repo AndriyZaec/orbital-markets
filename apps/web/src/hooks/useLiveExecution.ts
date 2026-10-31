@@ -217,11 +217,12 @@ function useLiveExecutionState() {
   // the callback (which would cancel in-flight sessions).
   const accountsRef = useRef<Record<Venue, string | null>>({
     pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+    phoenix: null,
   })
   const executionInFlightRef = useRef(false)
   const consumedRequestIdsRef = useRef(new Set<string>())
   useEffect(() => {
-    accountsRef.current = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress }
+    accountsRef.current = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress, phoenix: null }
   }, [asterAddress, hyperliquidAddress, pacificaAddress])
 
   const postAdvance = async (
@@ -247,11 +248,13 @@ function useLiveExecutionState() {
     const venues = intent.legs.map((leg) => leg.venue) as [Venue, Venue]
     const authorityByVenue: Record<Venue, string | null> = {
       pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+      phoenix: null,
     }
     const agentByVenue = {
       pacifica: tradingAgents.pacifica,
       hyperliquid: tradingAgents.hyperliquid,
       aster: tradingAgents.aster,
+      phoenix: tradingAgents.phoenix,
     }
     if (venues[0] === venues[1] || venues.some((venue) => !authorityByVenue[venue])) {
       setState({ ...INITIAL_STATE, phase: 'failed', error: 'Both venue accounts must be connected' })

@@ -173,6 +173,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/phoenix/delegation/prepare", s.handlePhoenixDelegationPrepare)
 	s.mux.HandleFunc("POST /api/v1/live/phoenix/delegation/submit", s.handlePhoenixDelegationSubmit)
 	s.mux.HandleFunc("POST /api/v1/live/phoenix/delegation/reconcile", s.handlePhoenixDelegationReconcile)
+	s.mux.HandleFunc("POST /api/v1/live/phoenix/delegation/authority", s.handlePhoenixAuthority)
 	s.mux.HandleFunc("GET /api/v1/live/accounts/events", s.handleLiveAccountEvents)
 	s.mux.HandleFunc("GET /api/v1/live/events", s.handleLiveEvents)
 	s.mux.HandleFunc("GET /api/v1/live/activity", s.handleLiveActivity)

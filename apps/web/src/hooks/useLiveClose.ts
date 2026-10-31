@@ -76,11 +76,13 @@ export function useLiveClose() {
     closingRef.current = true
     const authorityByVenue: Record<Venue, string | null> = {
       pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
+      phoenix: null,
     }
     const agentByVenue = {
       pacifica: tradingAgents.pacifica,
       hyperliquid: tradingAgents.hyperliquid,
       aster: tradingAgents.aster,
+      phoenix: tradingAgents.phoenix,
     }
     if (venues.some((venue) => !authorityByVenue[venue])) {
       setState({ ...INITIAL, phase: 'error', errors: ['Both venue accounts must be connected'] })
