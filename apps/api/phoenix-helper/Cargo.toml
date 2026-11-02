@@ -20,3 +20,8 @@ solana-hash = { version = "=4.7.0", features = ["decode"] }
 solana-instruction = { version = "=3.5.1", default-features = false, features = ["std"] }
 solana-message = { version = "=4.4.0", features = ["serde"] }
 solana-pubkey = { version = "=4.4.0", features = ["curve25519"] }
+
+# Rise quantity operators include plain integer arithmetic. Financial views must
+# fail closed on overflow in production, just as they do in debug builds.
+[profile.release]
+overflow-checks = true

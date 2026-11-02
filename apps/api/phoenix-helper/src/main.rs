@@ -7,6 +7,7 @@ mod authority;
 mod delegation;
 mod message;
 mod order;
+mod risk;
 
 const PROTOCOL_VERSION: u32 = 1;
 const PHOENIX_RISE_VERSION: &str = "0.6.13";
@@ -258,6 +259,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ok: false,
                             error: ErrorDetails {
                                 code: "invalid_trader_account",
+                                message,
+                            },
+                        },
+                    )?,
+                }
+            }
+            "compute_risk" => {
+                let result = request
+                    .payload
+                    .ok_or_else(|| "compute_risk requires payload".to_string())
+                    .and_then(|payload| {
+                        serde_json::from_value::<risk::RiskRequest>(payload)
+                            .map_err(|e| format!("invalid risk payload: {e}"))
+                    })
+                    .and_then(|request| {
+                        // This read-only calculation owns no shared state. Some
+                        // SDK quantity operators panic on overflow; report an
+                        // unavailable risk view without taking down the signer.
+                        std::panic::catch_unwind(|| risk::compute(request))
+                            .unwrap_or_else(|_| Err("Rise risk arithmetic failed".into()))
+                    });
+                match result {
+                    Ok(result) => write_json_line(
+                        &mut stdout,
+                        &SuccessResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: true,
+                            result,
+                        },
+                    )?,
+                    Err(message) => write_json_line(
+                        &mut stdout,
+                        &ErrorResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: false,
+                            error: ErrorDetails {
+                                code: "invalid_risk_request",
                                 message,
                             },
                         },
