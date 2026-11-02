@@ -1,0 +1,29 @@
+{
+  "channel": "traderState",
+  "authority": "11111111111111111111111111111111",
+  "traderPdaIndex": 0,
+  "slot": 101,
+  "messageType": "delta",
+  "deltas": [{
+    "subaccountIndex": 0,
+    "sequence": 42,
+    "collateral": "9007199254740994",
+    "spotCollaterals": [{"assetIndex": 1, "symbol": "SOL", "balance": "1000000002", "decimals": 9}],
+    "positions": [
+      {"symbol": "BTC", "change": "closed"},
+      {"symbol": "ETH", "change": "updated", "position": {
+        "positionSequenceNumber": "8", "basePositionLots": "2500", "entryPriceTicks": "2000", "entryPriceUsd": "2000.5",
+        "virtualQuotePositionLots": "-5000", "unsettledFundingQuoteLots": "-2", "accumulatedFundingQuoteLots": "4",
+        "takeProfitTriggers": [], "stopLossTriggers": []
+      }}
+    ],
+    "orders": [{"symbol": "BTC", "orders": [{
+      "change": "closed", "orderSequenceNumber": "18446744073709551615", "side": "bid", "orderType": "limit",
+      "priceTicks": "59000", "priceUsd": "59000.25", "sizeRemainingLots": "0", "initialSizeLots": "20", "reduceOnly": true, "status": "closed"
+    }]}],
+    "splines": [{"symbol": "BTC", "change": "closed"}],
+    "triggers": [{"symbol": "BTC", "change": "closed"}, {"symbol": "ETH", "change": "updated", "triggers": {"takeProfitTriggers": [], "stopLossTriggers": []}}],
+    "tradeHistory": [],
+    "orderHistory": []
+  }]
+}
