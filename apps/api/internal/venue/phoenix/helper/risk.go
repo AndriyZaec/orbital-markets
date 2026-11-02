@@ -77,8 +77,10 @@ type RiskMarket struct {
 	AssetID                     uint64           `json:"asset_id"`
 	BaseLotDecimals             int8             `json:"base_lot_decimals"`
 	TickSize                    string           `json:"tick_size"`
-	MarkPriceTicks              string           `json:"mark_price_ticks"`
-	IndexPriceTicks             *string          `json:"index_price_ticks"`
+	MarkPriceTicks              string           `json:"mark_price_ticks,omitempty"`
+	IndexPriceTicks             *string          `json:"index_price_ticks,omitempty"`
+	MarkPriceUSD                *float64         `json:"mark_price_usd,omitempty"`
+	IndexPriceUSD               *float64         `json:"index_price_usd,omitempty"`
 	PriceObservedUnixMS         int64            `json:"price_observed_unix_ms"`
 	LeverageTiers               [4]RiskTierInput `json:"leverage_tiers"`
 	RiskFactorsBPS              [3]uint16        `json:"risk_factors_bps"`

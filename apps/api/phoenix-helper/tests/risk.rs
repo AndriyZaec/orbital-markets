@@ -217,3 +217,24 @@ fn underwater_and_flat_pending_funding_are_not_spendable_margin() {
         json!({})
     );
 }
+
+#[test]
+fn usd_prices_use_sdk_tick_conversion_and_reject_ambiguous_units() {
+    let mut request = fixture();
+    request["markets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("mark_price_ticks");
+    request["markets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("index_price_ticks");
+    request["markets"][0]["mark_price_usd"] = json!(110.0);
+    request["markets"][0]["index_price_usd"] = json!(100.0);
+    let response = compute(request.clone());
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["result"]["equity_quote_lots"], "108000000");
+    assert_eq!(response["result"]["initial_margin_quote_lots"], "11000000");
+    request["markets"][0]["mark_price_ticks"] = json!("11000");
+    assert_eq!(compute(request)["ok"], false);
+}

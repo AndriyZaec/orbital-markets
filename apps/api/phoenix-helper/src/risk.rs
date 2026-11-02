@@ -6,9 +6,10 @@ use phoenix_rise::math::portfolio::{
     MarginSimulationAction, SimulateMarginParams, SpotCollateralInput,
 };
 use phoenix_rise::math::{
-    BaseLots, BasisPoints, Constant, LeverageTier, LeverageTiers, LimitOrder, PerpAssetMetadata,
-    QuoteLotsPerBaseLotPerTick, SequenceNumberU8, Side, SignedBaseLots, SignedQuoteLots,
-    SignedQuoteLotsI56, SignedQuoteLotsPerBaseLot, Ticks, TraderPortfolio, TraderPosition,
+    BaseLots, BasisPoints, Constant, LeverageTier, LeverageTiers, LimitOrder, MarketCalculator,
+    PerpAssetMetadata, QuoteLotsPerBaseLotPerTick, SequenceNumberU8, Side, SignedBaseLots,
+    SignedQuoteLots, SignedQuoteLotsI56, SignedQuoteLotsPerBaseLot, Ticks, TraderPortfolio,
+    TraderPosition,
 };
 use serde::{Deserialize, Serialize};
 use solana_pubkey::Pubkey;
@@ -90,8 +91,11 @@ struct MarketInput {
     asset_id: u64,
     base_lot_decimals: i8,
     tick_size: String,
-    mark_price_ticks: String,
+    #[serde(default)]
+    mark_price_ticks: Option<String>,
     index_price_ticks: Option<String>,
+    mark_price_usd: Option<f64>,
+    index_price_usd: Option<f64>,
     price_observed_unix_ms: u64,
     leverage_tiers: [TierInput; 4],
     risk_factors_bps: [u16; 3],
@@ -174,11 +178,20 @@ pub fn compute(request: RiskRequest) -> Result<RiskResult, String> {
         if !(-18..=18).contains(&market.base_lot_decimals) {
             return Err("invalid base lot decimals".into());
         }
-        let mark = ticks(&market.mark_price_ticks)?;
         let tick_size = uint(&market.tick_size)?;
         if tick_size == 0 {
             return Err("tick size must be positive".into());
         }
+        let calculator = MarketCalculator::new(
+            market.base_lot_decimals,
+            QuoteLotsPerBaseLotPerTick::new(tick_size),
+        );
+        let mark = price_ticks(
+            market.mark_price_ticks.as_deref(),
+            market.mark_price_usd,
+            &calculator,
+        )?
+        .ok_or("missing mark price")?;
         let mut tiers = Vec::new();
         for tier in &market.leverage_tiers {
             if tier.max_leverage == 0 || tier.limit_order_risk_factor_bps > 10_000 {
@@ -209,8 +222,12 @@ pub fn compute(request: RiskRequest) -> Result<RiskResult, String> {
         {
             return Err("risk factors exceed 10000 bps".into());
         }
-        if let Some(index) = &market.index_price_ticks {
-            indices.insert(market.symbol.clone(), ticks(index)?);
+        if let Some(index) = price_ticks(
+            market.index_price_ticks.as_deref(),
+            market.index_price_usd,
+            &calculator,
+        )? {
+            indices.insert(market.symbol.clone(), index);
         }
         provider.insert(
             market.symbol.clone(),
@@ -445,4 +462,28 @@ fn ticks(value: &str) -> Result<Ticks, String> {
         return Err("price ticks outside SDK bounds".into());
     }
     Ok(Ticks::new(value))
+}
+
+fn price_ticks(
+    raw: Option<&str>,
+    usd: Option<f64>,
+    calculator: &MarketCalculator,
+) -> Result<Option<Ticks>, String> {
+    match (raw, usd) {
+        (Some(value), None) => ticks(value).map(Some),
+        (None, Some(value)) => {
+            if !value.is_finite() || value <= 0.0 {
+                return Err("invalid USD risk price".into());
+            }
+            let value = calculator
+                .price_to_ticks(value)
+                .map_err(|_| "USD price conversion failed")?;
+            if value == Ticks::ZERO || value.as_inner() > u64::from(u32::MAX) {
+                return Err("converted price outside SDK bounds".into());
+            }
+            Ok(Some(value))
+        }
+        (None, None) => Ok(None),
+        _ => Err("supply ticks or USD, not both".into()),
+    }
 }
