@@ -27,6 +27,8 @@ type healthHelper interface {
 	BuildDelegation(context.Context, helper.BuildDelegationRequest) (helper.BuildDelegationResult, error)
 	DecodeTraderAuthority(context.Context, helper.DecodeAuthorityRequest) (helper.AuthorityResult, error)
 	ComputeRisk(context.Context, helper.RiskRequest) (helper.RiskResult, error)
+	NormalizeOrder(context.Context, helper.NormalizeRequest) (helper.NormalizedOrder, error)
+	BuildOrder(context.Context, helper.BuildOrderRequest) (helper.BuildOrderResult, error)
 }
 
 type chain interface {
@@ -90,6 +92,28 @@ func (r *Runtime) ComputeRisk(ctx context.Context, q helper.RiskRequest) (helper
 	result, err := r.helper.ComputeRisk(r.ctx, q)
 	if ctx.Err() != nil {
 		return helper.RiskResult{}, ctx.Err()
+	}
+	return result, err
+}
+
+func (r *Runtime) NormalizeOrder(ctx context.Context, q helper.NormalizeRequest) (helper.NormalizedOrder, error) {
+	if err := ctx.Err(); err != nil {
+		return helper.NormalizedOrder{}, err
+	}
+	result, err := r.helper.NormalizeOrder(r.ctx, q)
+	if ctx.Err() != nil {
+		return helper.NormalizedOrder{}, ctx.Err()
+	}
+	return result, err
+}
+
+func (r *Runtime) BuildOrder(ctx context.Context, q helper.BuildOrderRequest) (helper.BuildOrderResult, error) {
+	if err := ctx.Err(); err != nil {
+		return helper.BuildOrderResult{}, err
+	}
+	result, err := r.helper.BuildOrder(r.ctx, q)
+	if ctx.Err() != nil {
+		return helper.BuildOrderResult{}, ctx.Err()
 	}
 	return result, err
 }

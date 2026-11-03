@@ -39,6 +39,12 @@ func (h *fakeHelper) Close() { h.closed.Add(1) }
 func (h *fakeHelper) ComputeRisk(context.Context, helper.RiskRequest) (helper.RiskResult, error) {
 	return helper.RiskResult{}, errors.New("unused")
 }
+func (h *fakeHelper) NormalizeOrder(context.Context, helper.NormalizeRequest) (helper.NormalizedOrder, error) {
+	return helper.NormalizedOrder{}, errors.New("unused")
+}
+func (h *fakeHelper) BuildOrder(context.Context, helper.BuildOrderRequest) (helper.BuildOrderResult, error) {
+	return helper.BuildOrderResult{}, errors.New("unused")
+}
 func (h *fakeHelper) BuildDelegation(context.Context, helper.BuildDelegationRequest) (helper.BuildDelegationResult, error) {
 	return helper.BuildDelegationResult{}, errors.New("unused")
 }

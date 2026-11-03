@@ -668,6 +668,7 @@ dependencies = [
  "base64",
  "bincode",
  "phoenix-rise",
+ "rust_decimal",
  "serde",
  "serde_json",
  "sha2",

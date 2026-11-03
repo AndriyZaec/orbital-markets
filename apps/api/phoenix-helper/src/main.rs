@@ -6,6 +6,7 @@ use serde_json::Value;
 mod authority;
 mod delegation;
 mod message;
+mod normalize;
 mod order;
 mod projection;
 mod risk;
@@ -299,6 +300,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ok: false,
                             error: ErrorDetails {
                                 code: "invalid_risk_request",
+                                message,
+                            },
+                        },
+                    )?,
+                }
+            }
+            "normalize_order" => {
+                let result = request
+                    .payload
+                    .ok_or_else(|| "normalize_order requires payload".to_string())
+                    .and_then(|payload| {
+                        serde_json::from_value::<normalize::NormalizeRequest>(payload)
+                            .map_err(|e| format!("invalid normalize payload: {e}"))
+                    })
+                    .and_then(|request| {
+                        std::panic::catch_unwind(|| normalize::normalize(request))
+                            .unwrap_or_else(|_| Err("SDK normalization arithmetic failed".into()))
+                    });
+                match result {
+                    Ok(result) => write_json_line(
+                        &mut stdout,
+                        &SuccessResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: true,
+                            result,
+                        },
+                    )?,
+                    Err(message) => write_json_line(
+                        &mut stdout,
+                        &ErrorResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: false,
+                            error: ErrorDetails {
+                                code: "invalid_normalization_request",
                                 message,
                             },
                         },

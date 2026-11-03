@@ -369,6 +369,12 @@ func validateBuildOrderResult(request BuildOrderRequest, result BuildOrderResult
 	return nil
 }
 
+// ValidateBuildOrderResult also serves server-side request builders using a
+// supervised backend wrapper instead of calling Client directly.
+func ValidateBuildOrderResult(request BuildOrderRequest, result BuildOrderResult) error {
+	return validateBuildOrderResult(request, result)
+}
+
 type boundedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
