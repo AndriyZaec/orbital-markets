@@ -39,6 +39,9 @@ func (a *Adapter) Name() string { return venueName }
 
 func (a *Adapter) MarketDataUpdates() <-chan struct{} { return a.stream.Updates() }
 
+// Snapshot shares the existing market stream with read-only account risk views.
+func (a *Adapter) Snapshot() MarketStreamSnapshot { return a.stream.Snapshot() }
+
 func (a *Adapter) Run(ctx context.Context) {
 	if err := a.stream.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		a.logger.Error("phoenix market stream stopped", "err", err)

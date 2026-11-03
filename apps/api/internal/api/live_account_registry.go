@@ -16,11 +16,13 @@ import (
 var errAccountFeedCapacity = errors.New("live account feed capacity reached")
 
 type liveAccountPosition struct {
-	Symbol     string
-	Side       string
-	Size       float64
-	EntryPrice float64
-	LiqPrice   float64
+	Symbol           string  `json:"symbol"`
+	Side             string  `json:"side"`
+	Size             float64 `json:"size"`
+	EntryPrice       float64 `json:"entry_price"`
+	LiqPrice         float64 `json:"liquidation_price"`
+	BaseLots         string  `json:"base_lots,omitempty"`
+	LiquidationModel string  `json:"liquidation_model,omitempty"`
 }
 
 type liveAccountSnapshot struct {
@@ -34,6 +36,7 @@ type liveAccountSnapshot struct {
 	Positions          []liveAccountPosition
 	LeverageBySymbol   map[string]float64
 	UnavailableReason  string
+	Phoenix            *phoenixAccountDetails
 }
 
 // liveAccountFeed hides venue-specific account state, submission, and fill tracking.

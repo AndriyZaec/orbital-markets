@@ -11,6 +11,7 @@ import (
 
 var currentLiveVenues = []string{"pacifica", "hyperliquid"}
 var supportedLiveVenues = []string{"pacifica", "hyperliquid", "aster"}
+var supportedAccountVenues = []string{"pacifica", "hyperliquid", "aster", "phoenix"}
 
 type liveVenueBindingsRequest struct {
 	Accounts uniqueVenueBindings `json:"accounts,omitempty"`

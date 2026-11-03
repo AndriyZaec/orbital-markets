@@ -29,6 +29,7 @@ func startLive(
 	hl *hyperliquid.Adapter,
 	ast *aster.Adapter,
 	asterReader dataagent.Reader,
+	phoenixConfigs ...api.PhoenixAccountConfig,
 ) *api.LiveDeps {
 	logger.Info("live execution: starting runtime")
 
@@ -37,7 +38,7 @@ func startLive(
 	// --- Live position store + monitor ---
 	liveStore := executor.NewStore(writer, reader, logger)
 	signingStore := domain.NewSigningRequestStore()
-	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader)
+	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader, phoenixConfigs...)
 	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)
 	fundingSources := map[string]venue.FundingHistory{
 		"pacifica":    pac,

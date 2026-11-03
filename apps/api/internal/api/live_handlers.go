@@ -802,16 +802,17 @@ const (
 // venueAccountStatus is the per-venue account-data readiness view returned by
 // /live/balances and consumed by the /live/prepare gate.
 type venueAccountStatus struct {
-	Venue       string     `json:"venue"`
-	Equity      float64    `json:"equity"`
-	Available   float64    `json:"available"`
-	Connected   bool       `json:"connected"`    // wallet-derived stream is up
-	StreamReady bool       `json:"stream_ready"` // account snapshot has been populated at least once
-	Fresh       bool       `json:"fresh"`        // snapshot age within liveAccountFreshness
-	LastUpdated *time.Time `json:"last_updated,omitempty"`
-	AgeSeconds  float64    `json:"age_seconds"`
-	Reason      string     `json:"reason,omitempty"` // human explanation when not ready
-	Unavailable bool       `json:"unavailable,omitempty"`
+	Venue       string                 `json:"venue"`
+	Equity      float64                `json:"equity"`
+	Available   float64                `json:"available"`
+	Connected   bool                   `json:"connected"`    // wallet-derived stream is up
+	StreamReady bool                   `json:"stream_ready"` // account snapshot has been populated at least once
+	Fresh       bool                   `json:"fresh"`        // snapshot age within liveAccountFreshness
+	LastUpdated *time.Time             `json:"last_updated,omitempty"`
+	AgeSeconds  float64                `json:"age_seconds"`
+	Reason      string                 `json:"reason,omitempty"` // human explanation when not ready
+	Unavailable bool                   `json:"unavailable,omitempty"`
+	Phoenix     *phoenixAccountDetails `json:"phoenix,omitempty"`
 }
 
 // buildVenueAccountStatus derives the readiness view from a raw venue snapshot.
@@ -849,17 +850,21 @@ func liveAccountStatuses(accounts *liveAccountContext, freshness time.Duration) 
 }
 
 func accountStatus(accounts *liveAccountContext, venue string, freshness time.Duration) venueAccountStatus {
-	if venue == "aster" && freshness > admissionFreshness {
+	if (venue == "aster" || venue == "phoenix") && freshness > admissionFreshness {
 		freshness = admissionFreshness
 	}
 	return buildVenueAccountStatusFromSnapshot(venue, accountSnapshot(accounts, venue), freshness)
 }
 
 func buildVenueAccountStatusFromSnapshot(venue string, snapshot liveAccountSnapshot, freshness time.Duration) venueAccountStatus {
+	if venue == "phoenix" && freshness > admissionFreshness {
+		freshness = admissionFreshness
+	}
 	status := buildVenueAccountStatus(
 		venue, snapshot.Connected, snapshot.LastUpdated,
 		snapshot.Equity, snapshot.Available, freshness,
 	)
+	status.Phoenix = snapshot.Phoenix
 	if snapshot.UnavailableReason != "" {
 		status.Connected = false
 		status.StreamReady = false
@@ -891,7 +896,7 @@ func (s *Server) handleLiveBalances(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAccountsWithin(supportedLiveVenues); err != nil {
+	if err := bindings.requireAccountsWithin(supportedAccountVenues); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -983,7 +988,7 @@ func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one account binding required"})
 		return
 	}
-	if err := bindings.requireAccountsWithin(supportedLiveVenues); err != nil {
+	if err := bindings.requireAccountsWithin(supportedAccountVenues); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

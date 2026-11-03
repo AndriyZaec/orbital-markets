@@ -36,6 +36,9 @@ func (h *fakeHelper) Health(ctx context.Context) (helper.HealthResult, error) {
 	return helper.HealthResult{HelperVersion: "0.1.0", PhoenixRiseVersion: helper.PhoenixRiseVersion}, nil
 }
 func (h *fakeHelper) Close() { h.closed.Add(1) }
+func (h *fakeHelper) ComputeRisk(context.Context, helper.RiskRequest) (helper.RiskResult, error) {
+	return helper.RiskResult{}, errors.New("unused")
+}
 func (h *fakeHelper) BuildDelegation(context.Context, helper.BuildDelegationRequest) (helper.BuildDelegationResult, error) {
 	return helper.BuildDelegationResult{}, errors.New("unused")
 }

@@ -95,6 +95,9 @@ func (s *Server) handlePhoenixDelegationSubmit(w http.ResponseWriter, r *http.Re
 	}
 	defer unlock()
 	result, err := s.phoenixDelegation.Submit(r.Context(), request.Owner, request.SignedAction)
+	if result.State == "pending" || result.State == "confirmed" || result.State == "superseded" {
+		s.invalidatePhoenixAccount(request.Owner)
+	}
 	s.writePhoenixDelegation(w, result, err)
 }
 
@@ -111,7 +114,22 @@ func (s *Server) handlePhoenixDelegationReconcile(w http.ResponseWriter, r *http
 		return
 	}
 	result, err := s.phoenixDelegation.Reconcile(r.Context(), request.Owner, request.RequestID)
+	if result.State == "confirmed" || result.State == "superseded" {
+		s.invalidatePhoenixAccount(request.Owner)
+	}
 	s.writePhoenixDelegation(w, result, err)
+}
+
+func (s *Server) invalidatePhoenixAccount(owner string) {
+	if s.live == nil || s.live.accounts == nil {
+		return
+	}
+	if lease, ok := s.live.accounts.LookupPassive("phoenix", owner); ok {
+		defer lease.Release()
+		if feed, ok := lease.Feed().(*phoenixAccountFeed); ok {
+			feed.invalidateAuthority()
+		}
+	}
 }
 
 func (s *Server) writePhoenixDelegation(w http.ResponseWriter, result delegation.Result, err error) {

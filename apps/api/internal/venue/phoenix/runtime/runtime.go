@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -25,6 +26,7 @@ type healthHelper interface {
 	Close()
 	BuildDelegation(context.Context, helper.BuildDelegationRequest) (helper.BuildDelegationResult, error)
 	DecodeTraderAuthority(context.Context, helper.DecodeAuthorityRequest) (helper.AuthorityResult, error)
+	ComputeRisk(context.Context, helper.RiskRequest) (helper.RiskResult, error)
 }
 
 type chain interface {
@@ -74,6 +76,62 @@ func (r *Runtime) ReadAuthority(ctx context.Context, owner, trader string, slot 
 	decoded, err := r.helper.DecodeTraderAuthority(ctx, helper.DecodeAuthorityRequest{OwnerAuthority: owner, TraderAccount: trader, AccountOwner: a.Owner, DataBase64: a.DataBase64})
 	if err != nil {
 		return delegation.Authority{}, err
+	}
+	return delegation.Authority{PositionAuthority: decoded.PositionAuthority, Slot: a.Slot}, nil
+}
+
+// Read-only helper frames must finish draining when an individual account feed
+// is evicted. Cancelling an in-flight NDJSON frame otherwise stops the shared
+// helper. Runtime shutdown still cancels it; helper calls retain their 2s bound.
+func (r *Runtime) ComputeRisk(ctx context.Context, q helper.RiskRequest) (helper.RiskResult, error) {
+	if err := ctx.Err(); err != nil {
+		return helper.RiskResult{}, err
+	}
+	result, err := r.helper.ComputeRisk(r.ctx, q)
+	if ctx.Err() != nil {
+		return helper.RiskResult{}, ctx.Err()
+	}
+	return result, err
+}
+
+func (r *Runtime) AccountAuthority(ctx context.Context, owner string, minSlot uint64) (delegation.Authority, error) {
+	if err := ctx.Err(); err != nil {
+		return delegation.Authority{}, err
+	}
+	if err := r.ctx.Err(); err != nil {
+		return delegation.Authority{}, err
+	}
+	hash, err := r.chain.LatestBlockhash(ctx)
+	if err != nil {
+		return delegation.Authority{}, err
+	}
+	built, err := r.helper.BuildDelegation(r.ctx, helper.BuildDelegationRequest{Action: helper.ActionRevoke, OwnerAuthority: owner, NewPositionAuthority: owner,
+		FeePayer: r.Address(), RecentBlockhash: hash.Hash, LastValidBlockHeight: hash.LastValidBlockHeight})
+	if err != nil {
+		return delegation.Authority{}, err
+	}
+	if ctx.Err() != nil {
+		return delegation.Authority{}, ctx.Err()
+	}
+	a, err := r.chain.AccountInfo(ctx, built.TraderAccount, max(minSlot, hash.Slot), false)
+	if err != nil {
+		return delegation.Authority{}, err
+	}
+	if a.Owner != helper.PhoenixProgramID || a.Slot < max(minSlot, hash.Slot) {
+		return delegation.Authority{}, rpc.ErrInvalidResponse
+	}
+	if ctx.Err() != nil {
+		return delegation.Authority{}, ctx.Err()
+	}
+	decoded, err := r.helper.DecodeTraderAuthority(r.ctx, helper.DecodeAuthorityRequest{OwnerAuthority: owner, TraderAccount: built.TraderAccount, AccountOwner: a.Owner, DataBase64: a.DataBase64})
+	if err != nil {
+		return delegation.Authority{}, err
+	}
+	if ctx.Err() != nil {
+		return delegation.Authority{}, ctx.Err()
+	}
+	if r.ctx.Err() != nil {
+		return delegation.Authority{}, errors.New("Phoenix runtime stopped")
 	}
 	return delegation.Authority{PositionAuthority: decoded.PositionAuthority, Slot: a.Slot}, nil
 }

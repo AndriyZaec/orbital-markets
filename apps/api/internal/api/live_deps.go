@@ -119,6 +119,7 @@ func NewLiveDeps(
 	pacificaLotSizes pacificlive.LotSizeMap,
 	asterRules asterlive.OrderRuleMap,
 	asterReader dataagent.Reader,
+	phoenixConfigs ...PhoenixAccountConfig,
 ) *LiveDeps {
 	asterClient := asterlive.NewDefaultClient(logger)
 	hlBuilder := hllive.OrbitalBuilderCode()
@@ -162,6 +163,9 @@ func NewLiveDeps(
 		},
 		"pacifica":    &pacificaAccountFeedFactory{logger: logger},
 		"hyperliquid": &hyperliquidAccountFeedFactory{logger: logger, assetMap: hlAssetMap},
+	}
+	if len(phoenixConfigs) > 0 && phoenixConfigs[0].Backend != nil && phoenixConfigs[0].Markets != nil {
+		factories["phoenix"] = newPhoenixAccountFactory(phoenixConfigs[0], liveStore, logger)
 	}
 	deps.accounts = newAccountFeedRegistry(ctx, factories, accountFeedRegistryConfig{
 		IdleTTL:         defaultAccountFeedIdleTTL,

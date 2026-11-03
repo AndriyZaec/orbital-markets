@@ -111,10 +111,17 @@ type Subscriber struct {
 }
 
 func NewSubscriber(state *State, reader *Reader, logger *slog.Logger) *Subscriber {
+	return NewSubscriberWithURL(state, reader, logger, defaultWSURL)
+}
+
+func NewSubscriberWithURL(state *State, reader *Reader, logger *slog.Logger, wsURL string) *Subscriber {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Subscriber{state: state, reader: reader, logger: logger, wsURL: defaultWSURL,
+	if wsURL == "" {
+		wsURL = defaultWSURL
+	}
+	return &Subscriber{state: state, reader: reader, logger: logger, wsURL: wsURL,
 		dialer: websocket.DefaultDialer, reconnectWait: reconnectDelay, refreshEvery: refreshInterval, updates: make(chan struct{}, 1)}
 }
 
