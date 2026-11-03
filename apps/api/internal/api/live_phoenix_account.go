@@ -326,6 +326,33 @@ func (f *phoenixAccountFeed) RefreshPositions(ctx context.Context) error {
 	}
 	return f.refreshView(ctx)
 }
+
+// ProjectOpen is an internal planning seam. The feed still rejects every live
+// submit; a model's margin_sufficient is not transaction authorization.
+func (f *phoenixAccountFeed) ProjectOpen(ctx context.Context, order helper.OrderProjection) (helper.RiskResult, error) {
+	if err := f.refreshView(ctx); err != nil {
+		return helper.RiskResult{}, err
+	}
+	before := f.Snapshot()
+	if before.UnavailableReason != "" || before.Phoenix == nil || !before.Phoenix.AccountReady || !before.Phoenix.CanIncreaseRisk {
+		return helper.RiskResult{}, errors.New("Phoenix account is not ready for opening projection")
+	}
+	f.mu.Lock()
+	revision := f.authorityRevision
+	f.mu.Unlock()
+	result, err := f.factory.risk.ProjectOpen(ctx, f.state, f.factory.config.Backend, order)
+	if err != nil {
+		return helper.RiskResult{}, err
+	}
+	after := f.Snapshot()
+	f.mu.Lock()
+	changed := f.authorityRevision != revision
+	f.mu.Unlock()
+	if changed || after.UnavailableReason != "" || after.Phoenix == nil || !after.Phoenix.Authorized || before.Phoenix.PositionAuthority != after.Phoenix.PositionAuthority {
+		return helper.RiskResult{}, errors.New("Phoenix authority or account changed during opening projection")
+	}
+	return result, nil
+}
 func (f *phoenixAccountFeed) PreTradeBlockers(domain.Leg) []string {
 	reasons := []string{errPhoenixLiveDisabled.Error()}
 	if reason := f.Snapshot().UnavailableReason; reason != "" {

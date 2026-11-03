@@ -1,4 +1,4 @@
-//! Read-only adapter to pinned Rise math. No RPC, signer or order simulation.
+//! Read-only adapter to pinned Rise math. No RPC, signing or transaction send.
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::str::FromStr;
 
@@ -13,6 +13,8 @@ use phoenix_rise::math::{
 };
 use serde::{Deserialize, Serialize};
 use solana_pubkey::Pubkey;
+
+use crate::projection::{OrderProjection, ProjectionResult};
 
 const DATA_MAX_AGE_MS: u64 = 30_000;
 const PARAMS_MAX_AGE_MS: u64 = 300_000;
@@ -37,6 +39,7 @@ pub struct RiskRequest {
     spot_balances: Vec<SpotBalance>,
     markets: Vec<MarketInput>,
     spot_params: Vec<SpotParams>,
+    projection: Option<OrderProjection>,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +105,8 @@ struct MarketInput {
     cancel_order_risk_factor_bps: u16,
     upnl_risk_factor_bps: u16,
     upnl_withdrawal_risk_factor_bps: u16,
+    taker_fee_rate: Option<f64>,
+    isolated_only: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +141,8 @@ pub struct RiskResult {
     risk_tier: String,
     liquidation_model: &'static str,
     static_liquidation_prices_usd: BTreeMap<String, Option<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    projection: Option<ProjectionResult>,
 }
 
 pub fn compute(request: RiskRequest) -> Result<RiskResult, String> {
@@ -160,6 +167,13 @@ pub fn compute(request: RiskRequest) -> Result<RiskResult, String> {
         request.params_observed_unix_ms,
         PARAMS_MAX_AGE_MS,
     )?);
+    if let Some(order) = &request.projection {
+        valid_until = valid_until.min(expiry(
+            request.as_of_unix_ms,
+            order.quote_observed_unix_ms,
+            5_000,
+        )?);
+    }
     let mut provider = HashMap::new();
     let mut indices = HashMap::new();
     let mut asset_ids = HashSet::new();
@@ -366,7 +380,7 @@ pub fn compute(request: RiskRequest) -> Result<RiskResult, String> {
     let mut simulation = portfolio
         .simulate_margin(
             SimulateMarginParams {
-                actions: funding,
+                actions: funding.clone(),
                 ..Default::default()
             },
             &provider,
@@ -407,6 +421,30 @@ pub fn compute(request: RiskRequest) -> Result<RiskResult, String> {
     {
         return Err("invalid SDK liquidation estimate".into());
     }
+    let projection = request
+        .projection
+        .as_ref()
+        .map(|order| {
+            let target = request
+                .markets
+                .iter()
+                .find(|m| m.symbol == order.symbol)
+                .ok_or("missing projected market")?;
+            crate::projection::project(
+                order,
+                &portfolio,
+                &provider,
+                &funding,
+                &margin,
+                target
+                    .taker_fee_rate
+                    .ok_or("missing projected market taker fee")?,
+                target
+                    .isolated_only
+                    .ok_or("missing projected market cross-margin policy")?,
+            )
+        })
+        .transpose()?;
     Ok(RiskResult {
         owner_authority: request.owner_authority,
         trader_pda_index: 0,
@@ -430,6 +468,7 @@ pub fn compute(request: RiskRequest) -> Result<RiskResult, String> {
         risk_tier: format!("{:?}", margin.risk_tier().map_err(|e| e.to_string())?),
         liquidation_model: "rise_local_static",
         static_liquidation_prices_usd: simulation.liquidation_prices_usd.into_iter().collect(),
+        projection,
     })
 }
 
@@ -449,14 +488,14 @@ fn int(value: &str) -> Result<i64, String> {
 fn uint(value: &str) -> Result<u64, String> {
     value.parse().map_err(|_| "invalid unsigned integer".into())
 }
-fn base_lots(value: &str) -> Result<BaseLots, String> {
+pub(crate) fn base_lots(value: &str) -> Result<BaseLots, String> {
     let value = uint(value)?;
     if value > u64::from(u32::MAX) {
         return Err("base lots exceed SDK bounds".into());
     }
     Ok(BaseLots::new(value))
 }
-fn ticks(value: &str) -> Result<Ticks, String> {
+pub(crate) fn ticks(value: &str) -> Result<Ticks, String> {
     let value = uint(value)?;
     if value == 0 || value > u64::from(u32::MAX) {
         return Err("price ticks outside SDK bounds".into());

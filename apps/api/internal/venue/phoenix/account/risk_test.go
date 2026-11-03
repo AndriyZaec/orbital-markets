@@ -120,3 +120,28 @@ func TestRiskRejectsSplineAndStaleInputsBeforeCallingHelper(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectionCapturesAccountFeeMultiplierAndRequiresIncreasingCapability(t *testing.T) {
+	s, _, at := readyState(t)
+	s.mu.Lock()
+	s.snapshot.Cross.Splines = nil
+	s.mu.Unlock()
+	order := helper.OrderProjection{IntentID: "open-1", Symbol: "BTC", Side: "bid", NumBaseLots: "10", PriceLimitTicks: "60000", QuoteObservedUnixMS: at.UnixMilli(), FlightFeeBPS: 2, TakerFeeMultiplier: 999}
+	marker := errors.New("captured projection")
+	computer := riskComputerFunc(func(_ context.Context, q helper.RiskRequest) (helper.RiskResult, error) {
+		if q.Projection == nil || q.Projection.TakerFeeMultiplier != .8 || q.Projection.IntentID != "open-1" || q.Projection.NumBaseLots != "10" {
+			t.Fatal("projection did not bind captured account fee and exact intent")
+		}
+		return helper.RiskResult{}, marker
+	})
+	if _, err := s.risk(context.Background(), computer, riskInputs(at), func() time.Time { return at.Add(time.Millisecond) }, order); !errors.Is(err, marker) {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.snapshot.Cross.Capabilities.State = "reduceOnly"
+	s.snapshot.Cross.Capabilities.Actions.RiskIncreasingTrade.Immediate = false
+	s.mu.Unlock()
+	if _, err := s.risk(context.Background(), computer, riskInputs(at), func() time.Time { return at.Add(time.Millisecond) }, order); err == nil || errors.Is(err, marker) {
+		t.Fatal("reduce-only account reached opening projection")
+	}
+}

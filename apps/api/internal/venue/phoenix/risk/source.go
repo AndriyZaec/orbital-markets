@@ -103,7 +103,47 @@ func (s *Source) Evaluate(ctx context.Context, state *account.State, computer ac
 	return result, nil
 }
 
-func (s *Source) inputs(ctx context.Context, acct account.Snapshot, stream phoenix.MarketStreamSnapshot) (account.RiskInputs, error) {
+// ProjectOpen includes a target market even when the account is otherwise flat.
+// It returns a bounded model result, not permission to sign or submit an order.
+func (s *Source) ProjectOpen(ctx context.Context, state *account.State, computer account.RiskComputer, order helper.OrderProjection) (helper.RiskResult, error) {
+	if s.stream == nil || state == nil {
+		return helper.RiskResult{}, errors.New("Phoenix projection sources unavailable")
+	}
+	if err := helper.ValidateProjectionIntent(order); err != nil {
+		return helper.RiskResult{}, err
+	}
+	before := s.stream.Snapshot()
+	active := false
+	for _, market := range before.Metadata.Markets {
+		if market.Symbol == order.Symbol {
+			active = market.Status == "active"
+			break
+		}
+	}
+	if !active {
+		return helper.RiskResult{}, errors.New("Phoenix projected market is not active")
+	}
+	inputs, err := s.inputs(ctx, state.Snapshot(), before, order.Symbol)
+	if err != nil {
+		return helper.RiskResult{}, err
+	}
+	for _, target := range inputs.Markets {
+		if target.Symbol == order.Symbol && (target.TakerFeeRate == nil || target.IsolatedOnly == nil || *target.IsolatedOnly) {
+			return helper.RiskResult{}, errors.New("Phoenix opening fee or cross-margin policy unavailable")
+		}
+	}
+	result, err := state.ProjectOpen(ctx, computer, inputs, order)
+	if err != nil {
+		return helper.RiskResult{}, err
+	}
+	after := s.stream.Snapshot()
+	if !synchronized(after) || streamRevision(before) != streamRevision(after) {
+		return helper.RiskResult{}, errors.New("Phoenix exchange changed during order projection")
+	}
+	return result, nil
+}
+
+func (s *Source) inputs(ctx context.Context, acct account.Snapshot, stream phoenix.MarketStreamSnapshot, extraSymbols ...string) (account.RiskInputs, error) {
 	if !acct.Fresh(s.now()) || !synchronized(stream) {
 		return account.RiskInputs{}, errors.New("Phoenix account or market stream not synchronized")
 	}
@@ -118,6 +158,12 @@ func (s *Source) inputs(ctx context.Context, acct account.Snapshot, stream phoen
 		return account.RiskInputs{}, errors.New("Phoenix exchange changed during parameter read")
 	}
 	needed := make(map[string]bool)
+	for _, symbol := range extraSymbols {
+		if symbol == "" {
+			return account.RiskInputs{}, errors.New("missing projected market symbol")
+		}
+		needed[symbol] = true
+	}
 	for symbol := range acct.Cross.Positions {
 		needed[symbol] = true
 	}
@@ -362,13 +408,15 @@ type tier struct {
 	RiskFactorBPS *uint16  `json:"limitOrderRiskFactorBps"`
 }
 type marketConfig struct {
-	Symbol   string  `json:"symbol"`
-	Status   string  `json:"marketStatus"`
-	AssetID  *uint32 `json:"assetId"`
-	TickSize *uint64 `json:"tickSize"`
-	Decimals *int8   `json:"baseLotsDecimals"`
-	Tiers    []tier  `json:"leverageTiers"`
-	Risk     struct {
+	Symbol       string   `json:"symbol"`
+	Status       string   `json:"marketStatus"`
+	AssetID      *uint32  `json:"assetId"`
+	TickSize     *uint64  `json:"tickSize"`
+	Decimals     *int8    `json:"baseLotsDecimals"`
+	TakerFee     *float64 `json:"takerFee"`
+	IsolatedOnly *bool    `json:"isolatedOnly"`
+	Tiers        []tier   `json:"leverageTiers"`
+	Risk         struct {
 		Maintenance    *float64 `json:"maintenance"`
 		MaintenanceBPS *uint16  `json:"maintenanceBps"`
 		Backstop       *float64 `json:"backstop"`
@@ -401,6 +449,17 @@ func normalizeMarket(m marketConfig) (helper.RiskMarket, error) {
 		return helper.RiskMarket{}, errors.New("incomplete market risk configuration")
 	}
 	r := helper.RiskMarket{Symbol: m.Symbol, AssetID: uint64(*m.AssetID), BaseLotDecimals: *m.Decimals, TickSize: strconv.FormatUint(*m.TickSize, 10)}
+	if m.TakerFee != nil {
+		if math.IsNaN(*m.TakerFee) || math.IsInf(*m.TakerFee, 0) || *m.TakerFee < 0 || *m.TakerFee > 1 {
+			return helper.RiskMarket{}, errors.New("invalid Phoenix taker fee")
+		}
+		fee := *m.TakerFee
+		r.TakerFeeRate = &fee
+	}
+	if m.IsolatedOnly != nil {
+		isolated := *m.IsolatedOnly
+		r.IsolatedOnly = &isolated
+	}
 	for i, t := range m.Tiers {
 		if t.MaxLeverage == nil || !positive(*t.MaxLeverage) || *t.MaxLeverage != math.Trunc(*t.MaxLeverage) || *t.MaxLeverage >= float64(math.MaxInt64) || t.MaxSize == nil || *t.MaxSize == 0 || *t.MaxSize > math.MaxUint32 {
 			return helper.RiskMarket{}, errors.New("invalid or unrepresentable leverage tier")

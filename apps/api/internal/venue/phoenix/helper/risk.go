@@ -31,6 +31,7 @@ type RiskRequest struct {
 	SpotBalances          []RiskSpotBalance `json:"spot_balances"`
 	Markets               []RiskMarket      `json:"markets"`
 	SpotParams            []RiskSpotParams  `json:"spot_params"`
+	Projection            *OrderProjection  `json:"projection,omitempty"`
 }
 
 type RiskPosition struct {
@@ -87,6 +88,8 @@ type RiskMarket struct {
 	CancelOrderRiskFactorBPS    uint16           `json:"cancel_order_risk_factor_bps"`
 	UPnLRiskFactorBPS           uint16           `json:"upnl_risk_factor_bps"`
 	UPnLWithdrawalRiskFactorBPS uint16           `json:"upnl_withdrawal_risk_factor_bps"`
+	TakerFeeRate                *float64         `json:"taker_fee_rate,omitempty"`
+	IsolatedOnly                *bool            `json:"isolated_only,omitempty"`
 }
 
 type RiskTierInput struct {
@@ -118,6 +121,7 @@ type RiskResult struct {
 	RiskTier                     string              `json:"risk_tier"`
 	LiquidationModel             string              `json:"liquidation_model"`
 	StaticLiquidationPricesUSD   map[string]*float64 `json:"static_liquidation_prices_usd"`
+	Projection                   *ProjectionResult   `json:"projection,omitempty"`
 }
 
 func (c *Client) ComputeRisk(ctx context.Context, request RiskRequest) (RiskResult, error) {
@@ -154,6 +158,14 @@ func RiskExpiry(q RiskRequest) (int64, error) {
 	}
 	if err := check(q.ParamsObservedUnixMS, RiskParamsMaxAge); err != nil {
 		return 0, err
+	}
+	if q.Projection != nil {
+		if err := ValidateProjectionIntent(*q.Projection); err != nil {
+			return 0, err
+		}
+		if err := check(q.Projection.QuoteObservedUnixMS, ProjectionQuoteMaxAge); err != nil {
+			return 0, err
+		}
 	}
 	for _, market := range q.Markets {
 		if err := check(market.PriceObservedUnixMS, RiskDataMaxAge); err != nil {
@@ -208,5 +220,5 @@ func ValidateRiskResult(q RiskRequest, r RiskResult, now time.Time) error {
 			return errors.New("invalid Phoenix liquidation result")
 		}
 	}
-	return nil
+	return validateProjectionResult(q, r)
 }

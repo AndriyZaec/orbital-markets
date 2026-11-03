@@ -424,3 +424,18 @@ func TestCollateralCapRetainsJsSafeU64Precision(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectionInputsIncludeTargetForAnOtherwiseFlatAccount(t *testing.T) {
+	now := time.Now().UTC()
+	stream := streamAt(now)
+	source, _ := sourceFor(t, &now, stream, nil)
+	acct := acctAt(now)
+	acct.Cross.SpotCollaterals = nil
+	inputs, err := source.inputs(context.Background(), acct, stream.Snapshot(), "BTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs.Markets) != 1 || inputs.Markets[0].Symbol != "BTC" || inputs.Markets[0].TakerFeeRate == nil || *inputs.Markets[0].TakerFeeRate != .00035 || inputs.Markets[0].IsolatedOnly == nil || *inputs.Markets[0].IsolatedOnly {
+		t.Fatalf("missing target fee/cross metadata: %+v", inputs.Markets)
+	}
+}

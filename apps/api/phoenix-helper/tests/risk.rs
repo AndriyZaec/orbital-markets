@@ -238,3 +238,150 @@ fn usd_prices_use_sdk_tick_conversion_and_reject_ambiguous_units() {
     request["markets"][0]["mark_price_ticks"] = json!("11000");
     assert_eq!(compute(request)["ok"], false);
 }
+
+fn projection_request() -> Value {
+    let mut request = fixture();
+    request["markets"][0]["taker_fee_rate"] = json!(0.00035);
+    request["markets"][0]["isolated_only"] = json!(false);
+    request["projection"] = json!({"intent_id":"open-1","symbol":"SOL","side":"bid","num_base_lots":"1000","price_limit_ticks":"11000",
+        "quote_observed_unix_ms":999750,"taker_fee_multiplier":0.8,"flight_fee_bps":2,"reduce_only":false});
+    request
+}
+
+#[test]
+fn full_fill_projection_includes_fees_and_settles_pending_funding_once() {
+    let response = compute(projection_request());
+    assert_eq!(response["ok"], true, "{response}");
+    let r = &response["result"];
+    let p = &r["projection"];
+    assert_eq!(r["equity_quote_lots"], "108000000"); // Baseline is unchanged.
+    assert_eq!(r["valid_until_unix_ms"], 1004750); // Execution quote has a 5s TTL.
+    assert_eq!(p["model"], "rise_full_fill_at_limit");
+    assert_eq!(p["notional_quote_lots"], "110000000");
+    assert_eq!(p["exchange_fee_quote_lots"], "38500");
+    assert_eq!(p["flight_fee_quote_lots"], "22000");
+    assert_eq!(p["total_fee_quote_lots"], "60500");
+    assert_eq!(p["projected_base_lots"], "2000");
+    assert_eq!(p["projected_equity_quote_lots"], "107939500");
+    assert_eq!(p["projected_initial_margin_quote_lots"], "22000000");
+    assert_eq!(p["projected_available_margin_quote_lots"], "80939500");
+    assert_eq!(p["margin_sufficient"], true);
+}
+
+#[test]
+fn projection_rejects_buffer_exhaustion_even_when_post_fill_tier_is_safe() {
+    let mut request = projection_request();
+    request["projection"]["num_base_lots"] = json!("8000");
+    let response = compute(request);
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(
+        response["result"]["projection"]["projected_risk_tier"],
+        "Safe"
+    );
+    assert_eq!(response["result"]["projection"]["margin_sufficient"], false);
+    assert_eq!(
+        response["result"]["projection"]["reason"],
+        "insufficient_margin_with_buffer"
+    );
+    let mut request = projection_request();
+    request["projection"]["num_base_lots"] = json!("7000");
+    assert_eq!(
+        compute(request)["result"]["projection"]["margin_sufficient"],
+        true
+    );
+    let mut request = projection_request();
+    request["projection"]["num_base_lots"] = json!("100000");
+    let response = compute(request);
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(
+        response["result"]["projection"]["reason"],
+        "projected_account_not_safe"
+    );
+}
+
+#[test]
+fn projection_handles_existing_opposite_positions_and_cross_fees() {
+    let mut request = projection_request();
+    request["projection"]["side"] = json!("ask");
+    let flat = compute(request.clone());
+    assert_eq!(flat["ok"], true, "{flat}");
+    assert_eq!(flat["result"]["projection"]["projected_base_lots"], "0");
+    assert_eq!(
+        flat["result"]["projection"]["projected_initial_margin_quote_lots"],
+        "0"
+    );
+    assert_eq!(
+        flat["result"]["projection"]["projected_equity_quote_lots"],
+        "107939500"
+    );
+    request["projection"]["num_base_lots"] = json!("2000");
+    let flip = compute(request);
+    assert_eq!(flip["result"]["projection"]["projected_base_lots"], "-1000");
+    assert_eq!(
+        flip["result"]["projection"]["total_fee_quote_lots"],
+        "121000"
+    );
+    assert_eq!(flip["result"]["projection"]["margin_sufficient"], true);
+}
+
+#[test]
+fn projection_fee_components_round_up_and_premium_accounts_pay_more() {
+    let mut request = projection_request();
+    request["projection"]["taker_fee_multiplier"] = json!(2.0);
+    assert_eq!(
+        compute(request)["result"]["projection"]["total_fee_quote_lots"],
+        "99000"
+    );
+    let mut request = projection_request();
+    request["projection"]["num_base_lots"] = json!("1");
+    request["projection"]["price_limit_ticks"] = json!("1");
+    let response = compute(request);
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(
+        response["result"]["projection"]["exchange_fee_quote_lots"],
+        "1"
+    );
+    assert_eq!(
+        response["result"]["projection"]["flight_fee_quote_lots"],
+        "1"
+    );
+    assert_eq!(
+        response["result"]["projection"]["total_fee_quote_lots"],
+        "2"
+    );
+}
+
+#[test]
+fn projection_requires_current_quote_complete_cross_metadata_and_exact_intent() {
+    for (path, value) in [
+        ("/projection/quote_observed_unix_ms", json!(994999)),
+        ("/projection/flight_fee_bps", json!(0)),
+        ("/projection/reduce_only", json!(true)),
+        ("/projection/intent_id", json!("")),
+        ("/projection/num_base_lots", json!("0")),
+        ("/projection/price_limit_ticks", json!("0")),
+        ("/projection/symbol", json!("UNKNOWN")),
+        ("/markets/0/taker_fee_rate", json!(-0.01)),
+        ("/markets/0/isolated_only", json!(true)),
+    ] {
+        let mut request = projection_request();
+        *request.pointer_mut(path).unwrap() = value;
+        let response = compute(request);
+        assert_eq!(response["ok"], false, "accepted {path}: {response}");
+    }
+    let mut request = projection_request();
+    request["markets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("taker_fee_rate");
+    assert_eq!(compute(request)["ok"], false);
+    let mut request = projection_request();
+    request["collateral_quote_lots"] = json!("5000000");
+    request["projection"]["side"] = json!("ask");
+    let response = compute(request);
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(
+        response["result"]["projection"]["reason"],
+        "current_account_not_safe"
+    );
+}

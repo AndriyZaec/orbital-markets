@@ -39,12 +39,14 @@ func (m *phoenixTestMarkets) Snapshot() phoenix.MarketStreamSnapshot {
 }
 
 type phoenixTestBackend struct {
-	mu           sync.Mutex
-	agent        string
-	riskErr      error
-	authorityErr error
-	minSlot      uint64
-	onRisk       func()
+	mu                  sync.Mutex
+	agent               string
+	riskErr             error
+	authorityErr        error
+	minSlot             uint64
+	onRisk              func()
+	onProjection        func()
+	projectedMultiplier float64
 }
 
 func (b *phoenixTestBackend) AccountAuthority(_ context.Context, owner string, slot uint64) (delegation.Authority, error) {
@@ -73,11 +75,24 @@ func (b *phoenixTestBackend) ComputeRisk(_ context.Context, q helper.RiskRequest
 			prices[p.Symbol] = nil
 		}
 	}
-	return helper.RiskResult{OwnerAuthority: q.OwnerAuthority, AccountGeneration: q.AccountGeneration, AccountSlot: q.AccountSlot, AccountSequence: q.AccountSequence,
+	result := helper.RiskResult{OwnerAuthority: q.OwnerAuthority, AccountGeneration: q.AccountGeneration, AccountSlot: q.AccountSlot, AccountSequence: q.AccountSequence,
 		MetadataGeneration: q.MetadataGeneration, AsOfUnixMS: q.AsOfUnixMS, ValidUntilUnixMS: expires, QuoteDecimals: 6,
 		EquityQuoteLots: "199999877", EffectiveCollateralQuoteLots: "181999877", AvailableMarginQuoteLots: "179499877", InitialMarginQuoteLots: "2500000", MaintenanceMarginQuoteLots: "1250000",
 		UnsettledFundingQuoteLots: "-123", UnrealizedPnLQuoteLots: "10000000", SpotNotionalQuoteLots: "90000000", DiscountedSpotQuoteLots: "72000000",
-		RiskTier: "Safe", LiquidationModel: "rise_local_static", StaticLiquidationPricesUSD: prices}, nil
+		RiskTier: "Safe", LiquidationModel: "rise_local_static", StaticLiquidationPricesUSD: prices}
+	if p := q.Projection; p != nil {
+		b.mu.Lock()
+		b.projectedMultiplier = p.TakerFeeMultiplier
+		callback := b.onProjection
+		b.mu.Unlock()
+		if callback != nil {
+			callback()
+		}
+		result.Projection = &helper.ProjectionResult{IntentID: p.IntentID, Symbol: p.Symbol, Side: p.Side, NumBaseLots: p.NumBaseLots, PriceLimitTicks: p.PriceLimitTicks, FlightFeeBPS: 2,
+			Model: "rise_full_fill_at_limit", FeePolicy: "undiscounted_taker_ceiling", NotionalQuoteLots: "100000000", ExchangeFeeQuoteLots: "35000", FlightFeeQuoteLots: "20000", TotalFeeQuoteLots: "55000",
+			ProjectedBaseLots: "100", ProjectedEquityQuoteLots: "199944877", ProjectedEffectiveCollateralQuoteLots: "181944877", ProjectedInitialMarginQuoteLots: "6500000", ProjectedMaintenanceMarginQuoteLots: "3250000", ProjectedAvailableMarginQuoteLots: "175444877", ProjectedRiskTier: "Safe", MarginSufficient: true}
+	}
+	return result, nil
 }
 
 type phoenixAccountFixture struct {
@@ -408,5 +423,32 @@ func TestPhoenixStartupRegistersAccountFactoryWithoutLiveModule(t *testing.T) {
 	}
 	if err := (liveVenueBindings{Accounts: map[string]string{"phoenix": phoenixTestOwner}}).requireAccountsWithin(supportedLiveVenues); err == nil {
 		t.Fatal("execution venue allowlist was expanded")
+	}
+}
+
+func TestPhoenixOpeningProjectionDoesNotEnableSubmitAndFencesAuthority(t *testing.T) {
+	f := newPhoenixAccountFixture(t)
+	lease, feed := f.ready(t)
+	defer lease.Release()
+	order := helper.OrderProjection{IntentID: "open-1", Symbol: "SOL", Side: "bid", NumBaseLots: "100", PriceLimitTicks: "10000", QuoteObservedUnixMS: time.Now().UnixMilli(), FlightFeeBPS: 2, TakerFeeMultiplier: 999}
+	result, err := feed.ProjectOpen(context.Background(), order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Projection == nil || !result.Projection.MarginSufficient || feed.Snapshot().Phoenix.LiveReady {
+		t.Fatal("projection changed live trading readiness")
+	}
+	f.backend.mu.Lock()
+	multiplier := f.backend.projectedMultiplier
+	f.backend.onProjection = func() { f.server.invalidatePhoenixAccount(phoenixTestOwner) }
+	f.backend.mu.Unlock()
+	if multiplier != .8 {
+		t.Fatal("projection trusted caller's fee multiplier")
+	}
+	if _, err := feed.ProjectOpen(context.Background(), order); err == nil {
+		t.Fatal("projection survived a known authority mutation")
+	}
+	if _, err := feed.SubmitSigned(context.Background(), domain.SignedAction{}, nil); !errors.Is(err, errPhoenixLiveDisabled) {
+		t.Fatal("projection enabled execution")
 	}
 }

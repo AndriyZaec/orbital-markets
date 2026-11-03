@@ -27,7 +27,11 @@ func (s *State) Risk(ctx context.Context, computer RiskComputer, inputs RiskInpu
 	return s.risk(ctx, computer, inputs, time.Now)
 }
 
-func (s *State) risk(ctx context.Context, computer RiskComputer, inputs RiskInputs, now func() time.Time) (helper.RiskResult, error) {
+func (s *State) ProjectOpen(ctx context.Context, computer RiskComputer, inputs RiskInputs, order helper.OrderProjection) (helper.RiskResult, error) {
+	return s.risk(ctx, computer, inputs, time.Now, order)
+}
+
+func (s *State) risk(ctx context.Context, computer RiskComputer, inputs RiskInputs, now func() time.Time, projections ...helper.OrderProjection) (helper.RiskResult, error) {
 	if computer == nil {
 		return helper.RiskResult{}, errors.New("Phoenix risk helper unavailable")
 	}
@@ -45,6 +49,16 @@ func (s *State) risk(ctx context.Context, computer RiskComputer, inputs RiskInpu
 	}
 	if q.HasSplines {
 		return helper.RiskResult{}, errors.New("Phoenix spline exposure requires Hawkeye risk views")
+	}
+	if len(projections) > 0 {
+		caps := before.Cross.Capabilities
+		access := func(a CapabilityAccess) bool { return a.Immediate || a.ViaColdActivation }
+		if (caps.State != "active" && caps.State != "cold") || !access(caps.Actions.PlaceMarketOrder) || !access(caps.Actions.RiskIncreasingTrade) {
+			return helper.RiskResult{}, errors.New("Phoenix account cannot place risk-increasing orders")
+		}
+		order := projections[0]
+		order.TakerFeeMultiplier = before.Cross.TakerFeeOverrideMultiplier
+		q.Projection = &order
 	}
 	for symbol, position := range before.Cross.Positions {
 		q.Positions = append(q.Positions, helper.RiskPosition{Symbol: symbol, Sequence: position.PositionSequenceNumber,

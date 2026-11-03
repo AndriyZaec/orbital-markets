@@ -7,6 +7,7 @@ mod authority;
 mod delegation;
 mod message;
 mod order;
+mod projection;
 mod risk;
 
 const PROTOCOL_VERSION: u32 = 1;
