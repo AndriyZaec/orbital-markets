@@ -360,12 +360,12 @@ function TradingAgentSession({
   }
 
   const sign = async (request: SigningRequest) => {
-    if (request.venue === 'phoenix') throw new Error('Phoenix live order signing is not enabled')
     const { signWithStoredTradingAgent } = await import('./signing.ts')
-    const currentOwner = request.venue === 'pacifica'
+    const solanaVenue = request.venue === 'pacifica' || request.venue === 'phoenix'
+    const currentOwner = solanaVenue
       ? pacificaOwner
       : request.venue === 'aster' ? asterOwner : hyperliquidOwner
-    const matches = request.venue === 'pacifica'
+    const matches = solanaVenue
       ? currentOwner === request.account
       : currentOwner?.toLowerCase() === request.account.toLowerCase()
     if (!matches) throw new Error(`${request.venue} owner changed during execution`)
@@ -375,7 +375,10 @@ function TradingAgentSession({
     if (!ownerStillCurrent(request.venue, request.account, owners.current)) {
       throw new Error(`${request.venue} owner changed during execution`)
     }
-    const signed = await signWithStoredTradingAgent(storage, request)
+    const isCurrent = () => ownerStillCurrent(request.venue, request.account, owners.current)
+    const signed = request.venue === 'phoenix'
+      ? await withAgentLock('phoenix', request.account, () => signWithStoredTradingAgent(storage, request, isCurrent))
+      : await signWithStoredTradingAgent(storage, request)
     if (!ownerStillCurrent(request.venue, request.account, owners.current)) {
       throw new Error(`${request.venue} owner changed during signing`)
     }
