@@ -17,16 +17,23 @@ func (s infrastructureStatus) Readiness(context.Context) phoenixruntime.Status {
 	return phoenixruntime.Status(s)
 }
 
+type verifiedFlightInfrastructure struct{ infrastructureStatus }
+
+func (verifiedFlightInfrastructure) FlightReadiness() phoenixruntime.FlightStatus {
+	return phoenixruntime.FlightStatus{Ready: true, BuilderAuthority: "configured-public-builder"}
+}
+
 func TestPhoenixInfrastructureNeverAdvertisesLiveReady(t *testing.T) {
-	for _, provider := range []PhoenixInfrastructure{nil, infrastructureStatus{Ready: true}, infrastructureStatus{Reason: "rpc_unavailable"}} {
+	for _, provider := range []PhoenixInfrastructure{nil, infrastructureStatus{Ready: true}, infrastructureStatus{Reason: "rpc_unavailable"}, verifiedFlightInfrastructure{infrastructureStatus{Ready: true}}} {
 		s := &Server{}
 		s.EnablePhoenixInfrastructure(provider)
 		w := httptest.NewRecorder()
 		s.handlePhoenixInfrastructure(w, httptest.NewRequest("GET", "/api/v1/live/phoenix/status", nil))
 		var result struct {
-			Configured     bool                  `json:"configured"`
-			Infrastructure phoenixruntime.Status `json:"infrastructure"`
-			LiveReady      bool                  `json:"live_ready"`
+			Configured     bool                        `json:"configured"`
+			Infrastructure phoenixruntime.Status       `json:"infrastructure"`
+			Flight         phoenixruntime.FlightStatus `json:"flight"`
+			LiveReady      bool                        `json:"live_ready"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 			t.Fatal(err)
@@ -39,6 +46,9 @@ func TestPhoenixInfrastructureNeverAdvertisesLiveReady(t *testing.T) {
 		}
 		if provider == nil && result.Infrastructure.Reason != "not_configured" {
 			t.Fatalf("missing disabled reason: %s", w.Body)
+		}
+		if _, flight := provider.(verifiedFlightInfrastructure); result.Flight.Ready != flight {
+			t.Fatalf("Flight readiness was confused with infrastructure/live readiness: %s", w.Body)
 		}
 	}
 }

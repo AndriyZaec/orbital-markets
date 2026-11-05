@@ -26,9 +26,16 @@ func (s *Server) handlePhoenixInfrastructure(w http.ResponseWriter, r *http.Requ
 	if configured {
 		status = s.phoenixInfrastructure.Readiness(r.Context())
 	}
+	flight := phoenixruntime.FlightStatus{Reason: "not_configured"}
+	if provider, ok := s.phoenixInfrastructure.(interface {
+		FlightReadiness() phoenixruntime.FlightStatus
+	}); ok {
+		flight = provider.FlightReadiness()
+	}
 	writeJSON(w, http.StatusOK, struct {
-		Configured     bool                  `json:"configured"`
-		Infrastructure phoenixruntime.Status `json:"infrastructure"`
-		LiveReady      bool                  `json:"live_ready"`
-	}{Configured: configured, Infrastructure: status, LiveReady: false})
+		Configured     bool                        `json:"configured"`
+		Infrastructure phoenixruntime.Status       `json:"infrastructure"`
+		Flight         phoenixruntime.FlightStatus `json:"flight"`
+		LiveReady      bool                        `json:"live_ready"`
+	}{Configured: configured, Infrastructure: status, Flight: flight, LiveReady: false})
 }

@@ -15,6 +15,7 @@ func TestPhoenixConfigurationIsOptionalAndAllOrNothing(t *testing.T) {
 		{"absent", nil, false, false},
 		{"partial key", map[string]string{"PHOENIX_RELAYER_PRIVATE_KEY": "test-secret"}, false, true},
 		{"partial URL", map[string]string{"HELIUS_RPC_URL": "https://rpc.example/?api-key=test-secret"}, false, true},
+		{"partial builder", map[string]string{"PHOENIX_BUILDER_AUTHORITY": "11111111111111111111111111111111"}, false, true},
 		{"complete", map[string]string{"PHOENIX_RELAYER_PRIVATE_KEY": "test-secret", "HELIUS_RPC_URL": "https://rpc.example/?api-key=test-secret", "PHOENIX_MAX_TRANSACTION_FEE_LAMPORTS": "10000"}, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

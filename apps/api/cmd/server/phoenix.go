@@ -16,9 +16,10 @@ func phoenixConfig(getenv func(string) string) (phoenixruntime.Config, bool, err
 		HelperPath:        strings.TrimSpace(getenv("PHOENIX_HELPER_PATH")),
 		RPCURL:            strings.TrimSpace(getenv("HELIUS_RPC_URL")),
 		RelayerPrivateKey: strings.TrimSpace(getenv("PHOENIX_RELAYER_PRIVATE_KEY")),
+		BuilderAuthority:  strings.TrimSpace(getenv("PHOENIX_BUILDER_AUTHORITY")),
 	}
 	cap := strings.TrimSpace(getenv("PHOENIX_MAX_TRANSACTION_FEE_LAMPORTS"))
-	if config.HelperPath == "" && config.RPCURL == "" && config.RelayerPrivateKey == "" && cap == "" {
+	if config.HelperPath == "" && config.RPCURL == "" && config.RelayerPrivateKey == "" && cap == "" && config.BuilderAuthority == "" {
 		return config, false, nil
 	}
 	if config.RPCURL == "" || config.RelayerPrivateKey == "" || cap == "" {

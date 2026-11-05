@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/delegation"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/relayer"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/rpc"
+	"github.com/mr-tron/base58"
 )
 
 type Config struct {
@@ -19,6 +21,7 @@ type Config struct {
 	RPCURL                    string
 	RelayerPrivateKey         string
 	MaxTransactionFeeLamports uint64
+	BuilderAuthority          string
 }
 
 type healthHelper interface {
@@ -29,6 +32,8 @@ type healthHelper interface {
 	ComputeRisk(context.Context, helper.RiskRequest) (helper.RiskResult, error)
 	NormalizeOrder(context.Context, helper.NormalizeRequest) (helper.NormalizedOrder, error)
 	BuildOrder(context.Context, helper.BuildOrderRequest) (helper.BuildOrderResult, error)
+	FlightAccounts(context.Context, helper.FlightRequest) (helper.FlightAccounts, error)
+	VerifyFlight(context.Context, helper.VerifyFlightRequest) (helper.VerifiedFlight, error)
 }
 
 type chain interface {
@@ -161,16 +166,25 @@ func (r *Runtime) AccountAuthority(ctx context.Context, owner string, minSlot ui
 }
 
 type Runtime struct {
-	helper  healthHelper
-	chain   chain
-	relayer *relayer.Service
-	maxFee  uint64
-	ctx     context.Context
-	cancel  context.CancelFunc
-	done    chan struct{}
+	helper           healthHelper
+	chain            chain
+	relayer          *relayer.Service
+	maxFee           uint64
+	ctx              context.Context
+	cancel           context.CancelFunc
+	done             chan struct{}
+	builderAuthority string
+	flightMu         sync.Mutex
+	flightStatus     FlightStatus
 }
 
 func Start(ctx context.Context, config Config, logger *slog.Logger) (*Runtime, error) {
+	if config.BuilderAuthority != "" {
+		key, err := base58.Decode(config.BuilderAuthority)
+		if err != nil || len(key) != 32 {
+			return nil, errors.New("invalid Phoenix Flight builder authority")
+		}
+	}
 	signer, err := relayer.NewSigner(config.RelayerPrivateKey)
 	if err != nil {
 		return nil, err
@@ -187,16 +201,25 @@ func Start(ctx context.Context, config Config, logger *slog.Logger) (*Runtime, e
 	if err != nil {
 		return nil, err
 	}
-	return startRuntime(ctx, helperClient, client, service, config.MaxTransactionFeeLamports), nil
+	return startRuntime(ctx, helperClient, client, service, config.MaxTransactionFeeLamports, config.BuilderAuthority), nil
 }
 
-func startRuntime(ctx context.Context, h healthHelper, c chain, s *relayer.Service, maxFee uint64) *Runtime {
+func startRuntime(ctx context.Context, h healthHelper, c chain, s *relayer.Service, maxFee uint64, builder ...string) *Runtime {
 	ctx, cancel := context.WithCancel(ctx)
 	r := &Runtime{helper: h, chain: c, relayer: s, maxFee: maxFee, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	if len(builder) > 0 {
+		r.builderAuthority = builder[0]
+	}
+	if r.builderAuthority != "" {
+		r.refreshFlight() // Startup verification; failure only blocks Flight readiness.
+	}
 	go func() {
 		defer close(r.done)
 		defer r.helper.Close()
+		flightDone := make(chan struct{})
+		go func() { defer close(flightDone); r.monitorFlight() }()
 		r.relayer.Run(ctx)
+		<-flightDone
 	}()
 	return r
 }

@@ -36,6 +36,12 @@ func (h *fakeHelper) Health(ctx context.Context) (helper.HealthResult, error) {
 	return helper.HealthResult{HelperVersion: "0.1.0", PhoenixRiseVersion: helper.PhoenixRiseVersion}, nil
 }
 func (h *fakeHelper) Close() { h.closed.Add(1) }
+func (h *fakeHelper) FlightAccounts(context.Context, helper.FlightRequest) (helper.FlightAccounts, error) {
+	return helper.FlightAccounts{}, errors.New("unused")
+}
+func (h *fakeHelper) VerifyFlight(context.Context, helper.VerifyFlightRequest) (helper.VerifiedFlight, error) {
+	return helper.VerifiedFlight{}, errors.New("unused")
+}
 func (h *fakeHelper) ComputeRisk(context.Context, helper.RiskRequest) (helper.RiskResult, error) {
 	return helper.RiskResult{}, errors.New("unused")
 }
@@ -180,6 +186,7 @@ func TestStartRejectsInvalidConfigurationBeforeHelperLaunch(t *testing.T) {
 		{"key", func(c *Config) { c.RelayerPrivateKey = "invalid-secret" }},
 		{"URL", func(c *Config) { c.RPCURL = "invalid" }},
 		{"cap", func(c *Config) { c.MaxTransactionFeeLamports = 0 }},
+		{"builder", func(c *Config) { c.BuilderAuthority = "invalid" }},
 		{"helper", func(c *Config) {}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
