@@ -152,3 +152,48 @@ func (s *Store) Unresolved(ctx context.Context, owner string) (bool, error) {
 	err := s.reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM phoenix_order_attempts WHERE owner_account=? AND state IN ('pending','submitted'))`, owner).Scan(&count)
 	return count != 0, err
 }
+
+func (s *Store) ByClientID(ctx context.Context, owner, cid string) (Attempt, error) {
+	var id string
+	err := s.reader.QueryRowContext(ctx, `SELECT request_id FROM phoenix_order_attempts WHERE owner_account=? AND client_order_id=?`, owner, cid).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Attempt{}, ErrNotFound
+	}
+	if err != nil {
+		return Attempt{}, err
+	}
+	return s.Get(ctx, owner, id)
+}
+
+func (s *Store) Pending(ctx context.Context, owner string, limit int) ([]Attempt, error) {
+	if limit < 1 || limit > 10 {
+		return nil, ErrConflict
+	}
+	rows, err := s.reader.QueryContext(ctx, `SELECT request_id FROM phoenix_order_attempts WHERE owner_account=? AND state IN ('pending','submitted') ORDER BY created_at,request_id LIMIT ?`, owner, limit)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Attempt, 0, len(ids))
+	for _, id := range ids {
+		a, err := s.Get(ctx, owner, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, nil
+}

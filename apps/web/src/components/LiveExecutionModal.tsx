@@ -52,7 +52,7 @@ function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatu
     case 'degraded':
     case 'aborted':
       if (unwindStatus === 'confirmed') return 'unwound'
-      if (unwindStatus === 'unconfirmed' || unwindStatus === 'submit_failed') return 'failed'
+      if (unwindStatus === 'unconfirmed' || unwindStatus === 'submit_failed' || unwindStatus === 'requires_signature') return 'failed'
       return 'failed'
     case 'failed': return 'failed'
     default: return 'pending'
@@ -141,7 +141,9 @@ function UnwindNotice({ status }: { status: UnwindStatus }) {
     case 'confirmed':
       return <p className="text-[10px] text-muted-foreground mt-1">Leg 1 was unwound via the pre-signed order.</p>
     case 'unconfirmed':
-      return <p className="text-[10px] text-red-400/80 mt-1">Leg 1 unwind was submitted but fill was not confirmed. Manual close or kill switch may be required.</p>
+      return <p className="text-[10px] text-red-400/80 mt-1">Recovery execution is not confirmed. A pending transaction may still land; review exposure before preparing another close.</p>
+    case 'requires_signature':
+      return <p className="text-[10px] text-orange-300/80 mt-1">Phoenix recovery needs a fresh reduce-only signature. Keep the wallet connected and prepare a new close or kill request; the old transaction was not resent.</p>
     case 'submit_failed':
       return <p className="text-[10px] text-red-400 mt-1">Leg 1 unwind failed to submit. Manual close or kill switch is required.</p>
     case 'not_armed':

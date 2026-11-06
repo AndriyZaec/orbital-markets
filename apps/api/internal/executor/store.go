@@ -304,7 +304,8 @@ func (s *Store) UpsertCloseOutcome(ctx context.Context, outcome CloseOutcome) er
 			confirmed = excluded.confirmed,
 			resolved = excluded.resolved,
 			error = excluded.error,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+		WHERE live_close_outcomes.venue != 'phoenix' OR live_close_outcomes.resolved = 0 OR excluded.resolved = 1`,
 		outcome.PositionID, outcome.Leg, outcome.Venue, outcome.ClientOrderID, outcome.OrderID,
 		outcome.RequestedAmount, outcome.FilledAmount, outcome.AvgFillPrice, outcome.FillRatio,
 		boolToInt(outcome.Accepted), boolToInt(outcome.Confirmed), boolToInt(outcome.Resolved), outcome.Error,

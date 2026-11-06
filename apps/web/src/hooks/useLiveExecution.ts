@@ -57,7 +57,7 @@ export interface LegFillView {
   fill_ratio?: number
 }
 
-export type UnwindStatus = 'not_armed' | 'skipped' | 'submit_failed' | 'unconfirmed' | 'confirmed' | null
+export type UnwindStatus = 'not_armed' | 'skipped' | 'submit_failed' | 'unconfirmed' | 'confirmed' | 'requires_signature' | null
 
 export interface RemainingExposure {
   leg: number
@@ -138,7 +138,7 @@ interface AdvanceResp {
   position_id?: string
   reason?: string
   unwound?: boolean
-  unwind_status?: 'not_armed' | 'skipped' | 'submit_failed' | 'unconfirmed' | 'confirmed'
+  unwind_status?: 'not_armed' | 'skipped' | 'submit_failed' | 'unconfirmed' | 'confirmed' | 'requires_signature'
   remaining_exposure?: RemainingExposure[]
 }
 

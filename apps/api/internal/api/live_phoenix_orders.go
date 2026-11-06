@@ -189,19 +189,14 @@ func (f *phoenixAccountFeed) WaitForFill(ctx context.Context, q *domain.SigningR
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(f.ctx, cancel)
 	defer func() { stop(); cancel() }()
-	a, err := f.factory.orders.Wait(ctx, q.Account, q.ID, func(ctx context.Context, minimum uint64) error {
-		if err := f.subscriber.Refresh(ctx); err != nil {
-			return err
-		}
-		state := f.state.Snapshot()
-		if !state.Fresh(time.Now()) || state.Slot < minimum {
-			return errors.New("Phoenix fill account state is not fresh at transaction slot")
-		}
-		return nil
-	})
+	a, err := f.factory.orders.Wait(ctx, q.Account, q.ID, f.fillStateProof)
 	if err != nil {
 		return nil, err
 	}
+	return phoenixAttemptFill(a, q)
+}
+
+func phoenixAttemptFill(a orders.Attempt, q *domain.SigningRequest) (*normFill, error) {
 	if a.Request.ClientOrderID != q.ClientOrderID || a.Request.Symbol != q.Symbol || a.Request.Side != q.Side || a.Request.Action != q.Action || a.Request.Amount != q.Amount {
 		return nil, orders.ErrConflict
 	}

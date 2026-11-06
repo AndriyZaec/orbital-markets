@@ -1162,7 +1162,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pos.State == string(executor.ExecStateClosing) {
+	if pos.State == string(executor.ExecStateClosing) || ((pos.VenueA == "phoenix" || pos.VenueB == "phoenix") && pos.State == string(executor.ExecStateDegraded)) {
 		progress, progressErr := s.liveStore.GetCloseProgress(r.Context(), id)
 		if progressErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get close progress"})
@@ -1218,8 +1218,17 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var signingRequests []*domain.SigningRequest
+	venueDerived := false
+	if (pos.VenueA == "phoenix" || pos.VenueB == "phoenix") && (pos.State == string(executor.ExecStateDegraded) || pos.State == string(executor.ExecStateClosing)) {
+		fills, err = s.freshVenueExposureFills(r.Context(), pos)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "Current Phoenix close exposure is unavailable; reconcile before retrying.", "code": "CLOSE_EXPOSURE_NOT_READY", "retryable": true})
+			return
+		}
+		venueDerived = true
+	}
 	for _, fill := range fills {
-		if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
+		if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
 			continue
 		}
 		if fill.Side != string(domain.SideLong) && fill.Side != string(domain.SideShort) {
@@ -1286,14 +1295,14 @@ func (s *Server) freshVenueExposureFills(
 	if s.live.accounts == nil {
 		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
 	}
-	accounts, err := s.live.acquireAccountContext(position.AccountBindings, false)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, true)
 	if err != nil {
 		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
 	}
 	defer accounts.Release()
 	unlock := accounts.Lock()
 	defer unlock()
-	symbols, err := s.positionVenueSymbols(ctx, position.ID, position.Asset)
+	symbols, err := s.positionVenueSymbols(ctx, position)
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve venue symbols")
 	}
@@ -1316,10 +1325,10 @@ func (s *Server) freshVenueExposureFills(
 		if !ok {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
 		}
-		if feed.RefreshPositions(refreshCtx) != nil {
+		if refreshRecoveryPositions(refreshCtx, feed) != nil {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
 		}
-		snapshot := feed.Snapshot()
+		snapshot := recoveryPositionSnapshot(feed)
 		if !positionStateReady(snapshot.PositionsUpdatedAt, updatedAfter) {
 			return nil, fmt.Errorf("fresh %s exposure is unavailable; verify both venues directly", venue)
 		}
@@ -1414,7 +1423,7 @@ func (s *Server) inspectPositionVenueTruth(
 	if s.live == nil || s.live.accounts == nil {
 		return positionExposureUnknown, nil
 	}
-	accounts, err := s.live.acquireAccountContext(position.AccountBindings, false)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, true)
 	if err != nil {
 		s.logger.Warn("live position: venue reconciliation unavailable", "err", err, "id", position.ID)
 		return positionExposureUnknown, nil
@@ -1425,7 +1434,7 @@ func (s *Server) inspectPositionVenueTruth(
 	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
 	defer cancel()
 	venues := []string{position.VenueA, position.VenueB}
-	symbols, err := s.positionVenueSymbols(ctx, position.ID, position.Asset)
+	symbols, err := s.positionVenueSymbols(ctx, position)
 	if err != nil {
 		return positionExposureUnknown, err
 	}
@@ -1434,7 +1443,7 @@ func (s *Server) inspectPositionVenueTruth(
 		if !ok {
 			return positionExposureUnknown, nil
 		}
-		if err := feed.RefreshPositions(reconcileCtx); err != nil {
+		if err := refreshRecoveryPositions(reconcileCtx, feed); err != nil {
 			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
 			return positionExposureUnknown, nil
 		}
@@ -1453,11 +1462,14 @@ func (s *Server) inspectPositionVenueTruth(
 			return positionExposurePresent, nil
 		}
 	}
+	if pending, err := recoveryOrdersUnresolved(reconcileCtx, accounts); err != nil || pending {
+		return positionExposureUnknown, err
+	}
 	return positionExposureFlat, nil
 }
 
-func (s *Server) positionVenueSymbols(ctx context.Context, positionID, fallback string) (map[string]string, error) {
-	fills, err := s.liveStore.GetFills(ctx, positionID)
+func (s *Server) positionVenueSymbols(ctx context.Context, position *executor.LivePosition) (map[string]string, error) {
+	fills, err := s.liveStore.GetFills(ctx, position.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1469,7 +1481,25 @@ func (s *Server) positionVenueSymbols(ctx context.Context, positionID, fallback 
 	}
 	for _, venue := range []string{"pacifica", "hyperliquid", "aster"} {
 		if symbols[venue] == "" {
-			symbols[venue] = fallback
+			symbols[venue] = position.Asset
+		}
+	}
+	if (position.VenueA == "phoenix" || position.VenueB == "phoenix") && symbols["phoenix"] == "" {
+		record, err := s.liveStore.GetDurableSessionForPlan(ctx, position.PlanID)
+		if err != nil {
+			return nil, fmt.Errorf("Phoenix native market identity unavailable")
+		}
+		session, err := unmarshalLiveSession(record.Payload)
+		if err != nil || validateDurableSessionOwnership(record, session) != nil || session.Plan.ID != position.PlanID || session.Plan.Asset != position.Asset || !session.Bindings.matchesAccounts(position.AccountBindings) {
+			return nil, fmt.Errorf("Phoenix durable market identity unavailable")
+		}
+		for _, leg := range []legPlan{session.Leg1, session.Leg2} {
+			if leg.venue == "phoenix" {
+				symbols["phoenix"] = leg.symbol
+			}
+		}
+		if symbols["phoenix"] == "" {
+			return nil, fmt.Errorf("Phoenix native market identity missing")
 		}
 	}
 	return symbols, nil
@@ -1482,7 +1512,7 @@ func waitForPositionState(ctx context.Context, accounts *liveAccountContext, ven
 		ready := true
 		for _, venue := range venues {
 			feed, ok := accounts.Feed(venue)
-			if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, after) {
+			if !ok || !positionStateReady(recoveryPositionSnapshot(feed).PositionsUpdatedAt, after) {
 				ready = false
 				break
 			}
@@ -1609,7 +1639,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			posResults = append(posResults, pc)
 			continue
 		}
-		if pos.State == string(executor.ExecStateClosing) {
+		if pos.State == string(executor.ExecStateClosing) || ((pos.VenueA == "phoenix" || pos.VenueB == "phoenix") && pos.State == string(executor.ExecStateDegraded)) {
 			progress, err := s.live.liveStore.GetCloseProgress(ctx, pos.ID)
 			if err != nil {
 				s.logger.Error("kill switch: get close progress", "err", err, "id", pos.ID)

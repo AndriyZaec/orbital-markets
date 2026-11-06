@@ -640,11 +640,12 @@ func (s *Server) abortAfterLeg1(w http.ResponseWriter, r *http.Request, sess *Li
 type unwindStatus string
 
 const (
-	unwindNotArmed    unwindStatus = "not_armed"     // no pre-signed unwind was available
-	unwindSkipped     unwindStatus = "skipped"       // unwind would increase directional exposure
-	unwindSubmitFail  unwindStatus = "submit_failed" // unwind order rejected or errored
-	unwindUnconfirmed unwindStatus = "unconfirmed"   // accepted by venue but fill not confirmed
-	unwindConfirmed   unwindStatus = "confirmed"     // fill confirmed — position is flat
+	unwindNotArmed       unwindStatus = "not_armed"          // no pre-signed unwind was available
+	unwindSkipped        unwindStatus = "skipped"            // unwind would increase directional exposure
+	unwindSubmitFail     unwindStatus = "submit_failed"      // unwind order rejected or errored
+	unwindUnconfirmed    unwindStatus = "unconfirmed"        // accepted by venue but fill not confirmed
+	unwindConfirmed      unwindStatus = "confirmed"          // fill confirmed — position is flat
+	unwindNeedsSignature unwindStatus = "requires_signature" // Phoenix signed bounds/expiry no longer cover recovery
 )
 
 // unwindResult carries the outcome of a fireUnwind call.
@@ -659,6 +660,12 @@ func (u unwindResult) Confirmed() bool { return u.Status == unwindConfirmed }
 // fireUnwind submits the pre-signed reduce-only leg-1 unwind and waits for fill.
 // Reduce-only auto-caps to the actual open size.
 func (s *Server) fireUnwind(ctx context.Context, sess *LiveSession) unwindResult {
+	if sess.ArmedUnwindReq != nil && sess.ArmedUnwindReq.Venue == "phoenix" {
+		return s.firePhoenixUnwind(ctx, sess)
+	}
+	if pending, err := recoveryOrdersUnresolved(ctx, sess.accounts); err != nil || pending {
+		return unwindResult{Status: unwindUnconfirmed}
+	}
 	if sess.ArmedUnwindSigned == nil || sess.ArmedUnwindReq == nil {
 		s.logger.Warn("live advance: no armed unwind to fire", "session_id", sess.ID)
 		return unwindResult{Status: unwindNotArmed}
@@ -758,7 +765,11 @@ func (s *Server) submitSignedActionForFeed(
 
 // waitForLegFill blocks on the account-scoped venue tracker.
 func (s *Server) waitForLegFill(ctx context.Context, req *domain.SigningRequest) (*normFill, error) {
-	lease, err := s.live.accounts.Acquire(req.Venue, req.Account)
+	acquire := s.live.accounts.Acquire
+	if req.ReduceOnly || req.Action == "close" || req.Action == "emergency_close" {
+		acquire = s.live.accounts.AcquireRecovery
+	}
+	lease, err := acquire(req.Venue, req.Account)
 	if err != nil {
 		return nil, err
 	}
@@ -883,6 +894,8 @@ func unwindReasonSuffix(ur unwindResult) string {
 		return "; no unwind was armed"
 	case unwindSkipped:
 		return "; leg 1 unwind skipped to preserve the existing hedge"
+	case unwindNeedsSignature:
+		return "; Phoenix recovery needs a fresh bounded reduce-only signature from the connected browser; the old transaction was not resent"
 	default:
 		return ""
 	}
