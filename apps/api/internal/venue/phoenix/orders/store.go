@@ -1,0 +1,154 @@
+// Package orders owns durable Phoenix order attempts and signature/history
+// reconciliation. RPC acceptance/confirmation is never interpreted as a fill.
+package orders
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+)
+
+var (
+	ErrNotFound  = errors.New("Phoenix order attempt not found")
+	ErrUncertain = errors.New("Phoenix order outcome is uncertain; reconcile without resubmitting")
+	ErrConflict  = errors.New("Phoenix order attempt correlation conflict")
+)
+
+type Before struct {
+	BaseLots                   string
+	Generation, Slot, Sequence uint64
+	ObservedAt                 time.Time
+}
+
+// Quantities and event identities remain exact in the journal. Float summaries
+// are derived only at the existing orchestration transport boundary.
+type Fill struct {
+	BaseLots, BaseQuantity, QuoteQuantity, ExchangeFee string
+	Slot                                               uint64
+	FillIDs                                            []string
+	Status                                             string
+}
+
+type Attempt struct {
+	Request                         domain.SigningRequest
+	Digest, Signature, State, Error string
+	Before                          Before
+	Fill                            *Fill
+	CreatedAt                       time.Time
+}
+
+type Store struct{ writer, reader *sql.DB }
+
+func NewStore(writer, reader *sql.DB) (*Store, error) {
+	if writer == nil || reader == nil {
+		return nil, errors.New("Phoenix order databases required")
+	}
+	return &Store{writer: writer, reader: reader}, nil
+}
+
+func requestDigest(q *domain.SigningRequest) (string, []byte, error) {
+	raw, err := json.Marshal(q)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(raw) > 64*1024 {
+		return "", nil, errors.New("Phoenix stored order request exceeds bound")
+	}
+	hash := sha256.Sum256(raw)
+	return hex.EncodeToString(hash[:]), raw, nil
+}
+
+func (s *Store) Get(ctx context.Context, owner, id string) (Attempt, error) {
+	var a Attempt
+	var request, before, fill, at string
+	err := s.reader.QueryRowContext(ctx, `SELECT request_json,request_digest,signature,before_json,state,error,fill_json,created_at FROM phoenix_order_attempts WHERE owner_account=? AND request_id=?`, owner, id).
+		Scan(&request, &a.Digest, &a.Signature, &before, &a.State, &a.Error, &fill, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	if err != nil {
+		return a, err
+	}
+	if err = json.Unmarshal([]byte(request), &a.Request); err != nil {
+		return a, err
+	}
+	if err = json.Unmarshal([]byte(before), &a.Before); err != nil {
+		return a, err
+	}
+	if fill != "" {
+		if err = json.Unmarshal([]byte(fill), &a.Fill); err != nil {
+			return a, err
+		}
+	}
+	a.CreatedAt, err = time.Parse(time.RFC3339Nano, at)
+	if err != nil || a.Request.Account != owner || a.Request.ID != id {
+		return Attempt{}, ErrConflict
+	}
+	digest, _, err := requestDigest(&a.Request)
+	if err != nil || digest != a.Digest {
+		return Attempt{}, ErrConflict
+	}
+	return a, nil
+}
+
+// Claim commits the local signature before any network send. Only the insert
+// winner may send. Existing request/CID/signature identities are never replaced.
+func (s *Store) Claim(ctx context.Context, a Attempt) (bool, error) {
+	digest, raw, err := requestDigest(&a.Request)
+	if err != nil {
+		return false, err
+	}
+	before, err := json.Marshal(a.Before)
+	if err != nil {
+		return false, err
+	}
+	at := a.CreatedAt.UTC().Format(time.RFC3339Nano)
+	result, err := s.writer.ExecContext(ctx, `INSERT INTO phoenix_order_attempts(request_id,owner_account,client_order_id,signature,request_json,request_digest,before_json,state,created_at,updated_at)
+	 SELECT ?,?,?,?,?,?,?,'pending',?,? WHERE ?!='open' OR NOT EXISTS(SELECT 1 FROM phoenix_order_attempts WHERE owner_account=? AND state IN ('pending','submitted')) ON CONFLICT DO NOTHING`,
+		a.Request.ID, a.Request.Account, a.Request.ClientOrderID, a.Signature, string(raw), digest, string(before), at, at, a.Request.Action, a.Request.Account)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}
+
+func (s *Store) Submitted(ctx context.Context, a Attempt, failure string) error {
+	state := "submitted"
+	if failure != "" {
+		state = "failed"
+	}
+	_, err := s.writer.ExecContext(ctx, `UPDATE phoenix_order_attempts SET state=?,error=?,updated_at=? WHERE request_id=? AND owner_account=? AND signature=? AND state='pending'`, state, failure, time.Now().UTC().Format(time.RFC3339Nano), a.Request.ID, a.Request.Account, a.Signature)
+	return err
+}
+
+func (s *Store) Resolve(ctx context.Context, a Attempt, state string, fill *Fill, failure string) error {
+	if state != "filled" && state != "no_fill" && state != "failed" {
+		return ErrConflict
+	}
+	raw := ""
+	if fill != nil {
+		bytes, err := json.Marshal(fill)
+		if err != nil {
+			return err
+		}
+		if len(bytes) > 64*1024 {
+			return ErrConflict
+		}
+		raw = string(bytes)
+	}
+	_, err := s.writer.ExecContext(ctx, `UPDATE phoenix_order_attempts SET state=?,fill_json=?,error=?,updated_at=? WHERE request_id=? AND owner_account=? AND signature=? AND state IN ('pending','submitted')`, state, raw, failure, time.Now().UTC().Format(time.RFC3339Nano), a.Request.ID, a.Request.Account, a.Signature)
+	return err
+}
+
+func (s *Store) Unresolved(ctx context.Context, owner string) (bool, error) {
+	var count int
+	err := s.reader.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM phoenix_order_attempts WHERE owner_account=? AND state IN ('pending','submitted'))`, owner).Scan(&count)
+	return count != 0, err
+}

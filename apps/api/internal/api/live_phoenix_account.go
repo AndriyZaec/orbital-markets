@@ -18,6 +18,7 @@ import (
 	phoenixaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/account"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/delegation"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/orders"
 	phoenixrisk "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/risk"
 )
 
@@ -29,8 +30,9 @@ type PhoenixAccountBackend interface {
 }
 
 // PhoenixAccountConfig supplies shared read-only account/market sources. A full
-// PhoenixOrderBackend also enables the internal preparation module, not HTTP
-// execution admission or submission.
+// PhoenixOrderBackend also enables the internal preparation module; a full
+// PhoenixSubmitBackend enables journaled internal submit/fill reconciliation.
+// Neither capability grants HTTP execution admission.
 // Construct once at startup: risk parameters and REST backoff are shared across
 // owners while the existing registry owns per-owner capacity and idle eviction.
 type PhoenixAccountConfig struct {
@@ -42,16 +44,28 @@ type PhoenixAccountConfig struct {
 }
 
 type phoenixAccountFeedFactory struct {
-	config PhoenixAccountConfig
-	reader *phoenixaccount.Reader
-	risk   *phoenixrisk.Source
-	store  *executor.Store
-	logger *slog.Logger
+	config       PhoenixAccountConfig
+	reader       *phoenixaccount.Reader
+	risk         *phoenixrisk.Source
+	store        *executor.Store
+	logger       *slog.Logger
+	orderJournal *orders.Store
+	orders       *orders.Service
 }
 
 func newPhoenixAccountFactory(config PhoenixAccountConfig, store *executor.Store, logger *slog.Logger) *phoenixAccountFeedFactory {
-	return &phoenixAccountFeedFactory{config: config, store: store, logger: logger,
+	f := &phoenixAccountFeedFactory{config: config, store: store, logger: logger,
 		reader: phoenixaccount.NewReader(config.RESTURL, config.HTTPClient), risk: phoenixrisk.NewSource(config.RESTURL, config.HTTPClient, config.Markets)}
+	if store != nil {
+		journal, err := store.PhoenixOrderJournal()
+		if err == nil {
+			f.orderJournal = journal
+			if backend, ok := config.Backend.(PhoenixSubmitBackend); ok {
+				f.orders = orders.NewService(journal, backend, orders.NewHistory(config.RESTURL, config.HTTPClient))
+			}
+		}
+	}
+	return f
 }
 
 func (f *phoenixAccountFeedFactory) Normalize(owner string) (string, error) {
@@ -361,15 +375,6 @@ func (f *phoenixAccountFeed) PreTradeBlockers(domain.Leg) []string {
 		reasons = append(reasons, reason)
 	}
 	return reasons
-}
-func (*phoenixAccountFeed) SubmitSigned(context.Context, domain.SignedAction, *domain.SigningRequest) (*domain.SubmissionResult, error) {
-	return nil, errPhoenixLiveDisabled
-}
-func (*phoenixAccountFeed) WaitForFill(context.Context, *domain.SigningRequest) (*normFill, error) {
-	return nil, errPhoenixLiveDisabled
-}
-func (*phoenixAccountFeed) WaitForLeverage(context.Context, string, float64) error {
-	return errPhoenixLiveDisabled
 }
 
 func phoenixAccess(access phoenixaccount.CapabilityAccess) bool {

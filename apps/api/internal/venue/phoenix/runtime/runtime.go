@@ -73,6 +73,12 @@ func (r *Runtime) CoSignDelegation(ctx context.Context, b helper.BuildDelegation
 	}
 	return r.relayer.CoSignDelegation(ctx, b, owner, sig, slot)
 }
+func (r *Runtime) CoSignOrder(ctx context.Context, b helper.BuildOrderResult, agent, sig string, slot uint64) ([]byte, error) {
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.relayer.CoSign(ctx, b, agent, sig, slot)
+}
 func (r *Runtime) SimulateAndSend(ctx context.Context, p []byte, height, slot uint64) (string, error) {
 	if err := r.ctx.Err(); err != nil {
 		return "", err

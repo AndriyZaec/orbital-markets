@@ -140,6 +140,15 @@ func (p *phoenixOrderPreparer) Prepare(ctx context.Context, q phoenixlive.Intent
 	stop := context.AfterFunc(feed.ctx, cancel)
 	defer func() { stop(); cancel() }()
 	state := feed.state.Snapshot()
+	if q.Action == helper.ActionOpen && feed.factory.orderJournal != nil {
+		pending, err := feed.factory.orderJournal.Unresolved(ctx, q.Owner)
+		if err != nil {
+			return nil, err
+		}
+		if pending {
+			return nil, errors.New("Phoenix prior order outcome requires reconciliation")
+		}
+	}
 	if !state.Fresh(time.Now()) || !phoenixOrderCapability(state, q.Action) {
 		return nil, errors.New("Phoenix fresh account trading capability required")
 	}

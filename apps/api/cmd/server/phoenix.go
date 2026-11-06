@@ -13,6 +13,7 @@ import (
 )
 
 var _ api.PhoenixOrderBackend = (*phoenixruntime.Runtime)(nil)
+var _ api.PhoenixSubmitBackend = (*phoenixruntime.Runtime)(nil)
 
 func phoenixConfig(getenv func(string) string) (phoenixruntime.Config, bool, error) {
 	config := phoenixruntime.Config{

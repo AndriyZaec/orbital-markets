@@ -113,7 +113,7 @@ func (b *phoenixOrderTestBackend) ComputeRisk(ctx context.Context, q helper.Risk
 	return b.sdk.ComputeRisk(ctx, q)
 }
 
-func newPhoenixPrepareFixture(t *testing.T) (*phoenixAccountFixture, *phoenixOrderTestBackend, *phoenixOrderTestMarkets, *phoenixlive.LiveModule, *phoenixAccountFeed) {
+func newPhoenixPrepareFixture(t *testing.T, configure ...func(*phoenixAccountFixture, *phoenixOrderTestBackend, *phoenixOrderTestMarkets)) (*phoenixAccountFixture, *phoenixOrderTestBackend, *phoenixOrderTestMarkets, *phoenixlive.LiveModule, *phoenixAccountFeed) {
 	t.Helper()
 	path := os.Getenv("ORBITAL_PHOENIX_HELPER_TEST_PATH")
 	if path == "" {
@@ -133,6 +133,9 @@ func newPhoenixPrepareFixture(t *testing.T) (*phoenixAccountFixture, *phoenixOrd
 	m := &phoenixOrderTestMarkets{base: f.markets}
 	f.factory.config.Backend, f.factory.config.Markets = b, m
 	f.factory.risk = phoenixrisk.NewSource(f.factory.config.RESTURL, f.factory.config.HTTPClient, m)
+	for _, setup := range configure {
+		setup(f, b, m)
+	}
 	lease, err := f.registry.Acquire("phoenix", phoenixTestOwner)
 	if err != nil {
 		t.Fatal(err)
