@@ -109,5 +109,16 @@ func (f *phoenixAccountFeed) ReconcileOutstandingOrders(ctx context.Context) err
 			return errors.Join(err, ctx.Err())
 		}
 	}
+	unaccounted, accountErr := f.factory.orderJournal.Unaccounted(ctx, f.state.Snapshot().Owner)
+	if accountErr != nil {
+		return errors.Join(err, accountErr)
+	}
+	for _, a := range unaccounted {
+		_, accountErr := f.factory.orders.Account(ctx, a)
+		err = errors.Join(err, accountErr)
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+	}
 	return err
 }

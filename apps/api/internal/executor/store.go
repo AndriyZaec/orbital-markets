@@ -981,6 +981,11 @@ func insertFundingPaymentsTx(
 			window != nil && (paidAt.Before(window.Since) || paidAt.After(window.Until)) {
 			return 0, 0, fmt.Errorf("invalid funding payment")
 		}
+		if venueName == "phoenix" && payment.AmountUSD != 0 {
+			if err := validatePhoenixFundingAttribution(ctx, tx, positionID, payment); err != nil {
+				return 0, 0, err
+			}
+		}
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO live_funding_payments (
 				position_id, venue, account, external_id, asset, amount_usd, paid_at, paid_at_ms, created_at

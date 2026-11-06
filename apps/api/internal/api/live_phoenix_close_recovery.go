@@ -13,6 +13,32 @@ type closeOrderReconciler interface {
 	ReconcileClose(context.Context, string) (*domain.SigningRequest, *normFill, error)
 }
 
+// A fast close can finish before the next background fee read. Keep known
+// closed Phoenix owners in the bounded finalization pass, not only open feeds.
+func (s *Server) refreshUnfinalizedPhoenixAccounting() {
+	if s.live == nil || s.live.accounts == nil || s.liveStore == nil {
+		return
+	}
+	positions, err := s.liveStore.ListUnfinalizedClosedPositions(s.ctx)
+	if err != nil {
+		return
+	}
+	seen := map[string]bool{}
+	for i := range positions {
+		position := &positions[i]
+		owner := position.AccountBindings["phoenix"]
+		if owner == "" {
+			continue
+		}
+		if !seen[owner] {
+			s.reconcilePhoenixPositionOrders(s.ctx, position)
+			seen[owner] = true
+		} else {
+			_ = s.liveStore.SyncPhoenixObservedFees(s.ctx, position)
+		}
+	}
+}
+
 func (s *Server) reconcilePhoenixPositionOrders(ctx context.Context, position *executor.LivePosition) {
 	owner := position.AccountBindings["phoenix"]
 	if owner == "" || s.live == nil || s.live.accounts == nil {
@@ -27,6 +53,7 @@ func (s *Server) reconcilePhoenixPositionOrders(ctx context.Context, position *e
 		lookup, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		_ = source.ReconcileOutstandingOrders(lookup) // Uncertain remains durable.
+		_ = s.liveStore.SyncPhoenixObservedFees(lookup, position)
 	}
 }
 

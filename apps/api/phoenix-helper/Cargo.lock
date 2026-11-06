@@ -667,7 +667,10 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bincode",
+ "borsh",
+ "bs58",
  "phoenix-rise",
+ "phoenix-rise-events",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -736,6 +739,17 @@ dependencies = [
  "phoenix-rise-math",
  "sha2-const-stable",
  "solana-pubkey",
+ "thiserror",
+]
+
+[[package]]
+name = "phoenix-rise-events"
+version = "0.6.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cfd0a1387e6dd632ebfe7d6839aecdd91277167190128555424311ced4811f9"
+dependencies = [
+ "borsh",
+ "phoenix-rise-math",
  "thiserror",
 ]
 

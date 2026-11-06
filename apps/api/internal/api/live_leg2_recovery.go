@@ -31,6 +31,7 @@ func mergeNormFills(first, second *normFill) *normFill {
 		FilledAmount: total,
 		AvgFillPrice: avgPrice,
 		Fee:          first.Fee + second.Fee,
+		FeeComplete:  first.FeeComplete && second.FeeComplete,
 		OrderID:      second.OrderID,
 		Status:       second.Status,
 		Filled:       total > 0,

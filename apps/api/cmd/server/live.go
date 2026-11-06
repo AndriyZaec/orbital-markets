@@ -15,6 +15,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
+	phoenixfunding "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/funding"
 )
 
 // startLive creates the shared registry and stores eagerly. Venue account
@@ -46,6 +47,10 @@ func startLive(
 	}
 	if asterReader != nil {
 		fundingSources["aster"] = asterFundingHistory{reader: asterReader}
+	}
+	if len(phoenixConfigs) > 0 && phoenixConfigs[0].Backend != nil && phoenixConfigs[0].Markets != nil {
+		config := phoenixConfigs[0]
+		fundingSources["phoenix"] = phoenixfunding.NewReader(config.RESTURL, config.HTTPClient, config.Markets)
 	}
 	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, fundingSources)
 	go liveMonitor.Run(ctx)

@@ -9,9 +9,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
 )
 
 var (
@@ -33,6 +35,28 @@ type Fill struct {
 	Slot                                               uint64
 	FillIDs                                            []string
 	Status                                             string
+	Accounting                                         *ObservedAccounting `json:"accounting,omitempty"`
+}
+
+type ObservedAccounting struct {
+	Slot               uint64                  `json:"slot"`
+	NetworkFeeLamports string                  `json:"network_fee_lamports"`
+	Events             helper.AccountingResult `json:"events"`
+}
+
+func (f Fill) TotalTradingFee() (*big.Rat, bool) {
+	fee, err := decimal(f.ExchangeFee)
+	if err != nil {
+		return nil, false
+	}
+	if f.Accounting == nil || f.Accounting.Events.FlightFeeQuoteLots == nil {
+		return fee, false
+	}
+	flight, ok := new(big.Int).SetString(*f.Accounting.Events.FlightFeeQuoteLots, 10)
+	if !ok || flight.Sign() < 0 {
+		return fee, false
+	}
+	return new(big.Rat).Add(fee, new(big.Rat).SetFrac(flight, big.NewInt(1_000_000))), true
 }
 
 type Attempt struct {
@@ -188,6 +212,57 @@ func (s *Store) Pending(ctx context.Context, owner string, limit int) ([]Attempt
 		return nil, err
 	}
 	result := make([]Attempt, 0, len(ids))
+	for _, id := range ids {
+		a, err := s.Get(ctx, owner, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, nil
+}
+
+func (s *Store) AttachAccounting(ctx context.Context, a Attempt, observed ObservedAccounting) error {
+	if a.Fill == nil || a.State != "filled" || observed.Slot != a.Fill.Slot {
+		return ErrConflict
+	}
+	before, err := json.Marshal(a.Fill)
+	if err != nil {
+		return err
+	}
+	copy := *a.Fill
+	copy.Accounting = &observed
+	after, err := json.Marshal(copy)
+	if err != nil {
+		return err
+	}
+	if len(after) > 64*1024 {
+		return ErrConflict
+	}
+	_, err = s.writer.ExecContext(ctx, `UPDATE phoenix_order_attempts SET fill_json=?,updated_at=? WHERE owner_account=? AND request_id=? AND signature=? AND state='filled' AND fill_json=?`, string(after), time.Now().UTC().Format(time.RFC3339Nano), a.Request.Account, a.Request.ID, a.Signature, string(before))
+	return err
+}
+
+func (s *Store) Unaccounted(ctx context.Context, owner string) ([]Attempt, error) {
+	rows, err := s.reader.QueryContext(ctx, `SELECT request_id FROM phoenix_order_attempts WHERE owner_account=? AND state='filled' AND json_extract(fill_json,'$.accounting.events.flight_fee_quote_lots') IS NULL ORDER BY created_at LIMIT 4`, owner)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	var result []Attempt
 	for _, id := range ids {
 		a, err := s.Get(ctx, owner, id)
 		if err != nil {

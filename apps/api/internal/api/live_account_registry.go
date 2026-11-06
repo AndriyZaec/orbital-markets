@@ -16,13 +16,14 @@ import (
 var errAccountFeedCapacity = errors.New("live account feed capacity reached")
 
 type liveAccountPosition struct {
-	Symbol           string  `json:"symbol"`
-	Side             string  `json:"side"`
-	Size             float64 `json:"size"`
-	EntryPrice       float64 `json:"entry_price"`
-	LiqPrice         float64 `json:"liquidation_price"`
-	BaseLots         string  `json:"base_lots,omitempty"`
-	LiquidationModel string  `json:"liquidation_model,omitempty"`
+	Symbol                  string  `json:"symbol"`
+	Side                    string  `json:"side"`
+	Size                    float64 `json:"size"`
+	EntryPrice              float64 `json:"entry_price"`
+	LiqPrice                float64 `json:"liquidation_price"`
+	BaseLots                string  `json:"base_lots,omitempty"`
+	LiquidationModel        string  `json:"liquidation_model,omitempty"`
+	PendingFundingQuoteLots string  `json:"pending_funding_quote_lots,omitempty"`
 }
 
 type liveAccountSnapshot struct {

@@ -22,6 +22,7 @@ func (s *Server) runLiveSessionRecovery() {
 	s.reconcileClosingPositions()
 	s.reconcileOpenPositions()
 	s.refreshUnfinalizedAsterFunding()
+	s.refreshUnfinalizedPhoenixAccounting()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -34,6 +35,7 @@ func (s *Server) runLiveSessionRecovery() {
 			s.reconcileClosingPositions()
 			s.reconcileOpenPositions()
 			s.refreshUnfinalizedAsterFunding()
+			s.refreshUnfinalizedPhoenixAccounting()
 		}
 	}
 }

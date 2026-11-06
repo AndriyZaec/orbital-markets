@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,6 +22,9 @@ type Backend interface {
 	CoSignOrder(context.Context, helper.BuildOrderResult, string, string, uint64) ([]byte, error)
 	SimulateAndSend(context.Context, []byte, uint64, uint64) (string, error)
 	SignatureStatus(context.Context, string) (*rpc.SignatureStatus, error)
+}
+type AccountingBackend interface {
+	OrderAccounting(context.Context, *domain.SigningRequest, string) (ObservedAccounting, error)
 }
 type Admission struct {
 	Before  Before
@@ -214,6 +218,49 @@ func (s *Service) Reconcile(ctx context.Context, owner, id string, stateProof St
 		return a, err
 	}
 	return s.store.Get(ctx, owner, id)
+}
+
+// Accounting is independent of exposure discovery: an unavailable transaction
+// event read must not delay hedging or turn an actual fill into an unknown fill.
+// Missing fee evidence remains explicitly incomplete and can be backfilled.
+func (s *Service) Account(ctx context.Context, a Attempt) (Attempt, error) {
+	b, ok := s.backend.(AccountingBackend)
+	if !ok || a.Fill == nil || a.State != "filled" {
+		return a, nil
+	}
+	if _, complete := a.Fill.TotalTradingFee(); complete {
+		return a, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	observed, err := b.OrderAccounting(ctx, &a.Request, a.Signature)
+	if err != nil {
+		return a, err
+	}
+	p, err := Decode(&a.Request)
+	if err != nil {
+		return a, err
+	}
+	if observed.Slot != a.Fill.Slot || observed.Events.OwnerAuthority != a.Request.Account || observed.Events.TraderAccount != p.Metadata.Built.TraderAccount {
+		return a, ErrConflict
+	}
+	network, parseErr := strconv.ParseUint(observed.NetworkFeeLamports, 10, 64)
+	if parseErr != nil || strconv.FormatUint(network, 10) != observed.NetworkFeeLamports || observed.Events.DecodedEventCount == 0 {
+		return a, ErrConflict
+	}
+	if value := observed.Events.FlightFeeQuoteLots; value != nil {
+		fee, parseErr := strconv.ParseUint(*value, 10, 64)
+		if parseErr != nil || strconv.FormatUint(fee, 10) != *value {
+			return a, ErrConflict
+		}
+		if (p.Metadata.Built.Manifest.Routing == "native" && (fee != 0 || observed.Events.FlightTransferEvents != 0)) || (p.Metadata.Built.Manifest.Routing == "flight" && observed.Events.FlightTransferEvents == 0) {
+			return a, ErrConflict
+		}
+	}
+	if err := s.store.AttachAccounting(ctx, a, observed); err != nil {
+		return a, err
+	}
+	return s.store.Get(ctx, a.Request.Account, a.Request.ID)
 }
 
 func (s *Service) Wait(ctx context.Context, owner, id string, stateProof StateProof) (Attempt, error) {

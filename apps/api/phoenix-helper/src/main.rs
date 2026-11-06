@@ -3,6 +3,7 @@ use std::io::{self, BufRead, BufWriter, Write};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod accounting;
 mod authority;
 mod delegation;
 mod flight;
@@ -155,6 +156,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         match request.operation.as_str() {
+            "decode_accounting" => {
+                let result = request
+                    .payload
+                    .ok_or_else(|| "decode_accounting requires payload".to_string())
+                    .and_then(|payload| {
+                        serde_json::from_value::<accounting::AccountingRequest>(payload)
+                            .map_err(|e| e.to_string())
+                    })
+                    .and_then(accounting::decode);
+                match result {
+                    Ok(result) => write_json_line(
+                        &mut stdout,
+                        &SuccessResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: true,
+                            result,
+                        },
+                    )?,
+                    Err(message) => write_json_line(
+                        &mut stdout,
+                        &ErrorResponse {
+                            protocol_version: PROTOCOL_VERSION,
+                            request_id: &request.request_id,
+                            ok: false,
+                            error: ErrorDetails {
+                                code: "invalid_accounting_request",
+                                message,
+                            },
+                        },
+                    )?,
+                }
+            }
             "flight_accounts" | "verify_flight" => {
                 let result = request
                     .payload

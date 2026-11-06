@@ -34,6 +34,7 @@ type healthHelper interface {
 	BuildOrder(context.Context, helper.BuildOrderRequest) (helper.BuildOrderResult, error)
 	FlightAccounts(context.Context, helper.FlightRequest) (helper.FlightAccounts, error)
 	VerifyFlight(context.Context, helper.VerifyFlightRequest) (helper.VerifiedFlight, error)
+	DecodeAccounting(context.Context, helper.AccountingRequest) (helper.AccountingResult, error)
 }
 
 type chain interface {

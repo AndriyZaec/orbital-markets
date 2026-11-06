@@ -220,6 +220,13 @@ func phoenixAttemptFill(a orders.Attempt, q *domain.SigningRequest) (*normFill, 
 		return nil, orders.ErrUncertain
 	}
 	result.FilledAmount, result.Fee, result.Status, result.Filled = amount, fee, a.Fill.Status, amount > 0
+	if total, complete := a.Fill.TotalTradingFee(); total != nil {
+		result.Fee, _ = total.Float64()
+		result.FeeComplete = complete
+		if math.IsInf(result.Fee, 0) || math.IsNaN(result.Fee) {
+			return nil, orders.ErrUncertain
+		}
+	}
 	if amount > 0 {
 		base, ok := new(big.Rat).SetString(a.Fill.BaseQuantity)
 		if !ok {

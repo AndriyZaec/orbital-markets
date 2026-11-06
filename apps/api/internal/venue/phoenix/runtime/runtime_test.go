@@ -36,6 +36,9 @@ func (h *fakeHelper) Health(ctx context.Context) (helper.HealthResult, error) {
 	return helper.HealthResult{HelperVersion: "0.1.0", PhoenixRiseVersion: helper.PhoenixRiseVersion}, nil
 }
 func (h *fakeHelper) Close() { h.closed.Add(1) }
+func (h *fakeHelper) DecodeAccounting(context.Context, helper.AccountingRequest) (helper.AccountingResult, error) {
+	return helper.AccountingResult{}, errors.New("unused")
+}
 func (h *fakeHelper) FlightAccounts(context.Context, helper.FlightRequest) (helper.FlightAccounts, error) {
 	return helper.FlightAccounts{}, errors.New("unused")
 }

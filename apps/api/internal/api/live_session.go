@@ -56,6 +56,7 @@ type normFill struct {
 	FilledAmount float64
 	AvgFillPrice float64
 	Fee          float64
+	FeeComplete  bool `json:"fee_complete,omitempty"`
 	OrderID      string
 	Status       string
 	Filled       bool // filled or partial with amount > 0

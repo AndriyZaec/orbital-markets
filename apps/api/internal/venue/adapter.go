@@ -70,12 +70,19 @@ type FundingPayment struct {
 	MarketKey  string
 	AmountUSD  float64
 	PaidAt     time.Time
+	// Optional attribution evidence for shared-account settlement sources.
+	PositionSize string
+	PositionSide string
 }
 
 // FundingHistory reads realized funding settlements for an account.
 type FundingHistory interface {
 	FundingPayments(ctx context.Context, account, asset string, since, until time.Time) ([]FundingPayment, error)
 }
+
+// FundingFinalizationPolicy allows venues with delayed settlement/indexing to
+// keep closed-position funding provisional beyond the shared minimum delay.
+type FundingFinalizationPolicy interface{ FundingFinalizationDelay() time.Duration }
 
 // Adapter is the interface every venue integration must implement.
 type Adapter interface {

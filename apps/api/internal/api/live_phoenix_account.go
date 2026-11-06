@@ -91,18 +91,19 @@ func (f *phoenixAccountFeedFactory) Start(ctx context.Context, owner string) (li
 }
 
 type phoenixAccountDetails struct {
-	AccountReady       bool                        `json:"account_ready"`
-	LiveReady          bool                        `json:"live_ready"`
-	PositionAuthority  string                      `json:"position_authority,omitempty"`
-	AuthorityCheckedAt *time.Time                  `json:"authority_checked_at,omitempty"`
-	Authorized         bool                        `json:"authorized"`
-	CanIncreaseRisk    bool                        `json:"can_increase_risk"`
-	CanReduceRisk      bool                        `json:"can_reduce_risk"`
-	Capabilities       phoenixaccount.Capabilities `json:"capabilities"`
-	Positions          []liveAccountPosition       `json:"positions"`
-	PositionsUpdatedAt *time.Time                  `json:"positions_updated_at,omitempty"`
-	LiquidationModel   string                      `json:"liquidation_model,omitempty"`
-	RiskTier           string                      `json:"risk_tier,omitempty"`
+	AccountReady            bool                        `json:"account_ready"`
+	LiveReady               bool                        `json:"live_ready"`
+	PositionAuthority       string                      `json:"position_authority,omitempty"`
+	AuthorityCheckedAt      *time.Time                  `json:"authority_checked_at,omitempty"`
+	Authorized              bool                        `json:"authorized"`
+	CanIncreaseRisk         bool                        `json:"can_increase_risk"`
+	CanReduceRisk           bool                        `json:"can_reduce_risk"`
+	Capabilities            phoenixaccount.Capabilities `json:"capabilities"`
+	Positions               []liveAccountPosition       `json:"positions"`
+	PositionsUpdatedAt      *time.Time                  `json:"positions_updated_at,omitempty"`
+	LiquidationModel        string                      `json:"liquidation_model,omitempty"`
+	RiskTier                string                      `json:"risk_tier,omitempty"`
+	PendingFundingQuoteLots string                      `json:"pending_funding_quote_lots,omitempty"`
 }
 
 type phoenixAccountRefresh struct {
@@ -241,7 +242,7 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 	}
 	checkedAt := authorityAt
 	details := &phoenixAccountDetails{PositionAuthority: authority.PositionAuthority, AuthorityCheckedAt: &checkedAt, Authorized: true,
-		Capabilities: after.Cross.Capabilities, Positions: positions, LiquidationModel: result.LiquidationModel, RiskTier: result.RiskTier}
+		Capabilities: after.Cross.Capabilities, Positions: positions, LiquidationModel: result.LiquidationModel, RiskTier: result.RiskTier, PendingFundingQuoteLots: result.UnsettledFundingQuoteLots}
 	details.CanIncreaseRisk = phoenixAccess(details.Capabilities.Actions.RiskIncreasingTrade) && result.RiskTier == "Safe"
 	details.CanReduceRisk = phoenixAccess(details.Capabilities.Actions.RiskReducingTrade)
 	reason := ""
@@ -425,7 +426,7 @@ func normalizePhoenixPositions(state phoenixaccount.Snapshot, risk helper.RiskRe
 		if price := risk.StaticLiquidationPricesUSD[symbol]; price != nil {
 			liq = *price
 		}
-		positions = append(positions, liveAccountPosition{Symbol: symbol, Side: side, Size: size, EntryPrice: entry, LiqPrice: liq, BaseLots: p.BasePositionLots, LiquidationModel: risk.LiquidationModel})
+		positions = append(positions, liveAccountPosition{Symbol: symbol, Side: side, Size: size, EntryPrice: entry, LiqPrice: liq, BaseLots: p.BasePositionLots, LiquidationModel: risk.LiquidationModel, PendingFundingQuoteLots: p.UnsettledFundingQuoteLots})
 	}
 	sort.Slice(positions, func(i, j int) bool { return positions[i].Symbol < positions[j].Symbol })
 	return positions, nil
