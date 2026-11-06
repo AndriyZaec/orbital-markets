@@ -51,6 +51,7 @@ func requestFixture(t *testing.T) (*domain.SigningRequest, domain.SignedAction) 
 		Manifest: helper.OrderManifest{Format: "solana_legacy_message", PhoenixProgramID: helper.PhoenixProgramID, Routing: "native", IntentAction: helper.ActionUnwind, OwnerAuthority: testAddress(1), PositionAuthority: testAddress(2), FeePayer: testAddress(3), TraderAccount: trader,
 			RequestedSymbol: "SOL", Orderbook: testAddress(4), MetadataGeneration: 7, Side: helper.SideBid, NumBaseLots: 29, PriceLimitTicks: 10000, ReduceOnly: true, ClientOrderID: ^uint64(0), LastValidSlot: 164,
 			AccountKeys: []helper.AccountManifest{{Pubkey: testAddress(3)}}, Instructions: []helper.InstructionManifest{{ProgramID: helper.PhoenixProgramID}}}}
+	built.Manifest.ComputeBudget = (helper.ComputeBudget{}).Effective()
 	payload, _ := json.Marshal(phoenixlive.OrderPayload{Format: "solana_legacy_message", MessageBase64: nativeFixture, MessageSHA256: built.MessageSHA256, OwnerAuthority: testAddress(1), PositionAuthority: testAddress(2), FeePayer: testAddress(3), TraderAccount: trader, ClientOrderID: cid, NumBaseLots: "29", PriceLimitTicks: "10000", LastValidSlot: "164"})
 	metadata, _ := json.Marshal(phoenixlive.SigningMetadata{ProtocolVersion: 1, Built: built, Normalized: helper.NormalizedOrder{Symbol: "SOL", Side: helper.SideBid, Amount: "0.29", LimitPrice: "100", NumBaseLots: 29, PriceLimitTicks: 10000, BaseLotDecimals: 2, TickSize: "100", MetadataGeneration: 7}, MinContextSlot: 120})
 	now := time.Now().UTC()

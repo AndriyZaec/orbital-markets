@@ -74,10 +74,11 @@ pub fn decode(q: AccountingRequest) -> Result<AccountingResult, String> {
     }
     let message: Message =
         bincode::deserialize(&expected).map_err(|_| "invalid legacy accounting message")?;
-    if message.header.num_required_signatures != 2 || message.instructions.len() != 1 {
+    if message.header.num_required_signatures != 2 {
         return Err("unexpected accounting message/signers".into());
     }
-    let top = &message.instructions[0];
+    let order_index = crate::compute::order_index(&message)?;
+    let top = &message.instructions[order_index];
     let program = message
         .account_keys
         .get(usize::from(top.program_id_index))
@@ -100,7 +101,7 @@ pub fn decode(q: AccountingRequest) -> Result<AccountingResult, String> {
     let transfer_authority =
         get_flight_collateral_transfer_authority_address().map_err(|e| e.to_string())?;
     let group = &q.inner_instructions[0];
-    if group.index != 0 || group.instructions.len() > 512 {
+    if group.index as usize != order_index || group.instructions.len() > 512 {
         return Err("accounting outer instruction mismatch".into());
     }
     let mut raw_logs = Vec::new();
@@ -312,6 +313,60 @@ mod tests {
                 ],
             }],
         }
+    }
+
+    #[test]
+    fn budget_prefix_moves_event_group_without_changing_observed_fees() {
+        let mut q = fixture();
+        let bytes = STANDARD.decode(&q.expected_message_base64).unwrap();
+        let old: Message = bincode::deserialize(&bytes).unwrap();
+        let original = &old.instructions[0];
+        let ix = Instruction {
+            program_id: old.account_keys[original.program_id_index as usize],
+            accounts: original
+                .accounts
+                .iter()
+                .map(|&index| AccountMeta {
+                    pubkey: old.account_keys[index as usize],
+                    is_signer: index < old.header.num_required_signatures,
+                    is_writable: old.is_maybe_writable_with_reserved_addresses(
+                        index as usize,
+                        None::<&std::collections::HashSet<Pubkey>>,
+                    ),
+                })
+                .collect(),
+            data: original.data.clone(),
+        };
+        let [limit, price] = crate::compute::ComputeBudget {
+            unit_limit: 500_000,
+            unit_price_micro_lamports: 1234,
+        }
+        .instructions()
+        .unwrap();
+        let message = Message::new_with_blockhash(
+            &[limit, price, ix],
+            Some(&old.account_keys[0]),
+            &old.recent_blockhash,
+        );
+        let index = message
+            .account_keys
+            .iter()
+            .position(|key| *key == PROD_PHOENIX_PROGRAM_ID)
+            .unwrap() as u16;
+        q.inner_instructions[0].index = 2;
+        for ix in &mut q.inner_instructions[0].instructions {
+            ix.program_id_index = index;
+        }
+        let bytes = bincode::serialize(&message).unwrap();
+        let mut packet = vec![0; 129];
+        packet[0] = 2;
+        packet.extend_from_slice(&bytes);
+        q.expected_message_base64 = STANDARD.encode(bytes);
+        q.transaction_base64 = STANDARD.encode(packet);
+        assert_eq!(
+            decode(q).unwrap().flight_fee_quote_lots.as_deref(),
+            Some("12345")
+        );
     }
     #[test]
     fn observed_transfer_not_registered_rate_defines_fee() {

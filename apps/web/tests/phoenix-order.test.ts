@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { Keypair, Message, PublicKey } from '@solana/web3.js'
+import { ComputeBudgetProgram, Keypair, Message, PublicKey, TransactionInstruction } from '@solana/web3.js'
 import bs58 from 'bs58'
 import nacl from 'tweetnacl'
 import { signPhoenixAgentRequest, validatePhoenixOrder, phoenixFlightProgram } from '../src/agents/phoenix-order.ts'
@@ -33,9 +33,14 @@ function syncMessage(request: SigningRequest, message: Message) {
 }
 
 function fixture(flight = true): SigningRequest {
-  const message = Message.from(Buffer.from(flight ? flightMessage : nativeMessage, 'base64'))
+  const old = Message.from(Buffer.from(flight ? flightMessage : nativeMessage, 'base64'))
+  const message = Message.compile({ payerKey: old.accountKeys[0], recentBlockhash: old.recentBlockhash, instructions: [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 0 }),
+    ...old.instructions.map((ix) => new TransactionInstruction({ programId: old.accountKeys[ix.programIdIndex], data: Buffer.from(bs58.decode(ix.data)),
+      keys: ix.accounts.map((index) => ({ pubkey: old.accountKeys[index], isSigner: index < 2, isWritable: old.isAccountWritable(index) })) })),
+  ] })
   const action = flight ? 'open' : 'unwind'
-  const accounts = message.instructions[0].accounts.map((index) => message.accountKeys[index].toBase58())
+  const accounts = message.instructions[2].accounts.map((index) => message.accountKeys[index].toBase58())
   const native = flight ? accounts.slice(6, -2) : accounts
   const request: SigningRequest = { id: 'order-1', client_order_id: '18446744073709551615', venue: 'phoenix', action,
     account: owner, signer: address, symbol: 'SOL', side: 'buy', amount: 0.29, price: 100.005, limit_price: 100, reduce_only: !flight,
@@ -45,7 +50,7 @@ function fixture(flight = true): SigningRequest {
       normalized: { symbol: 'SOL', side: 'bid', amount: '0.29', limit_price: '100', num_base_lots: 29, price_limit_ticks: 10000, base_lot_decimals: 2, tick_size: '100', metadata_generation: 7 },
       built: { metadata_generation: 7, trader_account: phoenixTrader(owner), trader_pda_index: 0, subaccount_index: 0, last_valid_block_height: 150,
         required_signers: [{ index: 0, pubkey: pubkey(3), role: 'fee_payer' }, { index: 1, pubkey: address, role: 'position_authority' }],
-        manifest: { format: 'solana_legacy_message', phoenix_program_id: phoenixProgram, routing: flight ? 'flight' : 'native',
+        manifest: { compute_budget: { unit_limit: 400_000, unit_price_micro_lamports: 0 }, format: 'solana_legacy_message', phoenix_program_id: phoenixProgram, routing: flight ? 'flight' : 'native',
           flight: flight ? { flight_program_id: phoenixFlightProgram, builder_authority: pubkey(4), builder_trader_account: accounts[3], builder_state: accounts[4], builder_pda_index: 0, builder_subaccount_index: 0, expected_registered_fee_bps: 2, uses_fee_override: false } : null,
           intent_action: action, owner_authority: owner, position_authority: address, fee_payer: pubkey(3), trader_account: phoenixTrader(owner), requested_symbol: 'SOL', orderbook: native[native.length - 2], metadata_generation: 7,
           side: 'bid', num_base_lots: 29, price_limit_ticks: 10000, reduce_only: !flight, client_order_id: Number('18446744073709551615'), last_valid_slot: 164 } } } }
@@ -55,9 +60,9 @@ function fixture(flight = true): SigningRequest {
 
 function mutateBytes(request: SigningRequest, change: (message: Message, data: Uint8Array) => void) {
   const message = Message.from(Buffer.from(String(record(request.unsigned_payload).message_base64), 'base64'))
-  const data = bs58.decode(message.instructions[0].data)
+  const data = bs58.decode(message.instructions[2].data)
   change(message, data)
-  message.instructions[0].data = bs58.encode(data)
+  message.instructions[2].data = bs58.encode(data)
   syncMessage(request, message) // Rehash/update the diagnostic manifest too.
 }
 
@@ -69,7 +74,7 @@ test('stored Phoenix agent signs exact pinned native and Flight bytes, preservin
     const signed = await signWithStoredTradingAgent(storage, request)
     assert.equal(signed.client_order_id, '18446744073709551615')
     assert.equal(signed.signer_address, address)
-    assert.equal(nacl.sign.detached.verify(Buffer.from(flight ? flightMessage : nativeMessage, 'base64'), bs58.decode(signed.signature), bs58.decode(address)), true)
+    assert.equal(nacl.sign.detached.verify(Buffer.from(String(record(request.unsigned_payload).message_base64), 'base64'), bs58.decode(signed.signature), bs58.decode(address)), true)
   }
 })
 
@@ -98,11 +103,11 @@ test('changing native packet semantics fails even with a matching digest and man
 test('Flight overrides, wrong permission tails, accounts, signer privileges and extra instructions fail closed', async () => {
   const changes: ((message: Message, data: Uint8Array) => void)[] = [
     (_, data) => { data[0] ^= 1 },
-    (message) => { message.instructions[0].accounts.pop() },
-    (message) => { message.instructions[0].accounts[2] = message.instructions[0].accounts[0] },
+    (message) => { message.instructions[2].accounts.pop() },
+    (message) => { message.instructions[2].accounts[2] = message.instructions[2].accounts[0] },
     (message) => { message.header.numReadonlySignedAccounts = 0 },
     (message) => { message.instructions.push({ ...message.instructions[0] }) },
-    (message) => { message.instructions[0].programIdIndex = 0 },
+    (message) => { message.instructions[2].programIdIndex = 0 },
   ]
   for (const change of changes) {
     const request = fixture()
@@ -133,15 +138,38 @@ test('summary, exact integer strings, normalization units, expiry and local life
   await assert.rejects(signPhoenixAgentRequest(fixture(), agent, () => ++checks === 1), /owner changed/)
 })
 
+test('compute budget rejects substitutions, duplicates, extra accounts and out-of-bounds fees even after rehashing', async () => {
+  for (const change of [
+    (m: Message) => { m.instructions[0].data = bs58.encode(Uint8Array.of(1, 0, 0, 1, 0)) },
+    (m: Message) => { m.instructions[0].accounts.push(0) },
+    (m: Message) => { m.instructions[1] = { ...m.instructions[0] } },
+    (m: Message) => { [m.instructions[0], m.instructions[1]] = [m.instructions[1], m.instructions[0]] },
+    (m: Message) => { m.instructions[1].programIdIndex = 0 },
+    (m: Message) => { m.instructions[1].data = bs58.encode(Uint8Array.of(3, 1, 0, 0, 0, 0, 0, 0, 0)) },
+    (m: Message) => { m.instructions.push({ ...m.instructions[1] }) },
+  ]) {
+    const request = fixture()
+    mutateBytes(request, (message) => change(message))
+    await assert.rejects(signPhoenixAgentRequest(request, agent), /Invalid Phoenix order/)
+  }
+  for (const [unit_limit, unit_price_micro_lamports] of [[0, 0], [1_400_001, 0], [400_000, -1], [400_000, 1_000_001], [400_000, 0.5]]) {
+    const request = fixture()
+    record(record(request.venue_metadata).built).manifest = { ...record(record(record(request.venue_metadata).built).manifest),
+      compute_budget: { unit_limit, unit_price_micro_lamports } }
+    await assert.rejects(signPhoenixAgentRequest(request, agent), /compute budget bounds/)
+  }
+})
+
 test('pinned Rust helper output is compatible for all four actions', async (t) => {
   const path = process.env.ORBITAL_PHOENIX_HELPER_TEST_PATH
   if (!path) { t.skip('set ORBITAL_PHOENIX_HELPER_TEST_PATH to built phoenix-helper'); return }
   const account = (n: number) => new PublicKey(new Uint8Array(32).fill(n)).toBase58()
-  for (const action of ['open', 'close', 'unwind', 'emergency_close'] as const) {
+  for (const action of ['open', 'close', 'unwind', 'emergency_close'] as const) for (const price of [0, 1234]) {
     const flight = action === 'open' || action === 'close', request = fixture(flight)
     request.action = action; request.reduce_only = action !== 'open'
     const input = JSON.stringify({ protocol_version: 1, request_id: 'fixture', operation: 'build_order', payload: {
       action, owner_authority: owner, position_authority: address, fee_payer: pubkey(3), ...(flight ? { builder_authority: pubkey(4) } : {}),
+      compute_budget: { unit_limit: 400_000, unit_price_micro_lamports: price },
       symbol: 'SOL', side: 'bid', num_base_lots: 29, price_limit_ticks: 10000, reduce_only: request.reduce_only, client_order_id: '18446744073709551615', last_valid_slot: 164,
       recent_blockhash: account(9), last_valid_block_height: 150, metadata_generation: 7,
       accounts: { perp_asset_map: account(10), orderbook: account(11), spline_collection: account(12), global_trader_index: [account(13)], active_trader_buffer: [account(14)] },

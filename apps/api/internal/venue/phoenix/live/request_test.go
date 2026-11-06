@@ -25,10 +25,13 @@ const payer = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 const flightBuilder = "Vote111111111111111111111111111111111111111"
 
 type fixtureBackend struct {
+	budget  helper.ComputeBudget
 	onBuild func()
 	corrupt bool
 	last    helper.BuildOrderRequest
 }
+
+func (f *fixtureBackend) ComputeBudget() helper.ComputeBudget { return f.budget.Effective() }
 
 func (f *fixtureBackend) NormalizeOrder(_ context.Context, q helper.NormalizeRequest) (helper.NormalizedOrder, error) {
 	price, ticks := "100", uint64(10000)
@@ -45,6 +48,7 @@ func (f *fixtureBackend) BuildOrder(_ context.Context, q helper.BuildOrderReques
 		RequiredSigners: []helper.RequiredSigner{{Index: 0, Pubkey: q.FeePayer, Role: "fee_payer"}, {Index: 1, Pubkey: q.PositionAuthority, Role: "position_authority"}},
 		Manifest: helper.OrderManifest{Format: "solana_legacy_message", PhoenixProgramID: helper.PhoenixProgramID, Routing: "native", IntentAction: q.Action, OwnerAuthority: q.OwnerAuthority, PositionAuthority: q.PositionAuthority, FeePayer: q.FeePayer, TraderAccount: owner, RequestedSymbol: q.Symbol, Orderbook: q.Accounts.Orderbook, MetadataGeneration: q.MetadataGeneration, Side: q.Side, NumBaseLots: q.NumBaseLots, PriceLimitTicks: q.PriceLimitTicks, ReduceOnly: q.ReduceOnly, ClientOrderID: q.ClientOrderID, LastValidSlot: q.LastValidSlot,
 			AccountKeys: []helper.AccountManifest{{Pubkey: q.FeePayer}}, Instructions: []helper.InstructionManifest{{ProgramID: helper.PhoenixProgramID}}}}
+	r.Manifest.ComputeBudget = q.ComputeBudget.Effective()
 	if normal(q.Action) {
 		r.Manifest.Routing = "flight"
 		r.Manifest.Flight = &helper.FlightManifest{FlightProgramID: helper.FlightProgramID, BuilderAuthority: q.BuilderAuthority, BuilderTraderAccount: agent, BuilderState: payer, ExpectedRegisteredFeeBPS: 2}
@@ -73,7 +77,7 @@ func captureFixture() (Intent, Capture) {
 
 func TestPrepareBindsExactMessageSummaryExpiryAndOneShotStore(t *testing.T) {
 	q, c := captureFixture()
-	backend := &fixtureBackend{}
+	backend := &fixtureBackend{budget: helper.ComputeBudget{UnitLimit: 500_000, UnitPriceMicroLamports: 1234}}
 	builder, err := NewBuilder(backend, payer, flightBuilder, func(context.Context, Intent, Capture) error { return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +99,9 @@ func TestPrepareBindsExactMessageSummaryExpiryAndOneShotStore(t *testing.T) {
 	}
 	if payload.ClientOrderID != "18446744073709551615" || payload.NumBaseLots != "29" || payload.PriceLimitTicks != "10000" || payload.MessageBase64 != metadata.Built.MessageBase64 || metadata.MinContextSlot != 120 || backend.last.LastValidSlot != 164 {
 		t.Fatal("native order or context binding was lost")
+	}
+	if metadata.Built.Manifest.ComputeBudget != backend.budget || backend.last.ComputeBudget != backend.budget {
+		t.Fatal("deployment compute policy was lost before signing")
 	}
 	store := domain.NewSigningRequestStore()
 	store.Store(r)

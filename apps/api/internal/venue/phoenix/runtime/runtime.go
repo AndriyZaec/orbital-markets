@@ -22,6 +22,7 @@ type Config struct {
 	RelayerPrivateKey         string
 	MaxTransactionFeeLamports uint64
 	BuilderAuthority          string
+	OrderComputeBudget        helper.ComputeBudget
 }
 
 type healthHelper interface {
@@ -58,7 +59,8 @@ func (r *Runtime) BlockHeight(ctx context.Context, minSlot uint64) (uint64, erro
 	}
 	return r.chain.BlockHeight(ctx, minSlot)
 }
-func (r *Runtime) BuilderAuthority() string { return r.builderAuthority }
+func (r *Runtime) BuilderAuthority() string            { return r.builderAuthority }
+func (r *Runtime) ComputeBudget() helper.ComputeBudget { return r.orderComputeBudget.Effective() }
 func (r *Runtime) BuildDelegation(ctx context.Context, q helper.BuildDelegationRequest) (helper.BuildDelegationResult, error) {
 	return r.helper.BuildDelegation(ctx, q)
 }
@@ -127,6 +129,9 @@ func (r *Runtime) NormalizeOrder(ctx context.Context, q helper.NormalizeRequest)
 }
 
 func (r *Runtime) BuildOrder(ctx context.Context, q helper.BuildOrderRequest) (helper.BuildOrderResult, error) {
+	if q.ComputeBudget == (helper.ComputeBudget{}) {
+		q.ComputeBudget = r.ComputeBudget()
+	}
 	if err := ctx.Err(); err != nil {
 		return helper.BuildOrderResult{}, err
 	}
@@ -180,19 +185,24 @@ func (r *Runtime) AccountAuthority(ctx context.Context, owner string, minSlot ui
 }
 
 type Runtime struct {
-	helper           healthHelper
-	chain            chain
-	relayer          *relayer.Service
-	maxFee           uint64
-	ctx              context.Context
-	cancel           context.CancelFunc
-	done             chan struct{}
-	builderAuthority string
-	flightMu         sync.Mutex
-	flightStatus     FlightStatus
+	helper             healthHelper
+	chain              chain
+	relayer            *relayer.Service
+	maxFee             uint64
+	orderComputeBudget helper.ComputeBudget
+	ctx                context.Context
+	cancel             context.CancelFunc
+	done               chan struct{}
+	builderAuthority   string
+	flightMu           sync.Mutex
+	flightStatus       FlightStatus
 }
 
 func Start(ctx context.Context, config Config, logger *slog.Logger) (*Runtime, error) {
+	budget := config.OrderComputeBudget.Effective()
+	if err := budget.Validate(); err != nil {
+		return nil, err
+	}
 	if config.BuilderAuthority != "" {
 		key, err := base58.Decode(config.BuilderAuthority)
 		if err != nil || len(key) != 32 {
@@ -207,7 +217,7 @@ func Start(ctx context.Context, config Config, logger *slog.Logger) (*Runtime, e
 	if err != nil {
 		return nil, err
 	}
-	service, err := relayer.NewService(signer, client, relayer.Policy{MaxTransactionFeeLamports: config.MaxTransactionFeeLamports}, logger)
+	service, err := relayer.NewService(signer, client, relayer.Policy{MaxTransactionFeeLamports: config.MaxTransactionFeeLamports, OrderComputeBudget: budget}, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +225,9 @@ func Start(ctx context.Context, config Config, logger *slog.Logger) (*Runtime, e
 	if err != nil {
 		return nil, err
 	}
-	return startRuntime(ctx, helperClient, client, service, config.MaxTransactionFeeLamports, config.BuilderAuthority), nil
+	r := startRuntime(ctx, helperClient, client, service, config.MaxTransactionFeeLamports, config.BuilderAuthority)
+	r.orderComputeBudget = budget
+	return r, nil
 }
 
 func startRuntime(ctx context.Context, h healthHelper, c chain, s *relayer.Service, maxFee uint64, builder ...string) *Runtime {

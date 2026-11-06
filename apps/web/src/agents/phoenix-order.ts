@@ -6,8 +6,9 @@ import type { StoredTradingAgent } from './types.ts'
 import { fromBase64, phoenixGlobalConfiguration, phoenixLogAuthority, phoenixProgram, phoenixTrader } from './phoenix-message.ts'
 
 // Semantic validator for the exact market-order template emitted by Rise IX
-// 0.6.13. No transfers, fee overrides, extra instructions, or versioned messages.
+// 0.6.13, prefixed by exactly two bounded Compute Budget instructions.
 export const phoenixFlightProgram = 'F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W'
+const computeProgram = 'ComputeBudget111111111111111111111111111111'
 const encoder = new TextEncoder()
 const u64Max = (1n << 64n) - 1n
 
@@ -126,19 +127,30 @@ export async function validatePhoenixOrder(request: SigningRequest, expected: {
   const message = Message.from(bytes), keys = message.accountKeys.map((account) => account.toBase58())
   requireOrder(equal(message.serialize(), bytes) && message.header.numRequiredSignatures === 2 &&
     message.header.numReadonlySignedAccounts === 1 && keys[0] === payer && keys[1] === agent &&
-    message.recentBlockhash === built.recent_blockhash && message.instructions.length === 1, 'message or signer layout')
+    message.recentBlockhash === built.recent_blockhash && message.instructions.length === 3, 'message or signer layout')
+  const budget = record(manifest.compute_budget)
+  requireOrder(safePositive(budget.unit_limit) && budget.unit_limit <= 1_400_000 &&
+    typeof budget.unit_price_micro_lamports === 'number' && Number.isSafeInteger(budget.unit_price_micro_lamports) &&
+    budget.unit_price_micro_lamports >= 0 && budget.unit_price_micro_lamports <= 1_000_000, 'compute budget bounds')
+  const computeData = [new Uint8Array([2, ...le(BigInt(budget.unit_limit), 4)]),
+    new Uint8Array([3, ...le(BigInt(budget.unit_price_micro_lamports), 8)])]
+  for (const [index, wanted] of computeData.entries()) {
+    const ix = message.instructions[index]
+    requireOrder(keys[ix.programIdIndex] === computeProgram && ix.accounts.length === 0 &&
+      equal(bs58.decode(ix.data), wanted), 'canonical compute budget instructions')
+  }
   requireOrder(Array.isArray(built.required_signers) && built.required_signers.length === 2, 'required signers')
   for (const [index, role] of ['fee_payer', 'position_authority'].entries()) {
     const signer = record(built.required_signers[index])
     requireOrder(signer.index === index && signer.pubkey === keys[index] && signer.role === role, 'signer manifest')
   }
-  const instruction = message.instructions[0]
+  const instruction = message.instructions[2]
   const accounts = instruction.accounts.map((index) => {
     requireOrder(Number.isInteger(index) && index >= 0 && index < keys.length, 'account index')
     return keys[index]
   })
   let data = bs58.decode(instruction.data), native = accounts
-  const readonly = new Set([phoenixProgram, phoenixLogAuthority, agent])
+  const readonly = new Set([phoenixProgram, phoenixLogAuthority, agent, computeProgram])
   const writable = new Set([payer])
   const flight = request.action === 'open' || request.action === 'close'
   if (flight) {
@@ -183,18 +195,20 @@ export async function validatePhoenixOrder(request: SigningRequest, expected: {
   ])
   requireOrder(equal(data, wanted), 'only the approved bounded IOC order may be signed')
   requireOrder(Array.isArray(manifest.account_keys) && manifest.account_keys.length === keys.length &&
-    Array.isArray(manifest.instructions) && manifest.instructions.length === 1, 'instruction manifest')
+    Array.isArray(manifest.instructions) && manifest.instructions.length === 3, 'instruction manifest')
   for (const [index, account] of manifest.account_keys.entries()) {
     const row = record(account)
     requireOrder(row.index === index && row.pubkey === keys[index] && row.signer === (index < 2) &&
       row.writable === message.isAccountWritable(index), 'account manifest')
   }
-  const described = record(manifest.instructions[0])
-  requireOrder(described.program_id === keys[instruction.programIdIndex] && described.program_id_index === instruction.programIdIndex &&
-    Array.isArray(described.account_indexes) && described.account_indexes.length === instruction.accounts.length &&
-    described.account_indexes.every((index, offset) => index === instruction.accounts[offset]) &&
-    typeof described.data_base64 === 'string' && described.data_base64.length <= 1472 &&
-    equal(fromBase64(described.data_base64), bs58.decode(instruction.data)), 'instruction bytes manifest')
+  for (const [index, ix] of message.instructions.entries()) {
+    const described = record(manifest.instructions[index])
+    requireOrder(described.program_id === keys[ix.programIdIndex] && described.program_id_index === ix.programIdIndex &&
+      Array.isArray(described.account_indexes) && described.account_indexes.length === ix.accounts.length &&
+      described.account_indexes.every((index, offset) => index === ix.accounts[offset]) &&
+      typeof described.data_base64 === 'string' && described.data_base64.length <= 1472 &&
+      equal(fromBase64(described.data_base64), bs58.decode(ix.data)), 'instruction bytes manifest')
+  }
   validTime(request, expected.now ?? Date.now())
   return bytes
 }

@@ -89,7 +89,8 @@ func Decode(q *domain.SigningRequest) (Prepared, error) {
 		return p, ErrConflict
 	}
 	request := helper.BuildOrderRequest{Action: helper.Action(q.Action), OwnerAuthority: q.Account, PositionAuthority: q.Signer, FeePayer: payload.FeePayer,
-		Symbol: q.Symbol, Side: side, NumBaseLots: p.Lots, PriceLimitTicks: p.Ticks, ReduceOnly: q.ReduceOnly, ClientOrderID: cid, LastValidSlot: p.LastSlot,
+		ComputeBudget: b.Manifest.ComputeBudget,
+		Symbol:        q.Symbol, Side: side, NumBaseLots: p.Lots, PriceLimitTicks: p.Ticks, ReduceOnly: q.ReduceOnly, ClientOrderID: cid, LastValidSlot: p.LastSlot,
 		RecentBlockhash: b.RecentBlockhash, LastValidBlockHeight: b.LastValidBlockHeight, MetadataGeneration: b.MetadataGeneration, Accounts: helper.MarketAccounts{Orderbook: b.Manifest.Orderbook}}
 	if b.Manifest.Flight != nil {
 		request.BuilderAuthority = b.Manifest.Flight.BuilderAuthority

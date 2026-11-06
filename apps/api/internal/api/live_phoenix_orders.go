@@ -103,7 +103,8 @@ func (f *phoenixAccountFeed) validateOrderSubmit(ctx context.Context, q *domain.
 		return failed(errors.New("Phoenix BBO outside signed limit"))
 	}
 	request := helper.BuildOrderRequest{Action: helper.Action(q.Action), OwnerAuthority: q.Account, PositionAuthority: q.Signer, FeePayer: b.Address(), Symbol: q.Symbol,
-		Side: p.Metadata.Normalized.Side, NumBaseLots: p.Lots, PriceLimitTicks: p.Ticks, ReduceOnly: q.ReduceOnly,
+		ComputeBudget: p.Metadata.Built.Manifest.ComputeBudget,
+		Side:          p.Metadata.Normalized.Side, NumBaseLots: p.Lots, PriceLimitTicks: p.Ticks, ReduceOnly: q.ReduceOnly,
 		ClientOrderID: p.Metadata.Built.Manifest.ClientOrderID, LastValidSlot: p.LastSlot, RecentBlockhash: p.Metadata.Built.RecentBlockhash,
 		LastValidBlockHeight: p.Metadata.Built.LastValidBlockHeight, MetadataGeneration: p.Metadata.Built.MetadataGeneration, Accounts: accounts}
 	if q.Action == "open" || q.Action == "close" {

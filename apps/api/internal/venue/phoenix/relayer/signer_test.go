@@ -49,6 +49,7 @@ func fixtureOrder(t *testing.T) (helper.BuildOrderResult, []byte, ed25519.Privat
 	message = append(message, hash...)
 	message = append(message, 1, 2, 1, 1, 1, 42) // one compiled instruction
 	built := helper.BuildOrderResult{
+		Manifest: helper.OrderManifest{ComputeBudget: (helper.ComputeBudget{}).Effective()},
 		RequiredSigners: []helper.RequiredSigner{
 			{Index: 0, Pubkey: signer.Address(), Role: "fee_payer"},
 			{Index: 1, Pubkey: base58.Encode(agent[32:]), Role: "position_authority"},

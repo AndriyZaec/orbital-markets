@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/rpc"
 	"github.com/mr-tron/base58"
 )
@@ -139,6 +140,18 @@ func TestBalanceStatusUsesFreshReadsAndWarningBoundary(t *testing.T) {
 	status, err = service.CheckBalance(context.Background())
 	if !errors.Is(err, rpcFailure) || !status.ObservedAt.IsZero() {
 		t.Fatalf("reused successful balance: %+v %v", status, err)
+	}
+}
+
+func TestCoSignRejectsBudgetOutsideCurrentPolicyBeforeRPC(t *testing.T) {
+	service, err := NewService(fixtureSigner(t), testChain{}, Policy{MaxTransactionFeeLamports: 20000, OrderComputeBudget: helper.ComputeBudget{UnitLimit: 500000, UnitPriceMicroLamports: 1234}}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, message, agent := fixtureOrder(t)
+	// Valid signature/digest do not permit a different deployment fee policy.
+	if packet, err := service.CoSign(context.Background(), built, base58.Encode(agent[32:]), base58.Encode(ed25519.Sign(agent, message)), 100); !errors.Is(err, ErrFeeCap) || packet != nil {
+		t.Fatalf("packet=%v err=%v", packet, err)
 	}
 }
 

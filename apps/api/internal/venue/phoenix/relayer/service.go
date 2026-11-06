@@ -30,6 +30,7 @@ type Policy struct {
 	// Total network fee, including any Compute Budget priority fee. This is not
 	// Phoenix/Flight's trading fee. Deployment must choose an explicit cap.
 	MaxTransactionFeeLamports uint64
+	OrderComputeBudget        helper.ComputeBudget
 }
 
 type Service struct {
@@ -42,6 +43,10 @@ type Service struct {
 func (s *Service) Address() string { return s.signer.Address() }
 
 func NewService(signer *Signer, chain Chain, policy Policy, logger *slog.Logger) (*Service, error) {
+	policy.OrderComputeBudget = policy.OrderComputeBudget.Effective()
+	if err := policy.OrderComputeBudget.Validate(); err != nil {
+		return nil, err
+	}
 	if signer == nil || len(signer.key) == 0 || chain == nil || logger == nil || policy.MaxTransactionFeeLamports == 0 {
 		return nil, errors.New("Phoenix relayer requires signer, chain, logger and positive network fee cap")
 	}
@@ -97,6 +102,9 @@ func (s *Service) Run(ctx context.Context) {
 // does not submit, reserve SOL across sessions or replace live intent checks.
 // minSlot comes from the server's blockhash context, not browser input.
 func (s *Service) CoSign(ctx context.Context, built helper.BuildOrderResult, expectedAgent, signature string, minSlot uint64) ([]byte, error) {
+	if built.Manifest.ComputeBudget != s.policy.OrderComputeBudget {
+		return nil, ErrFeeCap
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := ctx.Err(); err != nil {

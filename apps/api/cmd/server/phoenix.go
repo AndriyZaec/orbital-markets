@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
 	phoenixruntime "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/runtime"
 )
 
@@ -23,7 +24,9 @@ func phoenixConfig(getenv func(string) string) (phoenixruntime.Config, bool, err
 		BuilderAuthority:  strings.TrimSpace(getenv("PHOENIX_BUILDER_AUTHORITY")),
 	}
 	cap := strings.TrimSpace(getenv("PHOENIX_MAX_TRANSACTION_FEE_LAMPORTS"))
-	if config.HelperPath == "" && config.RPCURL == "" && config.RelayerPrivateKey == "" && cap == "" && config.BuilderAuthority == "" {
+	units := strings.TrimSpace(getenv("PHOENIX_COMPUTE_UNIT_LIMIT"))
+	price := strings.TrimSpace(getenv("PHOENIX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS"))
+	if config.HelperPath == "" && config.RPCURL == "" && config.RelayerPrivateKey == "" && cap == "" && config.BuilderAuthority == "" && units == "" && price == "" {
 		return config, false, nil
 	}
 	if config.RPCURL == "" || config.RelayerPrivateKey == "" || cap == "" {
@@ -34,6 +37,27 @@ func phoenixConfig(getenv func(string) string) (phoenixruntime.Config, bool, err
 		return phoenixruntime.Config{}, false, errors.New("PHOENIX_MAX_TRANSACTION_FEE_LAMPORTS must be a positive integer")
 	}
 	config.MaxTransactionFeeLamports = maxFee
+	config.OrderComputeBudget = (helper.ComputeBudget{}).Effective()
+	if units != "" {
+		v, err := strconv.ParseUint(units, 10, 32)
+		if err != nil || v == 0 {
+			return phoenixruntime.Config{}, false, errors.New("invalid PHOENIX_COMPUTE_UNIT_LIMIT")
+		}
+		config.OrderComputeBudget.UnitLimit = uint32(v)
+	}
+	if price != "" {
+		v, err := strconv.ParseUint(price, 10, 64)
+		if err != nil {
+			return phoenixruntime.Config{}, false, errors.New("invalid PHOENIX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS")
+		}
+		config.OrderComputeBudget.UnitPriceMicroLamports = v
+	}
+	if err := config.OrderComputeBudget.Validate(); err != nil {
+		return phoenixruntime.Config{}, false, err
+	}
+	if config.OrderComputeBudget.PriorityFeeLamports() >= maxFee {
+		return phoenixruntime.Config{}, false, errors.New("Phoenix priority fee leaves no room in total network fee cap")
+	}
 	if config.HelperPath == "" {
 		config.HelperPath = "/phoenix-helper"
 	}

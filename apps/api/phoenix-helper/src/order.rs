@@ -15,6 +15,7 @@ use solana_hash::Hash;
 use solana_message::legacy::Message;
 use solana_pubkey::Pubkey;
 
+use crate::compute::ComputeBudget;
 use crate::message::{AccountManifest, InstructionManifest, RequiredSigner, describe};
 
 const MAX_TRANSACTION_BYTES: usize = 1_232;
@@ -23,6 +24,8 @@ const EXPECTED_FLIGHT_FEE_BPS: u64 = 2;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildOrderRequest {
+    #[serde(default)]
+    compute_budget: ComputeBudget,
     action: Action,
     owner_authority: String,
     position_authority: String,
@@ -90,6 +93,7 @@ pub struct BuildOrderResult {
 
 #[derive(Serialize)]
 struct OrderManifest {
+    compute_budget: ComputeBudget,
     format: &'static str,
     phoenix_program_id: String,
     routing: Routing,
@@ -261,7 +265,12 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
             None,
         )
     };
-    let message = Message::new_with_blockhash(&[instruction], Some(&fee_payer), &recent_blockhash);
+    let [limit, price] = request.compute_budget.instructions()?;
+    let message = Message::new_with_blockhash(
+        &[limit, price, instruction],
+        Some(&fee_payer),
+        &recent_blockhash,
+    );
     let message_bytes = bincode::serialize(&message)
         .map_err(|error| format!("failed to serialize message: {error}"))?;
     let required_signatures = usize::from(message.header.num_required_signatures);
@@ -313,6 +322,7 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
         subaccount_index: 0,
         trader_bump,
         manifest: OrderManifest {
+            compute_budget: request.compute_budget,
             format: "solana_legacy_message",
             phoenix_program_id: PROD_PHOENIX_PROGRAM_ID.to_string(),
             routing,

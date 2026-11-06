@@ -228,9 +228,14 @@ fn build_order_returns_a_deterministic_cross_margin_message() {
         "8f1SJ8oVHyhTvxSYTCsGszbwLW5QYYGLCmvtTcn2qPEZ"
     );
     assert_eq!(response["result"]["trader_bump"], 255);
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+    let wire = base64::engine::general_purpose::STANDARD
+        .decode(response["result"]["message_base64"].as_str().unwrap())
+        .unwrap();
     assert_eq!(
         response["result"]["message_sha256"],
-        "0a009f7f2a2d4be1984d44a9574b81182bf73874313f3f685873eeb64e0ca7dc"
+        format!("{:x}", Sha256::digest(&wire))
     );
     assert!(
         response["result"]["message_base64"]
@@ -291,7 +296,7 @@ fn build_order_returns_a_deterministic_cross_margin_message() {
         "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih"
     );
     assert_eq!(
-        response["result"]["manifest"]["instructions"][0]["program_id"],
+        response["result"]["manifest"]["instructions"][2]["program_id"],
         "F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"
     );
 }
@@ -309,7 +314,7 @@ fn unwind_order_bypasses_flight() {
     assert_eq!(response["result"]["manifest"]["routing"], "native");
     assert!(response["result"]["manifest"]["flight"].is_null());
     assert_eq!(
-        response["result"]["manifest"]["instructions"][0]["program_id"],
+        response["result"]["manifest"]["instructions"][2]["program_id"],
         "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih"
     );
 }
@@ -330,7 +335,7 @@ fn emergency_close_bypasses_flight() {
     assert_eq!(response["result"]["manifest"]["routing"], "native");
     assert!(response["result"]["manifest"]["flight"].is_null());
     assert_eq!(
-        response["result"]["manifest"]["instructions"][0]["program_id"],
+        response["result"]["manifest"]["instructions"][2]["program_id"],
         "EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih"
     );
 }
@@ -350,7 +355,7 @@ fn normal_close_uses_flight() {
     assert_eq!(response["result"]["manifest"]["intent_action"], "close");
     assert_eq!(response["result"]["manifest"]["routing"], "flight");
     assert_eq!(
-        response["result"]["manifest"]["instructions"][0]["program_id"],
+        response["result"]["manifest"]["instructions"][2]["program_id"],
         "F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"
     );
 }
@@ -392,6 +397,56 @@ fn build_order_rejects_owner_as_position_authority() {
         response["error"]["message"],
         "position_authority must differ from owner_authority"
     );
+}
+
+#[test]
+fn compute_budget_is_canonical_bounded_and_part_of_signed_bytes() {
+    use base64::Engine as _;
+    use solana_compute_budget_interface::ComputeBudgetInstruction;
+    use solana_message::legacy::Message;
+    for (units, price, valid) in [
+        (400_000, 0_u64, true),
+        (1_400_000, 1_000_000, true),
+        (0, 0, false),
+        (1_400_001, 0, false),
+        (400_000, 1_000_001, false),
+        (400_000, u64::MAX, false),
+    ] {
+        let mut request: serde_json::Value = serde_json::from_slice(BUILD_ORDER_REQUEST).unwrap();
+        request["payload"]["compute_budget"] =
+            serde_json::json!({"unit_limit": units, "unit_price_micro_lamports": price});
+        let output = run_helper(&serde_json::to_vec(&request).unwrap());
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["ok"], valid, "{response}");
+        if !valid {
+            continue;
+        }
+        let wire = base64::engine::general_purpose::STANDARD
+            .decode(response["result"]["message_base64"].as_str().unwrap())
+            .unwrap();
+        let message: Message = bincode::deserialize(&wire).unwrap();
+        assert_eq!(message.instructions.len(), 3);
+        for (ix, expected) in message.instructions[..2].iter().zip([
+            ComputeBudgetInstruction::set_compute_unit_limit(units),
+            ComputeBudgetInstruction::set_compute_unit_price(price),
+        ]) {
+            assert!(ix.accounts.is_empty());
+            assert_eq!(
+                message.account_keys[ix.program_id_index as usize],
+                expected.program_id
+            );
+            assert_eq!(ix.data, expected.data);
+            assert!(!message.is_maybe_writable_with_reserved_addresses(
+                ix.program_id_index as usize,
+                None::<&std::collections::HashSet<solana_pubkey::Pubkey>>
+            ));
+        }
+        assert_eq!(
+            response["result"]["manifest"]["compute_budget"],
+            request["payload"]["compute_budget"]
+        );
+        assert!(wire.len() + 129 <= 1232);
+    }
 }
 
 #[test]

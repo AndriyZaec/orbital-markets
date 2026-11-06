@@ -313,6 +313,7 @@ func TestHelperProcess(t *testing.T) {
 
 func fakeOrderManifest(order BuildOrderRequest) OrderManifest {
 	manifest := OrderManifest{
+		ComputeBudget:      order.ComputeBudget.Effective(),
 		Format:             "solana_legacy_message",
 		PhoenixProgramID:   PhoenixProgramID,
 		Routing:            "flight",

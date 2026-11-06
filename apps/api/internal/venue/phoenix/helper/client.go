@@ -132,6 +132,7 @@ func (c *Client) Health(ctx context.Context) (HealthResult, error) {
 }
 
 func (c *Client) BuildOrder(ctx context.Context, request BuildOrderRequest) (BuildOrderResult, error) {
+	request.ComputeBudget = request.ComputeBudget.Effective()
 	var result BuildOrderResult
 	if err := c.call(ctx, "build_order", request, &result); err != nil {
 		return BuildOrderResult{}, err
@@ -302,6 +303,13 @@ func decodeStrict(data []byte, value any) error {
 }
 
 func validateBuildOrderResult(request BuildOrderRequest, result BuildOrderResult) error {
+	budget := request.ComputeBudget.Effective()
+	if err := budget.Validate(); err != nil {
+		return err
+	}
+	if result.Manifest.ComputeBudget != budget {
+		return errors.New("compute budget does not match build_order request")
+	}
 	message, err := base64.StdEncoding.DecodeString(result.MessageBase64)
 	if err != nil || len(message) == 0 {
 		return errors.New("message_base64 is invalid")

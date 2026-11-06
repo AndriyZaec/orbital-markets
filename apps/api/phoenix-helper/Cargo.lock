@@ -675,6 +675,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "solana-compute-budget-interface",
  "solana-hash",
  "solana-instruction 3.5.1",
  "solana-message",
@@ -1164,6 +1165,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "085db4906d89324cef2a30840d59eaecf3d4231c560ec7c9f6614a93c652f501"
 dependencies = [
  "parking_lot",
+]
+
+[[package]]
+name = "solana-compute-budget-interface"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8292c436b269ad23cecc8b24f7da3ab07ca111661e25e00ce0e1d22771951ab9"
+dependencies = [
+ "solana-instruction 3.5.1",
+ "solana-sdk-ids",
 ]
 
 [[package]]

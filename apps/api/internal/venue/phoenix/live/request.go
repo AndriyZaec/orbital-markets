@@ -80,6 +80,7 @@ type Builder struct {
 	feePayer, builderAuthority string
 	check                      CheckCapture
 	now                        func() time.Time
+	computeBudget              helper.ComputeBudget
 }
 
 func NewBuilder(backend Backend, feePayer, builderAuthority string, check CheckCapture) (*Builder, error) {
@@ -89,7 +90,14 @@ func NewBuilder(backend Backend, feePayer, builderAuthority string, check CheckC
 	if builderAuthority != "" && !key(builderAuthority) {
 		return nil, errors.New("invalid Flight builder authority")
 	}
-	return &Builder{backend: backend, feePayer: feePayer, builderAuthority: builderAuthority, check: check, now: time.Now}, nil
+	budget := (helper.ComputeBudget{}).Effective()
+	if provider, ok := backend.(interface{ ComputeBudget() helper.ComputeBudget }); ok {
+		budget = provider.ComputeBudget()
+	}
+	if err := budget.Validate(); err != nil {
+		return nil, err
+	}
+	return &Builder{backend: backend, feePayer: feePayer, builderAuthority: builderAuthority, check: check, now: time.Now, computeBudget: budget}, nil
 }
 
 func (b *Builder) Normalize(ctx context.Context, q Intent, c Capture) (helper.NormalizedOrder, error) {
@@ -164,7 +172,8 @@ func (b *Builder) Prepare(ctx context.Context, q Intent, c Capture) (*domain.Sig
 	}
 	cid, _ := strconv.ParseUint(q.ClientOrderID, 10, 64)
 	request := helper.BuildOrderRequest{Action: q.Action, OwnerAuthority: q.Owner, PositionAuthority: q.Agent, FeePayer: b.feePayer,
-		Symbol: q.Symbol, Side: normalized.Side, NumBaseLots: normalized.NumBaseLots, PriceLimitTicks: normalized.PriceLimitTicks, ReduceOnly: q.Action != helper.ActionOpen,
+		ComputeBudget: b.computeBudget,
+		Symbol:        q.Symbol, Side: normalized.Side, NumBaseLots: normalized.NumBaseLots, PriceLimitTicks: normalized.PriceLimitTicks, ReduceOnly: q.Action != helper.ActionOpen,
 		ClientOrderID: cid, LastValidSlot: c.Blockhash.Slot + slotBudget, RecentBlockhash: c.Blockhash.Hash, LastValidBlockHeight: c.Blockhash.LastValidBlockHeight, MetadataGeneration: c.MetadataGeneration, Accounts: c.Accounts}
 	if normal(q.Action) {
 		request.BuilderAuthority = b.builderAuthority

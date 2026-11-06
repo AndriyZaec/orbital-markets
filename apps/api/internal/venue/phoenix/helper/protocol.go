@@ -32,6 +32,7 @@ type HealthResult struct {
 }
 
 type BuildOrderRequest struct {
+	ComputeBudget        ComputeBudget  `json:"compute_budget"`
 	Action               Action         `json:"action"`
 	OwnerAuthority       string         `json:"owner_authority"`
 	PositionAuthority    string         `json:"position_authority"`
@@ -79,6 +80,7 @@ type RequiredSigner struct {
 }
 
 type OrderManifest struct {
+	ComputeBudget      ComputeBudget         `json:"compute_budget"`
 	Format             string                `json:"format"`
 	PhoenixProgramID   string                `json:"phoenix_program_id"`
 	Routing            string                `json:"routing"`
