@@ -145,9 +145,11 @@ func TestPrepareRejectsMismatchedOrExpiredEvidence(t *testing.T) {
 		"expired hash": func(_ *Intent, c *Capture) { c.BlockHeight = c.Blockhash.LastValidBlockHeight }, "stale hash": func(_ *Intent, c *Capture) { c.BlockhashObservedAt = time.Now().Add(-31 * time.Second) },
 		"stale quote": func(q *Intent, _ *Capture) { q.QuoteObservedAt = time.Now().Add(-6 * time.Second) }, "wrong delegate": func(_ *Intent, c *Capture) { c.Authority.RegisteredAgent = owner }, "old authority slot": func(_ *Intent, c *Capture) { c.Authority.Slot = 99 },
 		"wrong Flight fee": func(_ *Intent, c *Capture) { c.Flight.FeeBPS = 3 }, "missing Flight": func(_ *Intent, c *Capture) { c.Flight = nil }, "stale Flight": func(_ *Intent, c *Capture) { c.Flight.ObservedAt = time.Now().Add(-31 * time.Second) },
-		"Flight account mismatch": func(_ *Intent, c *Capture) { c.Flight.BuilderState = owner },
-		"projection blocked":      func(_ *Intent, c *Capture) { c.Projection.Projection.MarginSufficient = false },
-		"capability":              func(_ *Intent, c *Capture) { c.Authority.CanIncreaseRisk = false },
+		"Flight account mismatch":      func(_ *Intent, c *Capture) { c.Flight.BuilderState = owner },
+		"projection blocked":           func(_ *Intent, c *Capture) { c.Projection.Projection.MarginSufficient = false },
+		"capability":                   func(_ *Intent, c *Capture) { c.Authority.CanIncreaseRisk = false },
+		"authority beyond native slot": func(_ *Intent, c *Capture) { c.Authority.Slot = c.Blockhash.Slot + slotBudget },
+		"Flight beyond native slot":    func(_ *Intent, c *Capture) { c.Flight.Slot = c.Blockhash.Slot + slotBudget },
 	} {
 		t.Run(name, func(t *testing.T) {
 			q, c := captureFixture()

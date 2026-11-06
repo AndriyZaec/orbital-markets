@@ -8,8 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/api"
 	phoenixruntime "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/runtime"
 )
+
+var _ api.PhoenixOrderBackend = (*phoenixruntime.Runtime)(nil)
 
 func phoenixConfig(getenv func(string) string) (phoenixruntime.Config, bool, error) {
 	config := phoenixruntime.Config{

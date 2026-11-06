@@ -1,6 +1,7 @@
 package venue
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"reflect"
@@ -33,6 +34,7 @@ type LiveCapabilities struct {
 }
 
 type LiveOrderParams struct {
+	Context       context.Context `json:"-"` // optional caller cancellation for local SDK/RPC preparation
 	Account       string
 	Signer        string
 	Symbol        string

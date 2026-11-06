@@ -440,7 +440,7 @@ func (s *Server) advanceLeg1(w http.ResponseWriter, r *http.Request, sess *LiveS
 	// Build leg-2 open sized from the actual leg-1 fill.
 	leg2Cloid := fmt.Sprintf("orbital-l2open-%d", time.Now().UnixNano())
 	leg2Open, err := s.buildOpenSigningRequest(
-		sess.Leg2, fill.FilledAmount, leg2Cloid,
+		ctx, sess.Leg2, fill.FilledAmount, leg2Cloid,
 		sess.venueBindings(),
 	)
 	if err != nil {

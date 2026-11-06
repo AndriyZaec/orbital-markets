@@ -96,6 +96,28 @@ func sourceFor(t *testing.T, now *time.Time, stream *testStream, handler func(ht
 	return source, reads
 }
 
+func TestOrderParameterObservationRejectsRevisionsAndExpiryWithoutRefreshing(t *testing.T) {
+	now := time.Now().UTC()
+	stream := streamAt(now)
+	source, reads := sourceFor(t, &now, stream, nil)
+	if err := source.RefreshParameters(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	at, err := source.ParameterObservation(1, 3, 42)
+	if err != nil || !at.Equal(now) || reads.Load() != 2 {
+		t.Fatal("missing current parameter observation", at, err)
+	}
+	for _, revision := range [][3]uint64{{2, 3, 42}, {1, 4, 42}, {1, 3, 43}} {
+		if _, err := source.ParameterObservation(revision[0], revision[1], revision[2]); err == nil {
+			t.Fatal("accepted a different order parameter revision")
+		}
+	}
+	now = now.Add(paramsTTL + time.Millisecond)
+	if _, err := source.ParameterObservation(1, 3, 42); err == nil || reads.Load() != 2 {
+		t.Fatal("stale evidence was renewed during order validation")
+	}
+}
+
 func TestJoinCoversSpotPricingMarketsWithoutPerpPositions(t *testing.T) {
 	now := time.Now().UTC()
 	stream := streamAt(now)

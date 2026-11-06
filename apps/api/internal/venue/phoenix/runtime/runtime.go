@@ -51,6 +51,13 @@ func (r *Runtime) Address() string { return r.relayer.Address() }
 func (r *Runtime) LatestBlockhash(ctx context.Context) (rpc.Blockhash, error) {
 	return r.chain.LatestBlockhash(ctx)
 }
+func (r *Runtime) BlockHeight(ctx context.Context, minSlot uint64) (uint64, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.chain.BlockHeight(ctx, minSlot)
+}
+func (r *Runtime) BuilderAuthority() string { return r.builderAuthority }
 func (r *Runtime) BuildDelegation(ctx context.Context, q helper.BuildDelegationRequest) (helper.BuildDelegationResult, error) {
 	return r.helper.BuildDelegation(ctx, q)
 }

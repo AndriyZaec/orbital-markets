@@ -143,6 +143,37 @@ func (s *Source) ProjectOpen(ctx context.Context, state *account.State, computer
 	return result, nil
 }
 
+// ParameterObservation fences a completed projection to the exact still-current
+// REST parameter generation and stream revision. It never fetches or refreshes
+// evidence while validating an order capture.
+func (s *Source) ParameterObservation(generation, streamGeneration, sequence uint64) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.cached
+	if p == nil || p.generation != generation || p.revision != (revision{streamGeneration, sequence}) || !fresh(p.observedAt, s.now(), paramsTTL) {
+		return time.Time{}, errors.New("Phoenix order risk parameters changed or expired")
+	}
+	return p.observedAt, nil
+}
+
+func (s *Source) RefreshParameters(ctx context.Context) error {
+	if s.stream == nil {
+		return errors.New("Phoenix market stream unavailable")
+	}
+	before := s.stream.Snapshot()
+	if !synchronized(before) {
+		return errors.New("Phoenix market stream not synchronized")
+	}
+	if _, err := s.parameters(ctx, streamRevision(before)); err != nil {
+		return err
+	}
+	after := s.stream.Snapshot()
+	if !synchronized(after) || streamRevision(after) != streamRevision(before) {
+		return errors.New("Phoenix exchange changed during parameter refresh")
+	}
+	return nil
+}
+
 func (s *Source) inputs(ctx context.Context, acct account.Snapshot, stream phoenix.MarketStreamSnapshot, extraSymbols ...string) (account.RiskInputs, error) {
 	if !acct.Fresh(s.now()) || !synchronized(stream) {
 		return account.RiskInputs{}, errors.New("Phoenix account or market stream not synchronized")

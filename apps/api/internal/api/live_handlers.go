@@ -386,7 +386,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	leg1UnwindCloid := fmt.Sprintf("orbital-l1unwind-%d", now.UnixNano()+1)
 
 	leg1Open, err := s.buildOpenSigningRequest(
-		leg1, leg1Amount, leg1OpenCloid, bindings,
+		r.Context(), leg1, leg1Amount, leg1OpenCloid, bindings,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 open", "err", err)
@@ -397,7 +397,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leg1Unwind, err := s.buildUnwindSigningRequest(
-		leg1, leg1Amount, leg1UnwindCloid, bindings,
+		r.Context(), leg1, leg1Amount, leg1UnwindCloid, bindings,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 unwind", "err", err)
@@ -629,13 +629,14 @@ func legMarketKey(leg domain.Leg) string {
 
 // buildOpenSigningRequest builds an open-order signing request for one leg.
 func (s *Server) buildOpenSigningRequest(
-	leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
+	ctx context.Context, leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
 ) (*domain.SigningRequest, error) {
 	module, err := s.live.liveModule(leg.venue)
 	if err != nil {
 		return nil, err
 	}
 	return module.BuildOpen(venue.LiveOrderParams{
+		Context: ctx,
 		Account: bindings.Accounts[leg.venue],
 		Signer:  bindings.Agents[leg.venue],
 		Symbol:  leg.symbol, Side: leg.side, Amount: amount, Price: leg.price,
@@ -647,7 +648,7 @@ func (s *Server) buildOpenSigningRequest(
 // buildUnwindSigningRequest builds a reduce-only close signing request for one leg.
 // Side is the position side; the close payload inverts it internally.
 func (s *Server) buildUnwindSigningRequest(
-	leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
+	ctx context.Context, leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
 ) (*domain.SigningRequest, error) {
 	module, err := s.live.liveModule(leg.venue)
 	if err != nil {
@@ -655,6 +656,7 @@ func (s *Server) buildUnwindSigningRequest(
 	}
 	return module.BuildReduce(venue.LiveReduceParams{
 		LiveOrderParams: venue.LiveOrderParams{
+			Context: ctx,
 			Account: bindings.Accounts[leg.venue],
 			Signer:  bindings.Agents[leg.venue],
 			Symbol:  leg.symbol, Side: leg.side, Amount: amount, Price: leg.price,
@@ -1797,6 +1799,7 @@ func (s *Server) buildCloseSigningRequestForBindings(
 	}
 	return module.BuildReduce(venue.LiveReduceParams{
 		LiveOrderParams: venue.LiveOrderParams{
+			Context: ctx,
 			Account: bindings.Accounts[fill.Venue],
 			Signer:  bindings.Agents[fill.Venue],
 			Symbol:  fill.Symbol, Side: positionSide, Amount: fill.FilledAmount,

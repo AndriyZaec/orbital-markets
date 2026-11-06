@@ -147,14 +147,14 @@ func TestLiveSigningDispatchesThroughRegisteredModule(t *testing.T) {
 	if math.Abs(amount-7) > 1e-9 {
 		t.Fatalf("normalized amount = %v, want 7", amount)
 	}
-	request, err := server.buildOpenSigningRequest(leg, amount, "open-id", bindings)
+	request, err := server.buildOpenSigningRequest(context.Background(), leg, amount, "open-id", bindings)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if request.Venue != "alpha" || module.open.Account != "owner" || module.open.Signer != "agent" {
 		t.Fatalf("open request = %+v, params = %+v", request, module.open)
 	}
-	if _, err := server.buildUnwindSigningRequest(leg, amount, "unwind-id", bindings); err != nil {
+	if _, err := server.buildUnwindSigningRequest(context.Background(), leg, amount, "unwind-id", bindings); err != nil {
 		t.Fatal(err)
 	}
 	if module.reduce.Action != venue.ReduceActionUnwind {

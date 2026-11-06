@@ -55,6 +55,7 @@ type FlightProof struct {
 type Capture struct {
 	Symbol                                                 string
 	MetadataGeneration, StreamGeneration, ExchangeSequence uint64
+	MarketMetadataGeneration                               uint64
 	MetadataObservedAt                                     time.Time
 	BaseLotDecimals                                        int8
 	TickSize                                               string
@@ -133,6 +134,7 @@ type OrderPayload struct {
 
 type SigningMetadata struct {
 	ProtocolVersion          uint32                  `json:"protocol_version"`
+	MarketMetadataGeneration uint64                  `json:"market_metadata_generation"`
 	Built                    helper.BuildOrderResult `json:"built"`
 	Normalized               helper.NormalizedOrder  `json:"normalized"`
 	StreamGeneration         uint64                  `json:"stream_generation"`
@@ -207,7 +209,7 @@ func (b *Builder) Prepare(ctx context.Context, q Intent, c Capture) (*domain.Sig
 	if err != nil {
 		return nil, err
 	}
-	metadata, err := json.Marshal(SigningMetadata{ProtocolVersion: helper.ProtocolVersion, Built: built, Normalized: normalized,
+	metadata, err := json.Marshal(SigningMetadata{ProtocolVersion: helper.ProtocolVersion, Built: built, Normalized: normalized, MarketMetadataGeneration: c.MarketMetadataGeneration,
 		StreamGeneration: c.StreamGeneration, ExchangeSequence: c.ExchangeSequence, AccountGeneration: c.AccountGeneration, AccountSlot: c.AccountSlot, AccountSequence: c.AccountSequence,
 		MinContextSlot: max(c.Blockhash.Slot, c.Authority.Slot), BlockHeightAtPreparation: c.BlockHeight})
 	if err != nil {
@@ -242,7 +244,7 @@ func (b *Builder) validate(ctx context.Context, q Intent, c Capture, requireProj
 	if !fresh(q.QuoteObservedAt, now, helper.ProjectionQuoteMaxAge) || !fresh(c.AccountObservedAt, now, requestTTL) || !fresh(c.Authority.ObservedAt, now, requestTTL) || !fresh(c.BlockhashObservedAt, now, requestTTL) || !fresh(c.MetadataObservedAt, now, helper.RiskParamsMaxAge) {
 		return errors.New("Phoenix signing capture is missing, stale or future-dated")
 	}
-	if c.Symbol != q.Symbol || c.MetadataGeneration == 0 || c.StreamGeneration == 0 || c.AccountGeneration == 0 || c.Authority.Owner != q.Owner || c.Authority.Agent != q.Agent || c.Authority.RegisteredAgent != q.Agent || c.Authority.Slot < max(c.AccountSlot, c.Blockhash.Slot) || !key(c.Blockhash.Hash) || c.Blockhash.Slot == 0 || c.Blockhash.Slot > math.MaxUint64-slotBudget || c.BlockHeight == 0 || c.BlockHeight >= c.Blockhash.LastValidBlockHeight {
+	if c.Symbol != q.Symbol || c.MetadataGeneration == 0 || c.StreamGeneration == 0 || c.AccountGeneration == 0 || c.Authority.Owner != q.Owner || c.Authority.Agent != q.Agent || c.Authority.RegisteredAgent != q.Agent || c.Authority.Slot < max(c.AccountSlot, c.Blockhash.Slot) || !key(c.Blockhash.Hash) || c.Blockhash.Slot == 0 || c.Blockhash.Slot > math.MaxUint64-slotBudget || c.Authority.Slot >= c.Blockhash.Slot+slotBudget || c.BlockHeight == 0 || c.BlockHeight >= c.Blockhash.LastValidBlockHeight {
 		return errors.New("invalid Phoenix authority, metadata or blockhash evidence")
 	}
 	if (q.Action == helper.ActionOpen && !c.Authority.CanIncreaseRisk) || (q.Action != helper.ActionOpen && !c.Authority.CanReduceRisk) {
@@ -250,7 +252,7 @@ func (b *Builder) validate(ctx context.Context, q Intent, c Capture, requireProj
 	}
 	if normal(q.Action) {
 		f := c.Flight
-		if b.builderAuthority == "" || f == nil || f.ProgramOwner != helper.FlightProgramID || f.BuilderAuthority != b.builderAuthority || f.FeeBPS != 2 || !key(f.BuilderState) || !key(f.BuilderTraderAccount) || f.Slot < c.Blockhash.Slot || !fresh(f.ObservedAt, now, requestTTL) {
+		if b.builderAuthority == "" || f == nil || f.ProgramOwner != helper.FlightProgramID || f.BuilderAuthority != b.builderAuthority || f.FeeBPS != 2 || !key(f.BuilderState) || !key(f.BuilderTraderAccount) || f.Slot < c.Blockhash.Slot || f.Slot >= c.Blockhash.Slot+slotBudget || !fresh(f.ObservedAt, now, requestTTL) {
 			return errors.New("fresh verified Flight 2 bps registration required")
 		}
 	}

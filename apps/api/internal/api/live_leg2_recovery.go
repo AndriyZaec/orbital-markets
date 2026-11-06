@@ -75,7 +75,7 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 	}
 	clientOrderID := fmt.Sprintf("orbital-l2retry-%d", time.Now().UnixNano())
 	retryReq, err := s.buildOpenSigningRequest(
-		session.Leg2, remaining, clientOrderID,
+		ctx, session.Leg2, remaining, clientOrderID,
 		session.venueBindings(),
 	)
 	if err != nil {
@@ -89,7 +89,9 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 			fmt.Sprintf("%s; normalized residual retry value $%.2f is below %s minimum $%.2f", reason, retryReq.Amount*retryReq.Price, venueDisplayName(retryReq.Venue), minimumRetryNotional))
 		return
 	}
-	retryReq.ExpiresAt = time.Now().Add(leg2RetrySigningWindow)
+	if deadline := time.Now().Add(leg2RetrySigningWindow); deadline.Before(retryReq.ExpiresAt) {
+		retryReq.ExpiresAt = deadline
+	}
 	session.Leg2RetryReqID = retryReq.ID
 	session.Leg2RetryReq = retryReq
 	session.State = sessAwaitingLeg2RetrySign

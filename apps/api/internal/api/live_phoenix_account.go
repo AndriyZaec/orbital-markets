@@ -28,7 +28,9 @@ type PhoenixAccountBackend interface {
 	AccountAuthority(context.Context, string, uint64) (delegation.Authority, error)
 }
 
-// PhoenixAccountConfig enables only read-only account feeds, never a LiveModule.
+// PhoenixAccountConfig supplies shared read-only account/market sources. A full
+// PhoenixOrderBackend also enables the internal preparation module, not HTTP
+// execution admission or submission.
 // Construct once at startup: risk parameters and REST backoff are shared across
 // owners while the existing registry owns per-owner capacity and idle eviction.
 type PhoenixAccountConfig struct {

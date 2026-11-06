@@ -43,6 +43,8 @@ type MarketMetadata struct {
 	Status          string
 	MarketPubkey    string
 	SplinePubkey    string
+	BaseLotDecimals int
+	TickSize        uint64
 	AmountIncrement float64
 	PriceIncrement  float64
 	FundingInterval time.Duration
@@ -190,6 +192,7 @@ func normalizeMarketConfig(config marketConfig) (MarketMetadata, error) {
 	return MarketMetadata{
 		Symbol: config.Symbol, Asset: asset, Status: config.MarketStatus,
 		MarketPubkey: config.MarketPubkey, SplinePubkey: config.SplinePubkey,
+		BaseLotDecimals: config.BaseLotsDecimals, TickSize: uint64(config.TickSize),
 		AmountIncrement: amountIncrement,
 		PriceIncrement:  priceIncrement,
 		FundingInterval: time.Duration(config.FundingIntervalSeconds) * time.Second,

@@ -22,6 +22,7 @@ import (
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 	pacificlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica/live"
+	phoenixlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/live"
 )
 
 const (
@@ -174,6 +175,24 @@ func NewLiveDeps(
 		MaxPerVenue:     defaultMaxAccountFeedsPerVenue,
 		RecoveryReserve: defaultRecoveryAccountFeedReserve,
 	})
+	if len(phoenixConfigs) > 0 && phoenixConfigs[0].Markets != nil {
+		if backend, ok := phoenixConfigs[0].Backend.(PhoenixOrderBackend); ok {
+			module, err := phoenixlive.NewLiveModule(ctx, &phoenixOrderPreparer{deps: deps, config: phoenixConfigs[0], backend: backend})
+			if err != nil {
+				panic(fmt.Sprintf("configure Phoenix preparation module: %v", err))
+			}
+			all := make([]venue.LiveModule, 0, len(modules.Names())+1)
+			for _, name := range modules.Names() {
+				existing, _ := modules.Module(name)
+				all = append(all, existing)
+			}
+			all = append(all, module)
+			deps.modules, err = venue.NewLiveModuleRegistry(all...)
+			if err != nil {
+				panic(fmt.Sprintf("configure Phoenix preparation module: %v", err))
+			}
+		}
+	}
 	return deps
 }
 
