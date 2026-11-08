@@ -39,7 +39,7 @@ type TradeSelection =
 type SortField = 'asset' | 'apr' | 'aprMaxLev' | 'priceSpread' | 'oi' | 'fundingSpread' | 'pacificaRate' | 'hlRate' | 'signal7d'
 type SortDir = 'asc' | 'desc'
 
-const FILTER_VENUES = ['pacifica', 'hyperliquid', 'aster'] as const
+const FILTER_VENUES = ['pacifica', 'hyperliquid', 'aster', 'phoenix'] as const
 
 const OpportunityPanel = lazy(() => import('@/components/OpportunityPanel').then((module) => ({ default: module.OpportunityPanel })))
 const LivePositionPanel = lazy(() => import('@/components/LivePositionDetail').then((module) => ({ default: module.LivePositionPanel })))

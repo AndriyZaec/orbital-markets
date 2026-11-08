@@ -191,7 +191,7 @@ func TestPhoenixPrepareUsesRealSDKAndBindsAllFourActions(t *testing.T) {
 			t.Fatal("opening projection or tick limit lost")
 		}
 	}
-	if b.projectionCalls.Load() != 1 || b.flightCalls.Load() != 2 || supportedLiveVenue("phoenix") || feed.Snapshot().Phoenix.LiveReady {
+	if b.projectionCalls.Load() != 1 || b.flightCalls.Load() != 2 || !supportedLiveVenue("phoenix") || feed.Snapshot().Phoenix.LiveReady {
 		t.Fatal("preparation changed execution readiness or action dependencies")
 	}
 	if _, err := feed.SubmitSigned(context.Background(), domain.SignedAction{}, &domain.SigningRequest{}); !errors.Is(err, errPhoenixLiveDisabled) {
@@ -253,7 +253,7 @@ func TestNewLiveDepsWiresPhoenixPreparationModuleWithoutExecutionAdmission(t *te
 	t.Cleanup(cancel)
 	deps := NewLiveDeps(ctx, slog.Default(), domain.NewSigningRequestStore(), f.store, nil, nil, nil, nil, PhoenixAccountConfig{Backend: b, Markets: m})
 	module, err := deps.liveModule("phoenix")
-	if err != nil || module.Name() != "phoenix" || module.Capabilities().LeverageUpdate != venue.LeverageUpdateNotRequired || supportedLiveVenue("phoenix") {
+	if err != nil || module.Name() != "phoenix" || module.Capabilities().LeverageUpdate != venue.LeverageUpdateNotRequired || !supportedLiveVenue("phoenix") {
 		t.Fatalf("module=%+v err=%v", module, err)
 	}
 }

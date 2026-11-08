@@ -78,6 +78,6 @@ func startPhoenixInfrastructure(ctx context.Context, logger *slog.Logger) *phoen
 		logger.Warn("Phoenix infrastructure disabled", "reason", err)
 		return nil
 	}
-	logger.Info("Phoenix infrastructure started; live execution remains unavailable")
+	logger.Info("Phoenix infrastructure started; live execution requires account and Flight readiness")
 	return runtime
 }

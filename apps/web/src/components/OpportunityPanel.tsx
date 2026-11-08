@@ -70,7 +70,7 @@ function venueLabel(venue: string): string {
 }
 
 function isLiveVenue(venue: string): venue is VenueId {
-  return venue === 'pacifica' || venue === 'hyperliquid' || venue === 'aster'
+  return venue === 'pacifica' || venue === 'hyperliquid' || venue === 'aster' || venue === 'phoenix'
 }
 
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
@@ -148,12 +148,14 @@ export function OpportunityPanel({
     pacifica: pacReadiness,
     hyperliquid: hlReadiness,
     aster: asterReadiness,
+    phoenix: phoenixReadiness,
     refreshBalances,
   } = useVenueReadiness()
   const readinessByVenue = {
     pacifica: pacReadiness,
     hyperliquid: hlReadiness,
     aster: asterReadiness,
+    phoenix: phoenixReadiness,
   }
   const selectedReadiness = liveVenues.map((venue) => readinessByVenue[venue])
   const planAccounts = mode === 'live' && liveExecutionSupported
@@ -195,6 +197,7 @@ export function OpportunityPanel({
     if (v === 'pacifica') return pacReadiness.available
     if (v === 'hyperliquid') return hlReadiness.available
     if (v === 'aster') return asterReadiness.available
+    if (v === 'phoenix') return phoenixReadiness.available
     return null
   }
 

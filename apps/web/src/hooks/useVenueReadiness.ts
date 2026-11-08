@@ -14,7 +14,7 @@ import { liveAccountsKey, liveVenueBindingsBody, type VenueAddressMap } from '@/
 // wallet logic. Freshness/staleness of balances is intentionally out of
 // scope; a later backend step can add it via the same shape.
 
-export type VenueId = 'pacifica' | 'hyperliquid' | 'aster'
+export type VenueId = 'pacifica' | 'hyperliquid' | 'aster' | 'phoenix'
 
 export type VenueStatus =
   | 'disconnected'       // no wallet
@@ -69,6 +69,7 @@ export interface UseVenueReadinessResult {
   pacifica: VenueReadiness
   hyperliquid: VenueReadiness
   aster: VenueReadiness
+  phoenix: VenueReadiness
   venues: VenueReadiness[]
   aggregate: AggregateReadiness
   ensureStatus: EnsureStatus
@@ -87,6 +88,7 @@ const LABELS: Record<VenueId, string> = {
   pacifica: 'Pacifica',
   hyperliquid: 'Hyperliquid',
   aster: 'Aster',
+  phoenix: 'Phoenix',
 }
 
 function shorten(addr: string | null): string | null {
@@ -130,11 +132,13 @@ function buildReadiness(args: {
     last_updated?: string
     reason?: string
     unavailable?: boolean
+    phoenix?: { live_ready: boolean; live_unavailable_reason?: string }
   }
   unavailableReason?: string
 }): VenueReadiness {
   const { venue, address, authorityReadiness, agent, balance } = args
-  const unavailableReason = args.unavailableReason ?? (balance.unavailable ? balance.reason : undefined)
+  const unavailableReason = args.unavailableReason ?? (balance.unavailable ? balance.reason : undefined) ??
+    (venue === 'phoenix' && balance.phoenix?.live_ready !== true ? balance.phoenix?.live_unavailable_reason || 'Phoenix live readiness verification required' : undefined)
   const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
   const ownerMatches = venue === 'hyperliquid' || venue === 'aster'
     ? agent.ownerAddress?.toLowerCase() === address?.toLowerCase()
@@ -203,7 +207,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   const tradingAgents = useTradingAgents()
   const pacAddr = authority.pacifica.address
   const hlAddr = authority.hyperliquid.address
-  const balances = useLiveBalances(pacAddr, hlAddr, authority.aster.address)
+  const balances = useLiveBalances(pacAddr, hlAddr, authority.aster.address, authority.phoenix.address)
 
   // Ensure state — kick /live/accounts/ensure once per (pacAddr|hlAddr) pair
   // so backend account subscribers can start BEFORE Execute Live. Without
@@ -222,7 +226,8 @@ function useVenueReadinessState(): UseVenueReadinessResult {
     ['pacifica', pacSignerReady ? pacAddr : null],
     ['hyperliquid', hlSignerReady ? hlAddr : null],
     ['aster', asterSignerReady ? authority.aster.address : null],
-  ].filter((entry): entry is [string, string] => !!entry[1])), [asterSignerReady, authority.aster.address, hlAddr, hlSignerReady, pacAddr, pacSignerReady])
+    ['phoenix', authority.phoenix.readiness === 'ready' ? authority.phoenix.address : null],
+  ].filter((entry): entry is [string, string] => !!entry[1])), [asterSignerReady, authority.aster.address, authority.phoenix.address, authority.phoenix.readiness, hlAddr, hlSignerReady, pacAddr, pacSignerReady])
 
   const doEnsure = useCallback(async (accounts: VenueAddressMap) => {
     const pair = liveAccountsKey(accounts)
@@ -231,15 +236,20 @@ function useVenueReadinessState(): UseVenueReadinessResult {
     setEnsureStatus('starting')
     setEnsureError(null)
     try {
-      const resp = await apiFetch('/api/v1/live/accounts/ensure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(liveVenueBindingsBody(accounts)),
-      })
-      if (!resp.ok) {
-        const b = await resp.json().catch(() => ({}))
-        throw apiError(resp.status, 'Unable to connect account data. Please try again.', b)
-      }
+      // Optional Phoenix infrastructure must not stop the existing venues'
+      // streams when it is unconfigured or temporarily unavailable.
+      const core = Object.fromEntries(Object.entries(accounts).filter(([venue]) => venue !== 'phoenix'))
+      const groups = [core, ...(accounts.phoenix ? [{ phoenix: accounts.phoenix }] : [])].filter((group) => Object.keys(group).length > 0)
+      const results = await Promise.allSettled(groups.map(async (group) => {
+        const resp = await apiFetch('/api/v1/live/accounts/ensure', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(liveVenueBindingsBody(group)),
+        })
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}))
+          throw apiError(resp.status, 'Unable to connect account data. Please try again.', body)
+        }
+      }))
+      if (results.every((result) => result.status === 'rejected')) throw (results[0] as PromiseRejectedResult).reason
       setEnsureStatus('ready')
       // Nudge balances so readiness can move to ready without waiting for
       // the next fallback poll.
@@ -290,7 +300,9 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       agent: tradingAgents.aster,
       balance: balances.aster,
     })
-    const venues = [pacifica, hyperliquid, aster]
+    const phoenix = buildReadiness({ venue: 'phoenix', address: authority.phoenix.address,
+      authorityReadiness: authority.phoenix.readiness, agent: tradingAgents.phoenix, balance: balances.phoenix })
+    const venues = [pacifica, hyperliquid, aster, phoenix]
     const readyCount = venues.filter((v) => v.status === 'ready').length
     const totalCount = venues.length
     const tradingReady = readyCount >= 2
@@ -310,6 +322,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
       pacifica,
       hyperliquid,
       aster,
+      phoenix,
       venues,
       ensureStatus,
       ensureError,
@@ -323,7 +336,7 @@ function useVenueReadinessState(): UseVenueReadinessResult {
         statusLabel,
       },
     }
-  }, [authority.pacifica, authority.hyperliquid, authority.aster, tradingAgents.pacifica, tradingAgents.hyperliquid, tradingAgents.aster, balances, ensureStatus, ensureError, ensureAccounts])
+  }, [authority.pacifica, authority.hyperliquid, authority.aster, authority.phoenix, tradingAgents.pacifica, tradingAgents.hyperliquid, tradingAgents.aster, tradingAgents.phoenix, balances, ensureStatus, ensureError, ensureAccounts])
 
   useEffect(() => {
     const readyVenues = value.venues.filter((venue) => venue.status === 'ready' && venue.address)

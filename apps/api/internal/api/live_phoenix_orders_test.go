@@ -20,16 +20,25 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/orders"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/relayer"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/rpc"
+	phoenixruntime "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/runtime"
 	"github.com/mr-tron/base58"
 )
 
 type phoenixSubmitTestBackend struct {
 	*phoenixOrderTestBackend
-	relayer     *relayer.Service
-	journal     *orders.Store
-	request     *domain.SigningRequest
-	sends       atomic.Int32
-	afterCoSign func()
+	relayer            *relayer.Service
+	journal            *orders.Store
+	request            *domain.SigningRequest
+	sends              atomic.Int32
+	afterCoSign        func()
+	denyInfrastructure atomic.Bool
+}
+
+func (b *phoenixSubmitTestBackend) Readiness(context.Context) phoenixruntime.Status {
+	return phoenixruntime.Status{Ready: !b.denyInfrastructure.Load(), Reason: "test_infrastructure"}
+}
+func (b *phoenixSubmitTestBackend) FlightReadiness() phoenixruntime.FlightStatus {
+	return phoenixruntime.FlightStatus{Ready: !b.denyFlight.Load(), BuilderAuthority: b.BuilderAuthority()}
 }
 
 func (*phoenixSubmitTestBackend) BlockHeight(context.Context, uint64) (uint64, error) {
@@ -61,26 +70,34 @@ func (b *phoenixSubmitTestBackend) SimulateAndSend(ctx context.Context, packet [
 	return a.Signature, nil
 }
 
+func enablePhoenixSubmitTestBackend(t *testing.T, f *phoenixAccountFixture, base *phoenixOrderTestBackend) *phoenixSubmitTestBackend {
+	t.Helper()
+	agentKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, 32))
+	agent := base58.Encode(agentKey.Public().(ed25519.PublicKey))
+	f.backend.agent = agent
+	if err := f.store.UpsertAgentAuthorization(context.Background(), "phoenix", phoenixTestOwner, agent); err != nil {
+		t.Fatal(err)
+	}
+	b := &phoenixSubmitTestBackend{phoenixOrderTestBackend: base, journal: f.factory.orderJournal}
+	signer, err := relayer.NewSigner(base58.Encode(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, 32))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.relayer, err = relayer.NewService(signer, b, relayer.Policy{MaxTransactionFeeLamports: 10000}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.factory.config.Backend = b
+	f.factory.orders = orders.NewService(b.journal, b, orders.NewHistory(f.factory.config.RESTURL, f.factory.config.HTTPClient))
+	return b
+}
+
 func TestPhoenixFeedSubmitsExactSDKPacketOnceAndNeverTurnsAcceptanceIntoFill(t *testing.T) {
 	agentKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, 32))
 	agent := base58.Encode(agentKey.Public().(ed25519.PublicKey))
 	var b *phoenixSubmitTestBackend
 	f, _, _, _, feed := newPhoenixPrepareFixture(t, func(f *phoenixAccountFixture, base *phoenixOrderTestBackend, _ *phoenixOrderTestMarkets) {
-		f.backend.agent = agent
-		if err := f.store.UpsertAgentAuthorization(context.Background(), "phoenix", phoenixTestOwner, agent); err != nil {
-			t.Fatal(err)
-		}
-		b = &phoenixSubmitTestBackend{phoenixOrderTestBackend: base, journal: f.factory.orderJournal}
-		signer, err := relayer.NewSigner(base58.Encode(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, 32))))
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.relayer, err = relayer.NewService(signer, b, relayer.Policy{MaxTransactionFeeLamports: 10000}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.factory.config.Backend = b
-		f.factory.orders = orders.NewService(b.journal, b, orders.NewHistory(f.factory.config.RESTURL, f.factory.config.HTTPClient))
+		b = enablePhoenixSubmitTestBackend(t, f, base)
 	})
 	module, err := phoenixlive.NewLiveModule(context.Background(), &phoenixOrderPreparer{deps: f.server.live, config: f.factory.config, backend: b})
 	if err != nil {
@@ -111,8 +128,11 @@ func TestPhoenixFeedSubmitsExactSDKPacketOnceAndNeverTurnsAcceptanceIntoFill(t *
 	if fill, err := feed.WaitForFill(ctx, q); !errors.Is(err, orders.ErrUncertain) || fill != nil {
 		t.Fatal("acceptance became a fill", fill, err)
 	}
-	if feed.Snapshot().Phoenix.LiveReady || supportedLiveVenue("phoenix") {
-		t.Fatal("internal submission enabled HTTP execution")
+	if err := feed.refreshView(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if feed.Snapshot().Phoenix.LiveReady || !supportedLiveVenue("phoenix") {
+		t.Fatal("unresolved submission did not block new opening")
 	}
 	if err := feed.WaitForLeverage(context.Background(), "SOL", 5); err != nil {
 		t.Fatal("unsupported leverage was not a no-op", err)

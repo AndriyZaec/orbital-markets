@@ -10,7 +10,7 @@ import (
 )
 
 var currentLiveVenues = []string{"pacifica", "hyperliquid"}
-var supportedLiveVenues = []string{"pacifica", "hyperliquid", "aster"}
+var supportedLiveVenues = []string{"pacifica", "hyperliquid", "aster", "phoenix"}
 var supportedAccountVenues = []string{"pacifica", "hyperliquid", "aster", "phoenix"}
 
 type liveVenueBindingsRequest struct {

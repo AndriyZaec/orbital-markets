@@ -147,7 +147,7 @@ const recoveryFallbackPollMs = 5_000
 
 function useLiveExecutionState() {
   const [state, setState] = useState<LiveExecutionState>(INITIAL_STATE)
-  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress } = useVenueAuthority()
   const tradingAgents = useTradingAgents()
 
   useEffect(() => {
@@ -217,13 +217,13 @@ function useLiveExecutionState() {
   // the callback (which would cancel in-flight sessions).
   const accountsRef = useRef<Record<Venue, string | null>>({
     pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
-    phoenix: null,
+    phoenix: phoenixAddress,
   })
   const executionInFlightRef = useRef(false)
   const consumedRequestIdsRef = useRef(new Set<string>())
   useEffect(() => {
-    accountsRef.current = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress, phoenix: null }
-  }, [asterAddress, hyperliquidAddress, pacificaAddress])
+    accountsRef.current = { pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress, phoenix: phoenixAddress }
+  }, [asterAddress, hyperliquidAddress, pacificaAddress, phoenixAddress])
 
   const postAdvance = async (
     accounts: VenueAddressMap,
@@ -248,7 +248,7 @@ function useLiveExecutionState() {
     const venues = intent.legs.map((leg) => leg.venue) as [Venue, Venue]
     const authorityByVenue: Record<Venue, string | null> = {
       pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
-      phoenix: null,
+      phoenix: phoenixAddress,
     }
     const agentByVenue = {
       pacifica: tradingAgents.pacifica,
@@ -312,18 +312,18 @@ function useLiveExecutionState() {
       // for EVM, trimmed for Solana) so casing/whitespace doesn't false-flag.
       const normalizedAccounts = Object.fromEntries(venues.map((venue) => [
         venue,
-        venue === 'pacifica'
+        venue === 'pacifica' || venue === 'phoenix'
           ? normalizePacificaAddress(preparedAccounts[venue])
           : normalizeHyperliquidAddress(preparedAccounts[venue]),
       ]))
 
       const detectAccountChange = (): string | null => {
         for (const venue of venues) {
-          const current = venue === 'pacifica'
+          const current = venue === 'pacifica' || venue === 'phoenix'
             ? normalizePacificaAddress(accountsRef.current[venue])
             : normalizeHyperliquidAddress(accountsRef.current[venue])
           if (current !== normalizedAccounts[venue]) {
-            return venue === 'pacifica' ? 'Pacifica' : venue === 'aster' ? 'Aster' : 'Hyperliquid'
+            return venue === 'phoenix' ? 'Phoenix' : venue === 'pacifica' ? 'Pacifica' : venue === 'aster' ? 'Aster' : 'Hyperliquid'
           }
         }
         return null
@@ -619,7 +619,7 @@ function useLiveExecutionState() {
     } finally {
       executionInFlightRef.current = false
     }
-  }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
+  }, [asterAddress, pacificaAddress, hyperliquidAddress, phoenixAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL_STATE), [])
 

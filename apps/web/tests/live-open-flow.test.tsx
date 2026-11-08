@@ -2,12 +2,13 @@ import type { ReactNode } from 'react'
 import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LiveExecutionProvider, useLiveExecution } from '../src/hooks/useLiveExecution'
+import { useLiveClose } from '../src/hooks/useLiveClose'
 import type { ExecutionIntent } from '../src/lib/live-execution-state'
 import type { SigningRequest } from '../src/types/signing'
 import { LiveExecutionModal } from '../src/components/LiveExecutionModal'
 
 const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), sign: vi.fn(),
-  authority: { pacificaAddress: null as string | null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner' },
+  authority: { pacificaAddress: null as string | null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner', phoenixAddress: null as string | null },
 }))
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/lib/api')>(), apiFetch: mocks.apiFetch,
@@ -17,6 +18,7 @@ vi.mock('@/hooks/useTradingAgents', () => ({ useTradingAgents: () => ({
   pacifica: { status: 'ready', agentAddress: 'pac-agent' },
   hyperliquid: { status: 'ready', agentAddress: 'hl-agent' },
   aster: { status: 'ready', agentAddress: 'aster-agent' },
+  phoenix: { status: 'ready', agentAddress: 'phoenix-agent' },
   sign: mocks.sign,
 }) }))
 vi.mock('@/lib/live-events', () => ({ subscribeLiveSessionEvents: () => () => {} }))
@@ -64,7 +66,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-13T12:00:00Z'))
   mocks.apiFetch.mockReset()
-  mocks.authority = { pacificaAddress: null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner' }
+  mocks.authority = { pacificaAddress: null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner', phoenixAddress: null }
   mocks.sign.mockReset().mockImplementation(async (request: SigningRequest) => ({
     request_id: request.id, client_order_id: request.client_order_id, venue: request.venue,
     signer_address: 'agent', signature: 'test-signature',
@@ -73,6 +75,52 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('prepare integration with the signing and advance flow', () => {
+  it('prepares, signs and confirms a Phoenix close using its Solana account binding', async () => {
+    mocks.authority.phoenixAddress = 'SolanaOwnerCaseSensitive'
+    const request = { ...signingRequest('aster', 'unwind'), venue: 'phoenix', action: 'close', account: mocks.authority.phoenixAddress }
+    mocks.apiFetch.mockResolvedValueOnce(Response.json({ signing_requests: [request] }))
+      .mockResolvedValueOnce(Response.json({ accepted: true }))
+      .mockResolvedValueOnce(Response.json({ position: { state: 'closed' } }))
+    const { result } = renderHook(useLiveClose)
+    await act(async () => { await result.current.closePosition('phoenix-position', ['phoenix', 'hyperliquid']) })
+    expect(result.current.state.phase).toBe('done')
+    expect(mocks.sign).toHaveBeenCalledWith(request)
+    expect(JSON.parse(mocks.apiFetch.mock.calls[0][1].body)).toMatchObject({ accounts: { phoenix: 'SolanaOwnerCaseSensitive' }, agents: { phoenix: 'phoenix-agent' } })
+    expect(mocks.apiFetch.mock.calls[2][0]).toContain('accounts%5Bphoenix%5D=SolanaOwnerCaseSensitive')
+  })
+  for (const ownerChanges of [false, true]) it(`uses Phoenix owner/agent bindings and ${ownerChanges ? 'aborts on a case-only Solana owner change' : 'opens through the shared sequential hedge flow'}`, async () => {
+    mocks.authority.phoenixAddress = 'SolanaOwnerCaseSensitive'
+    const approved = intent()
+    approved.legs[0] = { ...approved.legs[0], venue: 'phoenix', symbol: 'BTC' }
+    const phoenixRequest = (action: 'open' | 'unwind'): SigningRequest => ({ ...signingRequest('aster', action), venue: 'phoenix',
+      id: `phoenix-${action}`, client_order_id: `phoenix-${action}`, account: mocks.authority.phoenixAddress!, symbol: 'BTC' })
+    let completeLeg1!: (response: Response) => void
+    mocks.apiFetch.mockResolvedValueOnce(Response.json({ session_id: 'session', asset: 'BTC', riskier_venue: 'phoenix', hedge_venue: 'hyperliquid',
+      signing_requests: [phoenixRequest('open'), phoenixRequest('unwind')] }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { completeLeg1 = resolve }))
+      .mockResolvedValueOnce(Response.json(ownerChanges ? { status: 'degraded', unwind_status: 'requires_signature' } : { status: 'open', position_id: 'phoenix-position', mismatch: 0 }))
+    const { result, rerender } = renderHook(useLiveExecution, { wrapper })
+    let execution: Promise<void>
+    await act(async () => { execution = result.current.executeLive(approved) })
+    expect(result.current.state.phase).toBe('submitting_leg1')
+    expect(JSON.parse(mocks.apiFetch.mock.calls[0][1].body)).toMatchObject({ accounts: { phoenix: 'SolanaOwnerCaseSensitive', hyperliquid: '0xhl-owner' }, agents: { phoenix: 'phoenix-agent' } })
+    if (ownerChanges) await act(async () => { mocks.authority.phoenixAddress = 'solanaownercasesensitive'; rerender() })
+    await act(async () => {
+      completeLeg1(Response.json({ status: 'awaiting_leg2_sign', leg1_fill: { filled_amount: .6, avg_price: 100, status: 'filled' },
+        signing_requests: [signingRequest('hyperliquid', 'open', .6)] }))
+      await execution
+    })
+    const last = JSON.parse(mocks.apiFetch.mock.calls[2][1].body)
+    expect(last.accounts.phoenix).toBe('SolanaOwnerCaseSensitive')
+    if (ownerChanges) {
+      expect(last.abort).toBe(true)
+      expect(result.current.state.unwindStatus).toBe('requires_signature')
+      expect(mocks.sign.mock.calls).toHaveLength(2)
+    } else {
+      expect(result.current.state.phase).toBe('open')
+      expect(mocks.sign.mock.calls.at(-1)?.[0].amount).toBe(.6)
+    }
+  })
   it('keeps the modal preparing with a spinner while BBO is pending, without signing or another request', async () => {
     let stream!: ReadableStreamDefaultController<Uint8Array>
     const encoder = new TextEncoder()

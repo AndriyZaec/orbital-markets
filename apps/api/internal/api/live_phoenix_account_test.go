@@ -421,8 +421,8 @@ func TestPhoenixStartupRegistersAccountFactoryWithoutLiveModule(t *testing.T) {
 	if _, err := deps.liveModule("phoenix"); err == nil {
 		t.Fatal("read-only account setup registered live execution")
 	}
-	if err := (liveVenueBindings{Accounts: map[string]string{"phoenix": phoenixTestOwner}}).requireAccountsWithin(supportedLiveVenues); err == nil {
-		t.Fatal("execution venue allowlist was expanded")
+	if err := (liveVenueBindings{Accounts: map[string]string{"phoenix": phoenixTestOwner}}).requireAccountsWithin(supportedLiveVenues); err != nil {
+		t.Fatal("Phoenix is missing from execution bindings", err)
 	}
 }
 

@@ -64,7 +64,7 @@ const killConfirmationPollMs = 2_000
 
 export function useKillSwitch() {
   const [state, setState] = useState<KillState>(INITIAL)
-  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress } = useVenueAuthority()
   const tradingAgents = useTradingAgents()
 
   const submitSigned = async (signed: SignedAction): Promise<SubmissionResult> => {
@@ -93,6 +93,7 @@ export function useKillSwitch() {
       { venue: 'pacifica' as Venue, account: pacificaAddress, agent: tradingAgents.pacifica },
       { venue: 'hyperliquid' as Venue, account: hyperliquidAddress, agent: tradingAgents.hyperliquid },
       { venue: 'aster' as Venue, account: asterAddress, agent: tradingAgents.aster },
+      { venue: 'phoenix' as Venue, account: phoenixAddress, agent: tradingAgents.phoenix },
     ].filter((entry) => entry.account)
     const connectedPairs: Array<typeof connected> = []
     for (let left = 0; left < connected.length; left++) {
@@ -326,7 +327,7 @@ export function useKillSwitch() {
         errors: [e instanceof Error ? e.message : 'Unknown error'],
       }))
     }
-  }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
+  }, [asterAddress, pacificaAddress, hyperliquidAddress, phoenixAddress, tradingAgents])
 
   const reset = useCallback(() => setState(INITIAL), [])
 

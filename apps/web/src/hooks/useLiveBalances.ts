@@ -21,18 +21,21 @@ interface VenueBalance {
   age_seconds?: number
   reason?: string
   unavailable?: boolean
+  phoenix?: { live_ready: boolean; live_unavailable_reason?: string }
 }
 
 interface Balances {
   pacifica: VenueBalance
   hyperliquid: VenueBalance
   aster: VenueBalance
+  phoenix: VenueBalance
 }
 
 const EMPTY: Balances = {
   pacifica: { venue: 'pacifica', equity: 0, available: 0, connected: false, stream_ready: false, fresh: false, age_seconds: 0 },
   hyperliquid: { venue: 'hyperliquid', equity: 0, available: 0, connected: false, stream_ready: false, fresh: false, age_seconds: 0 },
   aster: { venue: 'aster', equity: 0, available: 0, connected: false, stream_ready: false, fresh: false, age_seconds: 0 },
+  phoenix: { venue: 'phoenix', equity: 0, available: 0, connected: false, stream_ready: false, fresh: false, age_seconds: 0 },
 }
 
 // Balance display is background context. The real freshness gate lives in
@@ -44,13 +47,15 @@ export function useLiveBalances(
   accountPacifica: string | null,
   accountHyperliquid: string | null,
   accountAster: string | null,
+  accountPhoenix: string | null,
   pollInterval = 30_000,
 ) {
   const accounts = useMemo(() => Object.fromEntries(Object.entries({
     pacifica: accountPacifica,
     hyperliquid: accountHyperliquid,
     aster: accountAster,
-  }).filter((entry): entry is [string, string] => !!entry[1])), [accountAster, accountHyperliquid, accountPacifica])
+    phoenix: accountPhoenix,
+  }).filter((entry): entry is [string, string] => !!entry[1])), [accountAster, accountHyperliquid, accountPacifica, accountPhoenix])
   const pair = Object.keys(accounts).length > 0 ? JSON.stringify(accounts) : null
   const [result, setResult] = useState<{ pair: string | null; balances: Balances }>({
     pair: null,
@@ -63,7 +68,7 @@ export function useLiveBalances(
   const { state: execution } = useLiveExecution()
   const executionUsesPair = pair !== null && Object.entries(execution.accounts).every(([venue, account]) => {
     const current = accounts[venue]
-    return venue === 'pacifica' ? current === account : current?.toLowerCase() === account.toLowerCase()
+    return venue === 'pacifica' || venue === 'phoenix' ? current === account : current?.toLowerCase() === account.toLowerCase()
   })
   const executionActive = executionUsesPair &&
     execution.phase !== 'idle' && execution.phase !== 'failed' && execution.phase !== 'aborted'
@@ -90,9 +95,12 @@ export function useLiveBalances(
   useEffect(() => {
     streamConnected.current = false
     if (!shouldMonitor || !pair) return
-    return subscribeLiveAccountUpdates(accounts, (event) => {
-      if (event.type === 'connected') streamConnected.current = true
-      else if (event.type === 'disconnected') streamConnected.current = false
+    const core = Object.fromEntries(Object.entries(accounts).filter(([venue]) => venue !== 'phoenix'))
+    const groups = [core, ...(accounts.phoenix ? [{ phoenix: accounts.phoenix }] : [])].filter((group) => Object.keys(group).length > 0)
+    const connected = new Set<number>()
+    const subscriptions = groups.map((group, index) => subscribeLiveAccountUpdates(group, (event) => {
+      if (event.type === 'connected') connected.add(index)
+      else if (event.type === 'disconnected') connected.delete(index)
       else if (event.type === 'balances') {
         requestSequence.current++
         setResult((current) => ({
@@ -100,7 +108,9 @@ export function useLiveBalances(
           balances: { ...(current.pair === pair ? current.balances : EMPTY), ...(event.data as Partial<Balances>) },
         }))
       }
-    })
+      streamConnected.current = connected.size === groups.length
+    }))
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe())
   }, [accounts, shouldMonitor, pair])
 
   useEffect(() => {

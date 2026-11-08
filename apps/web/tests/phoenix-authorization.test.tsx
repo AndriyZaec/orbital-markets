@@ -11,14 +11,15 @@ vi.mock('@/hooks/useTradingAgents', () => ({ useTradingAgents: () => ({
   phoenix: { venue: 'phoenix', status: mocks.status, ownerAddress: mocks.owner, agentAddress: null, error: null },
   authorize: mocks.authorize, revokePhoenix: mocks.revoke,
 }) }))
+vi.mock('@/hooks/useVenueReadiness', () => ({ useVenueReadiness: () => ({ phoenix: { status: 'unavailable', blockingReasons: ['Phoenix infrastructure not ready'] } }) }))
 
 beforeEach(() => { mocks.authorize.mockReset().mockResolvedValue(undefined); mocks.revoke.mockReset().mockResolvedValue(undefined); mocks.owner = 'owner-A'; mocks.status = 'missing' })
 afterEach(cleanup)
 
-it('presents authorization separately from live trading and requests explicit delegate replacement', async () => {
+it('presents Phoenix execution authorization and requests explicit delegate replacement', async () => {
   mocks.authorize.mockRejectedValueOnce(Object.assign(new Error('replacement required'), { name: 'PhoenixReplacementRequired', authority: 'existing-delegate' }))
   render(<PhoenixAuthorization disabled={false} onConnect={() => {}} />)
-  expect(screen.getByText('Live execution coming soon.')).toBeTruthy()
+  expect(screen.getByText('Trade using your existing Phoenix cross account.')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Authorize Phoenix' }))
   await screen.findByRole('dialog')
   expect(screen.getByText('existing-delegate')).toBeTruthy()

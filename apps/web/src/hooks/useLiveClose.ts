@@ -65,7 +65,7 @@ async function waitForClose(positionId: string, accounts: Record<string, string>
 export function useLiveClose() {
   const [state, setState] = useState<CloseState>(INITIAL)
   const closingRef = useRef(false)
-  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress } = useVenueAuthority()
   const tradingAgents = useTradingAgents()
 
   const closePosition = useCallback(async (
@@ -76,7 +76,7 @@ export function useLiveClose() {
     closingRef.current = true
     const authorityByVenue: Record<Venue, string | null> = {
       pacifica: pacificaAddress, hyperliquid: hyperliquidAddress, aster: asterAddress,
-      phoenix: null,
+      phoenix: phoenixAddress,
     }
     const agentByVenue = {
       pacifica: tradingAgents.pacifica,
@@ -206,7 +206,7 @@ export function useLiveClose() {
     } finally {
       closingRef.current = false
     }
-  }, [asterAddress, pacificaAddress, hyperliquidAddress, tradingAgents])
+  }, [asterAddress, pacificaAddress, hyperliquidAddress, phoenixAddress, tradingAgents])
 
   const reset = useCallback(() => {
     closingRef.current = false

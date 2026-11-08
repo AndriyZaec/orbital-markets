@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
+import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
@@ -11,6 +12,7 @@ export function PhoenixAuthorization({ disabled, onConnect }: { disabled: boolea
   const wallet = useWallet()
   const owner = wallet.connected ? wallet.publicKey?.toBase58() : null
   const state = agents.phoenix
+  const { phoenix: readiness } = useVenueReadiness()
   const [replacement, setReplacement] = useState<{ owner: string; authority: string } | null>(null)
   const busy = ['restoring', 'authorizing', 'disconnecting'].includes(state.status)
 
@@ -27,14 +29,15 @@ export function PhoenixAuthorization({ disabled, onConnect }: { disabled: boolea
   return <>
     <Card size="sm">
       <CardHeader>
-        <CardTitle>Phoenix <Badge variant="secondary">Authorization preview</Badge></CardTitle>
-        <CardDescription>Live execution coming soon.</CardDescription>
+        <CardTitle>Phoenix <Badge variant="secondary">{readiness.status === 'ready' ? 'Live ready' : 'Not ready'}</Badge></CardTitle>
+        <CardDescription>Trade using your existing Phoenix cross account.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <p className="text-xs text-muted-foreground">Authorize a browser-local agent for your existing Phoenix cross account. Disconnect revokes on-chain before deleting the local key.</p>
         {owner && <p className="truncate font-mono text-xs" title={owner}>{owner}</p>}
         <p className="text-xs" role="status">{!owner ? 'Connect a Solana owner wallet' : state.status === 'ready' ? 'Agent authorized' : state.status === 'pending' ? 'Pending verification — key preserved' : state.status === 'restoring' ? 'Verifying on-chain authority…' : state.status === 'authorizing' ? 'Awaiting owner approval / confirmation…' : state.status === 'disconnecting' ? 'Confirming revoke…' : 'Authorization required'}</p>
         {state.error && <p className="text-xs text-destructive" role="alert">{state.error}</p>}
+        {state.status === 'ready' && readiness.blockingReasons.map((reason) => <p key={reason} className="text-xs text-muted-foreground">{reason}</p>)}
         {owner && !wallet.signTransaction && <p className="text-xs text-muted-foreground">This wallet must support transaction signing.</p>}
       </CardContent>
       <CardFooter className="flex-wrap justify-end gap-2">

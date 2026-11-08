@@ -23,7 +23,7 @@ func (verifiedFlightInfrastructure) FlightReadiness() phoenixruntime.FlightStatu
 	return phoenixruntime.FlightStatus{Ready: true, BuilderAuthority: "configured-public-builder"}
 }
 
-func TestPhoenixInfrastructureNeverAdvertisesLiveReady(t *testing.T) {
+func TestPhoenixInfrastructureAloneDoesNotAdvertiseLiveReady(t *testing.T) {
 	for _, provider := range []PhoenixInfrastructure{nil, infrastructureStatus{Ready: true}, infrastructureStatus{Reason: "rpc_unavailable"}, verifiedFlightInfrastructure{infrastructureStatus{Ready: true}}} {
 		s := &Server{}
 		s.EnablePhoenixInfrastructure(provider)

@@ -92,7 +92,7 @@ function categorize(p: LivePosition) {
 export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }: Props) {
   const { positions, loading: positionsLoading, error: positionsError } = useLivePositions()
   // One typed readiness layer, shared with the header and ConnectAccounts.
-  const { pacifica, hyperliquid, aster, aggregate: readiness } = useVenueReadiness()
+  const { pacifica, hyperliquid, aster, phoenix, aggregate: readiness } = useVenueReadiness()
   const [privateView, setPrivateView] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
@@ -113,10 +113,10 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
 
   // Sum only venues that actually report a value. If no venue has
   // reported equity, keep the tile as "--" rather than showing $0.00.
-  const equityValues = [pacifica.equity, hyperliquid.equity, aster.equity].filter(
+  const equityValues = [pacifica.equity, hyperliquid.equity, aster.equity, phoenix.equity].filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
-  const availableValues = [pacifica.available, hyperliquid.available, aster.available].filter(
+  const availableValues = [pacifica.available, hyperliquid.available, aster.available, phoenix.available].filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
   const totalEquity = equityValues.length > 0 ? equityValues.reduce((a, b) => a + b, 0) : null
@@ -269,6 +269,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
           <VenueCard readiness={pacifica} maskAmounts={privateView} />
           <VenueCard readiness={hyperliquid} maskAmounts={privateView} />
           <VenueCard readiness={aster} maskAmounts={privateView} />
+          <VenueCard readiness={phoenix} maskAmounts={privateView} />
         </div>
       </Section>
 
@@ -798,6 +799,7 @@ const STATUS_VIEW: Record<
 }
 
 const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
+  phoenix: '',
   pacifica: 'bg-[radial-gradient(circle_at_8%_0%,rgba(34,211,238,0.055),transparent_52%)]',
   hyperliquid: 'bg-[radial-gradient(circle_at_8%_0%,rgba(139,92,246,0.055),transparent_52%)]',
   aster: 'bg-[radial-gradient(circle_at_8%_0%,rgba(245,158,11,0.055),transparent_52%)]',

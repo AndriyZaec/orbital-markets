@@ -150,6 +150,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const [pickerOpen, setPickerOpen] = useState<VenueId | null>(null)
   const [pendingDisconnect, setPendingDisconnect] = useState<WalletKind | null>(null)
   const previousWalletConnectedRef = useRef<Record<VenueId, boolean>>({
+    phoenix: false,
     pacifica: false,
     hyperliquid: false,
     aster: false,
@@ -157,6 +158,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   // Wallet providers restore persisted sessions on mount; only count a
   // transition that follows an explicit connect action.
   const manualConnectRequestedRef = useRef<Record<VenueId, boolean>>({
+    phoenix: false,
     pacifica: false,
     hyperliquid: false,
     aster: false,
@@ -173,6 +175,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   useEffect(() => {
     const current: Record<VenueId, boolean> = {
+      phoenix: pacifica.walletConnected,
       pacifica: pacifica.walletConnected,
       hyperliquid: hyperliquid.walletConnected,
       aster: aster.walletConnected,

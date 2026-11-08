@@ -40,15 +40,23 @@ export function useVenueAuthority() {
     return { venue: 'aster', readiness: 'ready', address: evmAccount.address, signerType: 'evm', error: null }
   }, [evmAccount.isConnected, evmAccount.address])
 
-  const venueAuthorities = useMemo(() => [pacifica, hyperliquid, aster], [pacifica, hyperliquid, aster])
+  const phoenix = useMemo<VenueAuthority>(() => {
+    const address = solWallet.connected ? solWallet.publicKey?.toBase58() ?? null : null
+    if (!address) return { venue: 'phoenix', readiness: 'not_connected', address: null, signerType: null, error: null }
+    return { venue: 'phoenix', readiness: solWallet.signTransaction ? 'ready' : 'connected_cannot_sign', address,
+      signerType: 'solana', error: solWallet.signTransaction ? null : 'Wallet does not support transaction signing' }
+  }, [solWallet.connected, solWallet.publicKey, solWallet.signTransaction])
+  const venueAuthorities = useMemo(() => [pacifica, hyperliquid, aster, phoenix], [pacifica, hyperliquid, aster, phoenix])
 
   return {
     venueAuthorities,
     pacifica,
     hyperliquid,
     aster,
+    phoenix,
     pacificaAddress: pacifica.address,
     hyperliquidAddress: hyperliquid.address,
     asterAddress: aster.address,
+    phoenixAddress: phoenix.address,
   }
 }

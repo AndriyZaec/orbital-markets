@@ -45,6 +45,7 @@ vi.mock('@/hooks/useVenueReadiness', () => ({
       pacifica: venue('pacifica'),
       hyperliquid: venue('hyperliquid'),
       aster: venue('aster'),
+      phoenix: venue('phoenix'),
       aggregate: { tradingReady: true },
     }
   },

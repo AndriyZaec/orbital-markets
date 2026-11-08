@@ -270,7 +270,15 @@ func (r *Runtime) Readiness(ctx context.Context) Status {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	health, err := r.helper.Health(ctx)
+	if ctx.Err() != nil {
+		return Status{Reason: "readiness_cancelled"}
+	}
+	// Drain shared helper frames across account eviction/request cancellation,
+	// as with risk/order reads. The helper retains its own bounded call timeout.
+	health, err := r.helper.Health(r.ctx)
+	if ctx.Err() != nil {
+		return Status{Reason: "readiness_cancelled"}
+	}
 	if err != nil || health.HelperVersion == "" || health.PhoenixRiseVersion != helper.PhoenixRiseVersion {
 		return Status{Reason: "helper_unavailable"}
 	}

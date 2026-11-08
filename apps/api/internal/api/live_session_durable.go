@@ -281,7 +281,7 @@ func requireCurrentLiveVenuePair(venues []string) error {
 }
 
 func supportedLiveVenue(venue string) bool {
-	return venue == "pacifica" || venue == "hyperliquid" || venue == "aster"
+	return venue == "pacifica" || venue == "hyperliquid" || venue == "aster" || venue == "phoenix"
 }
 
 func (s *Server) saveLiveSession(ctx context.Context, session *LiveSession) error {

@@ -62,12 +62,13 @@ export function useLivePositions(pollInterval = 5_000) {
   const hasActivePositions = useRef<boolean | null>(null)
   const reschedulePolling = useRef<() => void>(() => {})
   const pageVisible = usePageVisibility()
-  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress } = useVenueAuthority()
   const accountPairs = useMemo(() => {
     const entries = Object.entries({
       pacifica: pacificaAddress,
       hyperliquid: hyperliquidAddress,
       aster: asterAddress,
+      phoenix: phoenixAddress,
     }).filter((entry): entry is [string, string] => !!entry[1])
     const pairs: Record<string, string>[] = []
     for (let left = 0; left < entries.length; left++) {
@@ -76,7 +77,7 @@ export function useLivePositions(pollInterval = 5_000) {
       }
     }
     return pairs
-  }, [asterAddress, hyperliquidAddress, pacificaAddress])
+  }, [asterAddress, hyperliquidAddress, pacificaAddress, phoenixAddress])
   const accountKey = accountPairs.length > 0 ? JSON.stringify(accountPairs) : ''
   const [exposure, setExposure] = useState<{ accountKey: string; active: boolean | null }>({
     accountKey: '',

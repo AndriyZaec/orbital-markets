@@ -29,10 +29,8 @@ type PhoenixAccountBackend interface {
 	AccountAuthority(context.Context, string, uint64) (delegation.Authority, error)
 }
 
-// PhoenixAccountConfig supplies shared read-only account/market sources. A full
-// PhoenixOrderBackend also enables the internal preparation module; a full
-// PhoenixSubmitBackend enables journaled internal submit/fill reconciliation.
-// Neither capability grants HTTP execution admission.
+// PhoenixAccountConfig supplies shared account/market sources. Full execution
+// requires journaled submission plus infrastructure and Flight readiness.
 // Construct once at startup: risk parameters and REST backoff are shared across
 // owners while the existing registry owns per-owner capacity and idle eviction.
 type PhoenixAccountConfig struct {
@@ -91,8 +89,11 @@ func (f *phoenixAccountFeedFactory) Start(ctx context.Context, owner string) (li
 }
 
 type phoenixAccountDetails struct {
-	AccountReady            bool                        `json:"account_ready"`
-	LiveReady               bool                        `json:"live_ready"`
+	AccountReady            bool   `json:"account_ready"`
+	LiveReady               bool   `json:"live_ready"`
+	LiveUnavailableReason   string `json:"live_unavailable_reason,omitempty"`
+	executionCheckedAt      time.Time
+	executionReason         string
 	PositionAuthority       string                      `json:"position_authority,omitempty"`
 	AuthorityCheckedAt      *time.Time                  `json:"authority_checked_at,omitempty"`
 	Authorized              bool                        `json:"authorized"`
@@ -251,6 +252,7 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 		reason = "Phoenix account trading capabilities unavailable"
 	}
 	details.AccountReady = reason == ""
+	f.checkExecutionReadiness(ctx, details)
 	updated := after.PositionsUpdatedAt
 	details.PositionsUpdatedAt = &updated
 	observed := after.ObservedAt
@@ -321,6 +323,8 @@ func (f *phoenixAccountFeed) Snapshot() liveAccountSnapshot {
 	if snapshot.Phoenix == nil {
 		snapshot.Phoenix = &phoenixAccountDetails{Positions: []liveAccountPosition{}}
 	}
+	snapshot.Phoenix.LiveUnavailableReason = f.executionReadiness(snapshot.Phoenix, snapshot.UnavailableReason)
+	snapshot.Phoenix.LiveReady = snapshot.Phoenix.LiveUnavailableReason == ""
 	snapshot.Positions = append([]liveAccountPosition{}, snapshot.Positions...)
 	return snapshot
 }
@@ -344,8 +348,7 @@ func (f *phoenixAccountFeed) RefreshPositions(ctx context.Context) error {
 	return f.refreshView(ctx)
 }
 
-// ProjectOpen is an internal planning seam. The feed still rejects every live
-// submit; a model's margin_sufficient is not transaction authorization.
+// ProjectOpen is a planning seam, not transaction authorization.
 func (f *phoenixAccountFeed) ProjectOpen(ctx context.Context, order helper.OrderProjection) (helper.RiskResult, error) {
 	if err := f.refreshView(ctx); err != nil {
 		return helper.RiskResult{}, err
@@ -371,11 +374,14 @@ func (f *phoenixAccountFeed) ProjectOpen(ctx context.Context, order helper.Order
 	return result, nil
 }
 func (f *phoenixAccountFeed) PreTradeBlockers(domain.Leg) []string {
-	reasons := []string{errPhoenixLiveDisabled.Error()}
-	if reason := f.Snapshot().UnavailableReason; reason != "" {
-		reasons = append(reasons, reason)
+	snapshot := f.Snapshot()
+	if snapshot.Phoenix == nil {
+		return []string{"Phoenix account verification required"}
 	}
-	return reasons
+	if !snapshot.Phoenix.LiveReady {
+		return []string{snapshot.Phoenix.LiveUnavailableReason}
+	}
+	return nil
 }
 
 func phoenixAccess(access phoenixaccount.CapabilityAccess) bool {
