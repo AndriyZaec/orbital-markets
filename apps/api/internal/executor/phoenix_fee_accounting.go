@@ -85,6 +85,11 @@ func (s *Store) SyncPhoenixObservedFees(ctx context.Context, position *LivePosit
 			if a.Request.ClientOrderID != request.ClientOrderID {
 				return orders.ErrConflict
 			}
+			// A merged fill carries the terminal retry's identity even if that
+			// attempt contributed no quantity or trading fees.
+			if a.Signature == fill.OrderID && a.Request.ClientOrderID == fill.ClientOrderID {
+				matched = true
+			}
 			if a.State == "failed" || a.State == "no_fill" {
 				continue
 			}
@@ -103,9 +108,6 @@ func (s *Store) SyncPhoenixObservedFees(ctx context.Context, position *LivePosit
 			}
 			quantity.Add(quantity, base)
 			total.Add(total, fee)
-			if a.Signature == fill.OrderID && a.Request.ClientOrderID == fill.ClientOrderID {
-				matched = true
-			}
 		}
 		if !complete || !matched {
 			continue

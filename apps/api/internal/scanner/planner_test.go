@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +119,54 @@ func TestScanExcludesMarketsWithoutOpenInterest(t *testing.T) {
 
 	if opportunities := s.Opportunities(); len(opportunities) != 0 {
 		t.Fatalf("opportunities = %+v, want zero-OI market excluded", opportunities)
+	}
+}
+
+func TestPhoenixOpportunityAndPlanIncludeFlightFee(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rate float64
+	}{{"Phoenix long", -.0002}, {"Phoenix short", .0002}} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			phoenix := leverageTestAdapter{name: "phoenix", data: []venue.MarketData{{
+				Venue: "phoenix", Asset: "SOL", MarketKey: "SOL-PERP", MarkPrice: 100, IndexPrice: 100,
+				FundingRate: tc.rate, BidPrice: 99.9, AskPrice: 100.1, BidSize: 1000, AskSize: 1000,
+				OpenInterest: 100000, MaxLeverage: 10, Timestamp: now,
+			}}}
+			hl := leverageTestAdapter{name: "hyperliquid", data: []venue.MarketData{{
+				Venue: "hyperliquid", Asset: "SOL", MarketKey: "SOL", MarkPrice: 100, IndexPrice: 100,
+				BidPrice: 99.9, AskPrice: 100.1, BidSize: 1000, AskSize: 1000,
+				OpenInterest: 100000, MaxLeverage: 10, Timestamp: now,
+			}}}
+			s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), phoenix, hl)
+			s.scan(context.Background())
+			opps := s.Opportunities()
+			if len(opps) != 1 {
+				t.Fatalf("opportunities = %d, want 1", len(opps))
+			}
+			const pairFee = .00055 + .0005
+			if math.Abs(opps[0].FeeEstimate-pairFee) > 1e-12 {
+				t.Fatalf("opportunity fee = %v, want %v", opps[0].FeeEstimate, pairFee)
+			}
+			plan, err := s.BuildPlan(context.Background(), opps[0].ID, 2, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, leg := range []domain.Leg{plan.Leg1, plan.Leg2} {
+				want := .0005
+				if leg.Venue == "phoenix" {
+					want = .00055
+				}
+				if math.Abs(leg.Fee-want) > 1e-12 {
+					t.Fatalf("%s leg fee = %v, want %v", leg.Venue, leg.Fee, want)
+				}
+			}
+			wantEdge := opps[0].AnnualizedGrossEdge - plan.Leg1.Slippage - plan.Leg2.Slippage - pairFee
+			if math.Abs(plan.EstimatedNetEdge-wantEdge) > 1e-12 {
+				t.Fatalf("plan net edge = %v, want %v", plan.EstimatedNetEdge, wantEdge)
+			}
+		})
 	}
 }
 

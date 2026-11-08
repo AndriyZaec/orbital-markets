@@ -244,7 +244,9 @@ export async function revokePhoenixAgent(options: Options): Promise<void> {
   const pending = await options.storage.loadPendingForSigning('phoenix', options.ownerAddress)
   const active = await options.storage.loadForSigning('phoenix', options.ownerAddress)
   options = { ...options, clearCandidates: [pending?.agentAddress, active?.agentAddress].filter((value): value is string => !!value) }
-  const agent = pending ?? active
+  // A replacement cancelled before prepare has never been submitted. The active
+  // delegate still owns authority; retain both keys until its revoke confirms.
+  const agent = pending?.phoenixOperation ? pending : active ?? pending
   if (!agent) return
-  await runOperation(options, agent, !!pending, 'revoke')
+  await runOperation(options, agent, agent === pending, 'revoke')
 }

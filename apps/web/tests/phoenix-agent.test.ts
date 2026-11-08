@@ -45,6 +45,7 @@ function fixture() {
   const transport: PhoenixTransport = {
     prepare: async (account, agent, action, replace, expectedAuthority) => {
       if (action === 'delegate' && currentAuthority !== account && currentAuthority !== agent && (!replace || expectedAuthority !== currentAuthority)) throw new PhoenixReplacementRequired(currentAuthority)
+      if (action === 'revoke' && currentAuthority !== agent && currentAuthority !== account) throw new Error('Phoenix authority changed')
       const request = signingRequest(agent, action, `request-${++nextID}`)
       const result: PhoenixResult = { request_id: request.id, owner: account, action, target_authority: action === 'revoke' ? account : agent, state: 'prepared', signing_request: request }
       rows.set(result.request_id, result)
@@ -57,7 +58,7 @@ function fixture() {
       assert.equal(signed.signer_address, ownerAddress)
       const pending = await storage.loadPendingForSigning('phoenix', account)
       const active = await storage.loadForSigning('phoenix', account)
-      assert.equal((pending ?? active)?.phoenixOperation?.submissionStarted, true)
+      assert.equal([pending, active].find((agent) => agent?.phoenixOperation?.requestID === signed.request_id)?.phoenixOperation?.submissionStarted, true)
       if (!leavePrepared) row.state = 'pending'
       if (loseResponse) throw new TypeError('Failed to fetch')
       return structuredClone(row)
@@ -80,7 +81,7 @@ function fixture() {
       signatures++
       const pending = await storage.loadPendingForSigning('phoenix', ownerAddress)
       const active = await storage.loadForSigning('phoenix', ownerAddress)
-      assert.ok((pending ?? active)?.phoenixOperation?.requestID, 'operation must be saved before wallet prompt')
+      assert.ok([pending, active].some((agent) => agent?.phoenixOperation?.requestID), 'operation must be saved before wallet prompt')
       await signHook?.()
       transaction.partialSign(owner)
       return transaction
@@ -163,6 +164,45 @@ test('confirmed revoke clears both a previous active key and a pending replaceme
   await revokePhoenixAgent(f.options)
   assert.equal(await f.storage.loadForSigning('phoenix', ownerAddress), null)
   assert.equal(await f.storage.loadPendingForSigning('phoenix', ownerAddress), null)
+})
+
+test('cancelled replacement revokes the active delegate before clearing either key', async () => {
+  const f = fixture(); const active = await authorizePhoenixAgent(f.options)
+  await assert.rejects(authorizePhoenixAgent(f.options), PhoenixReplacementRequired)
+  const pending = await f.storage.loadPendingForSigning('phoenix', ownerAddress)
+  assert.ok(pending)
+  assert.notEqual(pending.agentAddress, active.agentAddress)
+  assert.equal(pending.phoenixOperation, undefined)
+
+  f.onSign(async () => {
+    assert.equal((await f.storage.loadForSigning('phoenix', ownerAddress))?.agentAddress, active.agentAddress)
+    assert.equal((await f.storage.loadPendingForSigning('phoenix', ownerAddress))?.agentAddress, pending.agentAddress)
+  })
+  await revokePhoenixAgent(f.options)
+
+  assert.equal((await f.options.transport.authority(ownerAddress, active.agentAddress)).position_authority, ownerAddress)
+  assert.equal(await f.storage.loadForSigning('phoenix', ownerAddress), null)
+  assert.equal(await f.storage.loadPendingForSigning('phoenix', ownerAddress), null)
+  assert.deepEqual(f.counts(), { sends: 2, signatures: 2, preparations: 2 })
+})
+
+test('revoke reconciles an uncertain replacement without falling back to the old active key', async () => {
+  const f = fixture(); const active = await authorizePhoenixAgent(f.options)
+  f.setConfirm(false)
+  await assert.rejects(authorizePhoenixAgent({ ...f.options, replaceExistingDelegate: true, expectedAuthority: active.agentAddress }), PhoenixPendingError)
+  const pending = await f.storage.loadPendingForSigning('phoenix', ownerAddress)
+  assert.equal(pending?.phoenixOperation?.submissionStarted, true)
+
+  await assert.rejects(revokePhoenixAgent(f.options), PhoenixPendingError)
+  assert.deepEqual(f.counts(), { sends: 2, signatures: 2, preparations: 2 })
+  assert.equal((await f.storage.loadForSigning('phoenix', ownerAddress))?.agentAddress, active.agentAddress)
+  assert.equal((await f.storage.loadPendingForSigning('phoenix', ownerAddress))?.agentAddress, pending?.agentAddress)
+
+  f.setConfirm(true)
+  await revokePhoenixAgent(f.options)
+  assert.equal(await f.storage.loadForSigning('phoenix', ownerAddress), null)
+  assert.equal(await f.storage.loadPendingForSigning('phoenix', ownerAddress), null)
+  assert.deepEqual(f.counts(), { sends: 3, signatures: 3, preparations: 3 })
 })
 
 test('third-party delegate replacement requires explicit confirmation and reuses pending key', async () => {

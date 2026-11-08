@@ -438,7 +438,8 @@ func (s *Scanner) FreshSnapshots(ctx context.Context, asset, venueA, venueB stri
 }
 
 func estimateFee(md venue.MarketData) float64 {
-	// Placeholder: typical taker fee for perp venues
-	_ = md
+	if md.Venue == "phoenix" {
+		return 0.00055 // 3.5 bps taker + 2 bps Flight for normal open/close
+	}
 	return 0.0005 // 5bps
 }

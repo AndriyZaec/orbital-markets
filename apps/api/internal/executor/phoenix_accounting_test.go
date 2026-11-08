@@ -124,6 +124,76 @@ func TestObservedPhoenixFeeBackfillDoesNotOverwriteMergedRetryWithLastFee(t *tes
 	}
 }
 
+func TestObservedPhoenixFeeBackfillAfterEmptyRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, orderID string
+		wantFee              float64
+	}{
+		{"zero fill", "no_fill", "retry-signature", .102},
+		{"failed retry", "failed", "retry-signature", .102},
+		{"unrelated identity", "no_fill", "unrelated-signature", .1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := appdb.Open(filepath.Join(t.TempDir(), "empty-retry.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			ctx := context.Background()
+			store := NewStore(db, db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			const owner = "11111111111111111111111111111111"
+			bindings := map[string]string{"hyperliquid": "hl-owner", "phoenix": owner}
+			result := &ExecutionResult{PlanID: "empty-retry", Asset: "SOL", State: ExecStateDegraded, StartedAt: time.Now(), Leg2: LegResult{Venue: "phoenix", Symbol: "SOL", Side: "short", Submitted: true, Accepted: true, Filled: true, FilledAmount: .6, RequestedAmt: 1, AvgFillPrice: 100, Fee: .1, ClientOrderID: "43", OrderID: tc.orderID}}
+			if err := store.PersistFullResultAtomicForBindings(ctx, result, "hyperliquid", "phoenix", bindings, 100, 2); err != nil {
+				t.Fatal(err)
+			}
+			first := domain.SigningRequest{ID: "first", ClientOrderID: "42", Venue: "phoenix", Account: owner, Symbol: "SOL", Action: "open"}
+			retry := domain.SigningRequest{ID: "retry", ClientOrderID: "43", Venue: "phoenix", Account: owner, Symbol: "SOL", Action: "open"}
+			payload, _ := json.Marshal(map[string]any{"plan": map[string]any{"id": result.PlanID}, "leg_2_open_request": first, "leg_2_retry_request": retry})
+			if err := store.UpsertDurableSession(ctx, DurableSessionRecord{ID: "empty-retry-session", Asset: "SOL", State: "degraded", Payload: payload, AccountBindings: bindings}); err != nil {
+				t.Fatal(err)
+			}
+			journal, err := store.PhoenixOrderJournal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			flightFee := "2000"
+			for _, entry := range []struct {
+				request          domain.SigningRequest
+				signature, state string
+				fill             *orders.Fill
+			}{
+				{first, "first-signature", "filled", &orders.Fill{BaseQuantity: "0.6", ExchangeFee: "0.1", Slot: 130, Accounting: &orders.ObservedAccounting{Slot: 130, Events: helper.AccountingResult{FlightFeeQuoteLots: &flightFee}}}},
+				{retry, "retry-signature", tc.state, nil},
+			} {
+				a := orders.Attempt{Request: entry.request, Signature: entry.signature, CreatedAt: time.Now()}
+				if ok, err := journal.Claim(ctx, a); err != nil || !ok {
+					t.Fatal(ok, err)
+				}
+				if err := journal.Resolve(ctx, a, entry.state, entry.fill, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			position, err := store.GetPosition(ctx, result.PlanID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := store.SyncPhoenixObservedFees(ctx, position); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fills, err := store.GetFills(ctx, position.ID)
+			if err != nil || len(fills) != 1 {
+				t.Fatal(fills, err)
+			}
+			if math.Abs(fills[0].Fee-tc.wantFee) > 1e-12 {
+				t.Fatalf("fee = %v, want %v", fills[0].Fee, tc.wantFee)
+			}
+		})
+	}
+}
+
 func TestPhoenixFundingCannotCreditSharedMarketPaymentToSmallerStrategy(t *testing.T) {
 	db, err := appdb.Open(filepath.Join(t.TempDir(), "shared-funding.db"))
 	if err != nil {
