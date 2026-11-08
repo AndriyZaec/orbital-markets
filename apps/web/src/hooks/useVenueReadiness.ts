@@ -132,12 +132,14 @@ function buildReadiness(args: {
     last_updated?: string
     reason?: string
     unavailable?: boolean
-    phoenix?: { live_ready: boolean; live_unavailable_reason?: string }
+    phoenix?: { live_ready: boolean; live_unavailable_reason?: string; registered_agent?: string; action_verification_required?: boolean }
   }
   unavailableReason?: string
 }): VenueReadiness {
   const { venue, address, authorityReadiness, agent, balance } = args
+  // Phoenix live_ready permits preparation; chain admission is checked on action.
   const unavailableReason = args.unavailableReason ?? (balance.unavailable ? balance.reason : undefined) ??
+    (venue === 'phoenix' && balance.phoenix?.registered_agent && balance.phoenix.registered_agent !== agent.agentAddress ? 'Phoenix local agent differs from the registered agent. Reauthorize Phoenix.' : undefined) ??
     (venue === 'phoenix' && balance.phoenix?.live_ready !== true ? balance.phoenix?.live_unavailable_reason || 'Phoenix live readiness verification required' : undefined)
   const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
   const ownerMatches = venue === 'hyperliquid' || venue === 'aster'

@@ -214,9 +214,13 @@ test('third-party delegate replacement requires explicit confirmation and reuses
   assert.equal(authorized.privateKey, pending?.privateKey)
 })
 
-test('restore refuses externally replaced authority without deleting a recoverable key', async () => {
+test('confirmed local agent restores without idle RPC even if external authority changed', async () => {
   const f = fixture(); const agent = await authorizePhoenixAgent(f.options); f.setAuthority(third)
-  await assert.rejects(restorePhoenixAgent(f.options), /authority no longer matches/)
+  f.options.transport.authority = async () => { throw new Error('idle authority RPC is forbidden') }
+  f.options.transport.reconcile = async () => { throw new Error('confirmed agent needs no reconciliation') }
+  for (let reload = 0; reload < 2; reload++) {
+    assert.equal((await restorePhoenixAgent(f.options))?.agentAddress, agent.agentAddress)
+  }
   assert.equal((await f.storage.loadForSigning('phoenix', ownerAddress))?.privateKey, agent.privateKey)
 })
 

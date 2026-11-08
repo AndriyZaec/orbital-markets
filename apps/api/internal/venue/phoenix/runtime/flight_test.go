@@ -96,28 +96,27 @@ func flightRuntime(t *testing.T) (*Runtime, *flightHelper, *flightChain) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := startRuntime(context.Background(), h, c, service, 10000, flightKeys().BuilderAuthority)
+	r := startRuntime(context.Background(), h, c, service, flightKeys().BuilderAuthority)
 	t.Cleanup(r.Close)
 	return r, h, c
 }
 
-func TestFlightStartupAndFreshProofUseEveryAccountAtMinimumSlot(t *testing.T) {
+func TestFlightOnlyVerifiesOnActionAndUsesEveryAccountAtMinimumSlot(t *testing.T) {
 	r, h, c := flightRuntime(t)
-	if status := r.FlightReadiness(); !status.Ready || status.BuilderAuthority != flightKeys().BuilderAuthority || status.CheckedAt == nil {
-		t.Fatalf("startup Flight status: %+v", status)
+	if status := r.FlightReadiness(); status.Ready || status.CheckedAt != nil || status.Reason != "action_verification_required" {
+		t.Fatalf("startup should not claim on-chain verification: %+v", status)
 	}
-	if c.count.Load() != 3 {
-		t.Fatal("startup did not verify all three chain accounts")
+	if c.count.Load() != 0 || c.hashReads.Load() != 0 || c.reads.Load() != 0 {
+		t.Fatal("startup performed idle chain reads")
 	}
 	proof, err := r.FlightProof(context.Background(), 150)
-	if err != nil || proof.FeeBPS != 2 || proof.Slot != 151 || c.minimum.Load() != 150 || c.count.Load() != 6 || proof.BuilderTraderAccount != flightKeys().BuilderTraderAccount {
+	if err != nil || proof.FeeBPS != 2 || proof.Slot != 151 || c.minimum.Load() != 150 || c.count.Load() != 3 || proof.BuilderTraderAccount != flightKeys().BuilderTraderAccount {
 		t.Fatalf("proof=%+v err=%v", proof, err)
 	}
 	h.failure.Store(true)
 	if _, err := r.FlightProof(context.Background(), 150); err == nil {
 		t.Fatal("cached success authorized changed registration")
 	}
-	r.refreshFlight()
 	if status := r.FlightReadiness(); status.Ready || status.Reason != "verification_unavailable" {
 		t.Fatalf("failed verification stayed ready: %+v", status)
 	}
@@ -125,7 +124,9 @@ func TestFlightStartupAndFreshProofUseEveryAccountAtMinimumSlot(t *testing.T) {
 		t.Fatal("Flight failure disabled owner delegation infrastructure")
 	}
 	h.failure.Store(false)
-	r.refreshFlight()
+	if _, err := r.FlightProof(context.Background(), 150); err != nil {
+		t.Fatal(err)
+	}
 	if !r.FlightReadiness().Ready {
 		t.Fatal("fresh registration did not restore readiness")
 	}
@@ -138,6 +139,10 @@ func TestFlightWrongOwnerStaleSlotMissingAccountAndDiagnosticExpiry(t *testing.T
 		if _, err := r.FlightProof(context.Background(), 150); err == nil {
 			t.Fatalf("accepted invalid account mode %d", mode)
 		}
+	}
+	c.mode.Store(0)
+	if _, err := r.FlightProof(context.Background(), 150); err != nil {
+		t.Fatal(err)
 	}
 	status := r.FlightReadiness()
 	*status.CheckedAt = time.Now().Add(-time.Hour)
@@ -234,11 +239,10 @@ func TestFlightProofWithPinnedHelperRejectsActualFeeChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := startRuntime(context.Background(), h, c, service, 10000, accounts.BuilderAuthority)
+	r := startRuntime(context.Background(), h, c, service, accounts.BuilderAuthority)
 	t.Cleanup(r.Close)
-	if status := r.FlightReadiness(); !status.Ready {
-		_, err := r.FlightProof(context.Background(), 155)
-		t.Fatalf("real helper startup verification: %+v: %v", status, err)
+	if status := r.FlightReadiness(); status.Ready || status.CheckedAt != nil {
+		t.Fatalf("real helper startup unexpectedly verified chain: %+v", status)
 	}
 	proof, err := r.FlightProof(context.Background(), 155)
 	if err != nil || proof.Slot != 155 || proof.BuilderState != accounts.BuilderState || proof.FeeBPS != 2 {
@@ -248,7 +252,6 @@ func TestFlightProofWithPinnedHelperRejectsActualFeeChange(t *testing.T) {
 	if _, err := r.FlightProof(context.Background(), 155); err == nil {
 		t.Fatal("actual chain fee 3 bps accepted because manifest said 2 bps")
 	}
-	r.refreshFlight()
 	if r.FlightReadiness().Ready || !r.Readiness(context.Background()).Ready {
 		t.Fatal("fee change must block Flight without blocking delegation")
 	}

@@ -155,21 +155,10 @@ func TestCoSignRejectsBudgetOutsideCurrentPolicyBeforeRPC(t *testing.T) {
 	}
 }
 
-type cancelLogWriter struct {
-	buffer bytes.Buffer
-	cancel context.CancelFunc
-}
-
-func (w *cancelLogWriter) Write(p []byte) (int, error) {
-	n, err := w.buffer.Write(p)
-	w.cancel()
-	return n, err
-}
-
-func TestMonitorLogsLowOrUnavailableBalanceAndStops(t *testing.T) {
+func TestActionBalanceCheckLogsLowOrUnavailableBalance(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
-		writer := &cancelLogWriter{cancel: cancel}
+		var writer bytes.Buffer
 		calls := 0
 		service, err := NewService(fixtureSigner(t), testChain{balance: func(context.Context, string) (uint64, error) {
 			calls++
@@ -177,20 +166,20 @@ func TestMonitorLogsLowOrUnavailableBalanceAndStops(t *testing.T) {
 				return 0, errors.New("RPC unavailable")
 			}
 			return 0, nil
-		}}, Policy{MaxTransactionFeeLamports: 10000}, slog.New(slog.NewTextHandler(writer, nil)))
+		}}, Policy{MaxTransactionFeeLamports: 10000}, slog.New(slog.NewTextHandler(&writer, nil)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		service.Run(ctx)
+		_, _ = service.CheckBalance(ctx)
 		cancel()
 		want := "SOL balance low"
 		if unavailable {
 			want = "balance unavailable"
 		}
-		if calls != 1 || !strings.Contains(writer.buffer.String(), want) {
-			t.Fatalf("calls=%d log=%s", calls, writer.buffer.String())
+		if calls != 1 || !strings.Contains(writer.String(), want) {
+			t.Fatalf("calls=%d log=%s", calls, writer.String())
 		}
-		service.Run(ctx)
+		_, _ = service.CheckBalance(ctx)
 		if calls != 1 {
 			t.Fatal("cancelled monitor started network work")
 		}

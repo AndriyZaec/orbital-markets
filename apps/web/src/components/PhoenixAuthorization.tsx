@@ -29,7 +29,7 @@ export function PhoenixAuthorization({ disabled, onConnect, onDisconnect }: {
   return <>
     <div className="flex flex-col gap-2">
       <p className="text-xs text-muted-foreground">Trade using your existing Phoenix cross account. Disconnect revokes on-chain before deleting the local key.</p>
-      <p className="text-xs" role="status">{!owner ? 'Connect a Solana owner wallet' : state.status === 'ready' ? 'Agent authorized' : state.status === 'pending' ? 'Pending verification — key preserved' : state.status === 'restoring' ? 'Verifying on-chain authority…' : state.status === 'authorizing' ? 'Awaiting owner approval / confirmation…' : state.status === 'disconnecting' ? 'Confirming revoke…' : 'Authorization required'}</p>
+      <p className="text-xs" role="status">{!owner ? 'Connect a Solana owner wallet' : state.status === 'ready' ? 'Agent ready — verified on each action' : state.status === 'pending' ? 'Pending verification — key preserved' : state.status === 'restoring' ? 'Restoring local authorization…' : state.status === 'authorizing' ? 'Awaiting owner approval / confirmation…' : state.status === 'disconnecting' ? 'Confirming revoke…' : 'Authorization required'}</p>
       {state.error && <p className="text-xs text-destructive" role="alert">{state.error}</p>}
       {owner && !wallet.signTransaction && <p className="text-xs text-muted-foreground">This wallet must support transaction signing.</p>}
       <div className="flex flex-wrap justify-end gap-2">

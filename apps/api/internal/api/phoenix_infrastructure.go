@@ -38,6 +38,7 @@ func (s *Server) handlePhoenixInfrastructure(w http.ResponseWriter, r *http.Requ
 		Flight                      phoenixruntime.FlightStatus `json:"flight"`
 		LiveReady                   bool                        `json:"live_ready"`
 		AccountVerificationRequired bool                        `json:"account_verification_required"`
+		ActionVerificationRequired  bool                        `json:"action_verification_required"`
 	}{Configured: configured, Infrastructure: status, Flight: flight,
-		LiveReady: s.phoenixExecutionConfigured() && status.Ready && flight.Ready, AccountVerificationRequired: true})
+		LiveReady: s.phoenixExecutionConfigured() && status.Ready, AccountVerificationRequired: true, ActionVerificationRequired: true})
 }

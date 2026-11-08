@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	LowBalanceLamports  = 50_000_000 // 0.05 SOL: warning only, not a trading cutoff
-	balancePollInterval = 30 * time.Second
+	LowBalanceLamports = 50_000_000 // 0.05 SOL: warning only, not a trading cutoff
 )
 
 var (
@@ -65,37 +64,18 @@ type BalanceStatus struct {
 func (s *Service) CheckBalance(ctx context.Context) (BalanceStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	lamports, err := s.chain.Balance(ctx, s.signer.Address())
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return BalanceStatus{}, err
 	}
-	return BalanceStatus{Lamports: lamports, Low: lamports < LowBalanceLamports, ObservedAt: time.Now()}, nil
-}
-
-// Run monitors the configured fee payer until shutdown. It is opt-in: service
-// construction starts no work. Signing still makes its own fresh balance read.
-func (s *Service) Run(ctx context.Context) {
-	ticker := time.NewTicker(balancePollInterval)
-	defer ticker.Stop()
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		balance, err := s.CheckBalance(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if err != nil {
-			s.logger.Warn("phoenix relayer balance unavailable", "err", err)
-		} else if balance.Low {
-			s.logger.Warn("phoenix relayer SOL balance low", "lamports", balance.Lamports, "warning_below_lamports", LowBalanceLamports)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	lamports, err := s.chain.Balance(ctx, s.signer.Address())
+	if err != nil {
+		s.logger.Warn("phoenix relayer balance unavailable", "err", err)
+		return BalanceStatus{}, err
 	}
+	if lamports < LowBalanceLamports {
+		s.logger.Warn("phoenix relayer SOL balance low", "lamports", lamports, "warning_below_lamports", LowBalanceLamports)
+	}
+	return BalanceStatus{Lamports: lamports, Low: lamports < LowBalanceLamports, ObservedAt: time.Now()}, nil
 }
 
 // CoSign gates the low-level signer with fresh fee/balance/expiry checks. It

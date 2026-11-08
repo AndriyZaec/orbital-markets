@@ -165,10 +165,10 @@ export async function restorePhoenixAgent(options: Options): Promise<Omit<Stored
       if (value.state === 'prepared') throw new PhoenixPendingError('Phoenix authorization needs an owner signature. Resume to continue.')
       if (agent === pending) throw new PhoenixPendingError('Phoenix authorization was not completed. Resume or revoke; your pending key is preserved.')
     }
-    const authority = await options.transport.authority(options.ownerAddress, agent.agentAddress)
+    // Restore the confirmed local key without idle RPC. Fresh authority is
+    // checked by the backend when the user starts a trading/management action.
     assertOwner(options)
-    if (authority.authorized && authority.position_authority === agent.agentAddress) return agent
-    throw new Error('Phoenix authority no longer matches this local agent. Reauthorize or revoke; the key is preserved.')
+    return agent
   }
   return null
 }

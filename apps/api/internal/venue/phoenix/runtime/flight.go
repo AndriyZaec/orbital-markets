@@ -22,6 +22,19 @@ type FlightStatus struct {
 // caller's blockhash/account slot. A cached diagnostic is never order admission.
 // No signer or key belonging to the builder is needed.
 func (r *Runtime) FlightProof(ctx context.Context, minSlot uint64) (phoenixlive.FlightProof, error) {
+	proof, err := r.flightProof(ctx, minSlot)
+	status := FlightStatus{BuilderAuthority: r.builderAuthority, Reason: "verification_unavailable"}
+	if err == nil {
+		at := proof.ObservedAt
+		status = FlightStatus{Ready: true, BuilderAuthority: r.builderAuthority, CheckedAt: &at}
+	}
+	r.flightMu.Lock()
+	r.flightStatus = status
+	r.flightMu.Unlock()
+	return proof, err
+}
+
+func (r *Runtime) flightProof(ctx context.Context, minSlot uint64) (phoenixlive.FlightProof, error) {
 	if err := ctx.Err(); err != nil {
 		return phoenixlive.FlightProof{}, err
 	}
@@ -82,34 +95,6 @@ func (r *Runtime) FlightProof(ctx context.Context, minSlot uint64) (phoenixlive.
 		BuilderTraderAccount: a.BuilderTraderAccount, FeeBPS: verified.FeeBPS, ObservedAt: observed, Slot: slot}, nil
 }
 
-func (r *Runtime) refreshFlight() {
-	proof, err := r.FlightProof(r.ctx, 0)
-	status := FlightStatus{BuilderAuthority: r.builderAuthority, Reason: "verification_unavailable"}
-	if err == nil {
-		at := proof.ObservedAt
-		status = FlightStatus{Ready: true, BuilderAuthority: r.builderAuthority, CheckedAt: &at}
-	}
-	r.flightMu.Lock()
-	r.flightStatus = status
-	r.flightMu.Unlock()
-}
-
-func (r *Runtime) monitorFlight() {
-	if r.builderAuthority == "" {
-		return
-	}
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-r.ctx.Done():
-			return
-		case <-ticker.C:
-			r.refreshFlight()
-		}
-	}
-}
-
 // FlightReadiness is a bounded cached diagnostic, independently expiring after
 // 30s. Delegation infrastructure readiness does not depend on Flight.
 func (r *Runtime) FlightReadiness() FlightStatus {
@@ -124,6 +109,8 @@ func (r *Runtime) FlightReadiness() FlightStatus {
 		status.Ready, status.Reason = false, "stopped"
 	} else if r.builderAuthority == "" {
 		status.Ready, status.Reason = false, "not_configured"
+	} else if status.CheckedAt == nil && status.Reason == "" {
+		status.Reason = "action_verification_required"
 	} else if status.Ready && (status.CheckedAt == nil || time.Now().Before(*status.CheckedAt) || time.Since(*status.CheckedAt) >= flightFreshness) {
 		status.Ready, status.Reason = false, "verification_stale"
 	}

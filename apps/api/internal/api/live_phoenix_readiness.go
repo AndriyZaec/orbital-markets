@@ -1,41 +1,10 @@
 package api
 
-import (
-	"context"
-	"time"
-
-	phoenixruntime "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/runtime"
-)
-
-// Diagnostic readiness is not order admission: prepare and submit still verify
-// current chain evidence, exact intent, risk projection and signed fee policy.
-type phoenixExecutionBackend interface {
-	PhoenixSubmitBackend
-	PhoenixInfrastructure
-	FlightReadiness() phoenixruntime.FlightStatus
-}
-
-func (f *phoenixAccountFeedFactory) executionBackend() (phoenixExecutionBackend, bool) {
-	b, ok := f.config.Backend.(phoenixExecutionBackend)
+// Readiness permits starting preparation, not submission. No background RPC is
+// needed: prepare and submit independently verify all current chain evidence.
+func (f *phoenixAccountFeedFactory) executionBackend() (PhoenixSubmitBackend, bool) {
+	b, ok := f.config.Backend.(PhoenixSubmitBackend)
 	return b, ok && f.orders != nil && f.orderJournal != nil
-}
-
-func (f *phoenixAccountFeed) checkExecutionReadiness(ctx context.Context, details *phoenixAccountDetails) {
-	details.executionCheckedAt = time.Now()
-	b, ok := f.factory.executionBackend()
-	if !ok {
-		details.executionReason = errPhoenixLiveDisabled.Error()
-		return
-	}
-	status := b.Readiness(ctx)
-	if !status.Ready {
-		details.executionReason = "Phoenix infrastructure not ready: " + status.Reason
-		return
-	}
-	pending, err := f.factory.orderJournal.Unresolved(ctx, f.state.Snapshot().Owner)
-	if err != nil || pending {
-		details.executionReason = "Phoenix prior order outcome requires reconciliation"
-	}
 }
 
 func (f *phoenixAccountFeed) executionReadiness(details *phoenixAccountDetails, accountReason string) string {
@@ -46,21 +15,17 @@ func (f *phoenixAccountFeed) executionReadiness(details *phoenixAccountDetails, 
 	if !ok {
 		return errPhoenixLiveDisabled.Error()
 	}
-	if !details.AccountReady || !details.Authorized {
+	if !details.AccountReady || !details.AuthorizationRecorded {
 		return "Phoenix account authorization required"
 	}
 	if !details.CanIncreaseRisk {
 		return "Phoenix account cannot increase risk"
 	}
-	if !phoenixTimeFresh(details.executionCheckedAt, time.Now(), admissionFreshness) {
-		return "Phoenix infrastructure verification is stale"
+	if details.orderOutcomeUnknown {
+		return "Phoenix prior order outcome requires reconciliation"
 	}
-	if details.executionReason != "" {
-		return details.executionReason
-	}
-	flight := b.FlightReadiness()
-	if !flight.Ready {
-		return "Phoenix Flight registration not ready"
+	if b.BuilderAuthority() == "" {
+		return "Phoenix Flight builder is not configured"
 	}
 	return ""
 }
@@ -76,6 +41,6 @@ func (s *Server) phoenixExecutionConfigured() bool {
 	if !ok {
 		return false
 	}
-	_, ok = f.executionBackend()
-	return ok
+	b, ok := f.executionBackend()
+	return ok && b.BuilderAuthority() != ""
 }

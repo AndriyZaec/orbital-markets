@@ -16,7 +16,6 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix"
 	phoenixaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/account"
-	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/delegation"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/orders"
 	phoenixrisk "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/risk"
@@ -26,7 +25,6 @@ var errPhoenixLiveDisabled = errors.New("Phoenix live execution is not enabled")
 
 type PhoenixAccountBackend interface {
 	phoenixaccount.RiskComputer
-	AccountAuthority(context.Context, string, uint64) (delegation.Authority, error)
 }
 
 // PhoenixAccountConfig supplies shared account/market sources. Full execution
@@ -89,22 +87,21 @@ func (f *phoenixAccountFeedFactory) Start(ctx context.Context, owner string) (li
 }
 
 type phoenixAccountDetails struct {
-	AccountReady            bool   `json:"account_ready"`
-	LiveReady               bool   `json:"live_ready"`
-	LiveUnavailableReason   string `json:"live_unavailable_reason,omitempty"`
-	executionCheckedAt      time.Time
-	executionReason         string
-	PositionAuthority       string                      `json:"position_authority,omitempty"`
-	AuthorityCheckedAt      *time.Time                  `json:"authority_checked_at,omitempty"`
-	Authorized              bool                        `json:"authorized"`
-	CanIncreaseRisk         bool                        `json:"can_increase_risk"`
-	CanReduceRisk           bool                        `json:"can_reduce_risk"`
-	Capabilities            phoenixaccount.Capabilities `json:"capabilities"`
-	Positions               []liveAccountPosition       `json:"positions"`
-	PositionsUpdatedAt      *time.Time                  `json:"positions_updated_at,omitempty"`
-	LiquidationModel        string                      `json:"liquidation_model,omitempty"`
-	RiskTier                string                      `json:"risk_tier,omitempty"`
-	PendingFundingQuoteLots string                      `json:"pending_funding_quote_lots,omitempty"`
+	AccountReady               bool   `json:"account_ready"`
+	LiveReady                  bool   `json:"live_ready"`
+	LiveUnavailableReason      string `json:"live_unavailable_reason,omitempty"`
+	orderOutcomeUnknown        bool
+	RegisteredAgent            string                      `json:"registered_agent,omitempty"`
+	AuthorizationRecorded      bool                        `json:"authorization_recorded"`
+	ActionVerificationRequired bool                        `json:"action_verification_required"`
+	CanIncreaseRisk            bool                        `json:"can_increase_risk"`
+	CanReduceRisk              bool                        `json:"can_reduce_risk"`
+	Capabilities               phoenixaccount.Capabilities `json:"capabilities"`
+	Positions                  []liveAccountPosition       `json:"positions"`
+	PositionsUpdatedAt         *time.Time                  `json:"positions_updated_at,omitempty"`
+	LiquidationModel           string                      `json:"liquidation_model,omitempty"`
+	RiskTier                   string                      `json:"risk_tier,omitempty"`
+	PendingFundingQuoteLots    string                      `json:"pending_funding_quote_lots,omitempty"`
 }
 
 type phoenixAccountRefresh struct {
@@ -122,7 +119,7 @@ type phoenixAccountFeed struct {
 	snapshot                           liveAccountSnapshot
 	riskResult                         helper.RiskResult
 	marketGeneration, exchangeSequence uint64
-	authorityAt                        time.Time
+	viewAt                             time.Time
 	lastAttempt                        time.Time
 	authorityRevision                  uint64
 }
@@ -140,7 +137,7 @@ func (f *phoenixAccountFeed) run() {
 		case <-f.wake:
 		}
 		f.mu.Lock()
-		lastAttempt, authorityAt := f.lastAttempt, f.authorityAt
+		lastAttempt, viewAt := f.lastAttempt, f.viewAt
 		f.mu.Unlock()
 		if time.Since(lastAttempt) < 5*time.Second {
 			continue
@@ -148,7 +145,7 @@ func (f *phoenixAccountFeed) run() {
 		if !f.state.Snapshot().Fresh(time.Now()) {
 			continue
 		}
-		if f.Snapshot().UnavailableReason == "" && time.Since(authorityAt) < 15*time.Second {
+		if f.Snapshot().UnavailableReason == "" && time.Since(viewAt) < 15*time.Second {
 			continue
 		}
 		_ = f.refreshView(f.ctx)
@@ -166,13 +163,13 @@ func (f *phoenixAccountFeed) refreshView(ctx context.Context) error {
 		go func() {
 			opCtx, cancel := context.WithTimeout(f.ctx, 15*time.Second)
 			defer cancel()
-			snapshot, result, markets, authorityAt, err := f.readView(opCtx)
+			snapshot, result, markets, viewAt, err := f.readView(opCtx)
 			f.mu.Lock()
 			if revision != f.authorityRevision && err == nil {
 				err = errors.New("Phoenix authority changed during verification")
 			}
 			if err == nil && f.ctx.Err() == nil && revision == f.authorityRevision {
-				f.snapshot, f.riskResult, f.marketGeneration, f.exchangeSequence, f.authorityAt = snapshot, result, markets.Generation, markets.Sequence, authorityAt
+				f.snapshot, f.riskResult, f.marketGeneration, f.exchangeSequence, f.viewAt = snapshot, result, markets.Generation, markets.Sequence, viewAt
 			} else if revision == f.authorityRevision {
 				f.snapshot = liveAccountSnapshot{Venue: "phoenix", Account: f.state.Snapshot().Owner, UnavailableReason: "Phoenix account verification unavailable"}
 				if err != nil {
@@ -202,17 +199,10 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 	if !before.Fresh(time.Now()) {
 		return failed(errors.New("Phoenix account snapshot is not fresh and synchronized"))
 	}
-	authorityAt := time.Now().UTC()
-	authority, err := f.factory.config.Backend.AccountAuthority(ctx, before.Owner, before.Slot)
+	viewAt := time.Now().UTC()
+	agent, err := f.factory.store.RegisteredAgent(ctx, "phoenix", before.Owner)
 	if err != nil {
-		return failed(errors.New("Phoenix on-chain authority could not be verified"))
-	}
-	if authority.Slot < before.Slot || !phoenixaccount.ValidOwner(authority.PositionAuthority) || authority.PositionAuthority == before.Owner {
-		return failed(errors.New("Phoenix trading agent authorization required"))
-	}
-	authorized, err := f.factory.store.AgentAuthorizationMatches(ctx, "phoenix", before.Owner, authority.PositionAuthority)
-	if err != nil || !authorized {
-		return failed(errors.New("Phoenix current delegate is not the registered Orbital agent"))
+		return failed(errors.New("Phoenix agent registration unavailable"))
 	}
 	markets := f.factory.config.Markets.Snapshot()
 	result, err := f.factory.risk.Evaluate(ctx, f.state, f.factory.config.Backend)
@@ -225,8 +215,8 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 		!currentMarkets.Connected || !currentMarkets.Synchronized || markets.Generation != currentMarkets.Generation || markets.Sequence != currentMarkets.Sequence {
 		return failed(errors.New("Phoenix account or exchange changed during verification"))
 	}
-	authorized, err = f.factory.store.AgentAuthorizationMatches(ctx, "phoenix", before.Owner, authority.PositionAuthority)
-	if err != nil || !authorized {
+	currentAgent, err := f.factory.store.RegisteredAgent(ctx, "phoenix", before.Owner)
+	if err != nil || currentAgent != agent {
 		return failed(errors.New("Phoenix agent authorization changed during verification"))
 	}
 	positions, err := normalizePhoenixPositions(after, result, currentMarkets)
@@ -241,8 +231,7 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 	if err != nil {
 		return failed(err)
 	}
-	checkedAt := authorityAt
-	details := &phoenixAccountDetails{PositionAuthority: authority.PositionAuthority, AuthorityCheckedAt: &checkedAt, Authorized: true,
+	details := &phoenixAccountDetails{RegisteredAgent: agent, AuthorizationRecorded: agent != "" && agent != before.Owner && phoenixaccount.ValidOwner(agent), ActionVerificationRequired: true,
 		Capabilities: after.Cross.Capabilities, Positions: positions, LiquidationModel: result.LiquidationModel, RiskTier: result.RiskTier, PendingFundingQuoteLots: result.UnsettledFundingQuoteLots}
 	details.CanIncreaseRisk = phoenixAccess(details.Capabilities.Actions.RiskIncreasingTrade) && result.RiskTier == "Safe"
 	details.CanReduceRisk = phoenixAccess(details.Capabilities.Actions.RiskReducingTrade)
@@ -252,34 +241,33 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 		reason = "Phoenix account trading capabilities unavailable"
 	}
 	details.AccountReady = reason == ""
-	f.checkExecutionReadiness(ctx, details)
+	if f.factory.orderJournal != nil {
+		pending, err := f.factory.orderJournal.Unresolved(ctx, before.Owner)
+		details.orderOutcomeUnknown = err != nil || pending
+	}
 	updated := after.PositionsUpdatedAt
 	details.PositionsUpdatedAt = &updated
 	observed := after.ObservedAt
-	if authorityAt.Before(observed) {
-		observed = authorityAt
+	if viewAt.Before(observed) {
+		observed = viewAt
 	}
 	if source := time.UnixMilli(result.AsOfUnixMS); source.Before(observed) {
 		observed = source
 	}
 	return liveAccountSnapshot{Venue: "phoenix", Account: before.Owner, Connected: true, LastUpdated: observed, PositionsUpdatedAt: after.PositionsUpdatedAt,
-		Equity: equity, Available: available, Positions: positions, UnavailableReason: reason, Phoenix: details}, result, currentMarkets, authorityAt, nil
+		Equity: equity, Available: available, Positions: positions, UnavailableReason: reason, Phoenix: details}, result, currentMarkets, viewAt, nil
 }
 
 func (f *phoenixAccountFeed) Snapshot() liveAccountSnapshot {
 	state := f.state.Snapshot()
 	markets := f.factory.config.Markets.Snapshot()
 	f.mu.Lock()
-	snapshot, result, authorityAt, marketGeneration, sequence := f.snapshot, f.riskResult, f.authorityAt, f.marketGeneration, f.exchangeSequence
+	snapshot, result, marketGeneration, sequence := f.snapshot, f.riskResult, f.marketGeneration, f.exchangeSequence
 	f.mu.Unlock()
 	snapshot.Venue, snapshot.Account = "phoenix", state.Owner
 	if snapshot.Phoenix != nil {
 		details := *snapshot.Phoenix
 		details.Positions = append([]liveAccountPosition{}, details.Positions...)
-		if details.AuthorityCheckedAt != nil {
-			at := *details.AuthorityCheckedAt
-			details.AuthorityCheckedAt = &at
-		}
 		if details.PositionsUpdatedAt != nil {
 			at := *details.PositionsUpdatedAt
 			details.PositionsUpdatedAt = &at
@@ -287,7 +275,6 @@ func (f *phoenixAccountFeed) Snapshot() liveAccountSnapshot {
 		snapshot.Phoenix = &details
 	}
 	reason := snapshot.UnavailableReason
-	verified := false
 	switch {
 	case f.ctx.Err() != nil:
 		reason = "Phoenix account feed stopped"
@@ -300,21 +287,14 @@ func (f *phoenixAccountFeed) Snapshot() liveAccountSnapshot {
 		reason = "Phoenix market state requires risk resynchronization"
 	case result.AccountGeneration != state.Generation || result.AccountSlot != state.Slot || result.AccountSequence != state.Sequence:
 		reason = "Phoenix account changed; risk refresh required"
-	case !phoenixTimeFresh(authorityAt, time.Now(), admissionFreshness):
-		reason = "Phoenix authority verification is stale"
 	case result.ValidUntilUnixMS < time.Now().UnixMilli():
 		reason = "Phoenix risk inputs are stale"
-	default:
-		verified = true
 	}
 	if reason != "" {
 		snapshot.UnavailableReason = reason
 		snapshot.PositionsUpdatedAt = time.Time{}
 		if snapshot.Phoenix != nil {
 			snapshot.Phoenix.AccountReady = false
-			if !verified {
-				snapshot.Phoenix.Authorized = false
-			}
 			snapshot.Phoenix.CanIncreaseRisk = false
 			snapshot.Phoenix.CanReduceRisk = false
 			snapshot.Phoenix.PositionsUpdatedAt = nil
@@ -332,8 +312,8 @@ func (f *phoenixAccountFeed) Snapshot() liveAccountSnapshot {
 func (f *phoenixAccountFeed) invalidateAuthority() {
 	f.mu.Lock()
 	f.authorityRevision++
-	f.authorityAt = time.Time{}
-	f.snapshot.UnavailableReason = "Phoenix authority confirmation required"
+	f.viewAt = time.Time{}
+	f.snapshot.UnavailableReason = "Phoenix agent registration refresh required"
 	f.mu.Unlock()
 	select {
 	case f.wake <- struct{}{}:
@@ -368,7 +348,7 @@ func (f *phoenixAccountFeed) ProjectOpen(ctx context.Context, order helper.Order
 	f.mu.Lock()
 	changed := f.authorityRevision != revision
 	f.mu.Unlock()
-	if changed || after.UnavailableReason != "" || after.Phoenix == nil || !after.Phoenix.Authorized || before.Phoenix.PositionAuthority != after.Phoenix.PositionAuthority {
+	if changed || after.UnavailableReason != "" || after.Phoenix == nil || !after.Phoenix.AuthorizationRecorded || before.Phoenix.RegisteredAgent != after.Phoenix.RegisteredAgent {
 		return helper.RiskResult{}, errors.New("Phoenix authority or account changed during opening projection")
 	}
 	return result, nil

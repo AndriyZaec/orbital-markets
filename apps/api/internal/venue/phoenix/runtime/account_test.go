@@ -54,7 +54,7 @@ func accountRuntime(t *testing.T, h *accountHelper, c *accountChain) *Runtime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := startRuntime(context.Background(), h, c, service, 10000)
+	r := startRuntime(context.Background(), h, c, service)
 	t.Cleanup(r.Close)
 	return r
 }

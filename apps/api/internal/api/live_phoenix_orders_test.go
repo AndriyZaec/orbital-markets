@@ -32,10 +32,18 @@ type phoenixSubmitTestBackend struct {
 	sends              atomic.Int32
 	afterCoSign        func()
 	denyInfrastructure atomic.Bool
+	readinessCalls     atomic.Int32
 }
 
 func (b *phoenixSubmitTestBackend) Readiness(context.Context) phoenixruntime.Status {
+	b.readinessCalls.Add(1)
 	return phoenixruntime.Status{Ready: !b.denyInfrastructure.Load(), Reason: "test_infrastructure"}
+}
+func (b *phoenixSubmitTestBackend) LatestBlockhash(ctx context.Context) (rpc.Blockhash, error) {
+	if b.denyInfrastructure.Load() {
+		return rpc.Blockhash{}, errors.New("RPC unavailable")
+	}
+	return b.phoenixOrderTestBackend.LatestBlockhash(ctx)
 }
 func (b *phoenixSubmitTestBackend) FlightReadiness() phoenixruntime.FlightStatus {
 	return phoenixruntime.FlightStatus{Ready: !b.denyFlight.Load(), BuilderAuthority: b.BuilderAuthority()}
@@ -136,5 +144,52 @@ func TestPhoenixFeedSubmitsExactSDKPacketOnceAndNeverTurnsAcceptanceIntoFill(t *
 	}
 	if err := feed.WaitForLeverage(context.Background(), "SOL", 5); err != nil {
 		t.Fatal("unsupported leverage was not a no-op", err)
+	}
+}
+
+func TestPhoenixSubmitRechecksAuthorityAfterPassiveReadiness(t *testing.T) {
+	for _, action := range []string{"open", "close", "unwind", "emergency_close"} {
+		t.Run(action, func(t *testing.T) {
+			var b *phoenixSubmitTestBackend
+			f, _, _, _, feed := newPhoenixPrepareFixture(t, func(f *phoenixAccountFixture, base *phoenixOrderTestBackend, _ *phoenixOrderTestMarkets) {
+				b = enablePhoenixSubmitTestBackend(t, f, base)
+			})
+			module, err := phoenixlive.NewLiveModule(context.Background(), &phoenixOrderPreparer{deps: f.server.live, config: f.factory.config, backend: b})
+			if err != nil {
+				t.Fatal(err)
+			}
+			params := phoenixPrepareParams()
+			params.Signer = f.backend.agent
+			var q *domain.SigningRequest
+			if action == "open" {
+				q, err = module.BuildOpen(params)
+			} else {
+				q, err = module.BuildReduce(venue.LiveReduceParams{LiveOrderParams: params, Action: venue.ReduceAction(action)})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.backend.mu.Lock()
+			f.backend.agent = phoenixTestOwner // Replaced outside Orbital after preparation.
+			f.backend.mu.Unlock()
+			before := f.backend.authorityCalls.Load()
+			if err := feed.refreshView(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !feed.Snapshot().Phoenix.LiveReady || f.backend.authorityCalls.Load() != before {
+				t.Fatal("passive refresh performed a chain admission check")
+			}
+			var metadata phoenixlive.SigningMetadata
+			if err := json.Unmarshal(q.VenueMetadata, &metadata); err != nil {
+				t.Fatal(err)
+			}
+			message, _ := base64.StdEncoding.DecodeString(metadata.Built.MessageBase64)
+			key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{2}, 32))
+			signed := domain.SignedAction{RequestID: q.ID, ClientOrderID: q.ClientOrderID, Venue: "phoenix", SignerAddress: params.Signer, Signature: base58.Encode(ed25519.Sign(key, message))}
+			result, err := feed.SubmitSigned(context.Background(), signed, q)
+			if err != nil || result == nil || result.Accepted || result.Error != "Phoenix current agent/slot differs from signed order" || b.sends.Load() != 0 || f.backend.authorityCalls.Load() <= before {
+				t.Fatal("submission did not reject on fresh authority evidence", result, err)
+			}
+		})
 	}
 }

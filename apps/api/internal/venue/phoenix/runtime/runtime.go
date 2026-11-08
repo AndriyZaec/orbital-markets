@@ -188,7 +188,6 @@ type Runtime struct {
 	helper             healthHelper
 	chain              chain
 	relayer            *relayer.Service
-	maxFee             uint64
 	orderComputeBudget helper.ComputeBudget
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -225,45 +224,38 @@ func Start(ctx context.Context, config Config, logger *slog.Logger) (*Runtime, e
 	if err != nil {
 		return nil, err
 	}
-	r := startRuntime(ctx, helperClient, client, service, config.MaxTransactionFeeLamports, config.BuilderAuthority)
+	r := startRuntime(ctx, helperClient, client, service, config.BuilderAuthority)
 	r.orderComputeBudget = budget
 	return r, nil
 }
 
-func startRuntime(ctx context.Context, h healthHelper, c chain, s *relayer.Service, maxFee uint64, builder ...string) *Runtime {
+func startRuntime(ctx context.Context, h healthHelper, c chain, s *relayer.Service, builder ...string) *Runtime {
 	ctx, cancel := context.WithCancel(ctx)
-	r := &Runtime{helper: h, chain: c, relayer: s, maxFee: maxFee, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	r := &Runtime{helper: h, chain: c, relayer: s, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	if len(builder) > 0 {
 		r.builderAuthority = builder[0]
-	}
-	if r.builderAuthority != "" {
-		r.refreshFlight() // Startup verification; failure only blocks Flight readiness.
 	}
 	go func() {
 		defer close(r.done)
 		defer r.helper.Close()
-		flightDone := make(chan struct{})
-		go func() { defer close(flightDone); r.monitorFlight() }()
-		r.relayer.Run(ctx)
-		<-flightDone
+		<-ctx.Done()
 	}()
 	return r
 }
 
-// Close stops balance polling and reaps the helper. Parent cancellation has the
+// Close reaps the helper. Parent cancellation has the
 // same effect; repeated Close calls wait on the same completed lifecycle.
 func (r *Runtime) Close() { r.cancel(); <-r.done }
 
 type Status struct {
-	Ready      bool   `json:"ready"`
-	Reason     string `json:"reason,omitempty"`
-	BalanceLow bool   `json:"balance_low"`
+	Ready                      bool   `json:"ready"`
+	Reason                     string `json:"reason,omitempty"`
+	ActionVerificationRequired bool   `json:"action_verification_required"`
 }
 
-// Readiness uses fresh reads, never a cached successful snapshot. The monitor
-// warns independently at 0.05 SOL; infrastructure budget readiness requires
-// enough SOL for one configured maximum-fee transaction. Actual signing gates
-// the exact quoted fee. Flight registration and account readiness are separate.
+// Readiness is local infrastructure availability, not chain admission. Opening
+// a page or polling status must not read RPC. Every operation still checks its
+// current authority, blockhash, Flight, exact fee and relayer balance on demand.
 func (r *Runtime) Readiness(ctx context.Context) Status {
 	if r.ctx.Err() != nil {
 		return Status{Reason: "stopped"}
@@ -282,18 +274,8 @@ func (r *Runtime) Readiness(ctx context.Context) Status {
 	if err != nil || health.HelperVersion == "" || health.PhoenixRiseVersion != helper.PhoenixRiseVersion {
 		return Status{Reason: "helper_unavailable"}
 	}
-	if _, err := r.chain.LatestBlockhash(ctx); err != nil {
-		return Status{Reason: "rpc_unavailable"}
-	}
-	balance, err := r.relayer.CheckBalance(ctx)
-	if err != nil {
-		return Status{Reason: "balance_unavailable"}
-	}
 	if r.ctx.Err() != nil {
 		return Status{Reason: "stopped"}
 	}
-	if balance.Lamports < r.maxFee {
-		return Status{Reason: "insufficient_fee_budget", BalanceLow: balance.Low}
-	}
-	return Status{Ready: true, BalanceLow: balance.Low}
+	return Status{Ready: true, ActionVerificationRequired: true}
 }

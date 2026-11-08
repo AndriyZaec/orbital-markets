@@ -62,9 +62,10 @@ func (h *fakeHelper) DecodeTraderAuthority(context.Context, helper.DecodeAuthori
 }
 
 type fakeChain struct {
-	balance atomic.Uint64
-	failure atomic.Int32
-	reads   atomic.Int32
+	balance   atomic.Uint64
+	failure   atomic.Int32
+	reads     atomic.Int32
+	hashReads atomic.Int32
 }
 
 func (c *fakeChain) AccountInfo(context.Context, string, uint64, bool) (rpc.AccountInfo, error) {
@@ -83,6 +84,7 @@ func (c *fakeChain) FinalizedBlockhashValidity(context.Context, string, uint64) 
 func (c *fakeChain) BlockHeight(context.Context, uint64) (uint64, error)           { return 100, nil }
 func (c *fakeChain) FeeForMessage(context.Context, []byte, uint64) (uint64, error) { return 10000, nil }
 func (c *fakeChain) LatestBlockhash(ctx context.Context) (rpc.Blockhash, error) {
+	c.hashReads.Add(1)
 	if ctx.Err() != nil {
 		return rpc.Blockhash{}, ctx.Err()
 	}
@@ -117,38 +119,23 @@ func testRuntime(t *testing.T, ctx context.Context, h *fakeHelper, c *fakeChain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := startRuntime(ctx, h, c, service, 10000)
+	r := startRuntime(ctx, h, c, service)
 	t.Cleanup(r.Close)
 	return r
 }
 
-func TestInfrastructureReadinessUsesCurrentComponents(t *testing.T) {
+func TestInfrastructureReadinessAndStartupDoNotReadRPC(t *testing.T) {
 	c := &fakeChain{}
-	c.balance.Store(relayer.LowBalanceLamports)
 	r := testRuntime(t, context.Background(), &fakeHelper{}, c)
-	if status := r.Readiness(context.Background()); !status.Ready || status.BalanceLow {
-		t.Fatalf("healthy status=%+v", status)
+	for _, failure := range []int32{0, 1, 2} {
+		c.failure.Store(failure)
+		if status := r.Readiness(context.Background()); !status.Ready || !status.ActionVerificationRequired {
+			t.Fatalf("local availability must defer chain checks to action: %+v", status)
+		}
 	}
-	c.balance.Store(10000)
-	if status := r.Readiness(context.Background()); !status.Ready || !status.BalanceLow {
-		t.Fatalf("affordable low balance=%+v", status)
-	}
-	c.balance.Store(9999)
-	if status := r.Readiness(context.Background()); status.Ready || status.Reason != "insufficient_fee_budget" {
-		t.Fatalf("insufficient status=%+v", status)
-	}
-	c.balance.Store(relayer.LowBalanceLamports)
-	c.failure.Store(2)
-	if status := r.Readiness(context.Background()); status.Ready || status.Reason != "balance_unavailable" {
-		t.Fatalf("balance status=%+v", status)
-	}
-	c.failure.Store(1)
-	if status := r.Readiness(context.Background()); status.Ready || status.Reason != "rpc_unavailable" {
-		t.Fatalf("RPC status=%+v", status)
-	}
-	c.failure.Store(0)
-	if status := r.Readiness(context.Background()); !status.Ready {
-		t.Fatalf("did not recover after fresh reads: %+v", status)
+	r.Close()
+	if c.reads.Load() != 0 || c.hashReads.Load() != 0 {
+		t.Fatal("startup/status performed idle RPC", c.reads.Load(), c.hashReads.Load())
 	}
 }
 
@@ -208,7 +195,9 @@ func TestRuntimeWithPinnedHelperAndRPC(t *testing.T) {
 	if path == "" {
 		t.Skip("set ORBITAL_PHOENIX_HELPER_TEST_PATH to built phoenix-helper")
 	}
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
 		var request struct {
 			ID     uint64 `json:"id"`
 			Method string `json:"method"`
@@ -238,6 +227,15 @@ func TestRuntimeWithPinnedHelperAndRPC(t *testing.T) {
 	defer r.Close()
 	if status := r.Readiness(ctx); !status.Ready {
 		t.Fatalf("runtime status=%+v", status)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("startup/status used RPC with real helper", calls.Load())
+	}
+	if _, err := r.LatestBlockhash(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.relayer.CheckBalance(ctx); err != nil || calls.Load() != 2 {
+		t.Fatal("explicit action did not use fresh RPC", calls.Load(), err)
 	}
 	cancel()
 	r.Close()

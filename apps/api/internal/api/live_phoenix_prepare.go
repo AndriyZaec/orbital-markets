@@ -11,6 +11,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix"
 	phoenixaccount "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/account"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/delegation"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/helper"
 	phoenixlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/live"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/rpc"
@@ -26,6 +27,7 @@ type PhoenixOrderBackend interface {
 	LatestBlockhash(context.Context) (rpc.Blockhash, error)
 	BlockHeight(context.Context, uint64) (uint64, error)
 	FlightProof(context.Context, uint64) (phoenixlive.FlightProof, error)
+	AccountAuthority(context.Context, string, uint64) (delegation.Authority, error)
 }
 
 type phoenixOrderPreparer struct {

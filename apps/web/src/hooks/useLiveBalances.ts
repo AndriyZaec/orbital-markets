@@ -21,7 +21,7 @@ interface VenueBalance {
   age_seconds?: number
   reason?: string
   unavailable?: boolean
-  phoenix?: { live_ready: boolean; live_unavailable_reason?: string }
+  phoenix?: { live_ready: boolean; live_unavailable_reason?: string; registered_agent?: string; action_verification_required?: boolean }
 }
 
 interface Balances {

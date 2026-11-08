@@ -39,6 +39,7 @@ func (m *phoenixTestMarkets) Snapshot() phoenix.MarketStreamSnapshot {
 }
 
 type phoenixTestBackend struct {
+	authorityCalls      atomic.Int32
 	mu                  sync.Mutex
 	agent               string
 	riskErr             error
@@ -50,6 +51,7 @@ type phoenixTestBackend struct {
 }
 
 func (b *phoenixTestBackend) AccountAuthority(_ context.Context, owner string, slot uint64) (delegation.Authority, error) {
+	b.authorityCalls.Add(1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.minSlot = slot
@@ -267,7 +269,7 @@ func TestPhoenixAccountRegistryBalancesAndReadOnlyBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := statuses["phoenix"]
-	if !status.Fresh || status.Phoenix == nil || !status.Phoenix.AccountReady || !status.Phoenix.Authorized || status.Phoenix.LiveReady || !status.Phoenix.CanReduceRisk || len(status.Phoenix.Positions) != 1 {
+	if !status.Fresh || status.Phoenix == nil || !status.Phoenix.AccountReady || !status.Phoenix.AuthorizationRecorded || !status.Phoenix.ActionVerificationRequired || status.Phoenix.LiveReady || !status.Phoenix.CanReduceRisk || len(status.Phoenix.Positions) != 1 {
 		t.Fatalf("unexpected readiness: %s", response.Body.String())
 	}
 	position := status.Phoenix.Positions[0]
@@ -289,23 +291,24 @@ func TestPhoenixAccountRegistryBalancesAndReadOnlyBoundary(t *testing.T) {
 	f.backend.mu.Lock()
 	slot := f.backend.minSlot
 	f.backend.mu.Unlock()
-	if slot < 100 {
-		t.Fatal("authority read did not cover account slot")
+	if slot != 0 || f.backend.authorityCalls.Load() != 0 {
+		t.Fatal("account ensure/balances issued idle authority RPC")
 	}
 }
 
-func TestPhoenixAccountAuthorityChangesAndReadFailuresFailClosed(t *testing.T) {
+func TestPhoenixAccountRefreshDoesNotPollChainAndKeepsRegistrationSeparate(t *testing.T) {
 	f := newPhoenixAccountFixture(t)
 	lease, feed := f.ready(t)
 	defer lease.Release()
 	f.backend.mu.Lock()
 	f.backend.agent = phoenixTestOwner
+	f.backend.authorityErr = errors.New("RPC unavailable")
 	f.backend.mu.Unlock()
-	if err := feed.refreshView(context.Background()); err == nil {
-		t.Fatal("accepted externally revoked delegate")
+	if err := feed.refreshView(context.Background()); err != nil {
+		t.Fatal("passive account view required RPC", err)
 	}
-	if got := feed.Snapshot(); got.UnavailableReason == "" || got.Phoenix.AccountReady || !got.PositionsUpdatedAt.IsZero() {
-		t.Fatal("external revoke retained account readiness")
+	if got := feed.Snapshot(); !got.Phoenix.AccountReady || !got.Phoenix.ActionVerificationRequired || got.Phoenix.RegisteredAgent != phoenixTestAgent || f.backend.authorityCalls.Load() != 0 {
+		t.Fatal("passive view claimed fresh authority or polled chain", got.Phoenix)
 	}
 	f.backend.mu.Lock()
 	f.backend.agent = phoenixTestAgent
@@ -316,8 +319,11 @@ func TestPhoenixAccountAuthorityChangesAndReadFailuresFailClosed(t *testing.T) {
 	if err := f.store.DeleteAgentAuthorization(context.Background(), "phoenix", phoenixTestOwner, phoenixTestAgent); err != nil {
 		t.Fatal(err)
 	}
-	if err := feed.refreshView(context.Background()); err == nil {
-		t.Fatal("chain authority alone granted Orbital authorization")
+	if err := feed.refreshView(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := feed.Snapshot(); !got.Phoenix.AccountReady || got.Phoenix.AuthorizationRecorded || got.Phoenix.LiveReady {
+		t.Fatal("missing registration hid account data or granted trading readiness", got.Phoenix)
 	}
 	if err := f.store.UpsertAgentAuthorization(context.Background(), "phoenix", phoenixTestOwner, phoenixTestAgent); err != nil {
 		t.Fatal(err)
@@ -339,16 +345,6 @@ func TestPhoenixAccountGapMarketDisconnectAndExpiryInvalidateCachedView(t *testi
 		t.Fatal("market disconnect reused scanner fallback")
 	}
 	f.markets.disconnected.Store(false)
-	feed.mu.Lock()
-	checkedAt := feed.authorityAt
-	feed.authorityAt = time.Now().Add(-31 * time.Second)
-	feed.mu.Unlock()
-	if !strings.Contains(feed.Snapshot().UnavailableReason, "authority verification is stale") {
-		t.Fatal("expired authority proof remained ready")
-	}
-	feed.mu.Lock()
-	feed.authorityAt = checkedAt
-	feed.mu.Unlock()
 	feed.mu.Lock()
 	feed.riskResult.ValidUntilUnixMS = time.Now().Add(-time.Second).UnixMilli()
 	feed.mu.Unlock()
@@ -389,7 +385,7 @@ func TestPhoenixCapabilitiesAndRegistryEviction(t *testing.T) {
 	if err := feed.refreshView(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := feed.Snapshot(); got.Phoenix.AccountReady || !got.Phoenix.Authorized || got.Phoenix.CanIncreaseRisk || got.Phoenix.CanReduceRisk {
+	if got := feed.Snapshot(); got.Phoenix.AccountReady || !got.Phoenix.AuthorizationRecorded || got.Phoenix.CanIncreaseRisk || got.Phoenix.CanReduceRisk {
 		t.Fatalf("frozen readiness: %+v", got.Phoenix)
 	}
 	f.send <- map[string]any{"channel": "traderState", "authority": phoenixTestOwner, "traderPdaIndex": 0, "slot": 102, "messageType": "delta", "deltas": []any{map[string]any{
