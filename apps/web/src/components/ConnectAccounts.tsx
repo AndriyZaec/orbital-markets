@@ -7,7 +7,7 @@ import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import { useTelegramLink } from '@/hooks/useTelegramLink'
 import { trackAnalytics } from '@/lib/analytics'
-import { hasActiveLiveExposureForWallet } from '@/lib/live-events'
+import { hasActiveLiveExposure, hasActiveLiveExposureForWallet } from '@/lib/live-events'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { cn } from '@/lib/utils'
 import type { WalletKind } from '@/agents/types'
@@ -415,6 +415,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 {venue.id === 'phoenix' ? (
                   <PhoenixAuthorization key={tradingAgents.phoenix.ownerAddress ?? 'no-owner'}
                     disabled={agentChangeBlocked || disconnectBlocked}
+                    hasActiveExposure={hasActiveLiveExposure(positions.filter((position) => position.venue_a === 'phoenix' || position.venue_b === 'phoenix'))}
                     onConnect={() => handleConnect('phoenix')}
                     onDisconnect={() => handleDisconnect('phoenix')} />
                 ) : <div className="flex items-center justify-end">

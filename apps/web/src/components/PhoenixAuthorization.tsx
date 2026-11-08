@@ -6,14 +6,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 
 // Phoenix-specific actions live inside the shared account card. Delegate
 // replacement and confirmed revoke retain their existing owner-bound lifecycle.
-export function PhoenixAuthorization({ disabled, onConnect, onDisconnect }: {
-  disabled: boolean; onConnect: () => void; onDisconnect?: () => void
+export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, onDisconnect }: {
+  disabled: boolean; hasActiveExposure: boolean; onConnect: () => void; onDisconnect?: () => void
 }) {
   const agents = useTradingAgents()
   const wallet = useWallet()
   const owner = wallet.connected ? wallet.publicKey?.toBase58() : null
   const state = agents.phoenix
   const [replacement, setReplacement] = useState<{ owner: string; authority: string } | null>(null)
+  const [revokeOwner, setRevokeOwner] = useState<string | null>(null)
   const busy = ['restoring', 'authorizing', 'disconnecting'].includes(state.status)
 
   const authorize = async (replace = false, expectedOwner = owner, expectedAuthority?: string) => {
@@ -37,11 +38,30 @@ export function PhoenixAuthorization({ disabled, onConnect, onDisconnect }: {
           <Button size="xs" disabled={disabled || busy || !wallet.signTransaction} onClick={() => void authorize()}>
             {state.status === 'ready' ? 'Reauthorize Phoenix' : state.status === 'pending' ? 'Resume Phoenix' : 'Authorize Phoenix'}
           </Button>
-          <Button size="xs" variant="outline" disabled={disabled || busy || state.status === 'missing' || !wallet.signTransaction} onClick={() => void agents.revokePhoenix().catch(() => {})}>Revoke Phoenix</Button>
+          <Button size="xs" variant="outline" disabled={disabled || busy || state.status === 'missing' || !wallet.signTransaction} onClick={() => {
+            if (hasActiveExposure) setRevokeOwner(owner)
+            else void agents.revokePhoenix().catch(() => {})
+          }}>Revoke Phoenix</Button>
           {onDisconnect && <Button size="xs" variant="ghost" disabled={disabled || busy} onClick={onDisconnect}>Disconnect Solana</Button>}
         </>}
       </div>
     </div>
+    <Dialog open={!!revokeOwner && revokeOwner === owner} onOpenChange={(open) => { if (!open) setRevokeOwner(null) }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Revoke Phoenix authorization?</DialogTitle>
+          <DialogDescription>You have active Phoenix exposure. Orbital will lose trading access to your Phoenix account. Positions remain open; close them first or manage them directly on Phoenix.</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setRevokeOwner(null)}>Cancel</Button>
+          <Button disabled={disabled || busy || !wallet.signTransaction} onClick={() => {
+            const confirmedOwner = revokeOwner
+            setRevokeOwner(null)
+            if (confirmedOwner && confirmedOwner === owner) void agents.revokePhoenix().catch(() => {})
+          }}>Revoke authorization</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Dialog open={!!replacement && replacement.owner === owner} onOpenChange={(open) => { if (!open) setReplacement(null) }}>
       <DialogContent>
         <DialogHeader>

@@ -18,7 +18,7 @@ afterEach(cleanup)
 
 it('presents Phoenix execution authorization and requests explicit delegate replacement', async () => {
   mocks.authorize.mockRejectedValueOnce(Object.assign(new Error('replacement required'), { name: 'PhoenixReplacementRequired', authority: 'existing-delegate' }))
-  render(<PhoenixAuthorization disabled={false} onConnect={() => {}} />)
+  render(<PhoenixAuthorization disabled={false} hasActiveExposure={false} onConnect={() => {}} />)
   expect(screen.getByText(/Trade using your existing Phoenix cross account\./)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Authorize Phoenix' }))
   await screen.findByRole('dialog')
@@ -31,11 +31,30 @@ it('presents Phoenix execution authorization and requests explicit delegate repl
 
 it('does not reuse a replacement confirmation after the connected owner changes', async () => {
   mocks.authorize.mockRejectedValueOnce(Object.assign(new Error('replacement required'), { name: 'PhoenixReplacementRequired', authority: 'existing-delegate' }))
-  const view = render(<PhoenixAuthorization disabled={false} onConnect={() => {}} />)
+  const view = render(<PhoenixAuthorization disabled={false} hasActiveExposure={false} onConnect={() => {}} />)
   fireEvent.click(screen.getByRole('button', { name: 'Authorize Phoenix' }))
   await screen.findByRole('dialog')
   mocks.owner = 'owner-B'
-  view.rerender(<PhoenixAuthorization disabled={false} onConnect={() => {}} />)
+  view.rerender(<PhoenixAuthorization disabled={false} hasActiveExposure={false} onConnect={() => {}} />)
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   expect(mocks.authorize).toHaveBeenCalledTimes(1)
+})
+
+it('revokes directly without an extra confirmation when there is no active exposure', async () => {
+  mocks.status = 'ready'
+  render(<PhoenixAuthorization disabled={false} hasActiveExposure={false} onConnect={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Revoke Phoenix' }))
+  await waitFor(() => expect(mocks.revoke).toHaveBeenCalledTimes(1))
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('does not reuse an exposure confirmation after the connected owner changes', async () => {
+  mocks.status = 'ready'
+  const view = render(<PhoenixAuthorization disabled={false} hasActiveExposure onConnect={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Revoke Phoenix' }))
+  await screen.findByRole('dialog', { name: 'Revoke Phoenix authorization?' })
+  mocks.owner = 'owner-B'
+  view.rerender(<PhoenixAuthorization disabled={false} hasActiveExposure onConnect={() => {}} />)
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(mocks.revoke).not.toHaveBeenCalled()
 })
