@@ -1,8 +1,17 @@
 import asterLogo from '@/assets/aster-logo.svg'
 import hlLogo from '@/assets/hl-logo.svg'
 import pacificaLogo from '@/assets/pacifica-logo.svg'
+import phoenixLogo from '@/assets/phoenix-logo.svg'
 
 const VENUE_METADATA = {
+  phoenix: {
+    label: 'Phoenix',
+    shortLabel: 'PHX',
+    // Official orange mark: https://phoenix.trade/img/phoenix-mark-orange-sm.svg
+    color: '#ff8d2a',
+    textColor: 'text-venue-phoenix',
+    logo: phoenixLogo,
+  },
   pacifica: {
     label: 'Pacifica',
     shortLabel: 'PAC',

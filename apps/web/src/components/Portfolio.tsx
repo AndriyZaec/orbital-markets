@@ -799,7 +799,7 @@ const STATUS_VIEW: Record<
 }
 
 const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
-  phoenix: '',
+  phoenix: 'bg-[radial-gradient(circle_at_8%_0%,color-mix(in_srgb,var(--color-venue-phoenix)_5.5%,transparent),transparent_52%)]',
   pacifica: 'bg-[radial-gradient(circle_at_8%_0%,rgba(34,211,238,0.055),transparent_52%)]',
   hyperliquid: 'bg-[radial-gradient(circle_at_8%_0%,rgba(139,92,246,0.055),transparent_52%)]',
   aster: 'bg-[radial-gradient(circle_at_8%_0%,rgba(245,158,11,0.055),transparent_52%)]',

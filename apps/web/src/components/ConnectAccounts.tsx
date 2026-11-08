@@ -9,6 +9,7 @@ import { useTelegramLink } from '@/hooks/useTelegramLink'
 import { trackAnalytics } from '@/lib/analytics'
 import { hasActiveLiveExposureForWallet } from '@/lib/live-events'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { cn } from '@/lib/utils'
 import type { WalletKind } from '@/agents/types'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,6 +37,7 @@ const VENUES: VenueDef[] = [
   { id: 'pacifica', name: venueMetadata('pacifica').label, logo: venueMetadata('pacifica').logo },
   { id: 'hyperliquid', name: venueMetadata('hyperliquid').label, logo: venueMetadata('hyperliquid').logo },
   { id: 'aster', name: venueMetadata('aster').label, logo: venueMetadata('aster').logo },
+  { id: 'phoenix', name: venueMetadata('phoenix').label, logo: venueMetadata('phoenix').logo },
 ]
 
 interface Props {
@@ -117,6 +119,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     pacifica,
     hyperliquid,
     aster,
+    phoenix,
     aggregate,
     ensureStatus,
     ensureError,
@@ -175,12 +178,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   useEffect(() => {
     const current: Record<VenueId, boolean> = {
-      phoenix: pacifica.walletConnected,
+      phoenix: phoenix.walletConnected,
       pacifica: pacifica.walletConnected,
       hyperliquid: hyperliquid.walletConnected,
       aster: aster.walletConnected,
     }
-    for (const venue of ['pacifica', 'hyperliquid', 'aster'] as const) {
+    for (const venue of ['pacifica', 'hyperliquid', 'aster', 'phoenix'] as const) {
       if (
         current[venue]
         && !previousWalletConnectedRef.current[venue]
@@ -191,12 +194,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       }
     }
     previousWalletConnectedRef.current = current
-  }, [pacifica.walletConnected, hyperliquid.walletConnected, aster.walletConnected])
+  }, [pacifica.walletConnected, hyperliquid.walletConnected, aster.walletConnected, phoenix.walletConnected])
 
   const handleConnect = (venueId: string) => {
-    if (venueId === 'pacifica') {
-      requestManualConnect('pacifica')
-      window.setTimeout(() => { manualConnectRequestedRef.current.pacifica = false }, 30_000)
+    if (venueId === 'pacifica' || venueId === 'phoenix') {
+      requestManualConnect(venueId)
+      window.setTimeout(() => { manualConnectRequestedRef.current[venueId] = false }, 30_000)
       setSolModalVisible(true)
       return
     }
@@ -239,7 +242,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   }
 
   const handleDisconnect = (venueId: VenueId) => {
-    const wallet = venueId === 'pacifica' ? 'solana' : 'evm'
+    const wallet = venueId === 'pacifica' || venueId === 'phoenix' ? 'solana' : 'evm'
     if (hasActiveLiveExposureForWallet(positions, wallet)) {
       setPendingDisconnect(wallet)
       return
@@ -266,6 +269,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     if (venueId === 'pacifica') return pacifica
     if (venueId === 'hyperliquid') return hyperliquid
     if (venueId === 'aster') return aster
+    if (venueId === 'phoenix') return phoenix
     return null
   }
 
@@ -330,16 +334,18 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             const readiness = getReadiness(venue.id)
             const isReady = readiness?.status === 'ready'
             const isErr = readiness?.status === 'error'
+            const solanaVenue = venue.id === 'pacifica' || venue.id === 'phoenix'
             const disconnectBlocked = agentChangeBlocked || readiness?.agentStatus === 'restoring'
               || (venue.id === 'pacifica' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))
+              || (venue.id === 'phoenix' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.pacifica.status))
               || readiness?.agentStatus === 'authorizing' || readiness?.agentStatus === 'disconnecting'
-              || (venue.id !== 'pacifica' && (hyperliquid.agentStatus === 'restoring'
+              || (!solanaVenue && (hyperliquid.agentStatus === 'restoring'
                 || hyperliquid.agentStatus === 'authorizing' || hyperliquid.agentStatus === 'disconnecting'
                 || aster.agentStatus === 'restoring' || aster.agentStatus === 'authorizing'
                 || aster.agentStatus === 'disconnecting'))
 
             return (
-              <div key={venue.id}
+              <div key={venue.id} role="group" aria-label={`${venue.name} account`}
                 className={`rounded-lg border px-3 py-3 ${
                   isReady
                     ? 'border-green-500/20 bg-green-500/[0.03]'
@@ -352,7 +358,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 <div className="flex items-center gap-2.5 mb-2">
                   <div className="size-8 rounded-md bg-white/[0.04] border border-border flex items-center justify-center shrink-0 overflow-hidden">
                     {venue.logo ? (
-                      <img src={venue.logo} alt={venue.name} className="size-full object-cover" />
+                      <img src={venue.logo} alt={venue.name} className={cn('object-contain', venue.id === 'phoenix' ? 'size-6' : 'size-full')} />
                     ) : (
                       <span className="text-xs font-bold text-muted-foreground">{venue.name[0]}</span>
                     )}
@@ -406,7 +412,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 )}
 
                 {/* Action */}
-                <div className="flex items-center justify-end">
+                {venue.id === 'phoenix' ? (
+                  <PhoenixAuthorization key={tradingAgents.phoenix.ownerAddress ?? 'no-owner'}
+                    disabled={agentChangeBlocked || disconnectBlocked}
+                    onConnect={() => handleConnect('phoenix')}
+                    onDisconnect={() => handleDisconnect('phoenix')} />
+                ) : <div className="flex items-center justify-end">
                   {readiness?.walletConnected ? (
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
                       {!readiness.agentReady && (
@@ -449,13 +460,11 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       Connect
                     </button>
                   )}
-                </div>
+                </div>}
 
               </div>
             )
           })}
-
-          <PhoenixAuthorization key={tradingAgents.phoenix.ownerAddress ?? 'no-owner'} disabled={agentChangeBlocked || ['authorizing', 'disconnecting'].includes(tradingAgents.pacifica.status)} onConnect={() => handleConnect('pacifica')} />
 
           {showTelegram && (
             <div className="py-1 animate-in fade-in-0 duration-200">

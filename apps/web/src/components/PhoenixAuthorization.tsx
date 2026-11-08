@@ -1,18 +1,18 @@
 import { useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
-import { useVenueReadiness } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 
-export function PhoenixAuthorization({ disabled, onConnect }: { disabled: boolean; onConnect: () => void }) {
+// Phoenix-specific actions live inside the shared account card. Delegate
+// replacement and confirmed revoke retain their existing owner-bound lifecycle.
+export function PhoenixAuthorization({ disabled, onConnect, onDisconnect }: {
+  disabled: boolean; onConnect: () => void; onDisconnect?: () => void
+}) {
   const agents = useTradingAgents()
   const wallet = useWallet()
   const owner = wallet.connected ? wallet.publicKey?.toBase58() : null
   const state = agents.phoenix
-  const { phoenix: readiness } = useVenueReadiness()
   const [replacement, setReplacement] = useState<{ owner: string; authority: string } | null>(null)
   const busy = ['restoring', 'authorizing', 'disconnecting'].includes(state.status)
 
@@ -27,28 +27,21 @@ export function PhoenixAuthorization({ disabled, onConnect }: { disabled: boolea
   }
 
   return <>
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle>Phoenix <Badge variant="secondary">{readiness.status === 'ready' ? 'Live ready' : 'Not ready'}</Badge></CardTitle>
-        <CardDescription>Trade using your existing Phoenix cross account.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <p className="text-xs text-muted-foreground">Authorize a browser-local agent for your existing Phoenix cross account. Disconnect revokes on-chain before deleting the local key.</p>
-        {owner && <p className="truncate font-mono text-xs" title={owner}>{owner}</p>}
-        <p className="text-xs" role="status">{!owner ? 'Connect a Solana owner wallet' : state.status === 'ready' ? 'Agent authorized' : state.status === 'pending' ? 'Pending verification — key preserved' : state.status === 'restoring' ? 'Verifying on-chain authority…' : state.status === 'authorizing' ? 'Awaiting owner approval / confirmation…' : state.status === 'disconnecting' ? 'Confirming revoke…' : 'Authorization required'}</p>
-        {state.error && <p className="text-xs text-destructive" role="alert">{state.error}</p>}
-        {state.status === 'ready' && readiness.blockingReasons.map((reason) => <p key={reason} className="text-xs text-muted-foreground">{reason}</p>)}
-        {owner && !wallet.signTransaction && <p className="text-xs text-muted-foreground">This wallet must support transaction signing.</p>}
-      </CardContent>
-      <CardFooter className="flex-wrap justify-end gap-2">
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">Trade using your existing Phoenix cross account. Disconnect revokes on-chain before deleting the local key.</p>
+      <p className="text-xs" role="status">{!owner ? 'Connect a Solana owner wallet' : state.status === 'ready' ? 'Agent authorized' : state.status === 'pending' ? 'Pending verification — key preserved' : state.status === 'restoring' ? 'Verifying on-chain authority…' : state.status === 'authorizing' ? 'Awaiting owner approval / confirmation…' : state.status === 'disconnecting' ? 'Confirming revoke…' : 'Authorization required'}</p>
+      {state.error && <p className="text-xs text-destructive" role="alert">{state.error}</p>}
+      {owner && !wallet.signTransaction && <p className="text-xs text-muted-foreground">This wallet must support transaction signing.</p>}
+      <div className="flex flex-wrap justify-end gap-2">
         {!owner ? <Button size="xs" onClick={onConnect}>Connect Solana</Button> : <>
           <Button size="xs" disabled={disabled || busy || !wallet.signTransaction} onClick={() => void authorize()}>
             {state.status === 'ready' ? 'Reauthorize Phoenix' : state.status === 'pending' ? 'Resume Phoenix' : 'Authorize Phoenix'}
           </Button>
           <Button size="xs" variant="outline" disabled={disabled || busy || state.status === 'missing' || !wallet.signTransaction} onClick={() => void agents.revokePhoenix().catch(() => {})}>Revoke Phoenix</Button>
+          {onDisconnect && <Button size="xs" variant="ghost" disabled={disabled || busy} onClick={onDisconnect}>Disconnect Solana</Button>}
         </>}
-      </CardFooter>
-    </Card>
+      </div>
+    </div>
     <Dialog open={!!replacement && replacement.owner === owner} onOpenChange={(open) => { if (!open) setReplacement(null) }}>
       <DialogContent>
         <DialogHeader>

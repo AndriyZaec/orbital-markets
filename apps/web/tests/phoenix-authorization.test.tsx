@@ -19,7 +19,7 @@ afterEach(cleanup)
 it('presents Phoenix execution authorization and requests explicit delegate replacement', async () => {
   mocks.authorize.mockRejectedValueOnce(Object.assign(new Error('replacement required'), { name: 'PhoenixReplacementRequired', authority: 'existing-delegate' }))
   render(<PhoenixAuthorization disabled={false} onConnect={() => {}} />)
-  expect(screen.getByText('Trade using your existing Phoenix cross account.')).toBeTruthy()
+  expect(screen.getByText(/Trade using your existing Phoenix cross account\./)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Authorize Phoenix' }))
   await screen.findByRole('dialog')
   expect(screen.getByText('existing-delegate')).toBeTruthy()

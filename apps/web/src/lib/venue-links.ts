@@ -8,6 +8,9 @@ export function venueTradeUrl(venue: string, symbol: string): string | null {
   const normalizedVenue = venue.trim().toLowerCase()
   const base = venueTradeBases[normalizedVenue]
   let normalizedSymbol = symbol.trim().toUpperCase()
+  // The canonical Phoenix terminal selects markets in-app; use its supported
+  // entry point rather than inventing a /trade/:symbol route.
+  if (normalizedVenue === 'phoenix') return normalizedSymbol ? 'https://phoenix.trade/' : null
   if (!base || !normalizedSymbol) return null
   if (normalizedVenue === 'aster' && !normalizedSymbol.endsWith('USDT')) {
     normalizedSymbol += 'USDT'
