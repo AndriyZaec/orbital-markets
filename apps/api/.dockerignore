@@ -7,6 +7,7 @@
 **/*.db-wal
 **/tmp
 **/bin
+**/target
 **/.env
 **/.env.*
 apps/web
