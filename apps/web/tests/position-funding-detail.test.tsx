@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PositionFundingDetail } from '../src/components/PositionFundingDetail'
 import { LivePositionPanel } from '../src/components/LivePositionDetail'
@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hooks/useLivePositions', () => ({
-  useLivePositions: () => ({ positions: [position, closedPosition], loading: false, error: null, refetch: mocks.positionsRefetch }),
+  useLivePositions: () => ({ positions: [mocks.positionOverride ?? position, closedPosition], loading: false, error: null, refetch: mocks.positionsRefetch }),
 }))
 
 vi.mock('@/hooks/useVenueReadiness', () => ({
@@ -141,6 +141,41 @@ afterEach(() => {
 })
 
 describe('position-backed funding chart', () => {
+  it('shows Phoenix pending separately and keeps total unchanged when funding settles', () => {
+    mocks.chartContext = availableContext
+    const phoenixPosition: LivePosition = {
+      ...position, venue_a: 'phoenix', funding_pnl_source: 'realized', price_pnl: 10, funding_pnl: 4, total_pnl: 16,
+      phoenix_pending_funding: { amount_usd: 2, as_of: '2026-11-08T12:00:00Z' },
+    }
+    mocks.positionOverride = phoenixPosition
+    const tree = () => <LivePositionPanel position={phoenixPosition} onClose={() => {}} />
+    const { rerender } = render(tree())
+    expect(within(screen.getByText('Phoenix Pending Funding').parentElement!).getByText('+$2.00')).toBeTruthy()
+    expect(within(screen.getByText('Realized Funding').parentElement!).getByText('+$4.00')).toBeTruthy()
+    expect(within(screen.getByText('Total PnL').parentElement!).getByText('+$16.00')).toBeTruthy()
+
+    mocks.positionOverride = { ...phoenixPosition, funding_pnl: 6, phoenix_pending_funding: { amount_usd: 0 } }
+    rerender(tree())
+    expect(within(screen.getByText('Phoenix Pending Funding').parentElement!).getByText('+$0.00')).toBeTruthy()
+    expect(within(screen.getByText('Realized Funding').parentElement!).getByText('+$6.00')).toBeTruthy()
+    expect(within(screen.getByText('Total PnL').parentElement!).getByText('+$16.00')).toBeTruthy()
+  })
+
+  it('shows unavailable Phoenix funding and partial totals in the panel and table', () => {
+    mocks.chartContext = availableContext
+    mocks.positionOverride = {
+      ...position, venue_a: 'phoenix', funding_pnl_source: 'realized', funding_pnl: 4, total_pnl: 4,
+      phoenix_pending_funding: { amount_usd: null, unavailable_reason: 'Phoenix account exposure does not match the strategy leg' },
+    }
+    render(<><LivePositionPanel position={mocks.positionOverride} onClose={() => {}} /><LivePositions /></>)
+    expect(screen.getByText('Unavailable')).toBeTruthy()
+    expect(screen.getByText('Phoenix account exposure does not match the strategy leg')).toBeTruthy()
+    expect(screen.getByText('Total PnL (partial)')).toBeTruthy()
+    expect(screen.getByText('PHX pending unavailable')).toBeTruthy()
+    expect(screen.getByText('Partial')).toBeTruthy()
+    expect(screen.queryByText('PHX pending $0.00')).toBeNull()
+  })
+
   it('keeps graph endpoint and panel Price PnL identical as the live snapshot updates', async () => {
     mocks.positionOverride = { ...position, price_pnl: 7.5 }
     mocks.chartContext = { ...availableContext, price_pnl: {

@@ -1028,6 +1028,9 @@ func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
 	if positions == nil {
 		positions = []executor.LivePosition{}
 	}
+	for i := range positions {
+		s.addPhoenixPendingFunding(r.Context(), &positions[i], nil)
+	}
 	writeJSON(w, http.StatusOK, positions)
 }
 
@@ -1073,6 +1076,7 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.Error("live position: get durable plan", "err", err, "id", id, "plan_id", pos.PlanID)
 	}
+	s.addPhoenixPendingFunding(r.Context(), pos, fills)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"position":      pos,

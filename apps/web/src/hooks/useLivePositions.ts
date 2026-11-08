@@ -31,6 +31,11 @@ export interface LivePosition {
   funding_pnl: number
   funding_pnl_source: 'pending' | 'estimated' | 'realized'
   total_pnl: number
+  phoenix_pending_funding?: {
+    amount_usd: number | null
+    as_of?: string
+    unavailable_reason?: string
+  }
   leg1_current_price: number
   leg2_current_price: number
   leg1_liq_price: number

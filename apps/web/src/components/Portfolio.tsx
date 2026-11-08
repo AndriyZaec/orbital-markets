@@ -145,6 +145,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
   }, [positions])
 
   const recentPositions = positions.filter((position) => isActivePositionState(position.state)).slice(0, 5)
+  const pendingFundingUnavailable = positions.some((position) => position.phoenix_pending_funding?.amount_usd === null)
   const unrealizedPerformance = useMemo(
     () => portfolioPerformance(positions.filter((position) => {
       const category = categorize(position)
@@ -232,7 +233,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
         <Tile
           label={privateView ? unrealizedPerformance.value === null || unrealizedPerformance.annualized ? 'uPnL Annualized Return' : 'uPnL Return' : 'Unrealized P&L'}
           value={privateView ? fmtReturn(unrealizedPerformance.value) : openCount > 0 ? fmtUsd(unrealizedPnl) : '--'}
-          hint={privateView ? 'On deployed capital' : 'Sum across open positions'}
+          hint={pendingFundingUnavailable ? 'Partial · Phoenix pending funding unavailable' : privateView ? 'On deployed capital' : 'Sum across open positions'}
           valueClassName={privateView
             ? unrealizedPerformance.value !== null && unrealizedPerformance.value > 0 ? 'text-green-400' : unrealizedPerformance.value !== null && unrealizedPerformance.value < 0 ? 'text-red-400' : ''
             : unrealizedPnl > 0 ? 'text-green-400' : unrealizedPnl < 0 ? 'text-red-400' : ''}

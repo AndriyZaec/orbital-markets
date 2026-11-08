@@ -381,10 +381,20 @@ export function LivePositions({
                     <TC>{fmtUsd(pos.notional)}</TC>
                     <TC>{pos.leverage}x</TC>
                     <TC negative={pos.current_spread < 0}>{fmtPct(pos.current_spread, 2)}</TC>
-                    <TC negative={pos.funding_pnl < 0}>{fmtPnL(pos.funding_pnl)}</TC>
+                    <TC negative={pos.funding_pnl < 0}>
+                      {fmtPnL(pos.funding_pnl)}
+                      {pos.phoenix_pending_funding && (
+                        <span className="block text-[10px] text-muted-foreground" title={pos.phoenix_pending_funding.unavailable_reason}>
+                          {pos.phoenix_pending_funding.amount_usd === null
+                            ? 'PHX pending unavailable'
+                            : `PHX pending ${fmtPnL(pos.phoenix_pending_funding.amount_usd)}`}
+                        </span>
+                      )}
+                    </TC>
                     <TC negative={pos.price_pnl < 0}>{fmtPnL(pos.price_pnl)}</TC>
                     <TableCell className={`text-right font-mono text-xs font-semibold py-2 ${pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`} style={{ textAlign: 'right' }}>
                       {fmtPnL(pos.total_pnl)}
+                      {pos.phoenix_pending_funding?.amount_usd === null && <span className="block text-[10px] text-muted-foreground">Partial</span>}
                     </TableCell>
                     <TableCell className="py-2">
                       {liqRisk ? (

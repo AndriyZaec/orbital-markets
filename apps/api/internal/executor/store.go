@@ -1225,6 +1225,26 @@ type LivePosition struct {
 	CompletedAt        string            `json:"completed_at,omitempty"`
 	MonitorAt          string            `json:"monitor_at,omitempty"`
 	UpdatedAt          string            `json:"updated_at"`
+
+	// Response-only live component. Never persisted as a settled payment.
+	PhoenixPendingFunding *PendingFundingPnL `json:"phoenix_pending_funding,omitempty"`
+}
+
+type PendingFundingPnL struct {
+	AmountUSD         *float64   `json:"amount_usd"`
+	AsOf              *time.Time `json:"as_of,omitempty"`
+	UnavailableReason string     `json:"unavailable_reason,omitempty"`
+}
+
+// LatestFundingPaymentAt lets a live view reject an account snapshot that
+// predates a settlement already recorded in the cash ledger.
+func (s *Store) LatestFundingPaymentAt(ctx context.Context, positionID, venueName string) (time.Time, error) {
+	var paid sql.NullInt64
+	err := s.reader.QueryRowContext(ctx, `SELECT MAX(paid_at_ms) FROM live_funding_payments WHERE position_id=? AND venue=?`, positionID, venueName).Scan(&paid)
+	if err != nil || !paid.Valid {
+		return time.Time{}, err
+	}
+	return time.UnixMilli(paid.Int64).UTC(), nil
 }
 
 // LiveFill is the read model for a leg fill.

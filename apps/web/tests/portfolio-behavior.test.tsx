@@ -128,6 +128,15 @@ describe('Portfolio activity sharing', () => {
 })
 
 describe('Portfolio position navigation', () => {
+  it('marks live portfolio PnL partial when Phoenix pending funding is unavailable', () => {
+    mocks.positions = [{
+      ...position('phoenix-position', 'open', 'SOL'), venue_a: 'phoenix',
+      phoenix_pending_funding: { amount_usd: null, unavailable_reason: 'Phoenix account snapshot unavailable' },
+    }]
+    render(<Portfolio onConnectWallets={() => {}} onViewPositions={() => {}} />)
+    expect(screen.getByText('Partial · Phoenix pending funding unavailable')).toBeTruthy()
+  })
+
   it('shows at most five active positions including pending and selects the clicked position', async () => {
     const pending = position('pending-position', 'pending', 'PEND')
     mocks.positions = [
