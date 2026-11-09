@@ -18,6 +18,7 @@ primary_region = 'iad'
   DB_PATH = '/data/orbital.db'
   ENV = 'production'
   ALLOWED_ORIGIN = 'https://app.orbitalmarkets.xyz'
+  PHOENIX_BUILDER_AUTHORITY = '2f7fPuH88eMwWW4x7o5fHUNJDzLzCZk6EN6wY3zHR4yC'
 
 [[mounts]]
   source = 'orbital_data'
