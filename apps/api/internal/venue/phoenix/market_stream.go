@@ -30,8 +30,8 @@ type LiveMarketStats struct {
 	MarkPrice         float64
 	MidPrice          float64
 	IndexPrice        float64
-	HourlyFundingRate float64
-	NativeFundingRate float64
+	HourlyFundingRate float64 // Fraction per hour, matching venue.MarketData.
+	NativeFundingRate float64 // Fraction per native funding interval, not percentage points.
 	OpenInterest      float64
 	SourceTime        time.Time
 	ReceivedAt        time.Time
@@ -140,7 +140,7 @@ type marketStatsV2Wire struct {
 	MarkPrice          float64 `json:"markPrice"`
 	MidPrice           float64 `json:"midPrice"`
 	OraclePrice        float64 `json:"oraclePrice"`
-	CurrentFundingRate float64 `json:"currentFundingRate"`
+	CurrentFundingRate float64 `json:"currentFundingRate"` // Percentage points per funding interval.
 }
 
 type orderbookEnvelope struct {
@@ -438,11 +438,13 @@ func (s *MarketStream) applyMarketStats(generation uint64, message marketStatsV2
 		if exists && sourceTime.Before(previous.SourceTime) {
 			continue
 		}
+		// marketStatsV2 reports percentage points; internal rates are fractions.
+		nativeFundingRate := update.CurrentFundingRate / 100
 		stats[update.Symbol] = LiveMarketStats{
 			Symbol: update.Symbol, MarkPrice: update.MarkPrice, MidPrice: update.MidPrice,
 			IndexPrice:        update.OraclePrice,
-			HourlyFundingRate: update.CurrentFundingRate / market.FundingInterval.Hours(),
-			NativeFundingRate: update.CurrentFundingRate, OpenInterest: update.OpenInterest,
+			HourlyFundingRate: nativeFundingRate / market.FundingInterval.Hours(),
+			NativeFundingRate: nativeFundingRate, OpenInterest: update.OpenInterest,
 			SourceTime: sourceTime, ReceivedAt: receivedAt, Generation: generation,
 		}
 		if !exists {

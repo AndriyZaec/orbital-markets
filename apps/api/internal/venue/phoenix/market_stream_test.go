@@ -36,7 +36,7 @@ func TestMarketStreamAppliesExchangeSnapshotAndMarketStats(t *testing.T) {
 			}
 			assertOrderbookSubscription(t, connection, "subscribe", "SOL")
 			for _, message := range []string{
-				`{"channel":"marketStatsV2","stats":[{"symbol":"SOL","timestamp":1793020205,"openInterest":65520.02,"markPrice":101.33,"midPrice":101.345,"oraclePrice":101.31,"currentFundingRate":0.0002}]}`,
+				`{"channel":"marketStatsV2","stats":[{"symbol":"SOL","timestamp":1793020205,"openInterest":65520.02,"markPrice":101.33,"midPrice":101.345,"oraclePrice":101.31,"currentFundingRate":0.02}]}`,
 				`{"channel":"orderbook","symbol":"SOL","orderbook":{"bids":[[100,2]],"asks":[[102,3]],"mid":101}}`,
 			} {
 				if err := connection.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
@@ -109,6 +109,11 @@ func TestMarketStreamAppliesOrderedExchangeDeltasAtomically(t *testing.T) {
 	if err := stream.applyExchangeMessage(1, snapshot); err != nil {
 		t.Fatalf("apply snapshot: %v", err)
 	}
+	if err := stream.applyMarketStats(1, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{
+		Symbol: "SOL", Timestamp: 10, MarkPrice: 100, OraclePrice: 100, CurrentFundingRate: 0.02,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
 	ops := []json.RawMessage{
 		json.RawMessage(`{"kind":"marketStatusChanged","symbol":"SOL","new_market_status":"paused"}`),
 		json.RawMessage(`{"kind":"marketParameterUpdated","symbol":"SOL","update":{"kind":"fundingParametersUpdated","new":{"fundingIntervalSeconds":7200}}}`),
@@ -124,6 +129,9 @@ func TestMarketStreamAppliesOrderedExchangeDeltasAtomically(t *testing.T) {
 	if state.Metadata.Markets[1].Symbol != "SOL" || state.Metadata.Markets[1].Status != "paused" ||
 		state.Metadata.Markets[1].FundingInterval != 2*time.Hour {
 		t.Fatalf("unexpected SOL metadata: %+v", state.Metadata.Markets[1])
+	}
+	if stats := state.Stats["SOL"]; stats.NativeFundingRate != 0.0002 || stats.HourlyFundingRate != 0.0001 {
+		t.Fatalf("funding interval delta lost fractional units: %+v", stats)
 	}
 
 	badOps := []json.RawMessage{

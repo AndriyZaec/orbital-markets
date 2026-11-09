@@ -266,7 +266,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
           )
         }
       >
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <VenueCard readiness={pacifica} maskAmounts={privateView} />
           <VenueCard readiness={hyperliquid} maskAmounts={privateView} />
           <VenueCard readiness={aster} maskAmounts={privateView} />
@@ -814,7 +814,7 @@ function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; mask
   // render "--" rather than an ambiguous $0.00.
   return (
     <div className={`relative overflow-hidden rounded-md border border-white/[0.07] bg-[#0b1018] px-3 py-3 transition-colors hover:border-white/[0.12] ${VENUE_CARD_STYLES[readiness.venue]}`}>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <div className="flex items-center gap-2">
           <span className="flex size-7 items-center justify-center rounded-md border border-border bg-white/[0.035]">
             {logo ? <img src={logo} alt="" className="size-5 object-contain" /> : readiness.label[0]}
