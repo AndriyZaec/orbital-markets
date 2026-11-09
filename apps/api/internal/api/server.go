@@ -84,6 +84,7 @@ func NewServer(
 	live *LiveDeps,
 	jwtSecret string,
 	corsOrigin string,
+	authCookieName ...string,
 ) *Server {
 	// Live position store is always available for reads, even without venue clients.
 	var ls *executor.Store
@@ -117,7 +118,7 @@ func NewServer(
 	s.handler = middleware.Recovery(logger)(
 		middleware.Logging(logger)(
 			middleware.CORS(corsOrigin)(
-				middleware.Auth(jwtSecret, logger)(s.mux),
+				middleware.Auth(jwtSecret, logger, authCookieName...)(s.mux),
 			),
 		),
 	)

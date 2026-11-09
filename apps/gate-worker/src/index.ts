@@ -15,6 +15,9 @@ export interface Env {
   WAITLIST_DB: D1Database;
   JWT_SECRET: string;
   COOKIE_DOMAIN: string; // e.g. ".your-domain.example"; empty = no Domain attribute (local dev)
+  BETA_COOKIE_NAME?: string; // Defaults to __beta; staging uses an isolated cookie.
+  ASSETS?: Fetcher; // Standalone staging can serve the same frontend directly.
+  API_ORIGIN?: string; // Standalone staging API; production keeps route fallthrough.
   LANDING_ORIGIN?: string;
 }
 
@@ -74,10 +77,10 @@ export default {
 
     // The gate page itself is served unauthenticated so users can land on it.
     if (url.pathname === GATE_PATH || url.pathname.startsWith(GATE_PATH + '/')) {
-      return fetch(request);
+      return fetchOrigin(request, env);
     }
 
-    const token = readCookie(request, COOKIE_NAME);
+    const token = readCookie(request, env.BETA_COOKIE_NAME || COOKIE_NAME);
     const claims = await decodeJWT(token, env.JWT_SECRET);
     const currentTime = now();
     if (!claims || claims.exp <= currentTime) {
@@ -93,18 +96,31 @@ export default {
       if (isDocument) {
         return Response.redirect(new URL(GATE_PATH, url.origin).toString(), 302);
       }
-      return fetch(request);
+      return fetchOrigin(request, env);
     }
 
-    const response = await fetch(request);
+    const response = await fetchOrigin(request, env);
     if (claims.exp - currentTime > COOKIE_REFRESH_WINDOW) {
       return response;
     }
 
     const jwt = await signJWT({ cid: claims.cid, uid: claims.uid, exp: currentTime + COOKIE_MAX_AGE }, env.JWT_SECRET);
-    return withCookie(response, jwt, env.COOKIE_DOMAIN);
+    return withCookie(response, jwt, env.COOKIE_DOMAIN, env.BETA_COOKIE_NAME || COOKIE_NAME);
   },
 } satisfies ExportedHandler<Env>;
+
+function fetchOrigin(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  if (env.API_ORIGIN && url.pathname.startsWith('/api/')) {
+    const upstream = new URL(env.API_ORIGIN);
+    upstream.pathname = url.pathname;
+    upstream.search = url.search;
+    const proxied = new Request(upstream, request);
+    proxied.headers.delete('host');
+    return fetch(proxied, { redirect: 'manual' });
+  }
+  return env.ASSETS ? env.ASSETS.fetch(request) : fetch(request);
+}
 
 async function handleWaitlistRoute(request: Request, env: Env, url: URL): Promise<Response> {
   const origin = request.headers.get('origin');
@@ -288,12 +304,12 @@ async function handleRedeem(request: Request, env: Env): Promise<Response> {
   // Already-redeemed code: only the originally-bound browser may refresh it.
   // Anyone else (cleared cookie, different browser) is locked out — by design.
   if (record.used_at && record.bound_cookie_id) {
-    const existing = await decodeJWT(readCookie(request, COOKIE_NAME), env.JWT_SECRET);
+    const existing = await decodeJWT(readCookie(request, env.BETA_COOKIE_NAME || COOKIE_NAME), env.JWT_SECRET);
     if (!existing || existing.cid !== record.bound_cookie_id) {
       return jsonResponse(404, { error: 'invalid code' });
     }
     const jwt = await signJWT({ cid: existing.cid, uid: record.waitlist_entry_id, exp: now() + COOKIE_MAX_AGE }, env.JWT_SECRET);
-    return setCookieResponse(jwt, env.COOKIE_DOMAIN);
+    return setCookieResponse(jwt, env.COOKIE_DOMAIN, env.BETA_COOKIE_NAME || COOKIE_NAME);
   }
 
   // New admin-issued invites are linked to D1 before the KV record is updated.
@@ -313,7 +329,7 @@ async function handleRedeem(request: Request, env: Env): Promise<Response> {
     bound_cookie_id: cid,
   };
   await env.BETA_INVITES.put(key, JSON.stringify(updated));
-  return setCookieResponse(jwt, env.COOKIE_DOMAIN);
+  return setCookieResponse(jwt, env.COOKIE_DOMAIN, env.BETA_COOKIE_NAME || COOKIE_NAME);
 }
 
 async function redeemedCookieId(env: Env, waitlistEntryId: string, code: string): Promise<string | null> {
@@ -346,19 +362,19 @@ async function persistRedemption(
   }
 }
 
-function setCookieResponse(jwt: string, cookieDomain: string): Response {
+function setCookieResponse(jwt: string, cookieDomain: string, cookieName = COOKIE_NAME): Response {
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
       'content-type': 'application/json',
-      'set-cookie': cookieHeader(jwt, cookieDomain),
+      'set-cookie': cookieHeader(jwt, cookieDomain, cookieName),
     },
   });
 }
 
-function withCookie(response: Response, jwt: string, cookieDomain: string): Response {
+function withCookie(response: Response, jwt: string, cookieDomain: string, cookieName = COOKIE_NAME): Response {
   const headers = new Headers(response.headers);
-  headers.append('set-cookie', cookieHeader(jwt, cookieDomain));
+  headers.append('set-cookie', cookieHeader(jwt, cookieDomain, cookieName));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -366,9 +382,9 @@ function withCookie(response: Response, jwt: string, cookieDomain: string): Resp
   });
 }
 
-function cookieHeader(jwt: string, cookieDomain: string): string {
+function cookieHeader(jwt: string, cookieDomain: string, cookieName = COOKIE_NAME): string {
   const parts = [
-    `${COOKIE_NAME}=${jwt}`,
+    `${cookieName}=${jwt}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Strict',

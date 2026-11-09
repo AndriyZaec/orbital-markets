@@ -126,7 +126,7 @@ func main() {
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)
 
-	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"), os.Getenv("BETA_COOKIE_NAME"))
 	if phoenixInfrastructure != nil {
 		srv.EnablePhoenixInfrastructure(phoenixInfrastructure)
 		if delegationStore, err := delegation.NewStore(database, operationalDatabase); err != nil {

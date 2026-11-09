@@ -1,0 +1,35 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "your-app-staging-gate",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-11-09",
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [
+		{ "pattern": "staging.example.com", "custom_domain": true }
+	],
+	"assets": {
+		"directory": "../web/dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": true
+	},
+	"vars": {
+		"COOKIE_DOMAIN": ".staging.example.com",
+		"BETA_COOKIE_NAME": "__beta_staging",
+		"LANDING_ORIGIN": "https://staging.example.com",
+		"API_ORIGIN": "https://your-app-staging.fly.dev"
+	},
+	"kv_namespaces": [
+		{ "binding": "BETA_INVITES", "id": "00000000000000000000000000000000" }
+	],
+	"d1_databases": [
+		{
+			"binding": "WAITLIST_DB",
+			"database_name": "your-app-staging-waitlist",
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "migrations"
+		}
+	],
+	"observability": { "enabled": true }
+}
