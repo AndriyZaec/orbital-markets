@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
+import { act, cleanup, renderHook, screen } from '@testing-library/react'
+import { renderWithQueryClient as render } from './render-with-query-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LiveExecutionProvider, useLiveExecution } from '../src/hooks/useLiveExecution'
 import { useLiveClose } from '../src/hooks/useLiveClose'

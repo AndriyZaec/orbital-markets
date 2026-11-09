@@ -32,7 +32,7 @@ const PACIFICA_ICON_FILES: Record<string, string> = {
   XAU: 'XAU.1343ad2769b9e6b7.svg',
 }
 
-export function assetIconUrls(asset: string): string[] {
+export function assetIconUrls(asset: string, phoenixIconUrl?: string): string[] {
   const normalizedAsset = asset.toUpperCase()
   const hyperliquidAsset = HYPERLIQUID_ICON_ALIASES[normalizedAsset] ?? normalizedAsset
   const urls = [`https://app.hyperliquid.xyz/coins/${encodeURIComponent(hyperliquidAsset)}.svg`]
@@ -40,5 +40,41 @@ export function assetIconUrls(asset: string): string[] {
   if (pacificaFile) {
     urls.push(`https://app.pacifica.fi/imgs/optimized/tokens/${encodeURIComponent(pacificaFile)}`)
   }
+  if (phoenixIconUrl) urls.push(phoenixIconUrl)
   return urls
+}
+
+export function parsePhoenixAssetIcons(payload: unknown): Record<string, string> {
+  const icons: Record<string, string> = {}
+  if (!payload || typeof payload !== 'object' || !('markets' in payload) || !Array.isArray(payload.markets)) return icons
+  for (const market of payload.markets as unknown[]) {
+    if (!market || typeof market !== 'object' || !('symbol' in market) || typeof market.symbol !== 'string' || !('metadata' in market)) continue
+    const metadata = market.metadata
+    if (!metadata || typeof metadata !== 'object' || !('logoUri' in metadata) || typeof metadata.logoUri !== 'string') continue
+    const asset = market.symbol.replace(/-PERP$/, '').toUpperCase()
+    if (!asset) continue
+    try {
+      const url = new URL(metadata.logoUri)
+      if (url.protocol !== 'https:' || url.hostname !== 'phoenixcdn.trade' || url.username || url.password) continue
+      icons[asset] = url.href
+    } catch {
+      // Optional presentation metadata must not prevent other icons loading.
+    }
+  }
+  return icons
+}
+
+export async function fetchPhoenixAssetIcons({ signal }: { signal: AbortSignal }): Promise<Record<string, string>> {
+  try {
+    const response = await fetch('https://perp-api.phoenix.trade/v1/view/exchange', {
+      signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+    })
+    if (!response.ok) return {}
+    return parsePhoenixAssetIcons(await response.json())
+  } catch {
+    // Cache failures as an empty catalog too, rather than retrying for every row.
+    return {}
+  }
 }

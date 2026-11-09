@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, screen, within } from '@testing-library/react'
+import { renderWithQueryClient as render } from './render-with-query-client'
 import userEvent from '@testing-library/user-event'
 import { PositionFundingDetail } from '../src/components/PositionFundingDetail'
 import { LivePositionPanel } from '../src/components/LivePositionDetail'

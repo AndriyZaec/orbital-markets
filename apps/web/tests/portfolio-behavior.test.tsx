@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
+import { renderWithQueryClient as render } from './render-with-query-client'
 import userEvent from '@testing-library/user-event'
 import { Portfolio } from '../src/components/Portfolio'
 import type { LivePosition } from '../src/hooks/useLivePositions'
