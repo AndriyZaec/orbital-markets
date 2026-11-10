@@ -75,8 +75,15 @@ func CheckLiquidity(a, b venue.MarketData, annualizedEdge float64, now time.Time
 		}
 
 		// Signal 5: Stale quote
-		if !md.Timestamp.IsZero() && now.Sub(md.Timestamp) > staleQuoteAge {
-			reasons = append(reasons, fmt.Sprintf("%s: quote %.0fs old", md.Venue, now.Sub(md.Timestamp).Seconds()))
+		quoteAt := md.Timestamp
+		if md.Health != nil {
+			quoteAt = md.Health.Book.SourceTime
+			if quoteAt.IsZero() {
+				quoteAt = md.Health.Book.ReceivedAt
+			}
+		}
+		if !quoteAt.IsZero() && now.Sub(quoteAt) > staleQuoteAge {
+			reasons = append(reasons, fmt.Sprintf("%s: quote %.0fs old", md.Venue, now.Sub(quoteAt).Seconds()))
 		}
 	}
 

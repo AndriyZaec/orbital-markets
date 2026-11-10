@@ -5,7 +5,7 @@ import { OpportunityPanel } from '../src/components/OpportunityPanel'
 import type { Opportunity } from '../src/hooks/useOpportunities'
 import type { ExecutionPlan } from '../src/hooks/usePlan'
 
-const mocks = vi.hoisted(() => ({ execute: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined), executable: true, impact: 0.003, planReady: true, marketDataPending: false, accountsUpdating: false }))
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined), executable: true, impact: 0.003, planReady: true, marketDataPending: false, accountsUpdating: false, pendingBook: false }))
 vi.mock('@/hooks/useLiveExecution', () => ({ useLiveExecution: () => ({ state: { phase: 'idle' }, executeLive: mocks.execute, reset: vi.fn() }) }))
 vi.mock('@/components/LiveExecutionModal', () => ({ LiveExecutionModal: () => null }))
 vi.mock('@/lib/analytics', () => ({ trackAnalytics: vi.fn() }))
@@ -29,7 +29,7 @@ function makePlan(leverage = 2, notional = 500): ExecutionPlan {
     leg_2: { ...leg, venue: 'hyperliquid', side: 'short', limit_price: 98 },
     leverage: { leverage, margin_required: notional, gross_exposure: 2 * notional, effective_leverage: leverage },
     expected_spread: 0, estimated_net_edge: 0.1, bounds: { max_slippage_pct: 0.005, max_entry_spread_pct: 0.01, min_net_edge_pct: 0.01 },
-    liquidity: { status: mocks.executable ? 'l2' : 'insufficient', impact: mocks.impact, requires_acknowledgement: mocks.impact > 0.002, observed_at: new Date().toISOString() },
+    liquidity: { status: mocks.pendingBook ? 'pending' : mocks.executable ? 'l2' : 'insufficient', impact: mocks.impact, requires_acknowledgement: mocks.impact > 0.002, observed_at: new Date(Date.now() - (mocks.pendingBook ? 31_000 : 0)).toISOString() },
     risk_tier: 'standard', confidence: 'high', executable: mocks.executable,
     warnings: mocks.executable ? [] : ['Insufficient visible order-book depth'], created_at: '', expires_at: '',
   }
@@ -44,9 +44,29 @@ const opportunity: Opportunity = { id: 'opp', asset: 'BTC', detected_at: '', ven
   signal_7d: null, signal_7d_state: 'unavailable', signal_7d_version: 0,
 }
 const props = { opportunity, lastUpdated: null, mode: 'live' as const, notionalInput: '500', onNotionalInputChange: vi.fn(), onClose: vi.fn(), onExecute: vi.fn() }
-afterEach(() => { cleanup(); vi.useRealTimers(); mocks.execute.mockClear(); mocks.executable = true; mocks.impact = 0.003; mocks.planReady = true; mocks.marketDataPending = false; mocks.accountsUpdating = false })
+afterEach(() => { cleanup(); vi.useRealTimers(); mocks.execute.mockClear(); mocks.executable = true; mocks.impact = 0.003; mocks.planReady = true; mocks.marketDataPending = false; mocks.accountsUpdating = false; mocks.pendingBook = false })
 
 describe('automatic execution depth and acknowledgement', () => {
+  it('allows explicit prepare for a pending book while retaining preview price approvals and account gates', () => {
+    mocks.pendingBook = true
+    mocks.impact = 0
+    mocks.accountsUpdating = true
+    const view = render(<OpportunityPanel {...props} />)
+    expect((screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement).disabled).toBe(true)
+    mocks.accountsUpdating = false
+    view.rerender(<OpportunityPanel {...props} />)
+    const execute = screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement
+    expect(execute.disabled).toBe(false)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(mocks.execute).not.toHaveBeenCalled()
+    fireEvent.click(execute)
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+    expect(mocks.execute.mock.calls[0][0]).toMatchObject({
+      approvedBaseAmount: 5,
+      legs: [{ venue: 'pacifica', limitPrice: 102 }, { venue: 'hyperliquid', limitPrice: 98 }],
+    })
+  })
+
   it('does not rebind the old plan estimate to a new size during debounce', async () => {
     vi.useFakeTimers()
     mocks.impact = 0

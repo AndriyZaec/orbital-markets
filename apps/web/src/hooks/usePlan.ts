@@ -48,7 +48,7 @@ interface ExecutionPlan {
   notional: number
   base_amount?: number
   liquidity?: {
-    status: 'bbo' | 'l2' | 'insufficient' | 'unavailable'
+    status: 'bbo' | 'l2' | 'pending' | 'insufficient' | 'unavailable'
     impact: number
     requires_acknowledgement: boolean
     observed_at: string

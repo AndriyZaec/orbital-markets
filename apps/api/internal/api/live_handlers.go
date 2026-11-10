@@ -116,20 +116,12 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	// 1. Build a fresh execution plan
 	progress.Stage("quotes")
-	var plan *domain.ExecutionPlan
-	err = waitForLiveBBO(r.Context(), progress, func() error {
-		var err error
-		plan, err = s.scanner.BuildPlanWithLeverageCaps(
-			r.Context(), req.OpportunityID, req.Leverage, notional,
-			s.live.accountLeverageResolver(bindings.Accounts),
-		)
-		if err == nil && !plan.Executable && len(plan.Warnings) > 0 &&
-			plan.Warnings[len(plan.Warnings)-1] == scanner.ErrFreshBBOUnavailable.Error() {
-			// The planner appends this only after all other executable checks pass.
-			return scanner.ErrFreshBBOUnavailable
-		}
-		return err
-	})
+	// Pending preview liquidity is resolved by the mandatory fresh depth check
+	// before signing below; warnings are presentation, not readiness evidence.
+	plan, err := s.scanner.BuildPlanWithLeverageCaps(
+		r.Context(), req.OpportunityID, req.Leverage, notional,
+		s.live.accountLeverageResolver(bindings.Accounts),
+	)
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
 		writePlanError(w, http.StatusUnprocessableEntity, err)
@@ -1812,8 +1804,18 @@ func (s *Server) buildCloseSigningRequestForBindings(
 		if marketErr != nil {
 			return nil, fmt.Errorf("current %s BBO for %s unavailable: %w", fill.Venue, fill.Symbol, marketErr)
 		}
-		quoteAge := time.Since(market.Timestamp)
-		if market.Timestamp.IsZero() || quoteAge > maxCloseQuoteAge || quoteAge < -time.Second {
+		bookAt := market.Timestamp
+		bookAvailable := true
+		if market.Health != nil {
+			book := market.Health.Book
+			bookAvailable = book.Status == venue.HealthAvailable
+			bookAt = book.SourceTime
+			if bookAt.IsZero() {
+				bookAt = book.ReceivedAt
+			}
+		}
+		quoteAge := time.Since(bookAt)
+		if !bookAvailable || bookAt.IsZero() || quoteAge > maxCloseQuoteAge || quoteAge < -time.Second {
 			return nil, fmt.Errorf("current %s BBO for %s is stale", fill.Venue, fill.Symbol)
 		}
 		switch positionSide {

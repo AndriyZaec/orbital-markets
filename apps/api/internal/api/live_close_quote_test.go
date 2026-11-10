@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 )
 
@@ -98,6 +100,61 @@ func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("error = %v, want stale BBO rejection", err)
+	}
+}
+
+func TestMarketBBOCloseUsesBookHealthInsteadOfAggregateTimestamp(t *testing.T) {
+	now := time.Now()
+	for _, name := range []string{"hyperliquid", "aster"} {
+		for _, emergency := range []bool{false, true} {
+			for _, tc := range []struct {
+				name      string
+				aggregate time.Time
+				book      *venue.ComponentHealth
+				stale     bool
+			}{
+				{"fresh_REST_stale_BBO", now, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now.Add(-11 * time.Second), ReceivedAt: now}, true},
+				{"seven_second_book_still_valid_for_close", now, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now.Add(-7 * time.Second)}, false},
+				{"stale_aggregate_fresh_BBO", now.Add(-time.Minute), &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now}, false},
+				{"fresh_received_time_without_source", now, &venue.ComponentHealth{Status: venue.HealthAvailable, ReceivedAt: now}, false},
+				{"stale_received_time_without_source", now, &venue.ComponentHealth{Status: venue.HealthAvailable, ReceivedAt: now.Add(-11 * time.Second)}, true},
+				{"unavailable_book", now, &venue.ComponentHealth{Status: venue.HealthUnavailable, SourceTime: now}, true},
+				{"missing_book_time", now, &venue.ComponentHealth{Status: venue.HealthAvailable}, true},
+				{"future_book_time", now, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now.Add(time.Minute)}, true},
+				{"legacy_fresh_timestamp", now, nil, false},
+				{"legacy_stale_timestamp", now.Add(-11 * time.Second), nil, true},
+				{"legacy_missing_timestamp", time.Time{}, nil, true},
+			} {
+				t.Run(fmt.Sprintf("%s/emergency=%t/%s", name, emergency, tc.name), func(t *testing.T) {
+					var module venue.LiveModule = hllive.NewLiveModule(closeQuoteTestAssetMap{})
+					if name == "aster" {
+						module = asterlive.NewLiveModule(hedgeMatrixRules{}, nil)
+					}
+					modules, err := venue.NewLiveModuleRegistry(module)
+					if err != nil {
+						t.Fatal(err)
+					}
+					market := venue.MarketData{Venue: name, Asset: "BTC", BidPrice: 100, AskPrice: 101, BidSize: 500, AskSize: 500, Timestamp: tc.aggregate}
+					if tc.book != nil {
+						market.Health = &venue.MarketHealth{Book: *tc.book}
+					}
+					server := &Server{live: &LiveDeps{modules: modules}, closeMarkets: closeQuoteTestSource{snapshot: market}}
+					request, err := server.buildCloseSigningRequestForBindings(context.Background(),
+						executor.LiveFill{Venue: name, Symbol: "BTC", Side: "long", FilledAmount: 1, AvgFillPrice: 100},
+						"BTC", "close-book-health", liveVenueBindings{
+							Accounts: map[string]string{name: "0x1111111111111111111111111111111111111111"},
+							Agents:   map[string]string{name: "0x2222222222222222222222222222222222222222"},
+						}, emergency)
+					if tc.stale {
+						if request != nil || err == nil || !strings.Contains(err.Error(), "BBO for BTC is stale") {
+							t.Fatalf("stale book reached close signing: request=%+v err=%v", request, err)
+						}
+					} else if err != nil || request == nil || request.Price <= 0 {
+						t.Fatalf("fresh book rejected: request=%+v err=%v", request, err)
+					}
+				})
+			}
+		}
 	}
 }
 

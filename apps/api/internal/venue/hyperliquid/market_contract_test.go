@@ -10,8 +10,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
+
+func TestRESTRefreshKeepsQuietMarketDiscoverableWithoutRefreshingBook(t *testing.T) {
+	now := time.Now().Add(-31 * time.Second)
+	fail := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fail {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, `[
+			{"universe":[{"name":"SOL","maxLeverage":20,"szDecimals":2}]},
+			[{"markPx":"150","oraclePx":"149","funding":"0.0001","openInterest":"1000"}]
+		]`)
+	}))
+	defer server.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	adapter := New(logger)
+	adapter.client, adapter.marketURL = server.Client(), server.URL
+	adapter.now = func() time.Time { return now }
+	adapter.pollREST(context.Background())
+	generation := adapter.markStreamConnected()
+	adapter.applyBBO(generation, bboData{Coin: "SOL", Time: now.UnixMilli(), BBO: []bboLevel{{Px: "149", Sz: "2"}, {Px: "151", Sz: "3"}}})
+	before, _ := adapter.FetchMarketData(context.Background())
+	book := before[0].Health.Book
+	sc := scanner.New(logger, adapter)
+	if snapshots := sc.MarketData(context.Background()); len(snapshots) != 0 {
+		t.Fatal("31-second-old aggregate snapshot should be stale")
+	}
+	now = now.Add(31 * time.Second)
+	adapter.pollREST(context.Background())
+	snapshots := sc.MarketData(context.Background())
+	if len(snapshots) != 1 {
+		t.Fatal("fresh REST did not restore quiet market to scanner")
+	}
+	if !snapshots[0].Timestamp.Equal(now) || snapshots[0].Health.Book != book {
+		t.Fatalf("REST must refresh market, not book: %+v", snapshots[0])
+	}
+	lastREST := now
+	now = now.Add(time.Second)
+	fail = true
+	adapter.pollREST(context.Background())
+	snapshots, _ = adapter.FetchMarketData(context.Background())
+	if !snapshots[0].Timestamp.Equal(lastREST) || snapshots[0].Health.Book != book {
+		t.Fatal("failed REST fetch refreshed observations")
+	}
+}
 
 func TestFetchMarketDataReportsRESTComponentsBeforeFirstBookUpdate(t *testing.T) {
 	now := time.Date(2026, time.September, 25, 12, 0, 0, 0, time.UTC)

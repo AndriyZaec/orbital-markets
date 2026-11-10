@@ -39,6 +39,7 @@ type localPrepareDepth struct {
 	freshChecks int
 	delay       time.Duration
 	quote       liquidity.OrderQuote
+	err         error
 }
 
 func (d *localPrepareDepth) Quote(ctx context.Context, _ liquidity.Pair, size liquidity.OrderSize, fresh bool) (liquidity.OrderQuote, error) {
@@ -55,7 +56,7 @@ func (d *localPrepareDepth) Quote(ctx context.Context, _ liquidity.Pair, size li
 	}
 	quote := d.quote
 	quote.BaseAmount, quote.ObservedAt = size.BaseAmount, time.Now()
-	return quote, nil
+	return quote, d.err
 }
 
 type localPrepareFixture struct {

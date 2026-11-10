@@ -344,7 +344,7 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 			}
 			plan.BaseAmount = amount
 		}
-		if err := s.EvaluateExecutionLiquidity(ctx, plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, false); err != nil {
+		if err := s.EvaluateExecutionLiquidity(ctx, plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, false); err != nil && !errors.Is(err, ErrFreshBBOUnavailable) {
 			plan.Executable = false
 			plan.Warnings = append(plan.Warnings, err.Error())
 		}

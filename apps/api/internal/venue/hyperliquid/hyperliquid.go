@@ -398,6 +398,9 @@ func (a *Adapter) pollREST(ctx context.Context) {
 		state.indexPrice, state.indexHealth = parseRESTComponent(c.OraclePx, a.restReceivedAt, a.restGeneration)
 		state.fundingRate, state.fundingHealth = parseRESTComponent(c.Funding, a.restReceivedAt, a.restGeneration)
 		state.openInterest, state.openInterestHealth = parseRESTComponent(c.OpenInterest, a.restReceivedAt, a.restGeneration)
+		// Aggregate market freshness includes REST observations; book freshness
+		// remains bound to the separate BBO component timestamps.
+		state.timestamp = a.restReceivedAt
 		if meta.Universe[i].MaxLeverage > 0 {
 			state.maxLeverage = meta.Universe[i].MaxLeverage
 		}
