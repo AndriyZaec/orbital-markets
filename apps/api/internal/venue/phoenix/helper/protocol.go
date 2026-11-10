@@ -122,10 +122,23 @@ type AccountManifest struct {
 }
 
 type InstructionManifest struct {
-	ProgramID      string  `json:"program_id"`
-	ProgramIDIndex uint8   `json:"program_id_index"`
-	AccountIndexes []uint8 `json:"account_indexes"`
-	DataBase64     string  `json:"data_base64"`
+	ProgramID      string         `json:"program_id"`
+	ProgramIDIndex uint8          `json:"program_id_index"`
+	AccountIndexes AccountIndexes `json:"account_indexes"`
+	DataBase64     string         `json:"data_base64"`
+}
+
+// Account indexes are u8 numbers in the Rust/browser manifest, not a byte blob.
+// Retain uint8 decoding bounds while preventing encoding/json's base64 encoding
+// of byte slices. Empty compute-budget account lists must serialize as [].
+type AccountIndexes []uint8
+
+func (indexes AccountIndexes) MarshalJSON() ([]byte, error) {
+	numbers := make([]int, len(indexes))
+	for i, index := range indexes {
+		numbers[i] = int(index)
+	}
+	return json.Marshal(numbers)
 }
 
 type request struct {

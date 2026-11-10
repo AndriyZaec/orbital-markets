@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { ComputeBudgetProgram, Keypair, Message, PublicKey, TransactionInstruction } from '@solana/web3.js'
 import bs58 from 'bs58'
 import nacl from 'tweetnacl'
-import { signPhoenixAgentRequest, validatePhoenixOrder, phoenixFlightProgram } from '../src/agents/phoenix-order.ts'
+import { signPhoenixAgentRequest, phoenixFlightProgram } from '../src/agents/phoenix-order.ts'
 import { phoenixProgram, phoenixTrader } from '../src/agents/phoenix-message.ts'
 import { signWithStoredTradingAgent } from '../src/agents/signing.ts'
 import type { SigningRequest } from '../src/types/signing.ts'
@@ -160,24 +160,35 @@ test('compute budget rejects substitutions, duplicates, extra accounts and out-o
   }
 })
 
-test('pinned Rust helper output is compatible for all four actions', async (t) => {
+test('Rust helper output survives Go signing metadata JSON and browser signing for all four actions', async (t) => {
   const path = process.env.ORBITAL_PHOENIX_HELPER_TEST_PATH
   if (!path) { t.skip('set ORBITAL_PHOENIX_HELPER_TEST_PATH to built phoenix-helper'); return }
   const account = (n: number) => new PublicKey(new Uint8Array(32).fill(n)).toBase58()
-  for (const action of ['open', 'close', 'unwind', 'emergency_close'] as const) for (const price of [0, 1234]) {
+  for (const action of ['open', 'close', 'unwind', 'emergency_close'] as const) for (const price of [0, 1234]) for (const side of ['bid', 'ask'] as const) {
     const flight = action === 'open' || action === 'close', request = fixture(flight)
     request.action = action; request.reduce_only = action !== 'open'
+    request.side = side === 'bid' ? 'buy' : 'sell'
+    record(record(request.venue_metadata).normalized).side = side
     const input = JSON.stringify({ protocol_version: 1, request_id: 'fixture', operation: 'build_order', payload: {
       action, owner_authority: owner, position_authority: address, fee_payer: pubkey(3), ...(flight ? { builder_authority: pubkey(4) } : {}),
       compute_budget: { unit_limit: 400_000, unit_price_micro_lamports: price },
-      symbol: 'SOL', side: 'bid', num_base_lots: 29, price_limit_ticks: 10000, reduce_only: request.reduce_only, client_order_id: '18446744073709551615', last_valid_slot: 164,
+      symbol: 'SOL', side, num_base_lots: 29, price_limit_ticks: 10000, reduce_only: request.reduce_only, client_order_id: '18446744073709551615', last_valid_slot: 164,
       recent_blockhash: account(9), last_valid_block_height: 150, metadata_generation: 7,
       accounts: { perp_asset_map: account(10), orderbook: account(11), spline_collection: account(12), global_trader_index: [account(13)], active_trader_buffer: [account(14)] },
     } }).replace('"client_order_id":"18446744073709551615"', '"client_order_id":18446744073709551615')
-    const response = JSON.parse(execFileSync(path, { input: input + '\n', env: { ...process.env, PHOENIX_ENV: '' } }).toString())
+    const raw = execFileSync(path, { input: input + '\n', env: { ...process.env, PHOENIX_ENV: '' } }).toString()
+    const response = JSON.parse(raw)
     assert.equal(response.ok, true)
-    record(request.venue_metadata).built = response.result
+    // Send raw Rust JSON through Go before JS can round diagnostic u64 fields.
+    const metadata = JSON.parse(execFileSync('go', ['run', './internal/venue/phoenix/helper/testdata/json-roundtrip'], {
+      cwd: new URL('../../api/', import.meta.url), input: raw,
+    }).toString())
+    record(request.venue_metadata).built = metadata.built
     Object.assign(record(request.unsigned_payload), { message_base64: response.result.message_base64, message_sha256: response.result.message_sha256 })
-    await validatePhoenixOrder(request, { owner, agent: address })
+    const signed = await signPhoenixAgentRequest(request, agent)
+    assert.ok(nacl.sign.detached.verify(Buffer.from(response.result.message_base64, 'base64'), bs58.decode(signed.signature), bs58.decode(address)))
+    const instructions = metadata.built.manifest.instructions
+    instructions[2].account_indexes[0] = (instructions[2].account_indexes[0] + 1) % 256
+    await assert.rejects(signPhoenixAgentRequest(request, agent), /instruction bytes manifest/)
   }
 })
