@@ -29,8 +29,8 @@ const VENUE_METADATA = {
   aster: {
     label: 'Aster',
     shortLabel: 'AST',
-    color: '#f59e0b',
-    textColor: 'text-amber-400',
+    color: '#fcd34d',
+    textColor: 'text-amber-300',
     logo: asterLogo,
   },
 } as const
