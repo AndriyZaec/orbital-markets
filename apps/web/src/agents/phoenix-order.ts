@@ -154,14 +154,14 @@ export async function validatePhoenixOrder(request: SigningRequest, expected: {
   const writable = new Set([payer])
   const flight = request.action === 'open' || request.action === 'close'
   if (flight) {
-    const f = record(manifest.flight), builder = key(f.builder_authority)
+    const f = record(manifest.flight), builder = key(f.builder_authority), protocolRoot = key(metadata.protocol_root_authority)
     const programBytes = new PublicKey(phoenixProgram).toBytes()
     const transfer = pda(phoenixFlightProgram, [encoder.encode('collateral_transfer_authority'), programBytes])
     const prefix = [pda(phoenixFlightProgram, [programBytes, encoder.encode('global_state')]), phoenixProgram, builder,
       phoenixTrader(builder), pda(phoenixFlightProgram, [programBytes, new PublicKey(builder).toBytes(), encoder.encode('builder_state')]), agent]
-    const tail = [transfer, pda(phoenixProgram, [encoder.encode('permission'), new PublicKey(owner).toBytes(), new PublicKey(transfer).toBytes()])]
+    const tail = [transfer, pda(phoenixProgram, [encoder.encode('permission'), new PublicKey(protocolRoot).toBytes(), new PublicKey(transfer).toBytes()])]
     requireOrder(manifest.routing === 'flight' && keys[instruction.programIdIndex] === phoenixFlightProgram &&
-      f.flight_program_id === phoenixFlightProgram && f.builder_trader_account === prefix[3] && f.builder_state === prefix[4] &&
+      f.flight_program_id === phoenixFlightProgram && f.protocol_root_authority === protocolRoot && f.builder_trader_account === prefix[3] && f.builder_state === prefix[4] &&
       f.builder_pda_index === 0 && f.builder_subaccount_index === 0 && f.expected_registered_fee_bps === 2 && f.uses_fee_override === false &&
       prefix.every((account, index) => accounts[index] === account) &&
       tail.every((account, index) => accounts[accounts.length - 2 + index] === account) &&

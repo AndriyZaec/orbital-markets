@@ -17,6 +17,7 @@ func TestFetchExchangeMetadataIncludesAllPerpetualMarkets(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(response, `{
 			"keys":{
+				"currentAuthorities":{"rootAuthority":"protocol-root"},
 				"perpAssetMap":"asset-map",
 				"globalTraderIndex":["index-1","index-2"],
 				"activeTraderBuffer":["buffer-1"]
@@ -34,7 +35,7 @@ func TestFetchExchangeMetadataIncludesAllPerpetualMarkets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch exchange metadata: %v", err)
 	}
-	if metadata.Accounts.PerpAssetMap != "asset-map" || len(metadata.Accounts.GlobalTraderIndex) != 2 ||
+	if metadata.Accounts.ProtocolRootAuthority != "protocol-root" || metadata.Accounts.PerpAssetMap != "asset-map" || len(metadata.Accounts.GlobalTraderIndex) != 2 ||
 		len(metadata.Accounts.ActiveTraderBuffer) != 1 {
 		t.Fatalf("unexpected exchange accounts: %+v", metadata.Accounts)
 	}

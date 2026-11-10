@@ -21,8 +21,8 @@ type FlightStatus struct {
 // FlightProof performs fresh confirmed RPC reads, fenced at least to the
 // caller's blockhash/account slot. A cached diagnostic is never order admission.
 // No signer or key belonging to the builder is needed.
-func (r *Runtime) FlightProof(ctx context.Context, minSlot uint64) (phoenixlive.FlightProof, error) {
-	proof, err := r.flightProof(ctx, minSlot)
+func (r *Runtime) FlightProof(ctx context.Context, minSlot uint64, protocolRoot string) (phoenixlive.FlightProof, error) {
+	proof, err := r.flightProof(ctx, minSlot, protocolRoot)
 	status := FlightStatus{BuilderAuthority: r.builderAuthority, Reason: "verification_unavailable"}
 	if err == nil {
 		at := proof.ObservedAt
@@ -34,7 +34,7 @@ func (r *Runtime) FlightProof(ctx context.Context, minSlot uint64) (phoenixlive.
 	return proof, err
 }
 
-func (r *Runtime) flightProof(ctx context.Context, minSlot uint64) (phoenixlive.FlightProof, error) {
+func (r *Runtime) flightProof(ctx context.Context, minSlot uint64, protocolRoot string) (phoenixlive.FlightProof, error) {
 	if err := ctx.Err(); err != nil {
 		return phoenixlive.FlightProof{}, err
 	}
@@ -44,7 +44,7 @@ func (r *Runtime) flightProof(ctx context.Context, minSlot uint64) (phoenixlive.
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	observed := time.Now().UTC()
-	a, err := r.helper.FlightAccounts(r.ctx, helper.FlightRequest{BuilderAuthority: r.builderAuthority})
+	a, err := r.helper.FlightAccounts(r.ctx, helper.FlightRequest{BuilderAuthority: r.builderAuthority, ProtocolRootAuthority: protocolRoot})
 	if err != nil {
 		return phoenixlive.FlightProof{}, err
 	}
@@ -62,12 +62,15 @@ func (r *Runtime) flightProof(ctx context.Context, minSlot uint64) (phoenixlive.
 	if minSlot == 0 {
 		return phoenixlive.FlightProof{}, errors.New("Phoenix Flight context slot unavailable")
 	}
-	q := helper.VerifyFlightRequest{BuilderAuthority: r.builderAuthority}
+	if a.ProtocolRootAuthority != protocolRoot {
+		return phoenixlive.FlightProof{}, errors.New("Phoenix Flight protocol root mismatch")
+	}
+	q := helper.VerifyFlightRequest{BuilderAuthority: r.builderAuthority, ProtocolRootAuthority: protocolRoot}
 	slot := ^uint64(0)
 	for _, read := range []struct {
 		address, owner string
 		out            *helper.FlightAccountData
-	}{{a.GlobalState, helper.FlightProgramID, &q.GlobalState}, {a.BuilderState, helper.FlightProgramID, &q.BuilderState}, {a.BuilderTraderAccount, helper.PhoenixProgramID, &q.BuilderTrader}} {
+	}{{a.GlobalConfiguration, helper.PhoenixProgramID, &q.GlobalConfiguration}, {a.CollateralTransferPermission, helper.PhoenixProgramID, &q.CollateralTransferPermission}, {a.GlobalState, helper.FlightProgramID, &q.GlobalState}, {a.BuilderState, helper.FlightProgramID, &q.BuilderState}, {a.BuilderTraderAccount, helper.PhoenixProgramID, &q.BuilderTrader}} {
 		account, err := r.chain.AccountInfo(ctx, read.address, minSlot, false)
 		if err != nil {
 			return phoenixlive.FlightProof{}, err
@@ -91,7 +94,7 @@ func (r *Runtime) flightProof(ctx context.Context, minSlot uint64) (phoenixlive.
 	if r.ctx.Err() != nil || verified.Accounts != a || !verified.Active || verified.FeeBPS != 2 || time.Since(observed) >= flightFreshness {
 		return phoenixlive.FlightProof{}, errors.New("Phoenix Flight verification is invalid, stale or stopped")
 	}
-	return phoenixlive.FlightProof{ProgramOwner: a.FlightProgramID, BuilderAuthority: a.BuilderAuthority, BuilderState: a.BuilderState,
+	return phoenixlive.FlightProof{ProtocolRootAuthority: a.ProtocolRootAuthority, ProgramOwner: a.FlightProgramID, BuilderAuthority: a.BuilderAuthority, BuilderState: a.BuilderState,
 		BuilderTraderAccount: a.BuilderTraderAccount, FeeBPS: verified.FeeBPS, ObservedAt: observed, Slot: slot}, nil
 }
 

@@ -44,6 +44,7 @@ type AuthorityProof struct {
 // FlightProof must originate from verified chain state, not browser input or the
 // diagnostic order manifest. Its producer belongs to live Flight readiness.
 type FlightProof struct {
+	ProtocolRootAuthority                                              string
 	ProgramOwner, BuilderAuthority, BuilderState, BuilderTraderAccount string
 	FeeBPS                                                             uint64
 	ObservedAt                                                         time.Time
@@ -141,6 +142,7 @@ type OrderPayload struct {
 }
 
 type SigningMetadata struct {
+	ProtocolRootAuthority    string                  `json:"protocol_root_authority,omitempty"`
 	ProtocolVersion          uint32                  `json:"protocol_version"`
 	MarketMetadataGeneration uint64                  `json:"market_metadata_generation"`
 	Built                    helper.BuildOrderResult `json:"built"`
@@ -218,7 +220,7 @@ func (b *Builder) Prepare(ctx context.Context, q Intent, c Capture) (*domain.Sig
 	if err != nil {
 		return nil, err
 	}
-	metadata, err := json.Marshal(SigningMetadata{ProtocolVersion: helper.ProtocolVersion, Built: built, Normalized: normalized, MarketMetadataGeneration: c.MarketMetadataGeneration,
+	metadata, err := json.Marshal(SigningMetadata{ProtocolRootAuthority: c.Accounts.ProtocolRootAuthority, ProtocolVersion: helper.ProtocolVersion, Built: built, Normalized: normalized, MarketMetadataGeneration: c.MarketMetadataGeneration,
 		StreamGeneration: c.StreamGeneration, ExchangeSequence: c.ExchangeSequence, AccountGeneration: c.AccountGeneration, AccountSlot: c.AccountSlot, AccountSequence: c.AccountSequence,
 		MinContextSlot: max(c.Blockhash.Slot, c.Authority.Slot), BlockHeightAtPreparation: c.BlockHeight})
 	if err != nil {
@@ -261,7 +263,7 @@ func (b *Builder) validate(ctx context.Context, q Intent, c Capture, requireProj
 	}
 	if normal(q.Action) {
 		f := c.Flight
-		if b.builderAuthority == "" || f == nil || f.ProgramOwner != helper.FlightProgramID || f.BuilderAuthority != b.builderAuthority || f.FeeBPS != 2 || !key(f.BuilderState) || !key(f.BuilderTraderAccount) || f.Slot < c.Blockhash.Slot || f.Slot >= c.Blockhash.Slot+slotBudget || !fresh(f.ObservedAt, now, requestTTL) {
+		if b.builderAuthority == "" || f == nil || !key(c.Accounts.ProtocolRootAuthority) || f.ProtocolRootAuthority != c.Accounts.ProtocolRootAuthority || f.ProgramOwner != helper.FlightProgramID || f.BuilderAuthority != b.builderAuthority || f.FeeBPS != 2 || !key(f.BuilderState) || !key(f.BuilderTraderAccount) || f.Slot < c.Blockhash.Slot || f.Slot >= c.Blockhash.Slot+slotBudget || !fresh(f.ObservedAt, now, requestTTL) {
 			return errors.New("fresh verified Flight 2 bps registration required")
 		}
 	}

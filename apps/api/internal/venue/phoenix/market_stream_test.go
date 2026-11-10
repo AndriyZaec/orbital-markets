@@ -149,6 +149,31 @@ func TestMarketStreamAppliesOrderedExchangeDeltasAtomically(t *testing.T) {
 	}
 }
 
+func TestMarketStreamPreservesProtocolRootAcrossSnapshotsAndKeyUpdates(t *testing.T) {
+	stream := NewMarketStream(nil, discardLogger())
+	generation := stream.markConnected()
+	sequence := stringUint64(7)
+	message := exchangeEnvelope{MessageType: "snapshot", Version: 1, SequenceNumber: &sequence,
+		Exchange: wsExchangeAccounts{CurrentAuthorities: exchangeAuthorities{RootAuthority: "protocol-root"}, PerpAssetMap: "map", GlobalTraderIndex: []string{"index"}, ActiveTraderBuffer: []string{"buffer"}},
+		Markets:  []wsMarketConfig{{Symbol: "SOL", MarketStatus: "active", MarketPubkey: "market", SplinePubkey: "spline", TickSize: 100, BaseLotsDecimals: 2, FundingConfig: wsFundingConfig{FundingIntervalSeconds: 3600}, LeverageTiers: []leverageTier{{MaxLeverage: 20}}}},
+	}
+	if err := stream.applyExchangeMessage(generation, message); err != nil {
+		t.Fatal(err)
+	}
+	if got := stream.Snapshot().Metadata.Accounts.ProtocolRootAuthority; got != "protocol-root" {
+		t.Fatalf("snapshot root lost: %q", got)
+	}
+	sequence = 8
+	message.MessageType = "delta"
+	message.Ops = []json.RawMessage{json.RawMessage(`{"kind":"exchangeKeysUpdated","exchange":{"currentAuthorities":{"rootAuthority":"new-protocol-root"},"perpAssetMap":"map","globalTraderIndex":["index"],"activeTraderBuffer":["buffer"]}}`)}
+	if err := stream.applyExchangeMessage(generation, message); err != nil {
+		t.Fatal(err)
+	}
+	if got := stream.Snapshot().Metadata.Accounts.ProtocolRootAuthority; got != "new-protocol-root" {
+		t.Fatalf("updated root lost: %q", got)
+	}
+}
+
 func TestMarketStreamAcceptsPeriodicExchangeSnapshotsWithoutLosingLiveState(t *testing.T) {
 	stream := NewMarketStream(nil, discardLogger())
 	generation := stream.markConnected()

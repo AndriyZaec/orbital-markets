@@ -19,7 +19,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(live.SigningMetadata{Built: response.Result}); err != nil {
+	metadata := live.SigningMetadata{Built: response.Result}
+	if f := response.Result.Manifest.Flight; f != nil {
+		metadata.ProtocolRootAuthority = f.ProtocolRootAuthority
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

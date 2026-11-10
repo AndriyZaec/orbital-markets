@@ -94,6 +94,7 @@ func Decode(q *domain.SigningRequest) (Prepared, error) {
 		RecentBlockhash: b.RecentBlockhash, LastValidBlockHeight: b.LastValidBlockHeight, MetadataGeneration: b.MetadataGeneration, Accounts: helper.MarketAccounts{Orderbook: b.Manifest.Orderbook}}
 	if b.Manifest.Flight != nil {
 		request.BuilderAuthority = b.Manifest.Flight.BuilderAuthority
+		request.Accounts.ProtocolRootAuthority = p.Metadata.ProtocolRootAuthority
 	}
 	if err := helper.ValidateBuildOrderResult(request, b); err != nil {
 		return p, err

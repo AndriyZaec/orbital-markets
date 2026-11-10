@@ -173,7 +173,8 @@ func TestCoSignPinnedHelperOrders(t *testing.T) {
 				ReduceOnly: action != helper.ActionOpen, ClientOrderID: 42, LastValidSlot: 123456,
 				RecentBlockhash: base58.Encode(bytes.Repeat([]byte{9}, 32)), LastValidBlockHeight: 999999, MetadataGeneration: 7,
 				Accounts: helper.MarketAccounts{
-					PerpAssetMap: "PhUsd11YkbjSaWjFncfAAmatntsjx3MgDR9B6g1ks3A", Orderbook: "EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy",
+					ProtocolRootAuthority: "Stake11111111111111111111111111111111111111",
+					PerpAssetMap:          "PhUsd11YkbjSaWjFncfAAmatntsjx3MgDR9B6g1ks3A", Orderbook: "EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy",
 					SplineCollection: "RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj", GlobalTraderIndex: []string{helper.FlightProgramID}, ActiveTraderBuffer: []string{"phDEVv4w6BcfkLrLNeXr8HhhgQxnxziVGXpGPcaadMf"},
 				},
 			}

@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +24,8 @@ type phoenixRecoveryTestFeed struct {
 	positions         []liveAccountPosition
 	exact             map[string]*normFill
 	lookupErr         error
+	refreshErr        error
+	positionsAt       *time.Time
 	pending           bool
 	closeRequest      *domain.SigningRequest
 	closeFill         *normFill
@@ -34,11 +39,24 @@ func newRecoveryTestFeed() *phoenixRecoveryTestFeed {
 func (f *phoenixRecoveryTestFeed) RecoverySnapshot() liveAccountSnapshot {
 	f.recoveryMu.Lock()
 	defer f.recoveryMu.Unlock()
-	return liveAccountSnapshot{Venue: "phoenix", Account: "phi-owner", Connected: true, PositionsUpdatedAt: time.Now().UTC(), Positions: append([]liveAccountPosition(nil), f.positions...)}
+	updatedAt := time.Now().UTC()
+	if f.positionsAt != nil {
+		updatedAt = *f.positionsAt
+	}
+	return liveAccountSnapshot{Venue: "phoenix", Account: "phi-owner", Connected: true, PositionsUpdatedAt: updatedAt, Positions: append([]liveAccountPosition(nil), f.positions...)}
 }
 func (f *phoenixRecoveryTestFeed) RefreshRecoveryPositions(context.Context) error {
 	f.refreshesRecovery.Add(1)
-	return nil
+	return f.refreshErr
+}
+
+func (f *phoenixRecoveryTestFeed) ReconcileOutstandingOrders(context.Context) error {
+	f.recoveryMu.Lock()
+	defer f.recoveryMu.Unlock()
+	if f.lookupErr == nil {
+		f.pending = false
+	}
+	return f.lookupErr
 }
 func (f *phoenixRecoveryTestFeed) HasUnresolvedOrders(context.Context) (bool, error) {
 	f.recoveryMu.Lock()
@@ -286,6 +304,99 @@ func TestPhoenixFlatProofIsBlockedUntilOutstandingOrdersResolve(t *testing.T) {
 	state, err = server.inspectPositionVenueTruth(context.Background(), position, time.Now().Add(-time.Second))
 	if err != nil || state != positionExposureFlat {
 		t.Fatal("resolved flat account did not become provable", state, err)
+	}
+}
+
+func TestPhoenixCloseReconcilesExternalFlatWithoutAnotherOrder(t *testing.T) {
+	for _, kind := range []string{"degraded", "closing", "missing fill", "unresolved", "refresh unavailable", "stale"} {
+		t.Run(kind, func(t *testing.T) {
+			server, db := newResidualExposureServer(t)
+			feed := newRecoveryTestFeed()
+			_, accounts := recoveryPhoenixContext(t, feed)
+			server.live.accounts = accounts.leases["phoenix"].registry
+			position := phoenixRecoveryPosition(t, server)
+			state := "degraded"
+			if kind == "closing" {
+				state = "closing"
+			}
+			if _, err := db.Exec(`UPDATE live_positions SET state=?, updated_at=? WHERE id=?`, state, time.Now().Add(-time.Minute).Format(time.RFC3339), position.ID); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "missing fill" {
+				if _, err := db.Exec(`DELETE FROM live_fills WHERE position_id=?`, position.ID); err != nil {
+					t.Fatal(err)
+				}
+				session := &LiveSession{ID: "unconfirmed-open", State: sessDegraded,
+					Plan:     &domain.ExecutionPlan{ID: position.PlanID, Asset: position.Asset},
+					Bindings: liveVenueBindings{Accounts: position.AccountBindings},
+					Leg1:     legPlan{venue: "phoenix", symbol: "SOL-PERP"}, Leg2: legPlan{venue: "hyperliquid", symbol: "SOL"},
+					CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now().Add(-time.Minute),
+				}
+				payload, err := marshalLiveSession(session)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := server.liveStore.UpsertDurableSession(context.Background(), executor.DurableSessionRecord{
+					ID: session.ID, State: string(session.State), Payload: payload, Asset: position.Asset,
+					AccountBindings: position.AccountBindings, HasExposure: true, CreatedAt: session.CreatedAt, ExpiresAt: time.Now().Add(time.Minute),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for venue, agent := range map[string]string{"phoenix": "phi-agent", "hyperliquid": "0xagent"} {
+				if err := server.liveStore.UpsertAgentAuthorization(context.Background(), venue, position.AccountBindings[venue], agent); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The opening attempt may still be submitted locally after an external
+			// close. It must resolve before a fresh flat snapshot can close the row.
+			feed.pending = true
+			switch kind {
+			case "unresolved":
+				feed.lookupErr = orders.ErrUncertain
+			case "refresh unavailable":
+				feed.refreshErr = errors.New("account unavailable")
+			case "stale":
+				stale := time.Now().Add(-time.Hour)
+				feed.positionsAt = &stale
+			}
+			request := httptest.NewRequest("POST", "/api/v1/live/close/"+position.ID, jsonBody(t, map[string]any{
+				"accounts": position.AccountBindings,
+				"agents":   map[string]string{"phoenix": "phi-agent", "hyperliquid": "0xagent"},
+			}))
+			response := httptest.NewRecorder()
+			server.handleLiveClose(response, request)
+			wantClosed := kind == "degraded" || kind == "closing" || kind == "missing fill"
+			var body struct {
+				ReconciledClosed bool                    `json:"reconciled_closed"`
+				SigningRequests  []domain.SigningRequest `json:"signing_requests"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := server.liveStore.GetPosition(context.Background(), position.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wantClosed {
+				if response.Code != http.StatusOK || !body.ReconciledClosed || stored.State != "closed" {
+					t.Fatalf("external close not reconciled: %d %s state=%s", response.Code, response.Body.String(), stored.State)
+				}
+			} else if response.Code != http.StatusConflict || body.ReconciledClosed || stored.State == "closed" {
+				t.Fatalf("unknown exposure was marked closed: %d %s state=%s", response.Code, response.Body.String(), stored.State)
+			}
+			if len(body.SigningRequests) != 0 || feed.sends.Load() != 0 {
+				t.Fatal("flat recovery created or sent another order")
+			}
+			fills, err := server.liveStore.GetFills(context.Background(), position.ID)
+			if kind == "missing fill" {
+				if err != nil || len(fills) != 0 {
+					t.Fatal("flat snapshot fabricated historical execution", fills, err)
+				}
+			} else if err != nil || len(fills) != 1 || !fills[0].Filled || fills[0].FilledAmount != 1 {
+				t.Fatal("historical fill was erased", fills, err)
+			}
+		})
 	}
 }
 

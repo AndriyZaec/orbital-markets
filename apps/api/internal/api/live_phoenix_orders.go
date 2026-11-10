@@ -74,12 +74,12 @@ func (f *phoenixAccountFeed) validateOrderSubmit(ctx context.Context, q *domain.
 		return failed(errors.New("Phoenix current agent/slot differs from signed order"))
 	}
 	if q.Action == "open" || q.Action == "close" {
-		proof, err := b.FlightProof(ctx, hash.Slot)
+		proof, err := b.FlightProof(ctx, hash.Slot, p.Metadata.ProtocolRootAuthority)
 		if err != nil {
 			return failed(err)
 		}
 		flight := p.Metadata.Built.Manifest.Flight
-		if flight == nil || proof.ProgramOwner != helper.FlightProgramID || proof.FeeBPS != 2 || proof.BuilderAuthority != flight.BuilderAuthority || proof.BuilderState != flight.BuilderState || proof.BuilderTraderAccount != flight.BuilderTraderAccount || proof.Slot >= p.LastSlot || proof.Slot < hash.Slot || !phoenixTimeFresh(proof.ObservedAt, time.Now(), admissionFreshness) {
+		if flight == nil || proof.ProtocolRootAuthority != p.Metadata.ProtocolRootAuthority || proof.ProtocolRootAuthority != flight.ProtocolRootAuthority || proof.ProgramOwner != helper.FlightProgramID || proof.FeeBPS != 2 || proof.BuilderAuthority != flight.BuilderAuthority || proof.BuilderState != flight.BuilderState || proof.BuilderTraderAccount != flight.BuilderTraderAccount || proof.Slot >= p.LastSlot || proof.Slot < hash.Slot || !phoenixTimeFresh(proof.ObservedAt, time.Now(), admissionFreshness) {
 			return failed(errors.New("Phoenix Flight registration differs from signed order"))
 		}
 	}

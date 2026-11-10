@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress'
 import { AssetIcon } from '@/components/AssetIcon'
 import { ExternalLinkIcon, Share2Icon } from 'lucide-react'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { cn } from '@/lib/utils'
 
 interface Props {
   position: LivePosition
@@ -464,10 +465,19 @@ function FillCard({ fill }: { fill: LiveFillDetail }) {
   )
 }
 
+function executionOutcomeLabel(state: string) {
+  switch (state) {
+    case 'degraded': return 'Recovery required'
+    case 'failed': return 'Execution failed'
+    case 'open': return 'Hedge opened'
+    case 'closed': return 'Position closed'
+    default: return 'Execution update'
+  }
+}
+
 function EventRow({ event: ev }: { event: LiveEventDetail }) {
   const isComplete = ev.event === 'complete'
-  const isError = ev.state === 'degraded' || ev.state === 'failed'
-  const label = ev.event
+  const label = isComplete ? executionOutcomeLabel(ev.state) : ev.event
     .split('_')
     .filter(Boolean)
     .map((word, index) => index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word)
@@ -476,12 +486,12 @@ function EventRow({ event: ev }: { event: LiveEventDetail }) {
   return (
     <div className="min-w-0 text-[10px]">
       <div className="flex min-w-0 items-baseline justify-between gap-3">
-        <span className={`min-w-0 font-medium leading-relaxed ${
-          isComplete && isError ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-foreground'
-        }`}>{label}</span>
+        <span className={cn('min-w-0 font-medium leading-relaxed',
+          isComplete ? stateColor(ev.state) : 'text-foreground',
+        )}>{label}</span>
         <span className="shrink-0 whitespace-nowrap font-mono text-[9px] text-muted-foreground/60">{fmtEventTime(ev.at)}</span>
       </div>
-      {ev.detail && <p className="mt-1 min-w-0 break-words leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{ev.detail}</p>}
+      {!isComplete && ev.detail && <p className="mt-1 min-w-0 break-words leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{ev.detail}</p>}
     </div>
   )
 }

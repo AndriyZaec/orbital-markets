@@ -1250,6 +1250,25 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(signingRequests) == 0 {
+		if venueDerived {
+			// A manual venue close may have flattened exposure while the original
+			// Phoenix attempt is still submitted locally. Resolve that journal
+			// evidence first, then re-read both venues through the existing flat
+			// proof (freshness, native symbols and unresolved-order gates).
+			s.reconcilePhoenixPositionOrders(r.Context(), pos)
+			state, err := s.inspectPositionAfterCloseActivity(r.Context(), pos)
+			if err == nil && state == positionExposureFlat {
+				if _, err := s.markPositionClosedFromVenueTruth(r.Context(), pos); err != nil {
+					s.logger.Error("live close: persist reconciled closure", "err", err, "id", id)
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Could not save the position status. Try again shortly."})
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"position_id": id, "reconciled_closed": true, "signing_requests": []any{},
+				})
+				return
+			}
+		}
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":     "Current close exposure is not ready. Try again shortly.",
 			"code":      "CLOSE_EXPOSURE_NOT_READY",

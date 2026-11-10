@@ -28,6 +28,7 @@ func flightKeys() helper.FlightAccounts {
 		return base58.Encode(bytes)
 	}
 	return helper.FlightAccounts{PhoenixProgramID: helper.PhoenixProgramID, FlightProgramID: helper.FlightProgramID,
+		ProtocolRootAuthority: key(15), GlobalConfiguration: key(16), CollateralTransferPermission: key(17),
 		BuilderAuthority: key(4), GlobalState: key(5), BuilderState: key(6), BuilderTraderAccount: key(7), CollateralTransferAuthority: key(8)}
 }
 
@@ -73,7 +74,7 @@ func (c *flightChain) AccountInfo(_ context.Context, address string, minSlot uin
 	c.count.Add(1)
 	c.minimum.Store(minSlot)
 	owner := helper.FlightProgramID
-	if address == flightKeys().BuilderTraderAccount {
+	if address == flightKeys().BuilderTraderAccount || address == flightKeys().GlobalConfiguration || address == flightKeys().CollateralTransferPermission {
 		owner = helper.PhoenixProgramID
 	}
 	slot := minSlot + 1
@@ -109,12 +110,12 @@ func TestFlightOnlyVerifiesOnActionAndUsesEveryAccountAtMinimumSlot(t *testing.T
 	if c.count.Load() != 0 || c.hashReads.Load() != 0 || c.reads.Load() != 0 {
 		t.Fatal("startup performed idle chain reads")
 	}
-	proof, err := r.FlightProof(context.Background(), 150)
-	if err != nil || proof.FeeBPS != 2 || proof.Slot != 151 || c.minimum.Load() != 150 || c.count.Load() != 3 || proof.BuilderTraderAccount != flightKeys().BuilderTraderAccount {
+	proof, err := r.FlightProof(context.Background(), 150, flightKeys().ProtocolRootAuthority)
+	if err != nil || proof.ProtocolRootAuthority != flightKeys().ProtocolRootAuthority || proof.FeeBPS != 2 || proof.Slot != 151 || c.minimum.Load() != 150 || c.count.Load() != 5 || proof.BuilderTraderAccount != flightKeys().BuilderTraderAccount {
 		t.Fatalf("proof=%+v err=%v", proof, err)
 	}
 	h.failure.Store(true)
-	if _, err := r.FlightProof(context.Background(), 150); err == nil {
+	if _, err := r.FlightProof(context.Background(), 150, flightKeys().ProtocolRootAuthority); err == nil {
 		t.Fatal("cached success authorized changed registration")
 	}
 	if status := r.FlightReadiness(); status.Ready || status.Reason != "verification_unavailable" {
@@ -124,7 +125,7 @@ func TestFlightOnlyVerifiesOnActionAndUsesEveryAccountAtMinimumSlot(t *testing.T
 		t.Fatal("Flight failure disabled owner delegation infrastructure")
 	}
 	h.failure.Store(false)
-	if _, err := r.FlightProof(context.Background(), 150); err != nil {
+	if _, err := r.FlightProof(context.Background(), 150, flightKeys().ProtocolRootAuthority); err != nil {
 		t.Fatal(err)
 	}
 	if !r.FlightReadiness().Ready {
@@ -136,12 +137,12 @@ func TestFlightWrongOwnerStaleSlotMissingAccountAndDiagnosticExpiry(t *testing.T
 	r, _, c := flightRuntime(t)
 	for _, mode := range []int32{1, 2, 3} {
 		c.mode.Store(mode)
-		if _, err := r.FlightProof(context.Background(), 150); err == nil {
+		if _, err := r.FlightProof(context.Background(), 150, flightKeys().ProtocolRootAuthority); err == nil {
 			t.Fatalf("accepted invalid account mode %d", mode)
 		}
 	}
 	c.mode.Store(0)
-	if _, err := r.FlightProof(context.Background(), 150); err != nil {
+	if _, err := r.FlightProof(context.Background(), 150, flightKeys().ProtocolRootAuthority); err != nil {
 		t.Fatal(err)
 	}
 	status := r.FlightReadiness()
@@ -169,7 +170,7 @@ func TestFlightCancellationDrainsSharedHelperAndDoesNotReadRPC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	before := c.count.Load()
-	go func() { _, err := r.FlightProof(ctx, 100); done <- err }()
+	go func() { _, err := r.FlightProof(ctx, 100, flightKeys().ProtocolRootAuthority); done <- err }()
 	helperCtx := <-block.entered
 	cancel()
 	if helperCtx.Err() != nil {
@@ -185,8 +186,10 @@ func TestFlightCancellationDrainsSharedHelperAndDoesNotReadRPC(t *testing.T) {
 // decoded by the real helper, not a fake registration result or order manifest.
 type flightDataChain struct {
 	fakeChain
-	accounts helper.FlightAccounts
-	fee      atomic.Uint64
+	accounts           helper.FlightAccounts
+	fee                atomic.Uint64
+	wrongRoot          atomic.Bool
+	permissionDisabled atomic.Bool
 }
 
 func (c *flightDataChain) AccountInfo(_ context.Context, address string, minimum uint64, _ bool) (rpc.AccountInfo, error) {
@@ -195,6 +198,10 @@ func (c *flightDataChain) AccountInfo(_ context.Context, address string, minimum
 		name, size = "builder_state", 216
 	} else if address == c.accounts.BuilderTraderAccount {
 		owner, name, size = helper.PhoenixProgramID, "trader", 224
+	} else if address == c.accounts.GlobalConfiguration {
+		owner, name, size = helper.PhoenixProgramID, "global_configuration", 1104
+	} else if address == c.accounts.CollateralTransferPermission {
+		owner, name, size = helper.PhoenixProgramID, "permission_account", 168
 	} else if address != c.accounts.GlobalState {
 		return rpc.AccountInfo{}, rpc.ErrAccountNotFound
 	}
@@ -203,6 +210,19 @@ func (c *flightDataChain) AccountInfo(_ context.Context, address string, minimum
 	copy(data, digest[:8])
 	pubkey := func(offset int, key string) { decoded, _ := base58.Decode(key); copy(data[offset:offset+32], decoded) }
 	switch name {
+	case "global_configuration":
+		pubkey(8, c.accounts.GlobalConfiguration)
+		pubkey(40, c.accounts.ProtocolRootAuthority)
+		if c.wrongRoot.Load() {
+			pubkey(40, c.accounts.BuilderAuthority)
+		}
+	case "permission_account":
+		pubkey(8, c.accounts.ProtocolRootAuthority)
+		pubkey(40, c.accounts.CollateralTransferAuthority)
+		if !c.permissionDisabled.Load() {
+			binary.LittleEndian.PutUint64(data[80:88], 1)
+		}
+		binary.LittleEndian.PutUint64(data[96:104], ^uint64(0))
 	case "global_state":
 		pubkey(8, helper.PhoenixProgramID)
 		binary.LittleEndian.PutUint64(data[104:112], 100)
@@ -218,7 +238,7 @@ func (c *flightDataChain) AccountInfo(_ context.Context, address string, minimum
 	return rpc.AccountInfo{Owner: owner, Slot: minimum, DataBase64: base64.StdEncoding.EncodeToString(data)}, nil
 }
 
-func TestFlightProofWithPinnedHelperRejectsActualFeeChange(t *testing.T) {
+func TestFlightProofWithPinnedHelperRejectsInvalidChainRegistrationAndPermission(t *testing.T) {
 	path := os.Getenv("ORBITAL_PHOENIX_HELPER_TEST_PATH")
 	if path == "" {
 		t.Skip("set ORBITAL_PHOENIX_HELPER_TEST_PATH to built phoenix-helper")
@@ -228,7 +248,7 @@ func TestFlightProofWithPinnedHelperRejectsActualFeeChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(h.Close)
-	accounts, err := h.FlightAccounts(context.Background(), helper.FlightRequest{BuilderAuthority: flightKeys().BuilderAuthority})
+	accounts, err := h.FlightAccounts(context.Background(), helper.FlightRequest{BuilderAuthority: flightKeys().BuilderAuthority, ProtocolRootAuthority: flightKeys().ProtocolRootAuthority})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,15 +264,25 @@ func TestFlightProofWithPinnedHelperRejectsActualFeeChange(t *testing.T) {
 	if status := r.FlightReadiness(); status.Ready || status.CheckedAt != nil {
 		t.Fatalf("real helper startup unexpectedly verified chain: %+v", status)
 	}
-	proof, err := r.FlightProof(context.Background(), 155)
+	proof, err := r.FlightProof(context.Background(), 155, flightKeys().ProtocolRootAuthority)
 	if err != nil || proof.Slot != 155 || proof.BuilderState != accounts.BuilderState || proof.FeeBPS != 2 {
 		t.Fatalf("real helper proof=%+v err=%v", proof, err)
 	}
 	c.fee.Store(3)
-	if _, err := r.FlightProof(context.Background(), 155); err == nil {
+	if _, err := r.FlightProof(context.Background(), 155, flightKeys().ProtocolRootAuthority); err == nil {
 		t.Fatal("actual chain fee 3 bps accepted because manifest said 2 bps")
 	}
 	if r.FlightReadiness().Ready || !r.Readiness(context.Background()).Ready {
 		t.Fatal("fee change must block Flight without blocking delegation")
+	}
+	c.fee.Store(2)
+	c.wrongRoot.Store(true)
+	if _, err := r.FlightProof(context.Background(), 155, accounts.ProtocolRootAuthority); err == nil {
+		t.Fatal("metadata root differs from canonical chain config")
+	}
+	c.wrongRoot.Store(false)
+	c.permissionDisabled.Store(true)
+	if _, err := r.FlightProof(context.Background(), 155, accounts.ProtocolRootAuthority); err == nil {
+		t.Fatal("disabled collateral transfer permission accepted")
 	}
 }

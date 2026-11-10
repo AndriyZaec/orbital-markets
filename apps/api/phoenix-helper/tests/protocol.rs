@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-const BUILD_ORDER_REQUEST: &[u8] = br#"{"protocol_version":1,"request_id":"order-1","operation":"build_order","payload":{"action":"open","owner_authority":"11111111111111111111111111111111","position_authority":"So11111111111111111111111111111111111111112","fee_payer":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","builder_authority":"Vote111111111111111111111111111111111111111","symbol":"SOL","side":"bid","num_base_lots":100,"price_limit_ticks":12345,"reduce_only":false,"client_order_id":42,"last_valid_slot":123456,"recent_blockhash":"11111111111111111111111111111111","last_valid_block_height":999999,"metadata_generation":7,"accounts":{"perp_asset_map":"PhUsd11YkbjSaWjFncfAAmatntsjx3MgDR9B6g1ks3A","orderbook":"EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy","spline_collection":"RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj","global_trader_index":["F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"],"active_trader_buffer":["phDEVv4w6BcfkLrLNeXr8HhhgQxnxziVGXpGPcaadMf"]}}}
+const BUILD_ORDER_REQUEST: &[u8] = br#"{"protocol_version":1,"request_id":"order-1","operation":"build_order","payload":{"action":"open","owner_authority":"11111111111111111111111111111111","position_authority":"So11111111111111111111111111111111111111112","fee_payer":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","builder_authority":"Vote111111111111111111111111111111111111111","symbol":"SOL","side":"bid","num_base_lots":100,"price_limit_ticks":12345,"reduce_only":false,"client_order_id":42,"last_valid_slot":123456,"recent_blockhash":"11111111111111111111111111111111","last_valid_block_height":999999,"metadata_generation":7,"accounts":{"protocol_root_authority":"Stake11111111111111111111111111111111111111","perp_asset_map":"PhUsd11YkbjSaWjFncfAAmatntsjx3MgDR9B6g1ks3A","orderbook":"EMBERpYNE6ehWmXymZZS2skiFmCa9V5dp14e1iduM5qy","spline_collection":"RiSeVw3ZjNfsaXPRb4mgaqYaEEt41pNNJoDvVh7pgQj","global_trader_index":["F1ightu9cujFYo34k9CabifLrJT8qzfDVM2Q7BqhJn2W"],"active_trader_buffer":["phDEVv4w6BcfkLrLNeXr8HhhgQxnxziVGXpGPcaadMf"]}}}
 "#;
 
 fn run_helper(input: &[u8]) -> std::process::Output {
@@ -20,6 +20,56 @@ fn run_helper(input: &[u8]) -> std::process::Output {
         .expect("request should be written");
 
     child.wait_with_output().expect("helper should exit")
+}
+
+#[test]
+fn flight_permission_uses_protocol_root_not_wallet_owner() {
+    use base64::Engine as _;
+    use phoenix_rise::ix::flight::get_flight_authorized_collateral_transfer_permission_address;
+    use solana_message::legacy::Message;
+    use solana_pubkey::Pubkey;
+    use std::str::FromStr;
+    let mut request: serde_json::Value = serde_json::from_slice(BUILD_ORDER_REQUEST).unwrap();
+    let root = Pubkey::new_from_array([5; 32]);
+    request["payload"]["accounts"]["protocol_root_authority"] = root.to_string().into();
+    for action in ["open", "close"] {
+        request["payload"]["action"] = action.into();
+        request["payload"]["reduce_only"] = (action == "close").into();
+        let output = run_helper(&serde_json::to_vec(&request).unwrap());
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["ok"], true, "{response}");
+        let wire = base64::engine::general_purpose::STANDARD
+            .decode(response["result"]["message_base64"].as_str().unwrap())
+            .unwrap();
+        let message: Message = bincode::deserialize(&wire).unwrap();
+        let ix = &message.instructions[2];
+        let actual = message.account_keys[usize::from(*ix.accounts.last().unwrap())];
+        let owner =
+            Pubkey::from_str(request["payload"]["owner_authority"].as_str().unwrap()).unwrap();
+        assert_ne!(root, owner);
+        assert_eq!(
+            actual,
+            get_flight_authorized_collateral_transfer_permission_address(&root).unwrap()
+        );
+        assert_ne!(
+            actual,
+            get_flight_authorized_collateral_transfer_permission_address(&owner).unwrap()
+        );
+        assert_eq!(
+            response["result"]["manifest"]["flight"]["protocol_root_authority"],
+            root.to_string()
+        );
+    }
+    request["payload"]["accounts"]
+        .as_object_mut()
+        .unwrap()
+        .remove("protocol_root_authority");
+    let output = run_helper(&serde_json::to_vec(&request).unwrap());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        response["ok"], false,
+        "missing root must not default to wallet owner"
+    );
 }
 
 fn delegation_request(action: &str) -> serde_json::Value {

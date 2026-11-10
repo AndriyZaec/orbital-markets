@@ -109,9 +109,10 @@ type exchangeEnvelope struct {
 }
 
 type wsExchangeAccounts struct {
-	PerpAssetMap       string   `json:"perpAssetMap"`
-	GlobalTraderIndex  []string `json:"globalTraderIndex"`
-	ActiveTraderBuffer []string `json:"activeTraderBuffer"`
+	CurrentAuthorities exchangeAuthorities `json:"currentAuthorities"`
+	PerpAssetMap       string              `json:"perpAssetMap"`
+	GlobalTraderIndex  []string            `json:"globalTraderIndex"`
+	ActiveTraderBuffer []string            `json:"activeTraderBuffer"`
 }
 
 type wsMarketConfig struct {
@@ -668,7 +669,8 @@ func normalizeExchangeSnapshot(accounts wsExchangeAccounts, configs []wsMarketCo
 	sort.Slice(markets, func(i, j int) bool { return markets[i].Symbol < markets[j].Symbol })
 	return ExchangeMetadata{
 		Accounts: ExchangeAccounts{
-			PerpAssetMap: accounts.PerpAssetMap, GlobalTraderIndex: append([]string(nil), accounts.GlobalTraderIndex...),
+			ProtocolRootAuthority: accounts.CurrentAuthorities.RootAuthority,
+			PerpAssetMap:          accounts.PerpAssetMap, GlobalTraderIndex: append([]string(nil), accounts.GlobalTraderIndex...),
 			ActiveTraderBuffer: append([]string(nil), accounts.ActiveTraderBuffer...),
 		},
 		Markets: markets,
@@ -704,7 +706,8 @@ func applyExchangeOp(accounts *ExchangeAccounts, markets map[string]MarketMetada
 			return errors.New("Phoenix exchange keys delta is missing required accounts")
 		}
 		*accounts = ExchangeAccounts{
-			PerpAssetMap: op.Exchange.PerpAssetMap, GlobalTraderIndex: append([]string(nil), op.Exchange.GlobalTraderIndex...),
+			ProtocolRootAuthority: op.Exchange.CurrentAuthorities.RootAuthority,
+			PerpAssetMap:          op.Exchange.PerpAssetMap, GlobalTraderIndex: append([]string(nil), op.Exchange.GlobalTraderIndex...),
 			ActiveTraderBuffer: append([]string(nil), op.Exchange.ActiveTraderBuffer...),
 		}
 	case "marketAdded":
@@ -818,7 +821,8 @@ func cloneStats(stats map[string]LiveMarketStats) map[string]LiveMarketStats {
 
 func cloneExchangeAccounts(accounts ExchangeAccounts) ExchangeAccounts {
 	return ExchangeAccounts{
-		PerpAssetMap: accounts.PerpAssetMap, GlobalTraderIndex: append([]string(nil), accounts.GlobalTraderIndex...),
+		ProtocolRootAuthority: accounts.ProtocolRootAuthority,
+		PerpAssetMap:          accounts.PerpAssetMap, GlobalTraderIndex: append([]string(nil), accounts.GlobalTraderIndex...),
 		ActiveTraderBuffer: append([]string(nil), accounts.ActiveTraderBuffer...),
 	}
 }

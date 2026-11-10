@@ -357,6 +357,8 @@ func validateBuildOrderResult(request BuildOrderRequest, result BuildOrderResult
 		flight := result.Manifest.Flight
 		if result.Manifest.Routing != "flight" ||
 			flight == nil ||
+			!validKey(request.Accounts.ProtocolRootAuthority) ||
+			flight.ProtocolRootAuthority != request.Accounts.ProtocolRootAuthority ||
 			flight.FlightProgramID != FlightProgramID ||
 			flight.BuilderAuthority != request.BuilderAuthority ||
 			flight.BuilderTraderAccount == "" ||

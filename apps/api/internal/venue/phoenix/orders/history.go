@@ -3,6 +3,8 @@ package orders
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -174,6 +176,19 @@ func number(p *json.Number) (uint64, error) {
 }
 func isNumber(p *json.Number, want uint64) bool { v, err := number(p); return err == nil && v == want }
 func isBool(p *bool, want bool) bool            { return p != nil && *p == want }
+
+func isHistoryClientOrderID(wire *string, want string) bool {
+	cid, err := nativeUint(want)
+	if wire == nil || err != nil {
+		return false
+	}
+	// orders_v2 exposes a hex-encoded little-endian u128. Our native IDs
+	// occupy its lower u64; matching all 16 bytes also binds the upper half.
+	var encoded [16]byte
+	binary.LittleEndian.PutUint64(encoded[:8], cid)
+	return *wire == hex.EncodeToString(encoded[:])
+}
+
 func null(raw json.RawMessage) bool {
 	return len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
@@ -203,6 +218,24 @@ func signedDelta(before, after, delta string) (*big.Int, error) {
 	return values[2], nil
 }
 
+func signedDecimalDelta(before, after, delta string) error {
+	values := make([]*big.Rat, 0, 3)
+	for _, text := range []string{before, after, delta} {
+		v, err := decimal(strings.TrimPrefix(text, "-"))
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(text, "-") {
+			v.Neg(v)
+		}
+		values = append(values, v)
+	}
+	if new(big.Rat).Sub(values[1], values[0]).Cmp(values[2]) != 0 {
+		return ErrUncertain
+	}
+	return nil
+}
+
 func (h *History) Resolve(ctx context.Context, a Attempt, slot uint64) (*Fill, error) {
 	p, err := Decode(&a.Request)
 	if err != nil {
@@ -221,7 +254,7 @@ func (h *History) Resolve(ctx context.Context, a Attempt, slot uint64) (*Fill, e
 		if err := json.Unmarshal(raw, &row); err != nil {
 			return err
 		}
-		if row.Intended.CID == nil || *row.Intended.CID != q.ClientOrderID {
+		if !isHistoryClientOrderID(row.Intended.CID, q.ClientOrderID) {
 			return nil
 		}
 		if order != nil {
@@ -329,7 +362,7 @@ func (h *History) Resolve(ctx context.Context, a Attempt, slot uint64) (*Fill, e
 		if err != nil || delta.Sign() == 0 || (q.Side == "buy") != (delta.Sign() > 0) {
 			return ErrUncertain
 		}
-		if _, err := signedDelta(row.QuoteBefore, row.QuoteAfter, row.QuoteDelta); err != nil {
+		if err := signedDecimalDelta(row.QuoteBefore, row.QuoteAfter, row.QuoteDelta); err != nil {
 			return err
 		}
 		delta.Abs(delta)

@@ -32,9 +32,10 @@ type ExchangeMetadata struct {
 }
 
 type ExchangeAccounts struct {
-	PerpAssetMap       string
-	GlobalTraderIndex  []string
-	ActiveTraderBuffer []string
+	ProtocolRootAuthority string
+	PerpAssetMap          string
+	GlobalTraderIndex     []string
+	ActiveTraderBuffer    []string
 }
 
 type MarketMetadata struct {
@@ -58,9 +59,14 @@ type exchangeResponse struct {
 }
 
 type exchangeKeys struct {
-	PerpAssetMap       string   `json:"perpAssetMap"`
-	GlobalTraderIndex  []string `json:"globalTraderIndex"`
-	ActiveTraderBuffer []string `json:"activeTraderBuffer"`
+	CurrentAuthorities exchangeAuthorities `json:"currentAuthorities"`
+	PerpAssetMap       string              `json:"perpAssetMap"`
+	GlobalTraderIndex  []string            `json:"globalTraderIndex"`
+	ActiveTraderBuffer []string            `json:"activeTraderBuffer"`
+}
+
+type exchangeAuthorities struct {
+	RootAuthority string `json:"rootAuthority"`
 }
 
 type marketConfig struct {
@@ -119,9 +125,10 @@ func (c *Client) FetchExchangeMetadata(ctx context.Context) (ExchangeMetadata, e
 
 	return ExchangeMetadata{
 		Accounts: ExchangeAccounts{
-			PerpAssetMap:       response.Keys.PerpAssetMap,
-			GlobalTraderIndex:  append([]string(nil), response.Keys.GlobalTraderIndex...),
-			ActiveTraderBuffer: append([]string(nil), response.Keys.ActiveTraderBuffer...),
+			ProtocolRootAuthority: response.Keys.CurrentAuthorities.RootAuthority,
+			PerpAssetMap:          response.Keys.PerpAssetMap,
+			GlobalTraderIndex:     append([]string(nil), response.Keys.GlobalTraderIndex...),
+			ActiveTraderBuffer:    append([]string(nil), response.Keys.ActiveTraderBuffer...),
 		},
 		Markets: markets,
 	}, nil

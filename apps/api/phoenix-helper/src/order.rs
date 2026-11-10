@@ -69,6 +69,7 @@ enum Side {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MarketAccounts {
+    protocol_root_authority: Option<String>,
     perp_asset_map: String,
     orderbook: String,
     spline_collection: String,
@@ -125,6 +126,7 @@ enum Routing {
 
 #[derive(Serialize)]
 struct FlightManifest {
+    protocol_root_authority: String,
     flight_program_id: String,
     builder_authority: String,
     builder_trader_account: String,
@@ -223,6 +225,12 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
     let phoenix_instruction = create_place_market_order_ix(params)
         .map_err(|error| format!("failed to build market order: {error}"))?;
     let (instruction, routing, flight) = if request.action.uses_flight() {
+        let protocol_root = request
+            .accounts
+            .protocol_root_authority
+            .as_deref()
+            .ok_or_else(|| "normal orders require accounts.protocol_root_authority".to_string())
+            .and_then(|value| parse_pubkey("accounts.protocol_root_authority", value))?;
         let builder_authority = request
             .builder_authority
             .as_deref()
@@ -235,7 +243,7 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
             .builder_authority(builder_authority)
             .builder_trader_account(builder_trader_account)
             .trader_wallet(position_authority)
-            .root_authority(owner_authority)
+            .root_authority(protocol_root)
             .inner_instruction(phoenix_instruction)
             .build()
             .map_err(|error| format!("invalid Flight proxy order: {error}"))?;
@@ -245,6 +253,7 @@ pub fn build_order(request: BuildOrderRequest) -> Result<BuildOrderResult, Strin
             proxy_instruction.into(),
             Routing::Flight,
             Some(FlightManifest {
+                protocol_root_authority: protocol_root.to_string(),
                 flight_program_id: FLIGHT_PROGRAM_ID.to_string(),
                 builder_authority: builder_authority.to_string(),
                 builder_trader_account: builder_trader_account.to_string(),

@@ -2,10 +2,13 @@ package orders
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,14 +18,21 @@ import (
 )
 
 func historyOrder(qid string) map[string]any {
+	// orders_v2 serializes the u128 as 16 little-endian bytes, not decimal.
+	cid, err := strconv.ParseUint(qid, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	var wire [16]byte
+	binary.LittleEndian.PutUint64(wire[:8], cid)
 	return map[string]any{"traderPdaIndex": 0, "traderSubaccountIndex": 0, "slot": 130, "slotIndex": 2, "instructionIndex": 0, "eventIndex": 1, "marketSymbol": "SOL", "instructionType": "PlaceMarketOrder", "orderType": "market", "createdAt": time.Now().UTC(), "status": "filled", "isReduceOnly": true, "isStopLoss": false,
-		"intended":            map[string]any{"clientOrderId": qid, "orderKind": "ImmediateOrCancel", "side": "buy", "priceInTicks": 10000, "baseLots": 29, "lastValidSlot": 164, "orderFlags": 128, "baseQty": "0.29", "hasPriceLimit": true, "isReduceOnly": true, "isStopLoss": false, "isPostOnly": false, "isTakeOnly": true, "cancelExisting": false},
+		"intended":            map[string]any{"clientOrderId": hex.EncodeToString(wire[:]), "orderKind": "ImmediateOrCancel", "side": "buy", "priceInTicks": 10000, "baseLots": 29, "lastValidSlot": 164, "orderFlags": 128, "baseQty": "0.29", "hasPriceLimit": true, "isReduceOnly": true, "isStopLoss": false, "isPostOnly": false, "isTakeOnly": true, "cancelExisting": false},
 		"fillBeforePlacement": map[string]any{"totalBaseQtyFilled": "0.15", "totalQuoteQtyFilled": "14.95", "totalTakerFee": "0.005", "numTrades": 2, "totalNumFills": 2}, "placedOrder": nil, "currentOrderState": nil}
 }
 func historyTrades(signature string) []map[string]any {
 	return []map[string]any{
-		{"traderPdaIndex": 0, "subaccountIndex": 0, "slot": 130, "slotIndex": 2, "instructionIndex": 0, "eventIndex": 2, "marketSymbol": "SOL", "signature": signature, "fillId": "fill-1", "instructionType": "PlaceMarketOrder", "tradeType": "market", "liquidity": "taker", "baseLotsBefore": "-29", "baseLotsAfter": "-19", "baseLotsDelta": "10", "virtualQuoteLotsBefore": "29000000", "virtualQuoteLotsAfter": "19000000", "virtualQuoteLotsDelta": "-10000000", "price": "100"},
-		{"traderPdaIndex": 0, "subaccountIndex": 0, "slot": 130, "slotIndex": 2, "instructionIndex": 0, "eventIndex": 3, "marketSymbol": "SOL", "signature": signature, "fillId": "fill-2", "instructionType": "PlaceMarketOrder", "tradeType": "market", "liquidity": "taker", "baseLotsBefore": "-19", "baseLotsAfter": "-14", "baseLotsDelta": "5", "virtualQuoteLotsBefore": "19000000", "virtualQuoteLotsAfter": "14000000", "virtualQuoteLotsDelta": "-5000000", "price": "99"},
+		{"traderPdaIndex": 0, "subaccountIndex": 0, "slot": 130, "slotIndex": 2, "instructionIndex": 0, "eventIndex": 2, "marketSymbol": "SOL", "signature": signature, "fillId": "fill-1", "instructionType": "PlaceMarketOrder", "tradeType": "market", "liquidity": "taker", "baseLotsBefore": "-29", "baseLotsAfter": "-19", "baseLotsDelta": "10", "virtualQuoteLotsBefore": "29.000001", "virtualQuoteLotsAfter": "19.000001", "virtualQuoteLotsDelta": "-10", "price": "100"},
+		{"traderPdaIndex": 0, "subaccountIndex": 0, "slot": 130, "slotIndex": 2, "instructionIndex": 0, "eventIndex": 3, "marketSymbol": "SOL", "signature": signature, "fillId": "fill-2", "instructionType": "PlaceMarketOrder", "tradeType": "market", "liquidity": "taker", "baseLotsBefore": "-19", "baseLotsAfter": "-14", "baseLotsDelta": "5", "virtualQuoteLotsBefore": "19.000001", "virtualQuoteLotsAfter": "14.000001", "virtualQuoteLotsDelta": "-5", "price": "99"},
 	}
 }
 
@@ -31,6 +41,24 @@ type historyFixture struct {
 	mode           atomic.Int32
 	reads          atomic.Int32
 	history        *History
+}
+
+func TestHistoryIncidentWireValues(t *testing.T) {
+	// Observed orders_v2/trades_v2 values from the 457 CHIP IOC. Keep IDs
+	// and quantities exact, without wallet addresses or signed envelopes.
+	wire := "7b25c14c0492c6640000000000000000"
+	if !isHistoryClientOrderID(&wire, "7261651996346754427") {
+		t.Fatal("real little-endian u128 CID did not match")
+	}
+	if isHistoryClientOrderID(&wire, "7261651996346754428") {
+		t.Fatal("another order matched")
+	}
+	if err := signedDecimalDelta("0", "-14.97589", "-14.97589"); err != nil {
+		t.Fatal("real fractional quote accounting was rejected", err)
+	}
+	if err := signedDecimalDelta("0", "-14.97589", "-14.975890000000000001"); err == nil {
+		t.Fatal("inexact accounting was accepted")
+	}
 }
 
 func (f *historyFixture) set(t *testing.T, order map[string]any, trades []map[string]any) {
@@ -131,7 +159,7 @@ func TestCompleteRecentOrderDoesNotRequireScanningWalletLifetimeHistory(t *testi
 }
 
 func TestHistoryNeverInfersFillFromUnrelatedOrIncompleteEvidence(t *testing.T) {
-	for _, kind := range []string{"CID", "signature", "subaccount", "opposite", "conflicting duplicate", "missing trade", "missing aggregate", "native limit", "native expiry", "scope"} {
+	for _, kind := range []string{"CID", "CID upper half", "CID endian", "signature", "subaccount", "opposite", "conflicting duplicate", "missing trade", "missing aggregate", "native limit", "native expiry", "scope", "quote precision", "quote exponent"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newHistoryFixture(t)
 			q, _ := requestFixture(t)
@@ -140,6 +168,14 @@ func TestHistoryNeverInfersFillFromUnrelatedOrIncompleteEvidence(t *testing.T) {
 			switch kind {
 			case "CID":
 				order["intended"].(map[string]any)["clientOrderId"] = "42"
+			case "CID upper half":
+				order["intended"].(map[string]any)["clientOrderId"] = "ffffffffffffffff0100000000000000"
+			case "CID endian":
+				order["intended"].(map[string]any)["clientOrderId"] = "0000000000000000ffffffffffffffff"
+			case "quote precision":
+				rows[0]["virtualQuoteLotsDelta"] = "-10.000000000000000001"
+			case "quote exponent":
+				rows[0]["virtualQuoteLotsDelta"] = "-1e1"
 			case "signature":
 				rows[0]["signature"] = "other"
 			case "subaccount":

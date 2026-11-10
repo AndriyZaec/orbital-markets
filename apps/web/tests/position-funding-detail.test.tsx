@@ -142,6 +142,23 @@ afterEach(() => {
 })
 
 describe('position-backed funding chart', () => {
+  it.each([
+    ['degraded', 'Recovery required'],
+    ['failed', 'Execution failed'],
+    ['open', 'Hedge opened'],
+    ['closed', 'Position closed'],
+    ['unknown', 'Execution update'],
+  ])('presents a terminal %s event as its outcome without raw recovery diagnostics', (state, label) => {
+    mocks.chartContext = availableContext
+    mocks.events = [{ id: 1, position_id: position.id, event: 'complete', state,
+      detail: 'leg 1 fill wait failed: context deadline exceeded; internal-request-id',
+      at: '2026-09-22T12:00:00Z' }]
+    render(<LivePositionPanel position={position} onClose={() => {}} />)
+    expect(screen.getByText(label)).toBeTruthy()
+    expect(screen.queryByText('Complete')).toBeNull()
+    expect(screen.queryByText(/context deadline exceeded/)).toBeNull()
+  })
+
   it('shows Phoenix pending separately and keeps total unchanged when funding settles', () => {
     mocks.chartContext = availableContext
     const phoenixPosition: LivePosition = {

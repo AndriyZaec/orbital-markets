@@ -26,7 +26,7 @@ type PhoenixOrderBackend interface {
 	BuilderAuthority() string
 	LatestBlockhash(context.Context) (rpc.Blockhash, error)
 	BlockHeight(context.Context, uint64) (uint64, error)
-	FlightProof(context.Context, uint64) (phoenixlive.FlightProof, error)
+	FlightProof(context.Context, uint64, string) (phoenixlive.FlightProof, error)
 	AccountAuthority(context.Context, string, uint64) (delegation.Authority, error)
 }
 
@@ -49,7 +49,7 @@ func phoenixOrderMarket(snapshot phoenix.MarketStreamSnapshot, symbol string) (p
 			return phoenix.MarketMetadata{}, helper.MarketAccounts{}, errors.New("Phoenix IOC market precision or status unavailable")
 		}
 		keys := snapshot.Metadata.Accounts
-		accounts := helper.MarketAccounts{PerpAssetMap: keys.PerpAssetMap, Orderbook: market.MarketPubkey, SplineCollection: market.SplinePubkey,
+		accounts := helper.MarketAccounts{ProtocolRootAuthority: keys.ProtocolRootAuthority, PerpAssetMap: keys.PerpAssetMap, Orderbook: market.MarketPubkey, SplineCollection: market.SplinePubkey,
 			GlobalTraderIndex: append([]string(nil), keys.GlobalTraderIndex...), ActiveTraderBuffer: append([]string(nil), keys.ActiveTraderBuffer...)}
 		if len(accounts.GlobalTraderIndex) == 0 || len(accounts.GlobalTraderIndex) > 64 || len(accounts.ActiveTraderBuffer) == 0 || len(accounts.ActiveTraderBuffer) > 64 {
 			return phoenix.MarketMetadata{}, helper.MarketAccounts{}, errors.New("Phoenix order account lists unavailable")
@@ -187,7 +187,8 @@ func (p *phoenixOrderPreparer) Prepare(ctx context.Context, q phoenixlive.Intent
 	}
 	var flight *phoenixlive.FlightProof
 	if q.Action == helper.ActionOpen || q.Action == helper.ActionClose {
-		proof, err := p.backend.FlightProof(ctx, hash.Slot)
+		root := p.config.Markets.Snapshot().Metadata.Accounts.ProtocolRootAuthority
+		proof, err := p.backend.FlightProof(ctx, hash.Slot, root)
 		if err != nil {
 			return nil, err
 		}

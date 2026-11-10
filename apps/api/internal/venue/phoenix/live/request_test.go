@@ -23,6 +23,7 @@ const owner = "11111111111111111111111111111111"
 const agent = "So11111111111111111111111111111111111111112"
 const payer = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 const flightBuilder = "Vote111111111111111111111111111111111111111"
+const protocolRoot = "Stake11111111111111111111111111111111111111"
 
 type fixtureBackend struct {
 	budget  helper.ComputeBudget
@@ -51,7 +52,7 @@ func (f *fixtureBackend) BuildOrder(_ context.Context, q helper.BuildOrderReques
 	r.Manifest.ComputeBudget = q.ComputeBudget.Effective()
 	if normal(q.Action) {
 		r.Manifest.Routing = "flight"
-		r.Manifest.Flight = &helper.FlightManifest{FlightProgramID: helper.FlightProgramID, BuilderAuthority: q.BuilderAuthority, BuilderTraderAccount: agent, BuilderState: payer, ExpectedRegisteredFeeBPS: 2}
+		r.Manifest.Flight = &helper.FlightManifest{ProtocolRootAuthority: q.Accounts.ProtocolRootAuthority, FlightProgramID: helper.FlightProgramID, BuilderAuthority: q.BuilderAuthority, BuilderTraderAccount: agent, BuilderState: payer, ExpectedRegisteredFeeBPS: 2}
 	}
 	if f.corrupt {
 		r.MessageSHA256 = "bad"
@@ -66,10 +67,10 @@ func captureFixture() (Intent, Capture) {
 	now := time.Now().UTC()
 	q := Intent{ID: "open-1", ClientOrderID: "18446744073709551615", PositionID: "position-1", Leg: 1, Owner: owner, Agent: agent, Symbol: "SOL", Action: helper.ActionOpen, Side: "buy", Amount: .299, ReferencePrice: 100, LimitPrice: 100.005, QuoteObservedAt: now}
 	c := Capture{Symbol: "SOL", MetadataGeneration: 7, StreamGeneration: 3, ExchangeSequence: 42, MetadataObservedAt: now, BaseLotDecimals: 2, TickSize: "100",
-		Accounts:          helper.MarketAccounts{PerpAssetMap: payer, Orderbook: agent, SplineCollection: flightBuilder, GlobalTraderIndex: []string{owner}, ActiveTraderBuffer: []string{owner}},
+		Accounts:          helper.MarketAccounts{ProtocolRootAuthority: protocolRoot, PerpAssetMap: payer, Orderbook: agent, SplineCollection: flightBuilder, GlobalTraderIndex: []string{owner}, ActiveTraderBuffer: []string{owner}},
 		AccountGeneration: 1, AccountSlot: 100, AccountSequence: 41, AccountObservedAt: now, Authority: AuthorityProof{Owner: owner, Agent: agent, RegisteredAgent: agent, ObservedAt: now, Slot: 120, CanIncreaseRisk: true, CanReduceRisk: true},
 		Blockhash: rpc.Blockhash{Hash: owner, Slot: 100, LastValidBlockHeight: 150}, BlockHeight: 100, BlockhashObservedAt: now,
-		Flight: &FlightProof{ProgramOwner: helper.FlightProgramID, BuilderAuthority: flightBuilder, BuilderState: payer, BuilderTraderAccount: agent, FeeBPS: 2, ObservedAt: now, Slot: 120},
+		Flight: &FlightProof{ProtocolRootAuthority: protocolRoot, ProgramOwner: helper.FlightProgramID, BuilderAuthority: flightBuilder, BuilderState: payer, BuilderTraderAccount: agent, FeeBPS: 2, ObservedAt: now, Slot: 120},
 		Projection: &helper.RiskResult{OwnerAuthority: owner, AccountGeneration: 1, AccountSlot: 100, AccountSequence: 41, MetadataGeneration: 7, AsOfUnixMS: now.UnixMilli(), ValidUntilUnixMS: now.Add(4 * time.Second).UnixMilli(), QuoteDecimals: 6, RiskTier: "Safe",
 			Projection: &helper.ProjectionResult{IntentID: q.ID, Symbol: "SOL", Side: "bid", NumBaseLots: "29", PriceLimitTicks: "10000", FlightFeeBPS: 2, Model: "rise_full_fill_at_limit", FeePolicy: "undiscounted_taker_ceiling", ProjectedRiskTier: "Safe", MarginSufficient: true}}}
 	return q, c

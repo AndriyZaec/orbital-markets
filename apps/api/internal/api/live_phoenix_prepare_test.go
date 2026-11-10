@@ -39,7 +39,7 @@ func (m *phoenixOrderTestMarkets) Snapshot() phoenix.MarketStreamSnapshot {
 	s := m.base.Snapshot()
 	s.Sequence += m.sequence.Load()
 	s.MetadataGeneration = 7
-	s.Metadata.Accounts = phoenix.ExchangeAccounts{PerpAssetMap: orderTestKey(10), GlobalTraderIndex: []string{orderTestKey(13)}, ActiveTraderBuffer: []string{orderTestKey(14)}}
+	s.Metadata.Accounts = phoenix.ExchangeAccounts{ProtocolRootAuthority: orderTestKey(5), PerpAssetMap: orderTestKey(10), GlobalTraderIndex: []string{orderTestKey(13)}, ActiveTraderBuffer: []string{orderTestKey(14)}}
 	for i := range s.Metadata.Markets {
 		s.Metadata.Markets[i].TickSize = 100
 		s.Metadata.Markets[i].BaseLotDecimals = 2
@@ -75,12 +75,12 @@ func (b *phoenixOrderTestBackend) AccountAuthority(ctx context.Context, owner st
 	a.Slot = max(slot, 120)
 	return a, err
 }
-func (b *phoenixOrderTestBackend) FlightProof(context.Context, uint64) (phoenixlive.FlightProof, error) {
+func (b *phoenixOrderTestBackend) FlightProof(_ context.Context, _ uint64, root string) (phoenixlive.FlightProof, error) {
 	b.flightCalls.Add(1)
-	if b.denyFlight.Load() {
+	if b.denyFlight.Load() || root != b.flight.ProtocolRootAuthority {
 		return phoenixlive.FlightProof{}, errors.New("Flight unavailable")
 	}
-	return phoenixlive.FlightProof{ProgramOwner: helper.FlightProgramID, BuilderAuthority: b.flight.BuilderAuthority, BuilderState: b.flight.BuilderState, BuilderTraderAccount: b.flight.BuilderTraderAccount, FeeBPS: 2, Slot: 120, ObservedAt: time.Now().UTC()}, nil
+	return phoenixlive.FlightProof{ProtocolRootAuthority: root, ProgramOwner: helper.FlightProgramID, BuilderAuthority: b.flight.BuilderAuthority, BuilderState: b.flight.BuilderState, BuilderTraderAccount: b.flight.BuilderTraderAccount, FeeBPS: 2, Slot: 120, ObservedAt: time.Now().UTC()}, nil
 }
 func (b *phoenixOrderTestBackend) NormalizeOrder(ctx context.Context, q helper.NormalizeRequest) (helper.NormalizedOrder, error) {
 	r, err := b.sdk.NormalizeOrder(ctx, q)
@@ -125,7 +125,7 @@ func newPhoenixPrepareFixture(t *testing.T, configure ...func(*phoenixAccountFix
 		t.Fatal(err)
 	}
 	t.Cleanup(sdk.Close)
-	flight, err := sdk.FlightAccounts(context.Background(), helper.FlightRequest{BuilderAuthority: orderTestKey(4)})
+	flight, err := sdk.FlightAccounts(context.Background(), helper.FlightRequest{BuilderAuthority: orderTestKey(4), ProtocolRootAuthority: orderTestKey(5)})
 	if err != nil {
 		t.Fatal(err)
 	}

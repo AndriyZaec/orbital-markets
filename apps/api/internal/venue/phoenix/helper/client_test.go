@@ -86,6 +86,15 @@ func TestBuildOrderDecodesAndValidatesResult(t *testing.T) {
 	if len(result.RequiredSigners) != 2 || result.RequiredSigners[1].Role != "position_authority" {
 		t.Fatalf("unexpected signers: %+v", result.RequiredSigners)
 	}
+	result.Manifest.Flight.ProtocolRootAuthority = request.OwnerAuthority
+	if err := ValidateBuildOrderResult(request, result); err == nil {
+		t.Fatal("wallet owner substituted for protocol root in manifest")
+	}
+	request.Accounts.ProtocolRootAuthority = ""
+	result.Manifest.Flight.ProtocolRootAuthority = ""
+	if err := ValidateBuildOrderResult(request, result); err == nil {
+		t.Fatal("missing protocol root accepted")
+	}
 }
 
 func TestBuildOrderReturnsTypedHelperError(t *testing.T) {
@@ -335,6 +344,7 @@ func fakeOrderManifest(order BuildOrderRequest) OrderManifest {
 		Instructions:       []InstructionManifest{{ProgramID: FlightProgramID}},
 	}
 	manifest.Flight = &FlightManifest{
+		ProtocolRootAuthority:    order.Accounts.ProtocolRootAuthority,
 		FlightProgramID:          FlightProgramID,
 		BuilderAuthority:         order.BuilderAuthority,
 		BuilderTraderAccount:     "builder-trader",
@@ -381,11 +391,12 @@ func testBuildOrderRequest() BuildOrderRequest {
 		LastValidBlockHeight: 5,
 		MetadataGeneration:   6,
 		Accounts: MarketAccounts{
-			PerpAssetMap:       "asset-map",
-			Orderbook:          "orderbook",
-			SplineCollection:   "splines",
-			GlobalTraderIndex:  []string{"index"},
-			ActiveTraderBuffer: []string{"buffer"},
+			ProtocolRootAuthority: "Stake11111111111111111111111111111111111111",
+			PerpAssetMap:          "asset-map",
+			Orderbook:             "orderbook",
+			SplineCollection:      "splines",
+			GlobalTraderIndex:     []string{"index"},
+			ActiveTraderBuffer:    []string{"buffer"},
 		},
 	}
 }

@@ -52,11 +52,12 @@ type BuildOrderRequest struct {
 }
 
 type MarketAccounts struct {
-	PerpAssetMap       string   `json:"perp_asset_map"`
-	Orderbook          string   `json:"orderbook"`
-	SplineCollection   string   `json:"spline_collection"`
-	GlobalTraderIndex  []string `json:"global_trader_index"`
-	ActiveTraderBuffer []string `json:"active_trader_buffer"`
+	ProtocolRootAuthority string   `json:"protocol_root_authority,omitempty"`
+	PerpAssetMap          string   `json:"perp_asset_map"`
+	Orderbook             string   `json:"orderbook"`
+	SplineCollection      string   `json:"spline_collection"`
+	GlobalTraderIndex     []string `json:"global_trader_index"`
+	ActiveTraderBuffer    []string `json:"active_trader_buffer"`
 }
 
 type BuildOrderResult struct {
@@ -104,6 +105,7 @@ type OrderManifest struct {
 }
 
 type FlightManifest struct {
+	ProtocolRootAuthority    string `json:"protocol_root_authority"`
 	FlightProgramID          string `json:"flight_program_id"`
 	BuilderAuthority         string `json:"builder_authority"`
 	BuilderTraderAccount     string `json:"builder_trader_account"`
