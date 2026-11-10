@@ -1,6 +1,7 @@
 package aster
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -186,13 +187,17 @@ type Adapter struct {
 	mu        sync.RWMutex
 	refreshMu sync.Mutex
 	markets   map[string]marketState
-	inactive  map[string]string
-	logger    *slog.Logger
-	client    *http.Client
-	restURL   string
-	wsURL     string
-	wsDialer  *websocket.Dialer
-	now       func() time.Time
+	// Cross-venue assets only grow. Readers use an immutable symbol snapshot
+	// so discarded book frames never contend on mu.
+	crossVenueAssets      map[string]struct{}
+	excludedStreamSymbols atomic.Pointer[map[string]struct{}]
+	inactive              map[string]string
+	logger                *slog.Logger
+	client                *http.Client
+	restURL               string
+	wsURL                 string
+	wsDialer              *websocket.Dialer
+	now                   func() time.Time
 
 	streamGeneration      uint64
 	streamConnected       bool
@@ -475,6 +480,7 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 	}
 	a.applyPendingStreamUpdates(markets)
 	a.markets = markets
+	a.publishStreamFilterLocked()
 	if token.synchronize {
 		a.streamSynchronized = true
 		if a.lastStreamReceivedAt.IsZero() {
@@ -676,6 +682,28 @@ func (a *Adapter) disconnectStreamGeneration(generation uint64) {
 }
 
 func (a *Adapter) applyStreamMessage(raw []byte) error {
+	if bytes.HasPrefix(raw, []byte(`{"stream":"!markPrice@arr@1s",`)) {
+		var marks struct {
+			Data []markPriceUpdate `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &marks); err != nil {
+			return fmt.Errorf("decode mark price updates: %w", err)
+		}
+		a.observeStreamMessage()
+		a.applyMarkPriceUpdates(marks.Data)
+		return nil
+	}
+	if excluded := a.excludedStreamSymbols.Load(); excluded != nil &&
+		bytes.Contains(raw, []byte(`"stream":"!bookTicker"`)) {
+		if start := bytes.Index(raw, []byte(`"s":"`)); start >= 0 {
+			symbol := raw[start+5:]
+			if end := bytes.IndexByte(symbol, '"'); end >= 0 {
+				if _, skip := (*excluded)[string(symbol[:end])]; skip {
+					return nil
+				}
+			}
+		}
+	}
 	// Book frames dominate this combined stream. Decode them directly instead
 	// of copying RawMessage and parsing the same object twice. The existing
 	// path below retains mark-array and malformed-message handling.
@@ -709,6 +737,46 @@ func (a *Adapter) applyStreamMessage(raw []byte) error {
 		a.applyBookTickerUpdate(update)
 	}
 	return nil
+}
+
+// SetCrossVenueAssets accumulates normalized assets published by other venues.
+// A missing venue in a later scan must not silence previously paired markets.
+func (a *Adapter) SetCrossVenueAssets(assets []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	changed := a.crossVenueAssets == nil
+	if changed {
+		a.crossVenueAssets = make(map[string]struct{}, len(assets))
+	}
+	for _, asset := range assets {
+		asset = strings.ToUpper(strings.TrimSpace(asset))
+		if asset == "" {
+			continue
+		}
+		if _, found := a.crossVenueAssets[asset]; !found {
+			a.crossVenueAssets[asset] = struct{}{}
+			changed = true
+		}
+	}
+	if changed {
+		a.publishStreamFilterLocked()
+	}
+}
+
+// publishStreamFilterLocked runs only when metadata or the allow-list changes.
+// It never publishes unknown symbols, preserving their existing pending path.
+func (a *Adapter) publishStreamFilterLocked() {
+	if a.crossVenueAssets == nil {
+		return
+	}
+	excluded := make(map[string]struct{})
+	for symbol, market := range a.markets {
+		asset := strings.ToUpper(strings.TrimSpace(market.asset))
+		if _, allowed := a.crossVenueAssets[asset]; !allowed {
+			excluded[symbol] = struct{}{}
+		}
+	}
+	a.excludedStreamSymbols.Store(&excluded)
 }
 
 func (a *Adapter) observeStreamMessage() {

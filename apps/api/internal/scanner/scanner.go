@@ -299,7 +299,40 @@ func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
 		}
 	}
 	collection.publishOpenInterestDemand(s.adapters)
+	collection.publishCrossVenueAssets(s.adapters)
 	return collection
+}
+
+// crossVenueAssetSink receives all assets published by other adapters, before
+// freshness/health filtering. Implementations retain their process-lifetime union.
+type crossVenueAssetSink interface {
+	SetCrossVenueAssets(assets []string)
+}
+
+func (c marketCollection) publishCrossVenueAssets(adapters []venue.Adapter) {
+	for _, adapter := range adapters {
+		sink, ok := adapter.(crossVenueAssetSink)
+		if !ok {
+			continue
+		}
+		assets := make(map[string]struct{})
+		for asset, snapshots := range c.pairingAssets {
+			for _, snapshot := range snapshots {
+				if snapshot.Venue != adapter.Name() {
+					if normalized := strings.ToUpper(strings.TrimSpace(asset)); normalized != "" {
+						assets[normalized] = struct{}{}
+					}
+					break
+				}
+			}
+		}
+		list := make([]string, 0, len(assets))
+		for asset := range assets {
+			list = append(list, asset)
+		}
+		sort.Strings(list)
+		sink.SetCrossVenueAssets(list)
+	}
 }
 
 func (c marketCollection) publishOpenInterestDemand(adapters []venue.Adapter) {
