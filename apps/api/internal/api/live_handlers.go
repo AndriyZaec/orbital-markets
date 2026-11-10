@@ -28,6 +28,7 @@ const (
 	livePrepareExistingSession       = "EXISTING_SESSION"
 	livePreparePreTradeBlocked       = "PRETRADE_BLOCKED"
 	livePrepareExecutionDataNotReady = "EXECUTION_DATA_NOT_READY"
+	livePrepareAdmissionDenied       = "LIVE_ADMISSION_DENIED"
 )
 
 func newLivePlanID() string {
@@ -263,6 +264,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		)
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"error":   "live admission denied",
+			"code":    livePrepareAdmissionDenied,
 			"reasons": admission.Reasons,
 		})
 		return

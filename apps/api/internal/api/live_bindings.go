@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/url"
 	"strings"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
 var currentLiveVenues = []string{"pacifica", "hyperliquid"}
-var supportedLiveVenues = []string{"pacifica", "hyperliquid", "aster", "phoenix"}
-var supportedAccountVenues = []string{"pacifica", "hyperliquid", "aster", "phoenix"}
+var supportedLiveVenues = domain.SupportedLiveVenues()
+var supportedAccountVenues = domain.SupportedLiveVenues()
 
 type liveVenueBindingsRequest struct {
 	Accounts uniqueVenueBindings `json:"accounts,omitempty"`
