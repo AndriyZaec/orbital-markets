@@ -36,12 +36,14 @@ type StreamHandler interface {
 // Each subscription message includes the account address.
 // No separate auth/login step is needed — subscriptions are public by account address.
 type Subscriber struct {
-	state   *AccountState
-	account string        // Solana public key (base58)
-	handler StreamHandler // optional: receives order/trade updates
-	logger  *slog.Logger
-	client  *http.Client
-	refresh sync.Mutex
+	state             *AccountState
+	account           string        // Solana public key (base58)
+	handler           StreamHandler // optional: receives order/trade updates
+	logger            *slog.Logger
+	client            *http.Client
+	refresh           sync.Mutex
+	wsURL             string
+	heartbeatInterval time.Duration
 }
 
 func NewSubscriber(
@@ -51,11 +53,13 @@ func NewSubscriber(
 	handler StreamHandler,
 ) *Subscriber {
 	return &Subscriber{
-		state:   state,
-		account: account,
-		handler: handler,
-		logger:  logger,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		state:             state,
+		account:           account,
+		handler:           handler,
+		logger:            logger,
+		client:            &http.Client{Timeout: 10 * time.Second},
+		wsURL:             privateWSURL,
+		heartbeatInterval: 30 * time.Second,
 	}
 }
 
@@ -329,7 +333,7 @@ type wsMessage struct {
 }
 
 func (s *Subscriber) connectAndListen(ctx context.Context) error {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, privateWSURL, nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
@@ -365,6 +369,25 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 			return fmt.Errorf("subscribe %s: %w", ch, err)
 		}
 	}
+
+	// Subscriptions are complete; only this goroutine writes from now on.
+	go func() {
+		heartbeat := time.NewTicker(s.heartbeatInterval)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-heartbeat.C:
+				if err := conn.WriteJSON(map[string]string{"method": "ping"}); err != nil {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
 
 	s.state.SetConnectedForAccount(s.account, true)
 	s.logger.Info("pacifica account ws connected",
