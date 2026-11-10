@@ -30,12 +30,14 @@ func TestMarketStreamAppliesExchangeSnapshotAndMarketStats(t *testing.T) {
 			}
 			defer connection.Close()
 			assertSubscriptions(t, connection)
-			if err := connection.WriteMessage(websocket.TextMessage, []byte(`{"channel":"exchange","messageType":"snapshot","version":1,"sequenceNumber":"41","exchange":{"perpAssetMap":"ws-map","globalTraderIndex":["ws-index"],"activeTraderBuffer":["ws-buffer"]},"markets":[{"symbol":"SOL","marketStatus":"active","marketPubkey":"ws-market","splinePubkey":"ws-spline","tickSize":100,"baseLotsDecimals":2,"fundingConfig":{"fundingIntervalSeconds":7200},"leverageTiers":[{"maxLeverage":20}]}]}`)); err != nil {
+			exchangeSnapshot := `{"channel":"exchange","messageType":"snapshot","version":1,"sequenceNumber":"41","exchange":{"perpAssetMap":"ws-map","globalTraderIndex":["ws-index"],"activeTraderBuffer":["ws-buffer"]},"markets":[{"symbol":"SOL","marketStatus":"active","marketPubkey":"ws-market","splinePubkey":"ws-spline","tickSize":100,"baseLotsDecimals":2,"fundingConfig":{"fundingIntervalSeconds":7200},"leverageTiers":[{"maxLeverage":20}]}]}`
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(exchangeSnapshot)); err != nil {
 				t.Errorf("write exchange snapshot: %v", err)
 				return
 			}
 			assertOrderbookSubscription(t, connection, "subscribe", "SOL")
 			for _, message := range []string{
+				exchangeSnapshot, // Periodic full snapshots must not reconnect the stream.
 				`{"channel":"marketStatsV2","stats":[{"symbol":"SOL","timestamp":1793020205,"openInterest":65520.02,"markPrice":101.33,"midPrice":101.345,"oraclePrice":101.31,"currentFundingRate":0.02}]}`,
 				`{"channel":"orderbook","symbol":"SOL","orderbook":{"bids":[[100,2]],"asks":[[102,3]],"mid":101}}`,
 			} {
@@ -144,6 +146,59 @@ func TestMarketStreamAppliesOrderedExchangeDeltasAtomically(t *testing.T) {
 	state = stream.Snapshot()
 	if state.Sequence != 8 || state.Metadata.Markets[1].Status != "paused" {
 		t.Fatalf("failed delta mutated state: %+v", state)
+	}
+}
+
+func TestMarketStreamAcceptsPeriodicExchangeSnapshotsWithoutLosingLiveState(t *testing.T) {
+	stream := NewMarketStream(nil, discardLogger())
+	generation := stream.markConnected()
+	sequence := stringUint64(7)
+	message := exchangeEnvelope{MessageType: "snapshot", Version: 1, SequenceNumber: &sequence,
+		Exchange: wsExchangeAccounts{PerpAssetMap: "map", GlobalTraderIndex: []string{"index"}, ActiveTraderBuffer: []string{"buffer"}},
+		Markets: []wsMarketConfig{{Symbol: "SOL", MarketStatus: "active", MarketPubkey: "market", SplinePubkey: "spline",
+			TickSize: 100, BaseLotsDecimals: 2, FundingConfig: wsFundingConfig{FundingIntervalSeconds: 3600}, LeverageTiers: []leverageTier{{MaxLeverage: 20}}}},
+	}
+	if err := stream.applyExchangeMessage(generation, message); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.applyMarketStats(generation, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{Symbol: "SOL", Timestamp: 10, MarkPrice: 100, OraclePrice: 100}}}); err != nil {
+		t.Fatal(err)
+	}
+	stream.mu.Lock()
+	stream.books["SOL"] = LiveBook{Symbol: "SOL", BidPrice: 99, AskPrice: 101, ReceivedAt: time.Unix(10, 0), Generation: generation}
+	stream.mu.Unlock()
+	before := stream.Snapshot()
+	for range 3 {
+		if err := stream.applyExchangeMessage(generation, message); err != nil {
+			t.Fatalf("periodic unchanged snapshot disconnected a healthy stream: %v", err)
+		}
+	}
+	after := stream.Snapshot()
+	if !after.Connected || !after.Synchronized || after.Generation != before.Generation || after.Sequence != before.Sequence ||
+		after.Stats["SOL"] != before.Stats["SOL"] || after.Books["SOL"] != before.Books["SOL"] {
+		t.Fatal("unchanged exchange snapshot invalidated live data or refreshed old prices")
+	}
+	// A newer full snapshot is authoritative even when it replaces missed deltas.
+	sequence = 10
+	message.Markets[0].MarketStatus = "paused"
+	if err := stream.applyExchangeMessage(generation, message); err != nil {
+		t.Fatalf("new full snapshot was rejected: %v", err)
+	}
+	after = stream.Snapshot()
+	if after.Sequence != 10 || after.Generation != generation || !after.Synchronized || after.Metadata.Markets[0].Status != "paused" {
+		t.Fatalf("new full snapshot not applied: %+v", after)
+	}
+	if _, found := after.Books["SOL"]; found {
+		t.Fatal("paused market retained an executable book")
+	}
+	sequence = 9
+	if err := stream.applyExchangeMessage(generation, message); err == nil || stream.Snapshot().Sequence != 10 {
+		t.Fatal("regressed snapshot was accepted or rolled back live state")
+	}
+	sequence = 10
+	message.Markets[0].MarketStatus = "active"
+	if err := stream.applyExchangeMessage(generation, message); err == nil || stream.Snapshot().Metadata.Markets[0].Status != "paused" {
+		t.Fatal("conflicting snapshot with unchanged sequence was accepted")
 	}
 }
 

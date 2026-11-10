@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -347,14 +348,31 @@ func (s *MarketStream) applyExchangeMessage(generation uint64, message exchangeE
 			return nil
 		}
 		if s.haveExchangeSnapshot {
-			return errors.New("Phoenix exchange sent a second snapshot in one connection generation")
+			if sequence < s.sequence {
+				return errors.New("Phoenix exchange snapshot sequence regressed")
+			}
+			if sequence == s.sequence {
+				// Phoenix periodically republishes the full exchange on the same
+				// connection. Identical metadata is not a stream revision and must
+				// neither discard live state nor renew price/book observations.
+				if !reflect.DeepEqual(metadata.Accounts, s.accounts) || !reflect.DeepEqual(marketsBySymbol(metadata.Markets), s.markets) {
+					return errors.New("Phoenix exchange snapshot conflicts with current sequence")
+				}
+				return nil
+			}
 		}
 		s.accounts = metadata.Accounts
 		s.replaceMarketsLocked(marketsBySymbol(metadata.Markets))
 		s.sequence = sequence
 		s.lastReceivedAt = s.now().UTC()
+		if s.haveExchangeSnapshot {
+			// A validated newer full snapshot replaces metadata atomically, as
+			// exchange deltas do; its sequence fences existing risk captures.
+			s.notify()
+		} else {
+			s.synchronized = false
+		}
 		s.haveExchangeSnapshot = true
-		s.synchronized = false
 		return nil
 	case "delta":
 		return s.applyExchangeDelta(generation, sequence, message.Ops)
