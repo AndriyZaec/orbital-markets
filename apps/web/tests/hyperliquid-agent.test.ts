@@ -346,3 +346,36 @@ test('a Hyperliquid agent binds the exact wire limit without trimming integer ze
   payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
   await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
 })
+
+test('Hyperliquid close and kill sign exact inward limits but reject widened or substituted prices', async () => {
+  for (const action of ['close', 'emergency_close'] as const) {
+    for (const side of ['buy', 'sell'] as const) {
+      const request = hyperliquidSigningRequest()
+      request.action = action
+      request.side = side
+      request.reduce_only = true
+      request.price = side === 'buy' ? 150.017 : 100.123
+      request.limit_price = side === 'buy' ? 150.76 : 99.623
+      const payload = request.unsigned_payload as {
+        action: { orders: { b: boolean; p: string; r: boolean }[]; builder?: unknown }
+        nonce: number
+        message: { connectionId: string }
+      }
+      if (action === 'emergency_close') delete payload.action.builder
+      payload.action.orders[0].b = side === 'buy'
+      payload.action.orders[0].r = true
+      payload.action.orders[0].p = String(request.limit_price)
+      payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+      await assert.doesNotReject(signHyperliquidAgentRequest(request, hyperliquidAgent()))
+
+      payload.action.orders[0].p = String(request.limit_price - 0.01)
+      payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+      await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
+
+      request.limit_price = request.price * (side === 'buy' ? 1.006 : 0.994)
+      payload.action.orders[0].p = String(request.limit_price)
+      payload.message.connectionId = l1ConnectionId(payload.action, payload.nonce)
+      await assert.rejects(signHyperliquidAgentRequest(request, hyperliquidAgent()), /not an allowed L1 order/)
+    }
+  }
+})

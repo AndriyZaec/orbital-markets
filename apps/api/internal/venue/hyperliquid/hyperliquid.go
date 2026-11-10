@@ -228,6 +228,14 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			ts = a.now()
 		}
 		book := componentHealth(s.bookHealth)
+		if !a.streamConnected && a.streamGeneration > 0 {
+			book.Status = venue.HealthUnavailable
+			book.Reason = venue.HealthReasonDisconnected
+		} else if a.streamConnected && book.SourceGeneration != a.streamGeneration {
+			// Reconnecting alone cannot revalidate the previous connection's BBO.
+			book.Status = venue.HealthUnavailable
+			book.Reason = venue.HealthReasonNotObserved
+		}
 		restSource := venue.SourceHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved}
 		if !a.restReceivedAt.IsZero() || a.restReason != "" {
 			restSource = venue.SourceHealth{

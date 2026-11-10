@@ -1106,6 +1106,9 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	closeCtx, cancelClose := context.WithTimeout(r.Context(), liveClosePrepareTimeout)
+	defer cancelClose()
+	r = r.WithContext(closeCtx)
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/live/close/")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "position id required"})
@@ -1560,6 +1563,9 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	closeCtx, cancelClose := context.WithTimeout(r.Context(), liveClosePrepareTimeout)
+	defer cancelClose()
+	r = r.WithContext(closeCtx)
 	var req liveVenueBindingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -1618,6 +1624,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			Amount float64 `json:"amount"`
 		} `json:"remaining_exposure"`
 		Error string `json:"error,omitempty"`
+		Code  string `json:"code,omitempty"`
 	}
 
 	var signingRequests []*domain.SigningRequest
@@ -1628,6 +1635,12 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			ID:    pos.ID,
 			Asset: pos.Asset,
 			State: pos.State,
+		}
+		if ctx.Err() != nil {
+			pc.Error = "Close preparation timed out. Try again shortly."
+			pc.Code = "CLOSE_PREPARATION_UNAVAILABLE"
+			posResults = append(posResults, pc)
+			continue
 		}
 
 		fills, err := s.live.liveStore.GetFills(ctx, pos.ID)
@@ -1692,7 +1705,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				s.logger.Error("kill switch: build close payload",
 					"err", err, "id", pos.ID, "leg", fill.Leg, "venue", fill.Venue)
-				pc.Error = fmt.Sprintf("leg %d: %s", fill.Leg, err)
+				pc.Error = fmt.Sprintf("Leg %d close preparation is temporarily unavailable.", fill.Leg)
+				pc.Code = "CLOSE_PREPARATION_UNAVAILABLE"
 				continue
 			}
 			sigReq.PositionID = pos.ID
@@ -1788,6 +1802,16 @@ func (s *Server) buildCloseSigningRequestForBindings(
 	emergency bool,
 ) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
+	timeout := liveClosePrepareTimeout
+	if emergency {
+		timeout = liveKillLegPrepareTimeout
+	}
+	// The parent request's 8s deadline is never extended by a per-leg budget.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
 	module, err := s.live.liveModule(fill.Venue)
 	if err != nil {
@@ -1795,45 +1819,9 @@ func (s *Server) buildCloseSigningRequestForBindings(
 	}
 	closePricePolicy := module.Capabilities().ClosePricePolicy
 	if closePricePolicy == venue.ClosePriceFromMarketBBO {
-		if s.closeMarkets == nil {
-			return nil, fmt.Errorf("current %s BBO for %s unavailable", fill.Venue, fill.Symbol)
-		}
-		marketCtx, cancelMarket := context.WithTimeout(ctx, 3*time.Second)
-		defer cancelMarket()
-		market, marketErr := s.closeMarkets.MarketSnapshot(marketCtx, fill.Venue, marketAsset)
-		if marketErr != nil {
-			return nil, fmt.Errorf("current %s BBO for %s unavailable: %w", fill.Venue, fill.Symbol, marketErr)
-		}
-		bookAt := market.Timestamp
-		bookAvailable := true
-		if market.Health != nil {
-			book := market.Health.Book
-			bookAvailable = book.Status == venue.HealthAvailable
-			bookAt = book.SourceTime
-			if bookAt.IsZero() {
-				bookAt = book.ReceivedAt
-			}
-		}
-		quoteAge := time.Since(bookAt)
-		if !bookAvailable || bookAt.IsZero() || quoteAge > maxCloseQuoteAge || quoteAge < -time.Second {
-			return nil, fmt.Errorf("current %s BBO for %s is stale", fill.Venue, fill.Symbol)
-		}
-		switch positionSide {
-		case domain.SideLong:
-			price = market.BidPrice
-			if price <= 0 || market.BidSize <= 0 {
-				return nil, fmt.Errorf("current %s bid for %s unavailable", fill.Venue, fill.Symbol)
-			}
-		case domain.SideShort:
-			price = market.AskPrice
-			if price <= 0 || market.AskSize <= 0 {
-				return nil, fmt.Errorf("current %s ask for %s unavailable", fill.Venue, fill.Symbol)
-			}
-		default:
-			return nil, fmt.Errorf("invalid position side: %q", fill.Side)
-		}
-		if math.IsNaN(price) || math.IsInf(price, 0) {
-			return nil, fmt.Errorf("current %s BBO for %s is invalid", fill.Venue, fill.Symbol)
+		price, err = s.closeReferencePrice(ctx, fill, marketAsset)
+		if err != nil {
+			return nil, err
 		}
 	} else if closePricePolicy != venue.ClosePriceFromFill {
 		return nil, fmt.Errorf("unsupported close price policy for venue %s", fill.Venue)
@@ -1842,7 +1830,7 @@ func (s *Server) buildCloseSigningRequestForBindings(
 	if emergency {
 		action = venue.ReduceActionEmergencyClose
 	}
-	return module.BuildReduce(venue.LiveReduceParams{
+	request, err := module.BuildReduce(venue.LiveReduceParams{
 		LiveOrderParams: venue.LiveOrderParams{
 			Context: ctx,
 			Account: bindings.Accounts[fill.Venue],
@@ -1852,4 +1840,8 @@ func (s *Server) buildCloseSigningRequestForBindings(
 		},
 		Action: action,
 	})
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return request, err
 }

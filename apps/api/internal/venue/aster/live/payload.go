@@ -200,7 +200,8 @@ func buildPayload(
 	if len(customLimit) > 0 && customLimit[0] != 0 {
 		targetPrice, slippageBPS = customLimit[0], 0
 	}
-	limitPrice, priceWire, err := normalizePrice(targetPrice, side, slippageBPS, rules)
+	inward := reduceOnly && (action == "close" || action == "emergency_close")
+	limitPrice, priceWire, err := normalizePrice(targetPrice, side, slippageBPS, rules, inward)
 	if err != nil {
 		return nil, fmt.Errorf("normalize %s price: %w", symbol, err)
 	}
@@ -321,7 +322,7 @@ func normalizeQuantity(amount float64, rules aster.OrderRules) (float64, string,
 	return quantity, wire, nil
 }
 
-func normalizePrice(price float64, side domain.Side, slippageBPS int64, rules aster.OrderRules) (float64, string, error) {
+func normalizePrice(price float64, side domain.Side, slippageBPS int64, rules aster.OrderRules, inward bool) (float64, string, error) {
 	if slippageBPS < 0 || slippageBPS >= 10_000 {
 		return 0, "", fmt.Errorf("invalid slippage")
 	}
@@ -337,13 +338,14 @@ func normalizePrice(price float64, side domain.Side, slippageBPS int64, rules as
 	} else if side != domain.SideShort {
 		return 0, "", fmt.Errorf("invalid side: %s", side)
 	}
-	// A zero-slippage custom limit is an absolute bound: round buy down and
-	// sell up. Legacy collars and reduce-only recovery retain their behavior.
-	if slippageBPS == 0 {
+	// Explicit limits and close/kill collars are absolute bounds: round buy
+	// down and sell up. Open collars and unwind retain their existing behavior.
+	absolute := slippageBPS == 0 || inward
+	if absolute {
 		roundUp = side == domain.SideShort
 	}
 	target := new(big.Rat).Mul(priceRat, big.NewRat(numerator, 10_000))
-	limitPrice, wire, err := quantizeRat(target, rules.TickSize, roundUp, slippageBPS == 0)
+	limitPrice, wire, err := quantizeRat(target, rules.TickSize, roundUp, absolute)
 	if err != nil {
 		return 0, "", err
 	}

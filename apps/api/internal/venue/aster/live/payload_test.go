@@ -126,6 +126,49 @@ func TestCloseAndEmergencyClosePayloadsRemainReduceOnly(t *testing.T) {
 	}
 }
 
+func TestCloseAndEmergencyCloseStayInsideOnePercentAfterTickRounding(t *testing.T) {
+	const price = 100.001
+	for _, side := range []domain.Side{domain.SideLong, domain.SideShort} {
+		for _, emergency := range []bool{false, true} {
+			var request *domain.SigningRequest
+			var err error
+			if emergency {
+				request, err = BuildEmergencyClosePayload(payloadTestRules, testUser, testSigner, "BTCUSDT", side, 1, price, "bounded-kill")
+			} else {
+				request, err = BuildClosePayload(payloadTestRules, testUser, testSigner, "BTCUSDT", side, 1, price, "bounded-close", nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 99.1
+			if side == domain.SideShort {
+				want = 101
+			}
+			if !request.ReduceOnly || request.LimitPrice != want {
+				t.Fatalf("close/kill must use 1%% with inward ticks: %+v, want %g", request, want)
+			}
+		}
+	}
+}
+
+func TestCloseOnePercentCollarDoesNotAddTickAtExactDecimalBoundary(t *testing.T) {
+	rules := payloadTestRules
+	rules.rules.TickSize, rules.rules.MinPrice = "0.000001", "0.000001"
+	for _, side := range []domain.Side{domain.SideLong, domain.SideShort} {
+		request, err := BuildClosePayload(rules, testUser, testSigner, "BTCUSDT", side, 1, 0.0536, "decimal-close", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 0.053064
+		if side == domain.SideShort {
+			want = 0.054136
+		}
+		if request.LimitPrice != want {
+			t.Fatalf("wire=%g, want %g", request.LimitPrice, want)
+		}
+	}
+}
+
 func TestBuildUnwindPayloadAllowsDustRecovery(t *testing.T) {
 	request, err := BuildUnwindPayload(
 		payloadTestRules, testUser, testSigner, "BTCUSDT", domain.SideShort,

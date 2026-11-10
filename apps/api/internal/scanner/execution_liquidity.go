@@ -86,6 +86,11 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 	useBBO := coveredByBBO && (!fresh || !pendingBBO)
 	result := &domain.ExecutionLiquidity{Status: "unavailable"}
 	plan.Liquidity = result
+	for _, market := range []venue.MarketData{long, short} {
+		if market.Health != nil && market.Health.Book.Status != venue.HealthAvailable {
+			return fmt.Errorf("order-book data unavailable for %s; checking again automatically", market.Venue)
+		}
+	}
 	if pendingBBO && fresh && source == nil {
 		return ErrFreshBBOUnavailable
 	}

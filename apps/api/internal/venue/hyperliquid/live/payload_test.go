@@ -68,6 +68,28 @@ func TestReduceOnlyIntegerCollarsPreserveZeros(t *testing.T) {
 	}
 }
 
+func TestCloseAndEmergencyCloseStayInsideHalfPercentAfterTickRounding(t *testing.T) {
+	for _, price := range []float64{100.123, 150.017} {
+		for _, side := range []domain.Side{domain.SideLong, domain.SideShort} {
+			for _, emergency := range []bool{false, true} {
+				var request *domain.SigningRequest
+				var err error
+				if emergency {
+					request, err = BuildEmergencyClosePayload(payloadTestAssetMap{index: 7, decimals: 3}, "BTC", side, 1, price, "bounded-kill")
+				} else {
+					request, err = BuildClosePayload(payloadTestAssetMap{index: 7, decimals: 3}, "BTC", side, 1, price, "bounded-close")
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !request.ReduceOnly || side == domain.SideLong && request.LimitPrice < price*0.995-1e-12 || side == domain.SideShort && request.LimitPrice > price*1.005+1e-12 {
+					t.Fatalf("close/kill widened 0.5%% collar: %+v", request)
+				}
+			}
+		}
+	}
+}
+
 func (m payloadTestAssetMap) AssetIndex(string) (int, bool)   { return m.index, true }
 func (m payloadTestAssetMap) SizeDecimals(string) (int, bool) { return m.decimals, true }
 

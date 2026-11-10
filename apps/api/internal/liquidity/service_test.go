@@ -230,6 +230,76 @@ func TestExecutionQuoteRefreshesCompletedBooks(t *testing.T) {
 	}
 }
 
+func TestFreshBBOReadsOneValidatedBookAndBypassesCompletedEntries(t *testing.T) {
+	var requests atomic.Int32
+	s := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		serveTestBook(w, r)
+	})
+	for _, market := range []Market{{"hyperliquid", "BTC"}, {"aster", "BTCUSDT"}} {
+		for range 2 {
+			before := requests.Load()
+			quote, err := s.FreshBBO(context.Background(), market)
+			if err != nil || quote.BidPrice != 99 || quote.AskPrice != 100 || quote.ObservedAt.IsZero() || requests.Load() != before+1 {
+				t.Fatalf("single-book quote=%+v err=%v requests=%d", quote, err, requests.Load())
+			}
+		}
+	}
+}
+
+func TestFreshBBORejectsStaleAndCrossedBooks(t *testing.T) {
+	for _, crossed := range []bool{false, true} {
+		s := testService(t, func(w http.ResponseWriter, r *http.Request) {
+			timestamp, bid := time.Now().Add(-6*time.Second).UnixMilli(), "99"
+			if crossed {
+				timestamp, bid = time.Now().UnixMilli(), "101"
+			}
+			var request struct{ Coin string }
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			_, _ = fmt.Fprintf(w, `{"coin":%q,"time":%d,"levels":[[{"px":%q,"sz":"5"}],[{"px":"100","sz":"5"}]]}`, request.Coin, timestamp, bid)
+		})
+		if _, err := s.FreshBBO(context.Background(), Market{"hyperliquid", "BTC"}); err == nil {
+			t.Fatal("invalid REST BBO accepted")
+		}
+	}
+}
+
+func TestFreshBBOBypassesCompletedFailedReadOnRetry(t *testing.T) {
+	var requests atomic.Int32
+	s := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		serveTestBook(w, r)
+	})
+	market := Market{"hyperliquid", "BTC"}
+	if _, err := s.FreshBBO(context.Background(), market); err == nil {
+		t.Fatal("first REST failure accepted")
+	}
+	quote, err := s.FreshBBO(context.Background(), market)
+	if err != nil || quote.BidPrice != 99 || requests.Load() != 2 {
+		t.Fatalf("retry reused failed cache: quote=%+v err=%v reads=%d", quote, err, requests.Load())
+	}
+}
+
+func TestFreshBBORetryRespectsSharedRateLimitPause(t *testing.T) {
+	var requests atomic.Int32
+	s := testService(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	for range 2 {
+		if _, err := s.FreshBBO(context.Background(), Market{"hyperliquid", "BTC"}); err == nil {
+			t.Fatal("rate-limited REST BBO accepted")
+		}
+	}
+	if requests.Load() != 1 {
+		t.Fatal("REST retry bypassed the shared rate-limit pause")
+	}
+}
+
 // Explicit opt-in: public market reads only, never orders or credentials.
 func TestPublicBooks(t *testing.T) {
 	if os.Getenv("ORBITAL_L2_SMOKE") != "1" {

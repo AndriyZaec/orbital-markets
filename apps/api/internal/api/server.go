@@ -33,6 +33,7 @@ type Server struct {
 	liveStore             *executor.Store // always available when DB exists — read-only live position access
 	live                  *LiveDeps       // nil = live execution endpoints disabled (venue clients not configured)
 	closeMarkets          closeMarketSource
+	closeBooks            closeBookSource
 	logger                *slog.Logger
 	mux                   *http.ServeMux
 	handler               http.Handler // mux wrapped in middleware (recovery → logging → auth)

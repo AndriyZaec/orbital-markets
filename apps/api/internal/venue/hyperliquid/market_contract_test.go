@@ -58,6 +58,18 @@ func TestRESTRefreshKeepsQuietMarketDiscoverableWithoutRefreshingBook(t *testing
 	if !snapshots[0].Timestamp.Equal(lastREST) || snapshots[0].Health.Book != book {
 		t.Fatal("failed REST fetch refreshed observations")
 	}
+	fail = false
+	adapter.markStreamDisconnected(generation)
+	adapter.pollREST(context.Background())
+	snapshots, err := adapter.FetchMarketData(context.Background())
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots after disconnected REST refresh = %+v, err = %v", snapshots, err)
+	}
+	if !snapshots[0].Timestamp.Equal(now) || snapshots[0].Health.REST.Status != venue.HealthAvailable ||
+		snapshots[0].Health.Book.Status != venue.HealthUnavailable || snapshots[0].Health.Book.Reason != venue.HealthReasonDisconnected ||
+		!snapshots[0].Health.Book.SourceTime.Equal(book.SourceTime) {
+		t.Fatalf("fresh REST hid market WS disconnect: %+v", snapshots[0])
+	}
 }
 
 func TestFetchMarketDataReportsRESTComponentsBeforeFirstBookUpdate(t *testing.T) {
@@ -241,6 +253,28 @@ func TestFetchMarketDataPreservesBookAfterStreamDisconnect(t *testing.T) {
 	if snapshot.Health.Stream.Status != venue.HealthUnavailable ||
 		snapshot.Health.Stream.Reason != venue.HealthReasonDisconnected {
 		t.Fatalf("disconnected stream health = %+v", snapshot.Health.Stream)
+	}
+	if snapshot.Health.Book.Status != venue.HealthUnavailable || snapshot.Health.Book.Reason != venue.HealthReasonDisconnected ||
+		!snapshot.Health.Book.SourceTime.Equal(sourceTime) || !snapshot.Health.Book.ReceivedAt.Equal(receivedAt) {
+		t.Fatalf("disconnected book health = %+v", snapshot.Health.Book)
+	}
+
+	nextGeneration := adapter.markStreamConnected()
+	snapshots, err = adapter.FetchMarketData(context.Background())
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots after reconnect = %+v, err = %v", snapshots, err)
+	}
+	if snapshots[0].Health.Book.Status != venue.HealthUnavailable || snapshots[0].Health.Book.Reason != venue.HealthReasonNotObserved {
+		t.Fatal("reconnect without a new BBO restored the old book")
+	}
+	adapter.applyBBO(nextGeneration, bboData{Coin: "SOL", Time: receivedAt.UnixMilli(), BBO: []bboLevel{{Px: "150", Sz: "2"}, {Px: "152", Sz: "3"}}})
+	snapshots, err = adapter.FetchMarketData(context.Background())
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots after new BBO = %+v, err = %v", snapshots, err)
+	}
+	if snapshots[0].Health.Book.Status != venue.HealthAvailable || snapshots[0].Health.Book.Reason != "" ||
+		snapshots[0].Health.Book.SourceGeneration != nextGeneration || snapshots[0].BidPrice != 150 {
+		t.Fatalf("first new-generation BBO did not restore book: %+v", snapshots[0])
 	}
 }
 

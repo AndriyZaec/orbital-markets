@@ -80,7 +80,7 @@ func TestHyperliquidCloseUsesFreshExecutableSideBBO(t *testing.T) {
 	}
 }
 
-func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
+func TestHyperliquidCachedClosePriceRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
 	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
 	if err != nil {
 		t.Fatal(err)
@@ -93,10 +93,10 @@ func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
 		live: &LiveDeps{modules: modules},
 	}
 
-	_, err = server.buildCloseSigningRequest(
+	_, err = server.cachedClosePrice(
 		context.Background(),
 		executor.LiveFill{Venue: "hyperliquid", Symbol: "2Z", Side: string(domain.SideLong), FilledAmount: 265, AvgFillPrice: 0.0566},
-		"close-order", "pacifica-owner", "hl-owner", "pacifica-agent", "hl-agent",
+		"2Z",
 	)
 	if err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("error = %v, want stale BBO rejection", err)
@@ -139,18 +139,15 @@ func TestMarketBBOCloseUsesBookHealthInsteadOfAggregateTimestamp(t *testing.T) {
 						market.Health = &venue.MarketHealth{Book: *tc.book}
 					}
 					server := &Server{live: &LiveDeps{modules: modules}, closeMarkets: closeQuoteTestSource{snapshot: market}}
-					request, err := server.buildCloseSigningRequestForBindings(context.Background(),
+					price, err := server.cachedClosePrice(context.Background(),
 						executor.LiveFill{Venue: name, Symbol: "BTC", Side: "long", FilledAmount: 1, AvgFillPrice: 100},
-						"BTC", "close-book-health", liveVenueBindings{
-							Accounts: map[string]string{name: "0x1111111111111111111111111111111111111111"},
-							Agents:   map[string]string{name: "0x2222222222222222222222222222222222222222"},
-						}, emergency)
+						"BTC")
 					if tc.stale {
-						if request != nil || err == nil || !strings.Contains(err.Error(), "BBO for BTC is stale") {
-							t.Fatalf("stale book reached close signing: request=%+v err=%v", request, err)
+						if price != 0 || err == nil || !strings.Contains(err.Error(), "BBO for BTC is stale") {
+							t.Fatalf("stale WS book accepted: price=%v err=%v", price, err)
 						}
-					} else if err != nil || request == nil || request.Price <= 0 {
-						t.Fatalf("fresh book rejected: request=%+v err=%v", request, err)
+					} else if err != nil || price != 100 {
+						t.Fatalf("fresh WS book rejected: price=%v err=%v", price, err)
 					}
 				})
 			}

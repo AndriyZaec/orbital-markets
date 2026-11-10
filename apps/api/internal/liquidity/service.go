@@ -13,6 +13,42 @@ var ErrUnavailable = errors.New("L2 estimate unavailable")
 
 type Market struct{ Venue, Key string }
 type Pair struct{ Long, Short Market }
+
+// BBOQuote is the top of a validated REST book, not an executable depth quote.
+type BBOQuote struct {
+	BidPrice, AskPrice float64
+	ObservedAt         time.Time
+}
+
+// FreshBBO reads one market using the same flights, quotas and validation as
+// opening quotes. Completed entries are bypassed, including failed reads.
+func (s *Service) FreshBBO(ctx context.Context, market Market) (BBOQuote, error) {
+	if err := ctx.Err(); err != nil {
+		return BBOQuote{}, err
+	}
+	if market.Key == "" || s.urls[market.Venue] == "" {
+		return BBOQuote{}, ErrUnavailable
+	}
+	s.mu.Lock()
+	if entry := s.books[market]; entry != nil && !entry.finished.IsZero() {
+		delete(s.books, market)
+	}
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	b, err := s.getBook(ctx, market)
+	if err != nil {
+		return BBOQuote{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return BBOQuote{}, err
+	}
+	if !validBook(b, time.Now()) {
+		return BBOQuote{}, ErrUnavailable
+	}
+	return BBOQuote{BidPrice: b.bids[0].price, AskPrice: b.asks[0].price, ObservedAt: b.at}, nil
+}
+
 type flight[T any] struct {
 	done     chan struct{}
 	value    T

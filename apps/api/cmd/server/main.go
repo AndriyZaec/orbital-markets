@@ -81,7 +81,8 @@ func main() {
 	if phoenixInfrastructure != nil {
 		defer phoenixInfrastructure.Close()
 	}
-	sc.EnableExecutionLiquidity(liquidity.New(ctx, logger))
+	books := liquidity.New(ctx, logger)
+	sc.EnableExecutionLiquidity(books)
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
@@ -127,6 +128,7 @@ func main() {
 	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)
 
 	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"), os.Getenv("BETA_COOKIE_NAME"))
+	srv.EnableCloseBooks(books)
 	if phoenixInfrastructure != nil {
 		srv.EnablePhoenixInfrastructure(phoenixInfrastructure)
 		if delegationStore, err := delegation.NewStore(database, operationalDatabase); err != nil {

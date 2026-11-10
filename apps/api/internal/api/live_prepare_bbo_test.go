@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 type prepareStageWriter struct {
@@ -248,6 +250,52 @@ func TestPreparePendingBBOUsesOneFreshL2QuoteWithinPreviewLimits(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDisconnectedHyperliquidBookBlocksOpeningButAllowsRESTClose(t *testing.T) {
+	f := newLocalPrepareFixture(t)
+	market := f.markets[1]
+	market.mu.Lock()
+	market.data.Timestamp = time.Now() // Fresh REST cannot restore frozen BBO.
+	market.data.Health.Book = venue.ComponentHealth{
+		Status: venue.HealthUnavailable, Reason: venue.HealthReasonDisconnected, SourceTime: time.Now(),
+	}
+	market.mu.Unlock()
+	f.s.closeMarkets = f.s.scanner
+	closeReads := 0
+	f.s.closeBooks = closeBookSourceFunc(func(context.Context, liquidity.Market) (liquidity.BBOQuote, error) {
+		closeReads++
+		return liquidity.BBOQuote{BidPrice: 100, AskPrice: 100, ObservedAt: time.Now()}, nil
+	})
+	preview, err := f.s.scanner.BuildPlan(context.Background(), f.body["opportunity_id"].(string), 2, 90)
+	if err != nil || preview.Executable || preview.Liquidity.Status != "unavailable" {
+		t.Fatalf("disconnected preview became executable: %+v err=%v", preview, err)
+	}
+	status, _, body, _ := f.prepare(t, context.Background(), true)
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "PLAN_NOT_EXECUTABLE") {
+		t.Fatalf("disconnected prepare did not reject immediately: %d %s", status, body)
+	}
+	bindings := liveVenueBindings{Accounts: f.body["accounts"].(map[string]string), Agents: f.body["agents"].(map[string]string)}
+	fill := executor.LiveFill{Venue: "hyperliquid", Symbol: "BTC", Side: "long", FilledAmount: 1, AvgFillPrice: 100}
+	request, err := f.s.buildCloseSigningRequestForBindings(context.Background(), fill, "BTC", "disconnected-close", bindings, false)
+	if request == nil || err != nil || closeReads != 1 {
+		t.Fatalf("disconnected close did not use REST: request=%+v err=%v reads=%d", request, err, closeReads)
+	}
+	_, err = f.s.liveStore.ActiveDurableSessionForBindings(context.Background(), bindings.Accounts, "BTC")
+	if !errors.Is(err, sql.ErrNoRows) || f.depth.calls != 0 {
+		t.Fatalf("disconnected book created a session or fetched L2: err=%v reads=%d", err, f.depth.calls)
+	}
+	// The adapter contract test separately verifies reconnect alone stays unavailable.
+	// Here the first new BBO restores the consumer-facing snapshot.
+	f.freshen()
+	status, _, body, _ = f.prepare(t, context.Background(), true)
+	if status != http.StatusOK {
+		t.Fatalf("new BBO did not restore prepare: %d %s", status, body)
+	}
+	request, err = f.s.buildCloseSigningRequestForBindings(context.Background(), fill, "BTC", "reconnected-close", bindings, false)
+	if err != nil || request == nil || f.depth.calls != 0 || closeReads != 1 {
+		t.Fatalf("new BBO did not restore close without L2: request=%+v err=%v reads=%d", request, err, f.depth.calls)
 	}
 }
 

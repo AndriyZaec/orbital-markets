@@ -152,7 +152,6 @@ func TestBBOFreshnessUsesBookComponentAndFailsClosed(t *testing.T) {
 	source.err = liquidity.ErrUnavailable
 	for _, health := range []venue.ComponentHealth{
 		{Status: venue.HealthAvailable, SourceTime: time.Now().Add(-45 * time.Second)},
-		{Status: venue.HealthUnavailable, ReceivedAt: time.Now()},
 		{Status: venue.HealthAvailable},
 	} {
 		a.data[0].Health.Book = health
@@ -179,6 +178,32 @@ func TestBBOFreshnessUsesBookComponentAndFailsClosed(t *testing.T) {
 	plan, err := s.BuildPlan(context.Background(), s.Opportunities()[0].ID, 2, 90)
 	if err != nil || !plan.Executable || plan.Liquidity.Status != "bbo" || source.calls != calls {
 		t.Fatalf("received-time book fallback failed: %v", err)
+	}
+}
+
+func TestUnavailableBookCannotBecomePendingOrUseL2(t *testing.T) {
+	s, _, b, source := bboFirstScanner(t)
+	id := s.Opportunities()[0].ID
+	for _, reason := range []string{venue.HealthReasonDisconnected, venue.HealthReasonNotObserved, venue.HealthReasonInvalidValue} {
+		for _, notional := range []float64{90, 500} {
+			b.data[0].Timestamp = time.Now() // REST remains fresh throughout the outage.
+			b.data[0].Health.Book = venue.ComponentHealth{Status: venue.HealthUnavailable, Reason: reason, SourceTime: time.Now()}
+			plan, err := s.BuildPlan(context.Background(), id, 2, notional)
+			if err != nil || plan.Executable || plan.Liquidity.Status != "unavailable" {
+				t.Fatalf("unavailable book admitted: reason=%s size=%g plan=%+v err=%v", reason, notional, plan, err)
+			}
+			if err := s.ValidateExecutionLiquidity(context.Background(), plan, plan.BaseAmount); err == nil || errors.Is(err, ErrFreshBBOUnavailable) {
+				t.Fatalf("unavailable book should fail immediately, not wait as pending: %v", err)
+			}
+			if source.calls != 0 {
+				t.Fatal("unavailable book triggered L2")
+			}
+		}
+	}
+	b.data[0].Health.Book = venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: time.Now()}
+	plan, err := s.BuildPlan(context.Background(), id, 2, 90)
+	if err != nil || !plan.Executable || plan.Liquidity.Status != "bbo" || source.calls != 0 {
+		t.Fatalf("fresh BBO did not restore preview: %+v err=%v", plan, err)
 	}
 }
 
