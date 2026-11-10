@@ -54,7 +54,7 @@ primary_region = 'iad'
     protocol = 'http'
 
 [[vm]]
-  size = 'shared-cpu-1x'
-  memory = '256mb'
-  cpus = 1
-  memory_mb = 256
+  size = 'shared-cpu-2x'
+  memory = '512mb'
+  cpus = 2
+  memory_mb = 512
