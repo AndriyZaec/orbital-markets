@@ -852,14 +852,11 @@ func liveAccountStatuses(accounts *liveAccountContext, freshness time.Duration) 
 }
 
 func accountStatus(accounts *liveAccountContext, venue string, freshness time.Duration) venueAccountStatus {
-	if (venue == "aster" || venue == "phoenix") && freshness > admissionFreshness {
-		freshness = admissionFreshness
-	}
 	return buildVenueAccountStatusFromSnapshot(venue, accountSnapshot(accounts, venue), freshness)
 }
 
 func buildVenueAccountStatusFromSnapshot(venue string, snapshot liveAccountSnapshot, freshness time.Duration) venueAccountStatus {
-	if venue == "phoenix" && freshness > admissionFreshness {
+	if (venue == "aster" || venue == "phoenix") && freshness > admissionFreshness {
 		freshness = admissionFreshness
 	}
 	status := buildVenueAccountStatus(
@@ -970,7 +967,7 @@ func (s *Server) liveAccountStatusesFor(pacAccount, hlAddress string, freshness 
 // The handler intentionally does NOT build a plan, create a session, or
 // return signing requests — those remain on /live/prepare.
 func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request) {
-	if s.live == nil {
+	if s.live == nil || s.live.accounts == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "live execution not configured",
 		})
@@ -995,17 +992,13 @@ func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	accounts, err := s.live.acquireAccountContext(bindings.Accounts, false)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-		return
-	}
-	defer accounts.Release()
+	views := newAccountViews(s.live.accounts, bindings.Accounts)
+	defer views.accounts.Release()
 
 	// Snapshot readiness right after the call. On a very first ensure the
 	// snapshot will typically still be empty (streams start asynchronously);
-	// the frontend polls /live/balances to see them go ready.
-	writeJSON(w, http.StatusOK, s.liveAccountStatusesForBindings(bindings.Accounts, displayFreshness))
+	// the shared account SSE reports each venue becoming ready independently.
+	writeJSON(w, http.StatusOK, accountViewStatuses(views.snapshots()))
 }
 
 // handleLivePositions returns all live positions, newest first.

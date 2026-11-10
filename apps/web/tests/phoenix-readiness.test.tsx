@@ -60,13 +60,23 @@ it('does not treat another browser agent registration as this local authorizatio
 })
 
 it('starts the existing account streams when optional Phoenix infrastructure is unavailable', async () => {
-  mocks.apiFetch.mockImplementation(async (_path, init) => JSON.parse(init.body).accounts.phoenix
-    ? Response.json({ error: 'Phoenix unavailable' }, { status: 503 }) : Response.json({}))
+  mocks.apiFetch.mockResolvedValue(Response.json({
+    pacifica: { connected: true, fresh: true },
+    phoenix: { unavailable: true, reason: 'Phoenix unavailable' },
+  }))
   const { result } = renderHook(useVenueReadiness, { wrapper })
   await waitFor(() => expect(result.current.ensureStatus).toBe('ready'))
-  const accounts = mocks.apiFetch.mock.calls.map(([, init]) => JSON.parse(init.body).accounts)
-  expect(accounts).toContainEqual({ pacifica: 'SolanaOwner' })
-  expect(accounts).toContainEqual({ phoenix: 'SolanaOwner' })
+  expect(mocks.apiFetch).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(mocks.apiFetch.mock.calls[0][1].body).accounts)
+    .toEqual({ pacifica: 'SolanaOwner', phoenix: 'SolanaOwner' })
   expect(result.current.pacifica.status).toBe('ready')
   expect(result.current.phoenix.status).toBe('unavailable')
+})
+
+it('reports a global ensure failure instead of treating it as a per-venue result', async () => {
+  mocks.apiFetch.mockResolvedValue(Response.json({ error: 'live execution not configured' }, { status: 503 }))
+  const { result } = renderHook(useVenueReadiness, { wrapper })
+  await waitFor(() => expect(result.current.ensureStatus).toBe('error'))
+  expect(result.current.ensureError).toBeTruthy()
+  expect(mocks.refetch).not.toHaveBeenCalled()
 })

@@ -238,20 +238,14 @@ function useVenueReadinessState(): UseVenueReadinessResult {
     setEnsureStatus('starting')
     setEnsureError(null)
     try {
-      // Optional Phoenix infrastructure must not stop the existing venues'
-      // streams when it is unconfigured or temporarily unavailable.
-      const core = Object.fromEntries(Object.entries(accounts).filter(([venue]) => venue !== 'phoenix'))
-      const groups = [core, ...(accounts.phoenix ? [{ phoenix: accounts.phoenix }] : [])].filter((group) => Object.keys(group).length > 0)
-      const results = await Promise.allSettled(groups.map(async (group) => {
-        const resp = await apiFetch('/api/v1/live/accounts/ensure', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(liveVenueBindingsBody(group)),
-        })
-        if (!resp.ok) {
-          const body = await resp.json().catch(() => ({}))
-          throw apiError(resp.status, 'Unable to connect account data. Please try again.', body)
-        }
-      }))
-      if (results.every((result) => result.status === 'rejected')) throw (results[0] as PromiseRejectedResult).reason
+      // The read-only endpoint isolates startup failures per venue.
+      const resp = await apiFetch('/api/v1/live/accounts/ensure', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(liveVenueBindingsBody(accounts)),
+      })
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}))
+        throw apiError(resp.status, 'Unable to connect account data. Please try again.', body)
+      }
       setEnsureStatus('ready')
       // Nudge balances so readiness can move to ready without waiting for
       // the next fallback poll.

@@ -39,10 +39,9 @@ const EMPTY: Balances = {
 }
 
 // Balance display is background context. The real freshness gate lives in
-// /live/prepare (30s admissionFreshness). 30s poll here keeps request volume
-// low while still catching a broken stream well within the 5-minute display
-// staleness window. Consumers refresh on intent (opening trade panel /
-// clicking Execute Live) via balances.refetch().
+// /live/prepare (30s admissionFreshness). One shared account SSE carries all
+// venues; the 30s REST poll is a disconnected-stream fallback. Consumers also
+// refresh on intent (opening trade panel / clicking Execute Live) via refetch().
 export function useLiveBalances(
   accountPacifica: string | null,
   accountHyperliquid: string | null,
@@ -95,12 +94,9 @@ export function useLiveBalances(
   useEffect(() => {
     streamConnected.current = false
     if (!shouldMonitor || !pair) return
-    const core = Object.fromEntries(Object.entries(accounts).filter(([venue]) => venue !== 'phoenix'))
-    const groups = [core, ...(accounts.phoenix ? [{ phoenix: accounts.phoenix }] : [])].filter((group) => Object.keys(group).length > 0)
-    const connected = new Set<number>()
-    const subscriptions = groups.map((group, index) => subscribeLiveAccountUpdates(group, (event) => {
-      if (event.type === 'connected') connected.add(index)
-      else if (event.type === 'disconnected') connected.delete(index)
+    return subscribeLiveAccountUpdates(accounts, (event) => {
+      if (event.type === 'connected') streamConnected.current = true
+      else if (event.type === 'disconnected') streamConnected.current = false
       else if (event.type === 'balances') {
         requestSequence.current++
         setResult((current) => ({
@@ -108,9 +104,7 @@ export function useLiveBalances(
           balances: { ...(current.pair === pair ? current.balances : EMPTY), ...(event.data as Partial<Balances>) },
         }))
       }
-      streamConnected.current = connected.size === groups.length
-    }))
-    return () => subscriptions.forEach((unsubscribe) => unsubscribe())
+    })
   }, [accounts, shouldMonitor, pair])
 
   useEffect(() => {
