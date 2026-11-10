@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,7 @@ func (m *phoenixTestMarkets) Snapshot() phoenix.MarketStreamSnapshot {
 
 type phoenixTestBackend struct {
 	authorityCalls      atomic.Int32
+	riskCalls           atomic.Int32
 	mu                  sync.Mutex
 	agent               string
 	riskErr             error
@@ -58,6 +60,7 @@ func (b *phoenixTestBackend) AccountAuthority(_ context.Context, owner string, s
 	return delegation.Authority{PositionAuthority: b.agent, Slot: 500}, b.authorityErr
 }
 func (b *phoenixTestBackend) ComputeRisk(_ context.Context, q helper.RiskRequest) (helper.RiskResult, error) {
+	b.riskCalls.Add(1)
 	b.mu.Lock()
 	err, callback := b.riskErr, b.onRisk
 	b.mu.Unlock()
@@ -333,6 +336,58 @@ func TestPhoenixAccountRefreshDoesNotPollChainAndKeepsRegistrationSeparate(t *te
 	f.backend.mu.Unlock()
 	if err := feed.refreshView(context.Background()); err == nil {
 		t.Fatal("risk outage reused a successful view")
+	}
+}
+
+func TestPhoenixAccountStreamUpdatesRefreshRiskWithoutPollingDelay(t *testing.T) {
+	f := newPhoenixAccountFixture(t)
+	lease, feed := f.ready(t)
+	defer lease.Release()
+	for update := uint64(1); update <= 3; update++ {
+		before := feed.state.Snapshot()
+		feed.mu.Lock()
+		feed.lastAttempt = time.Now()
+		feed.mu.Unlock()
+		f.send <- map[string]any{"channel": "traderState", "authority": phoenixTestOwner, "traderPdaIndex": 0,
+			"slot": before.Slot + 1, "messageType": "delta", "deltas": []any{map[string]any{
+				"subaccountIndex": 0, "sequence": before.Sequence + 1, "collateral": strconv.FormatUint(100000000+update, 10),
+			}}}
+		waitPhoenix(t, func() bool {
+			feed.mu.Lock()
+			sequence := feed.riskResult.AccountSequence
+			feed.mu.Unlock()
+			return sequence == before.Sequence+1 && feed.Snapshot().UnavailableReason == ""
+		})
+	}
+	if f.backend.authorityCalls.Load() != 0 {
+		t.Fatal("stream-driven risk refresh issued authority RPC")
+	}
+}
+
+func TestPhoenixAccountRiskFailureStillBacksOffStreamUpdates(t *testing.T) {
+	f := newPhoenixAccountFixture(t)
+	lease, feed := f.ready(t)
+	defer lease.Release()
+	f.backend.mu.Lock()
+	f.backend.riskErr = errors.New("risk unavailable")
+	f.backend.mu.Unlock()
+	if err := feed.refreshView(context.Background()); err == nil {
+		t.Fatal("risk outage unexpectedly succeeded")
+	}
+	attempts := f.backend.riskCalls.Load()
+	before := feed.state.Snapshot()
+	f.send <- map[string]any{"channel": "traderState", "authority": phoenixTestOwner, "traderPdaIndex": 0,
+		"slot": before.Slot + 1, "messageType": "delta", "deltas": []any{map[string]any{
+			"subaccountIndex": 0, "sequence": before.Sequence + 1, "collateral": "100000001",
+		}}}
+	waitPhoenix(t, func() bool { return feed.state.Snapshot().Sequence == before.Sequence+1 })
+	// Give the consumer time to process the notification within the backoff.
+	time.Sleep(100 * time.Millisecond)
+	if got := f.backend.riskCalls.Load(); got != attempts {
+		t.Fatalf("stream notification bypassed failed-read backoff: %d attempts, want %d", got, attempts)
+	}
+	if got := feed.Snapshot(); got.UnavailableReason != "risk unavailable" || got.Phoenix.AccountReady {
+		t.Fatalf("risk outage was hidden: %+v", got)
 	}
 }
 

@@ -137,9 +137,11 @@ func (f *phoenixAccountFeed) run() {
 		case <-f.wake:
 		}
 		f.mu.Lock()
-		lastAttempt, viewAt := f.lastAttempt, f.viewAt
+		lastAttempt, viewAt, haveVerifiedView := f.lastAttempt, f.viewAt, f.snapshot.Phoenix != nil
 		f.mu.Unlock()
-		if time.Since(lastAttempt) < 5*time.Second {
+		// Back off failed reads, not live account changes after a successful risk
+		// computation: the old view is already invalid for the new revision.
+		if !haveVerifiedView && time.Since(lastAttempt) < 5*time.Second {
 			continue
 		}
 		if !f.state.Snapshot().Fresh(time.Now()) {
