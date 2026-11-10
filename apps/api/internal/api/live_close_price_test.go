@@ -222,9 +222,11 @@ func TestCloseAndKillPriceFailureUsesOneDeadlineAndStructuredCode(t *testing.T) 
 				s.handleLiveClose(w, r)
 			}
 			var body struct {
-				Code      string `json:"code"`
+				Code      string                  `json:"code"`
+				Requests  []domain.SigningRequest `json:"signing_requests"`
 				Positions []struct {
 					Code string `json:"code"`
+					Legs int    `json:"legs_to_close"`
 				} `json:"positions"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
@@ -234,7 +236,8 @@ func TestCloseAndKillPriceFailureUsesOneDeadlineAndStructuredCode(t *testing.T) 
 			if kill && len(body.Positions) == 1 {
 				code = body.Positions[0].Code
 			}
-			if code != "CLOSE_PREPARATION_UNAVAILABLE" || calls != 2 || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if code != "CLOSE_PREPARATION_UNAVAILABLE" || calls != 2 || !errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+				len(body.Requests) != 0 || kill && (len(body.Positions) != 1 || body.Positions[0].Legs != 0 || body.Requests == nil) {
 				t.Fatalf("deadline failure: body=%s REST=%d ctx=%v", w.Body.String(), calls, ctx.Err())
 			}
 		})

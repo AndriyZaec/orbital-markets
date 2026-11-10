@@ -1627,7 +1627,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		Code  string `json:"code,omitempty"`
 	}
 
-	var signingRequests []*domain.SigningRequest
+	signingRequests := make([]*domain.SigningRequest, 0)
 	var posResults []positionClose
 
 	for _, pos := range positions {
@@ -1686,7 +1686,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			venueDerived = true
 		}
 
-		legsClosed := 0
+		// Publish nothing for this position until all outstanding legs prepare.
+		var positionRequests []*domain.SigningRequest
 		for _, fill := range closeFills {
 			if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
 				continue
@@ -1698,6 +1699,11 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				Side   string  `json:"side"`
 				Amount float64 `json:"amount"`
 			}{fill.Leg, fill.Venue, fill.Symbol, fill.Side, fill.FilledAmount})
+			if pc.Error != "" {
+				// Preserve the complete exposure list without spending more of the
+				// shared budget on a position that can no longer prepare fully.
+				continue
+			}
 
 			cloid := closeClientOrderID("kill", pos.ID, fill.Leg, time.Now())
 
@@ -1712,25 +1718,28 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			sigReq.PositionID = pos.ID
 			sigReq.Leg = fill.Leg
 
-			s.live.signingStore.Store(sigReq)
-			signingRequests = append(signingRequests, sigReq)
-			legsClosed++
-
-			s.logger.Info("kill switch: close payload ready",
-				"position", pos.ID,
-				"leg", fill.Leg,
-				"venue", fill.Venue,
-				"symbol", fill.Symbol,
-				"amount", fill.FilledAmount,
-			)
+			positionRequests = append(positionRequests, sigReq)
 		}
 
-		pc.Legs = legsClosed
+		if pc.Error == "" && ctx.Err() != nil {
+			pc.Error = "Close preparation timed out. Try again shortly."
+			pc.Code = "CLOSE_PREPARATION_UNAVAILABLE"
+		}
+		if pc.Error == "" {
+			for _, sigReq := range positionRequests {
+				s.live.signingStore.Store(sigReq)
+				signingRequests = append(signingRequests, sigReq)
+				s.logger.Info("kill switch: close payload ready",
+					"position", pos.ID, "leg", sigReq.Leg, "venue", sigReq.Venue,
+					"symbol", sigReq.Symbol, "amount", sigReq.Amount)
+			}
+			pc.Legs = len(positionRequests)
+		}
 
-		if legsClosed > 0 {
+		if pc.Legs > 0 {
 			s.live.liveStore.InsertEvent(ctx, pos.ID, "emergency_close_prepared",
 				executor.ExecState(pos.State),
-				fmt.Sprintf("kill switch: %d close orders prepared", legsClosed))
+				fmt.Sprintf("kill switch: %d close orders prepared", pc.Legs))
 		}
 
 		posResults = append(posResults, pc)
