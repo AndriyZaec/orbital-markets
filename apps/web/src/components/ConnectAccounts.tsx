@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import telegramLogo from '@/assets/telegram-logo.svg'
 import { PhoenixAuthorization } from './PhoenixAuthorization'
+import { accountActionStyles } from './account-action-styles'
 
 // Static venue presentation. Runtime
 // readiness comes from useVenueReadiness — the single typed layer that
@@ -425,7 +426,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                         <button
                           onClick={() => handleAuthorize(venue.id as VenueId)}
                           disabled={readiness.agentStatus === 'restoring' || readiness.agentStatus === 'authorizing' || !readiness.signerReady || (venue.id === 'pacifica' && ['authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))}
-                          className="px-3 py-1 rounded text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          className={accountActionStyles.primary}
                         >
                           {readiness.agentStatus === 'restoring'
                             ? 'Restoring authorization...'
@@ -439,7 +440,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                           <button
                             onClick={() => handleAuthorize(venue.id as VenueId)}
                             disabled={agentChangeBlocked}
-                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            className={accountActionStyles.secondary}
                           >
                             Reauthorize
                           </button>
@@ -448,7 +449,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       <button
                         onClick={() => handleDisconnect(venue.id)}
                         disabled={disconnectBlocked}
-                        className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className={accountActionStyles.secondary}
                       >
                         {venue.id === 'pacifica' ? 'Disconnect' : 'Disconnect EVM Wallet'}
                       </button>
@@ -456,7 +457,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   ) : (
                     <button
                       onClick={() => handleConnect(venue.id)}
-                      className="px-3 py-1 rounded text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+                      className={accountActionStyles.primary}
                     >
                       Connect
                     </button>

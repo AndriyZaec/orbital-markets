@@ -3,6 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { accountActionStyles } from './account-action-styles'
 
 // Phoenix-specific actions live inside the shared account card. Delegate
 // replacement and confirmed revoke retain their existing owner-bound lifecycle.
@@ -16,6 +17,14 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
   const [replacement, setReplacement] = useState<{ owner: string; authority: string } | null>(null)
   const [revokeOwner, setRevokeOwner] = useState<string | null>(null)
   const busy = ['restoring', 'authorizing', 'disconnecting'].includes(state.status)
+  const authorized = state.status === 'ready'
+  const canRevoke = authorized || state.status === 'pending' || !!state.agentAddress
+  const authorizeLabel = authorized ? 'Reauthorize'
+    : state.status === 'pending' ? 'Resume authorization'
+    : state.status === 'restoring' ? 'Restoring authorization...'
+    : state.status === 'authorizing' ? 'Authorizing agent...'
+    : state.status === 'disconnecting' ? 'Revoking authorization...'
+    : state.status === 'error' ? 'Reauthorize Phoenix' : 'Authorize Phoenix'
 
   const authorize = async (replace = false, expectedOwner = owner, expectedAuthority?: string) => {
     try {
@@ -28,21 +37,25 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
   }
 
   return <>
-    <div className="flex flex-col gap-2">
-      {owner && <p className="text-xs" role="status">{state.status === 'ready' ? 'Agent ready — verified on each action' : state.status === 'pending' ? 'Pending verification — key preserved' : state.status === 'restoring' ? 'Restoring local authorization…' : state.status === 'authorizing' ? 'Awaiting owner approval / confirmation…' : state.status === 'disconnecting' ? 'Confirming revoke…' : 'Authorization required'}</p>}
-      {state.error && <p className="text-xs text-destructive" role="alert">{state.error}</p>}
-      {owner && !wallet.signTransaction && <p className="text-xs text-muted-foreground">This wallet must support transaction signing.</p>}
-      <div className="flex flex-wrap justify-end gap-2">
-        {!owner ? <Button size="xs" onClick={onConnect}>Connect</Button> : <>
-          <Button size="xs" disabled={disabled || busy || !wallet.signTransaction} onClick={() => void authorize()}>
-            {state.status === 'ready' ? 'Reauthorize Phoenix' : state.status === 'pending' ? 'Resume Phoenix' : 'Authorize Phoenix'}
-          </Button>
-          <Button size="xs" variant="outline" disabled={disabled || busy || state.status === 'missing' || !wallet.signTransaction} onClick={() => {
-            if (hasActiveExposure) setRevokeOwner(owner)
-            else void agents.revokePhoenix().catch(() => {})
-          }}>Revoke Phoenix</Button>
-          {onDisconnect && <Button size="xs" variant="ghost" disabled={disabled || busy} onClick={onDisconnect}>Disconnect Solana</Button>}
-        </>}
+    <div className="flex flex-col gap-1.5">
+      {state.error && <p className="text-[10px] text-red-400" role="alert">{state.error}</p>}
+      {owner && !wallet.signTransaction && <p className="text-[10px] text-muted-foreground">This wallet must support transaction signing.</p>}
+      <div className="flex items-center justify-end">
+        {!owner ? <button type="button" className={accountActionStyles.primary} onClick={onConnect}>Connect</button> : (
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            <button type="button" className={authorized ? accountActionStyles.secondary : accountActionStyles.primary}
+              disabled={disabled || busy || !wallet.signTransaction} onClick={() => void authorize()}>
+              {authorizeLabel}
+            </button>
+            {canRevoke && <button type="button" className={accountActionStyles.secondary}
+              disabled={disabled || busy || !wallet.signTransaction} onClick={() => {
+                if (hasActiveExposure) setRevokeOwner(owner)
+                else void agents.revokePhoenix().catch(() => {})
+              }}>Revoke</button>}
+            {onDisconnect && <button type="button" className={accountActionStyles.secondary}
+              disabled={disabled || busy} onClick={onDisconnect}>Disconnect</button>}
+          </div>
+        )}
       </div>
     </div>
     <Dialog open={!!revokeOwner && revokeOwner === owner} onOpenChange={(open) => { if (!open) setRevokeOwner(null) }}>
