@@ -38,6 +38,7 @@ fn delegation_and_revoke_match_official_owner_signed_instructions() {
     use base64::Engine as _;
     use phoenix_rise::ix::delegate_trader::{DelegateTraderParams, create_delegate_trader_ix};
     use sha2::{Digest, Sha256};
+    use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_hash::Hash;
     use solana_message::legacy::Message;
     use solana_pubkey::Pubkey;
@@ -75,7 +76,11 @@ fn delegation_and_revoke_match_official_owner_signed_instructions() {
         )
         .unwrap();
         let expected = Message::new_with_blockhash(
-            &[ix.into()],
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(200_000),
+                ComputeBudgetInstruction::set_compute_unit_price(0),
+                ix.into(),
+            ],
             Some(&payer),
             &Hash::from_str(payload["recent_blockhash"].as_str().unwrap()).unwrap(),
         );
@@ -97,7 +102,7 @@ fn delegation_and_revoke_match_official_owner_signed_instructions() {
         assert_eq!(result["manifest"]["action"], action);
         assert_eq!(
             result["manifest"]["instructions"].as_array().unwrap().len(),
-            1
+            3
         );
         assert_eq!(expected.header.num_required_signatures, 2);
         if action == "delegate" {

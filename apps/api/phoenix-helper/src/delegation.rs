@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use solana_hash::Hash;
 use solana_message::legacy::Message;
 
+use crate::compute::ComputeBudget;
 use crate::message::{AccountManifest, InstructionManifest, RequiredSigner, describe};
 use crate::order::{derive_cross_margin_trader, parse_pubkey};
 
@@ -90,7 +91,15 @@ pub fn build_delegation(request: BuildDelegationRequest) -> Result<BuildDelegati
         .map_err(|e| format!("invalid delegation: {e}"))?;
     let instruction = create_delegate_trader_ix(params)
         .map_err(|e| format!("failed to build delegation: {e}"))?;
-    let message = Message::new_with_blockhash(&[instruction.into()], Some(&payer), &hash);
+    // Explicitly pin the default single-instruction allowance and zero priority
+    // fee so wallets do not enhance the immutable owner-signing message.
+    let [limit, price] = ComputeBudget {
+        unit_limit: 200_000,
+        unit_price_micro_lamports: 0,
+    }
+    .instructions()?;
+    let message =
+        Message::new_with_blockhash(&[limit, price, instruction.into()], Some(&payer), &hash);
     if message.header.num_required_signatures != 2
         || message.account_keys[0] != payer
         || message.account_keys[1] != owner

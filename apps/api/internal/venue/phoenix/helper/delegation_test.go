@@ -20,7 +20,11 @@ func fakeDelegationResult(req BuildDelegationRequest) BuildDelegationResult {
 		MessageBase64: base64.StdEncoding.EncodeToString(message), MessageSHA256: hex.EncodeToString(digest[:]),
 		RequiredSigners: []RequiredSigner{{Index: 0, Pubkey: req.FeePayer, Role: "fee_payer"}, {Index: 1, Pubkey: req.OwnerAuthority, Role: "owner_authority"}},
 		RecentBlockhash: req.RecentBlockhash, LastValidBlockHeight: req.LastValidBlockHeight, TraderAccount: "trader",
-		Manifest: DelegationManifest{Format: "solana_legacy_message", PhoenixProgramID: PhoenixProgramID, Action: req.Action, OwnerAuthority: req.OwnerAuthority, NewPositionAuthority: req.NewPositionAuthority, FeePayer: req.FeePayer, TraderAccount: "trader", AccountKeys: []AccountManifest{{}}, Instructions: []InstructionManifest{{ProgramID: PhoenixProgramID}}},
+		Manifest: DelegationManifest{Format: "solana_legacy_message", PhoenixProgramID: PhoenixProgramID, Action: req.Action, OwnerAuthority: req.OwnerAuthority, NewPositionAuthority: req.NewPositionAuthority, FeePayer: req.FeePayer, TraderAccount: "trader", AccountKeys: []AccountManifest{{}}, Instructions: []InstructionManifest{
+			{ProgramID: "ComputeBudget111111111111111111111111111111", DataBase64: "AkANAwA="},
+			{ProgramID: "ComputeBudget111111111111111111111111111111", DataBase64: "AwAAAAAAAAAA"},
+			{ProgramID: PhoenixProgramID},
+		}},
 	}
 }
 
@@ -71,7 +75,19 @@ func TestDelegationResultRejectsMismatchedIntentAndEnvelope(t *testing.T) {
 			r.Manifest.NewPositionAuthority = "different"
 		}},
 		{"program", func(_ *BuildDelegationRequest, r *BuildDelegationResult) {
-			r.Manifest.Instructions[0].ProgramID = FlightProgramID
+			r.Manifest.Instructions[2].ProgramID = FlightProgramID
+		}},
+		{"compute program", func(_ *BuildDelegationRequest, r *BuildDelegationResult) {
+			r.Manifest.Instructions[0].ProgramID = PhoenixProgramID
+		}},
+		{"compute limit", func(_ *BuildDelegationRequest, r *BuildDelegationResult) {
+			r.Manifest.Instructions[0].DataBase64 = "AkANAwE="
+		}},
+		{"priority fee", func(_ *BuildDelegationRequest, r *BuildDelegationResult) {
+			r.Manifest.Instructions[1].DataBase64 = "AwEAAAAAAAAA"
+		}},
+		{"compute accounts", func(_ *BuildDelegationRequest, r *BuildDelegationResult) {
+			r.Manifest.Instructions[0].AccountIndexes = []uint8{0}
 		}},
 		{"extra instruction", func(_ *BuildDelegationRequest, r *BuildDelegationResult) {
 			r.Manifest.Instructions = append(r.Manifest.Instructions, InstructionManifest{})

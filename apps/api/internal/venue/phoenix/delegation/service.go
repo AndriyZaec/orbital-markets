@@ -187,7 +187,7 @@ func (s *Service) Prepare(ctx context.Context, q PrepareRequest) (Result, error)
 	}{built.MessageBase64, q.Action, q.Owner, target, s.backend.Address(), built.TraderAccount})
 	metadata, _ := json.Marshal(built)
 	r := record{Owner: q.Owner, Target: target, Before: current.PositionAuthority, Action: q.Action, Slot: max(hash.Slot, current.Slot), Built: built, State: "prepared",
-		Request: domain.SigningRequest{ID: id, ClientOrderID: id, Venue: "phoenix", Action: string(q.Action), Account: q.Owner, Signer: q.Owner, UnsignedPayload: payload, VenueMetadata: metadata, CreatedAt: now, ExpiresAt: now.Add(30 * time.Second)}}
+		Request: domain.SigningRequest{ID: id, ClientOrderID: id, Venue: "phoenix", Action: string(q.Action), Account: q.Owner, Signer: q.Owner, UnsignedPayload: payload, VenueMetadata: metadata, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}}
 	if err = s.store.savePrepared(ctx, r); err != nil {
 		return Result{}, err
 	}

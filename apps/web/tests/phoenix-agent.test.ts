@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { Keypair, PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js'
+import { ComputeBudgetProgram, Keypair, Message, PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js'
 import bs58 from 'bs58'
 import nacl from 'tweetnacl'
 import { authorizePhoenixAgent, restorePhoenixAgent, revokePhoenixAgent, PhoenixPendingError, PhoenixReplacementRequired, type PhoenixTransport, type PhoenixResult } from '../src/agents/phoenix-agent.ts'
@@ -15,6 +15,18 @@ const payer = Keypair.fromSeed(new Uint8Array(32).fill(3))
 const third = Keypair.fromSeed(new Uint8Array(32).fill(4)).publicKey.toBase58()
 const ownerAddress = owner.publicKey.toBase58()
 
+// Phantom documents this enhancement for unsigned transactions without a budget,
+// including signTransaction: docs.phantom.com/developer-powertools/solana-priority-fees
+function phantomSignTransaction(transaction: Transaction): Transaction {
+  if (!transaction.signatures.some(({ signature }) => signature) &&
+    !transaction.instructions.some(({ programId }) => programId.equals(ComputeBudgetProgram.programId))) {
+    transaction.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1_000 }))
+  }
+  transaction.partialSign(owner)
+  return transaction
+}
+
 function signingRequest(agent: string, action: PhoenixAction, id = 'request-1'): SigningRequest {
   const target = action === 'revoke' ? ownerAddress : agent
   const trader = phoenixTrader(ownerAddress)
@@ -23,7 +35,9 @@ function signingRequest(agent: string, action: PhoenixAction, id = 'request-1'):
     keys: [phoenixProgram, phoenixLogAuthority, phoenixGlobalConfiguration, ownerAddress, trader, target].map((key, index) => ({ pubkey: new PublicKey(key), isSigner: index === 3, isWritable: index === 4 })),
     data: createHash('sha256').update('global:delegate_trader').digest().subarray(0, 8),
   })
-  const tx = new Transaction({ feePayer: payer.publicKey, recentBlockhash: bs58.encode(new Uint8Array(32).fill(9)) }).add(instruction)
+  const tx = new Transaction({ feePayer: payer.publicKey, recentBlockhash: bs58.encode(new Uint8Array(32).fill(9)) }).add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 0 }), instruction)
   const message = tx.serializeMessage()
   const message_base64 = message.toString('base64')
   return {
@@ -239,6 +253,62 @@ test('owner signing validates actual instructions and rejects wallet mutations',
   await assert.rejects(validatePhoenixDelegation(expired, expected), /expiry/)
 })
 
+test('owner signing allows a 45-second wallet review within the one-minute request', async (t) => {
+  const now = Date.now()
+  const agent = third
+  const request = signingRequest(agent, 'delegate')
+  request.expires_at = new Date(now + 60_000).toISOString()
+  const result = await signPhoenixDelegation(request, {
+    owner: ownerAddress, agent, action: 'delegate', isCurrent: () => true,
+    signTransaction: async (transaction) => {
+      t.mock.method(Date, 'now', () => now + 45_000)
+      transaction.partialSign(owner)
+      return transaction
+    },
+  })
+  assert.equal(result.request_id, request.id)
+  assert.ok(nacl.sign.detached.verify(
+    Buffer.from((request.unsigned_payload as { message_base64: string }).message_base64, 'base64'),
+    bs58.decode(result.signature), owner.publicKey.toBytes(),
+  ))
+})
+
+test('delegation rejects altered compute budgets even with a matching message digest', async () => {
+  const mutations: [string, (transaction: Transaction) => void][] = [
+    ['limit', (tx) => { tx.instructions[0] = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }) }],
+    ['price', (tx) => { tx.instructions[1] = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }) }],
+    ['accounts', (tx) => { tx.instructions[0].keys.push({ pubkey: payer.publicKey, isSigner: true, isWritable: true }) }],
+    ['duplicate', (tx) => { tx.add(tx.instructions[0]) }],
+    ['missing', (tx) => { tx.instructions.splice(0, 2) }],
+    ['reordered', (tx) => { [tx.instructions[0], tx.instructions[1]] = [tx.instructions[1], tx.instructions[0]] }],
+  ]
+  for (const [name, mutate] of mutations) {
+    const request = signingRequest(third, 'delegate')
+    const payload = request.unsigned_payload as { message_base64: string }
+    const tx = Transaction.populate(Message.from(Buffer.from(payload.message_base64, 'base64')))
+    mutate(tx)
+    const bytes = tx.serializeMessage()
+    payload.message_base64 = bytes.toString('base64')
+    request.venue_metadata = { ...(request.venue_metadata as object), message_base64: payload.message_base64,
+      message_sha256: createHash('sha256').update(bytes).digest('hex') }
+    await assert.rejects(validatePhoenixDelegation(request, { owner: ownerAddress, agent: third, action: 'delegate' }), /Unexpected Phoenix/, name)
+  }
+})
+
+test('expired wallet approval is distinguished from a changed message', async (t) => {
+  const now = Date.now()
+  const request = signingRequest(third, 'delegate')
+  request.expires_at = new Date(now + 60_000).toISOString()
+  await assert.rejects(signPhoenixDelegation(request, {
+    owner: ownerAddress, agent: third, action: 'delegate', isCurrent: () => true,
+    signTransaction: async (transaction) => {
+      t.mock.method(Date, 'now', () => now + 60_000)
+      transaction.partialSign(owner)
+      return transaction
+    },
+  }), /Phoenix signing request expired;.*try again/)
+})
+
 test('unavailable infrastructure creates no unused pending key or owner prompt', async () => {
   const f = fixture()
   f.options.transport.available = async () => { throw new Error('infrastructure unavailable') }
@@ -268,7 +338,7 @@ test('request ID mismatch fails before the owner wallet is called', async () => 
   assert.equal(f.counts().signatures, 0)
 })
 
-test('browser validator accepts exact delegation/revoke bytes from the pinned Rust helper', async (t) => {
+test('Phantom signs exact delegation/revoke bytes from the pinned Rust helper without priority-fee enhancement', async (t) => {
   const path = process.env.ORBITAL_PHOENIX_HELPER_TEST_PATH
   if (!path) { t.skip('set ORBITAL_PHOENIX_HELPER_TEST_PATH to built phoenix-helper'); return }
   const agent = bs58.encode(nacl.sign.keyPair().publicKey)
@@ -281,5 +351,12 @@ test('browser validator accepts exact delegation/revoke bytes from the pinned Ru
     request.venue_metadata = response.result
     request.unsigned_payload = { ...(request.unsigned_payload as object), message_base64: response.result.message_base64 }
     await validatePhoenixDelegation(request, { owner: ownerAddress, agent, action })
+    await signPhoenixDelegation(request, {
+      owner: ownerAddress, agent, action, isCurrent: () => true,
+      signTransaction: async (transaction) => {
+        const walletTransaction = Transaction.from(transaction.serialize({ requireAllSignatures: false, verifySignatures: false }))
+        return phantomSignTransaction(walletTransaction)
+      },
+    })
   }
 })

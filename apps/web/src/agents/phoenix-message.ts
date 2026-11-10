@@ -1,12 +1,17 @@
-import { Message, PublicKey, Transaction } from '@solana/web3.js'
+import { ComputeBudgetProgram, Message, PublicKey, Transaction } from '@solana/web3.js'
 import bs58 from 'bs58'
 import nacl from 'tweetnacl'
 import type { SignedAction, SigningRequest } from '../types/signing.ts'
 
-// Pinned to phoenix-rise-ix 0.6.13. Only native DelegateTrader is approved here.
+// Pinned to phoenix-rise-ix 0.6.13. Only native DelegateTrader with the fixed
+// zero-priority-fee compute budget is approved here.
 export const phoenixProgram = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih'
 export const phoenixLogAuthority = 'GdxfTLSsdSY37G6fZoYtdGDSfgFnbT2EmRpuePZxWShS'
 export const phoenixGlobalConfiguration = '2zskx2iyCvb6Stg7RBZkt1f6MrF4dpYtMG3yMvKwqtUZ'
+const delegationBudget = [
+  ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+  ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 0 }),
+]
 
 export type PhoenixAction = 'delegate' | 'revoke'
 export type OwnerTransactionSigner = (transaction: Transaction) => Promise<Transaction>
@@ -64,14 +69,21 @@ export async function validatePhoenixDelegation(request: SigningRequest, expecte
   }
   const message = Message.from(bytes)
   const keys = message.accountKeys.map((key) => key.toBase58())
-  const allowed = new Set([payload.fee_payer, expected.owner, payload.trader_account, phoenixProgram, phoenixLogAuthority, phoenixGlobalConfiguration, target])
+  const allowed = new Set([payload.fee_payer, expected.owner, payload.trader_account, phoenixProgram, phoenixLogAuthority, phoenixGlobalConfiguration, target, ComputeBudgetProgram.programId.toBase58()])
   if (!equal(message.serialize(), bytes) || message.header.numRequiredSignatures !== 2 || message.header.numReadonlySignedAccounts !== 1 ||
     keys[0] !== payload.fee_payer || keys[1] !== expected.owner || keys.length !== allowed.size ||
     keys.some((key, index) => !allowed.has(key) || message.isAccountWritable(index) !== (key === payload.fee_payer || key === payload.trader_account)) ||
-    message.recentBlockhash !== metadata.recent_blockhash || message.instructions.length !== 1) {
+    message.recentBlockhash !== metadata.recent_blockhash || message.instructions.length !== 3) {
     throw new Error('Unexpected Phoenix transaction message or signer layout')
   }
-  const instruction = message.instructions[0]
+  for (const [index, wanted] of delegationBudget.entries()) {
+    const instruction = message.instructions[index]
+    if (keys[instruction.programIdIndex] !== wanted.programId.toBase58() || instruction.accounts.length !== 0 ||
+      !equal(bs58.decode(instruction.data), wanted.data)) {
+      throw new Error('Unexpected Phoenix delegation compute budget')
+    }
+  }
+  const instruction = message.instructions[2]
   const accounts = instruction.accounts.map((index) => keys[index])
   const wanted = [phoenixProgram, phoenixLogAuthority, phoenixGlobalConfiguration, expected.owner, payload.trader_account, target]
   const discriminator = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('global:delegate_trader'))).slice(0, 8)
@@ -91,8 +103,11 @@ export async function signPhoenixDelegation(request: SigningRequest, options: {
   assertOwner()
   const signed = await options.signTransaction(Transaction.populate(Message.from(bytes)))
   assertOwner()
-  if (!equal(signed.serializeMessage(), bytes) || Date.parse(request.expires_at) <= Date.now()) {
-    throw new Error('Wallet changed the Phoenix message or the signing request expired')
+  if (!equal(signed.serializeMessage(), bytes)) {
+    throw new Error('Wallet changed the Phoenix message; the transaction was not submitted')
+  }
+  if (Date.parse(request.expires_at) <= Date.now()) {
+    throw new Error('Phoenix signing request expired; please try again and approve within 60 seconds')
   }
   const signature = signed.signatures.find((entry) => entry.publicKey.toBase58() === options.owner)?.signature
   if (!signature || !nacl.sign.detached.verify(bytes, signature, new PublicKey(options.owner).toBytes())) {

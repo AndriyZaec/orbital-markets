@@ -1,9 +1,11 @@
 package helper
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -84,8 +86,17 @@ func validateBuildDelegationResult(req BuildDelegationRequest, result BuildDeleg
 	m := result.Manifest
 	if m.Format != "solana_legacy_message" || m.PhoenixProgramID != PhoenixProgramID || m.Action != req.Action ||
 		m.OwnerAuthority != req.OwnerAuthority || m.NewPositionAuthority != req.NewPositionAuthority || m.FeePayer != req.FeePayer ||
-		m.TraderAccount != result.TraderAccount || len(m.AccountKeys) == 0 || len(m.Instructions) != 1 || m.Instructions[0].ProgramID != PhoenixProgramID {
+		m.TraderAccount != result.TraderAccount || len(m.AccountKeys) == 0 || len(m.Instructions) != 3 || m.Instructions[2].ProgramID != PhoenixProgramID {
 		return errors.New("Phoenix delegation manifest mismatch")
+	}
+	// Fixed default allowance for one native instruction, with no priority fee.
+	budgetData := [][]byte{binary.LittleEndian.AppendUint32([]byte{2}, 200_000), binary.LittleEndian.AppendUint64([]byte{3}, 0)}
+	for index, expected := range budgetData {
+		instruction := m.Instructions[index]
+		data, err := base64.StdEncoding.DecodeString(instruction.DataBase64)
+		if err != nil || instruction.ProgramID != "ComputeBudget111111111111111111111111111111" || len(instruction.AccountIndexes) != 0 || !bytes.Equal(data, expected) {
+			return errors.New("Phoenix delegation compute budget mismatch")
+		}
 	}
 	if len(result.RequiredSigners) != 2 || result.RequiredSigners[0] != (RequiredSigner{Index: 0, Pubkey: req.FeePayer, Role: "fee_payer"}) ||
 		result.RequiredSigners[1] != (RequiredSigner{Index: 1, Pubkey: req.OwnerAuthority, Role: "owner_authority"}) {

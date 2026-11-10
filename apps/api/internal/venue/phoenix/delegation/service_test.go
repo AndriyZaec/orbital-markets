@@ -130,6 +130,19 @@ func prepare(t *testing.T, s *Service, action helper.DelegationAction) Result {
 	}
 	return r
 }
+
+func TestOwnerSigningWindowAllowsWalletSecurityReview(t *testing.T) {
+	for _, action := range []helper.DelegationAction{helper.ActionDelegate, helper.ActionRevoke} {
+		t.Run(string(action), func(t *testing.T) {
+			s, _, _ := setup(t)
+			r := prepare(t, s, action)
+			if got := r.SigningRequest.ExpiresAt.Sub(r.SigningRequest.CreatedAt); got != time.Minute {
+				t.Fatalf("owner wallet review window = %v, want 1m", got)
+			}
+		})
+	}
+}
+
 func signed(t *testing.T, r Result) domain.SignedAction {
 	t.Helper()
 	var payload struct {
