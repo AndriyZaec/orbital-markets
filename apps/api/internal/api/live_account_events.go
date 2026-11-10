@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -30,8 +29,8 @@ func (s *Server) handleLiveAccountEvents(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	controller := http.NewResponseController(w)
-	if err := controller.Flush(); err != nil {
+	controller := streamController(w)
+	if err := flushStream(controller); err != nil {
 		return
 	}
 
@@ -52,7 +51,7 @@ func (s *Server) handleLiveAccountEvents(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			return true
 		}
-		if _, err := fmt.Fprintf(w, "event: balances\ndata: %s\n\n", data); err != nil || controller.Flush() != nil {
+		if err := writeStream(w, controller, "event: balances\ndata: %s\n\n", data); err != nil {
 			return false
 		}
 		lastVersion = version
@@ -71,7 +70,7 @@ func (s *Server) handleLiveAccountEvents(w http.ResponseWriter, r *http.Request)
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil || controller.Flush() != nil {
+			if err := writeStream(w, controller, ": heartbeat\n\n"); err != nil {
 				return
 			}
 		case <-ticker.C:

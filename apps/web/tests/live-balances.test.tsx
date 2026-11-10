@@ -15,12 +15,43 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
+it('expires execution-facing freshness when both transports stop, retaining the monetary observation', async () => {
+  vi.useFakeTimers()
+  const { result } = renderHook(() => useLiveBalances('OwnerA', null, null, 'OwnerA'))
+  await act(() => vi.advanceTimersByTimeAsync(0))
+  act(() => mocks.subscribe.mock.calls[0][1]({ type: 'balances', data: {
+    phoenix: { venue: 'phoenix', connected: true, stream_ready: true, fresh: true, equity: 100, available: 80,
+      age_seconds: 0, last_updated: new Date().toISOString() },
+  } }))
+  mocks.apiFetch.mockImplementation(async () => { throw new TypeError('offline') })
+  act(() => mocks.subscribe.mock.calls[0][1]({ type: 'disconnected' }))
+  await act(() => vi.advanceTimersByTimeAsync(30_001))
+  expect(result.current.phoenix.fresh).toBe(false)
+  expect(result.current.phoenix.observation?.equity).toBe(100)
+})
+
+it('preserves unchanged owners and their observations when another wallet connects or risk becomes unavailable', async () => {
+  const { result, rerender } = renderHook(({ evm }) => useLiveBalances('OwnerA', evm, null, 'OwnerA'), { initialProps: { evm: null as string | null } })
+  await waitFor(() => expect(mocks.subscribe).toHaveBeenCalledTimes(1))
+  act(() => mocks.subscribe.mock.calls[0][1]({ type: 'balances', data: {
+    phoenix: { venue: 'phoenix', connected: true, stream_ready: true, fresh: true, equity: 100, available: 80, last_updated: '2026-11-10T12:00:00Z' },
+  } }))
+  rerender({ evm: '0xHL' })
+  expect(result.current.phoenix.equity).toBe(100)
+  act(() => mocks.subscribe.mock.calls[1][1]({ type: 'balances', data: {
+    phoenix: { venue: 'phoenix', connected: true, stream_ready: true, fresh: false, unavailable: true, equity: 0, available: 0 },
+  } }))
+  expect(result.current.phoenix.observation?.equity).toBe(100)
+  expect(result.current.phoenix.fresh).toBe(false)
+  expect(result.current.phoenix.unavailable).toBe(true)
+})
+
 it('uses one account subscription for all venues and preserves healthy balances beside an unavailable venue', async () => {
   const { result, unmount } = renderHook(() => useLiveBalances('SolanaOwner', '0xHL', '0xAster', 'SolanaOwner'))
   await waitFor(() => expect(mocks.apiFetch).toHaveBeenCalledTimes(1))
   expect(mocks.subscribe).toHaveBeenCalledTimes(1)
   expect(mocks.subscribe.mock.calls[0][0]).toEqual({
-    pacifica: 'SolanaOwner', hyperliquid: '0xHL', aster: '0xAster', phoenix: 'SolanaOwner',
+    pacifica: 'SolanaOwner', hyperliquid: '0xhl', aster: '0xaster', phoenix: 'SolanaOwner',
   })
   act(() => mocks.subscribe.mock.calls[0][1]({ type: 'balances', data: {
     pacifica: { venue: 'pacifica', connected: true, fresh: true, equity: 100, available: 80 },
@@ -58,7 +89,7 @@ it('polls only when the shared SSE is disconnected and replaces the subscription
   rerender({ owner: 'OwnerB' })
   expect(mocks.unsubscribe).toHaveBeenCalledTimes(1)
   expect(mocks.subscribe).toHaveBeenCalledTimes(2)
-  expect(mocks.subscribe.mock.calls[1][0]).toEqual({ pacifica: 'OwnerB', hyperliquid: '0xHL', phoenix: 'OwnerB' })
+  expect(mocks.subscribe.mock.calls[1][0]).toEqual({ pacifica: 'OwnerB', hyperliquid: '0xhl', phoenix: 'OwnerB' })
   unmount()
   expect(mocks.unsubscribe).toHaveBeenCalledTimes(2)
 })

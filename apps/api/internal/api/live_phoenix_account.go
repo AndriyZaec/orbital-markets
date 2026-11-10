@@ -121,6 +121,7 @@ type phoenixAccountFeed struct {
 	marketGeneration, exchangeSequence uint64
 	viewAt                             time.Time
 	lastAttempt                        time.Time
+	lastError                          error
 	authorityRevision                  uint64
 }
 
@@ -137,11 +138,11 @@ func (f *phoenixAccountFeed) run() {
 		case <-f.wake:
 		}
 		f.mu.Lock()
-		lastAttempt, viewAt, haveVerifiedView := f.lastAttempt, f.viewAt, f.snapshot.Phoenix != nil
+		lastAttempt, viewAt, failed := f.lastAttempt, f.viewAt, f.lastError != nil
 		f.mu.Unlock()
 		// Back off failed reads, not live account changes after a successful risk
 		// computation: the old view is already invalid for the new revision.
-		if !haveVerifiedView && time.Since(lastAttempt) < 5*time.Second {
+		if failed && time.Since(lastAttempt) < 5*time.Second {
 			continue
 		}
 		if !f.state.Snapshot().Fresh(time.Now()) {
@@ -165,23 +166,44 @@ func (f *phoenixAccountFeed) refreshView(ctx context.Context) error {
 		go func() {
 			opCtx, cancel := context.WithTimeout(f.ctx, 15*time.Second)
 			defer cancel()
-			snapshot, result, markets, viewAt, err := f.readView(opCtx)
+			var snapshot liveAccountSnapshot
+			var result helper.RiskResult
+			var markets phoenix.MarketStreamSnapshot
+			var viewAt time.Time
+			var err error
+			// One flight owns refresh; normal account/market progress retries the
+			// latest capture inside the same bounded operation, not after backoff.
+			for attempt := 0; attempt < 3; attempt++ {
+				snapshot, result, markets, viewAt, err = f.readView(opCtx)
+				if !errors.Is(err, phoenixaccount.ErrRiskSuperseded) || opCtx.Err() != nil {
+					break
+				}
+			}
 			f.mu.Lock()
+			previousError := f.lastError
 			if revision != f.authorityRevision && err == nil {
 				err = errors.New("Phoenix authority changed during verification")
 			}
 			if err == nil && f.ctx.Err() == nil && revision == f.authorityRevision {
 				f.snapshot, f.riskResult, f.marketGeneration, f.exchangeSequence, f.viewAt = snapshot, result, markets.Generation, markets.Sequence, viewAt
 			} else if revision == f.authorityRevision {
-				f.snapshot = liveAccountSnapshot{Venue: "phoenix", Account: f.state.Snapshot().Owner, UnavailableReason: "Phoenix account verification unavailable"}
+				// Keep the last successful monetary observation. Failure changes
+				// verification status, never its amounts or original timestamp.
+				f.snapshot.UnavailableReason = "Phoenix account verification unavailable"
 				if err != nil {
 					f.snapshot.UnavailableReason = err.Error()
 				}
 			}
 			r.err = err
+			f.lastError = err
 			f.refresh = nil
 			close(r.done)
 			f.mu.Unlock()
+			if err != nil && (previousError == nil || previousError.Error() != err.Error()) {
+				f.factory.logger.Warn("phoenix account verification changed", "owner", f.state.Snapshot().Owner, "reason", err)
+			} else if err == nil && previousError != nil {
+				f.factory.logger.Info("phoenix account verification recovered", "owner", snapshot.Account)
+			}
 		}()
 	}
 	f.mu.Unlock()
@@ -215,7 +237,7 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 	currentMarkets := f.factory.config.Markets.Snapshot()
 	if !after.Fresh(time.Now()) || after.Generation != before.Generation || after.Sequence != before.Sequence || after.Slot != before.Slot ||
 		!currentMarkets.Connected || !currentMarkets.Synchronized || markets.Generation != currentMarkets.Generation || markets.Sequence != currentMarkets.Sequence {
-		return failed(errors.New("Phoenix account or exchange changed during verification"))
+		return failed(phoenixaccount.ErrRiskSuperseded)
 	}
 	currentAgent, err := f.factory.store.RegisteredAgent(ctx, "phoenix", before.Owner)
 	if err != nil || currentAgent != agent {
@@ -256,6 +278,13 @@ func (f *phoenixAccountFeed) readView(ctx context.Context) (liveAccountSnapshot,
 	if source := time.UnixMilli(result.AsOfUnixMS); source.Before(observed) {
 		observed = source
 	}
+	// Registration/normalization can yield too. Never publish a completion as
+	// current if its source identity was superseded after the earlier check.
+	latest, latestMarkets := f.state.Snapshot(), f.factory.config.Markets.Snapshot()
+	if !latest.Fresh(time.Now()) || latest.Generation != after.Generation || latest.Slot != after.Slot || latest.Sequence != after.Sequence ||
+		!latestMarkets.Connected || !latestMarkets.Synchronized || latestMarkets.Generation != currentMarkets.Generation || latestMarkets.Sequence != currentMarkets.Sequence {
+		return failed(phoenixaccount.ErrRiskSuperseded)
+	}
 	return liveAccountSnapshot{Venue: "phoenix", Account: before.Owner, Connected: true, LastUpdated: observed, PositionsUpdatedAt: after.PositionsUpdatedAt,
 		Equity: equity, Available: available, Positions: positions, UnavailableReason: reason, Phoenix: details}, result, currentMarkets, viewAt, nil
 }
@@ -267,6 +296,7 @@ func (f *phoenixAccountFeed) Snapshot() liveAccountSnapshot {
 	snapshot, result, marketGeneration, sequence := f.snapshot, f.riskResult, f.marketGeneration, f.exchangeSequence
 	f.mu.Unlock()
 	snapshot.Venue, snapshot.Account = "phoenix", state.Owner
+	snapshot.Connected = state.Connected && state.Synchronized
 	if snapshot.Phoenix != nil {
 		details := *snapshot.Phoenix
 		details.Positions = append([]liveAccountPosition{}, details.Positions...)
@@ -282,7 +312,7 @@ func (f *phoenixAccountFeed) Snapshot() liveAccountSnapshot {
 		reason = "Phoenix account feed stopped"
 	case !state.Fresh(time.Now()):
 		reason = "Phoenix account snapshot is not fresh and synchronized"
-	case reason != "" && snapshot.Phoenix == nil:
+	case reason != "":
 		// Preserve actionable authority/risk read errors when no verified view
 		// was published, instead of masking them with a generic revision error.
 	case !markets.Connected || !markets.Synchronized || markets.Generation != marketGeneration || markets.Sequence != sequence:

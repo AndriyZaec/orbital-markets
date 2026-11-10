@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -17,7 +16,7 @@ const (
 )
 
 func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
-	if s.live == nil {
+	if s.live == nil || s.live.accounts == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live execution not configured"})
 		return
 	}
@@ -33,19 +32,15 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	accounts, err := s.live.acquireAccountContext(requestedAccounts, false)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-		return
-	}
-	defer accounts.Release()
+	views := newAccountViews(s.live.accounts, requestedAccounts)
+	defer views.accounts.Release()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	controller := http.NewResponseController(w)
-	if err := controller.Flush(); err != nil {
+	controller := streamController(w)
+	if err := flushStream(controller); err != nil {
 		return
 	}
 
@@ -55,10 +50,7 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 		if err != nil || bytes.Equal(data, *previous) {
 			return true
 		}
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
-			return false
-		}
-		if err := controller.Flush(); err != nil {
+		if err := writeStream(w, controller, "event: %s\ndata: %s\n\n", event, data); err != nil {
 			return false
 		}
 		*previous = data
@@ -66,15 +58,11 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	emitBalances := func() bool {
-		statuses := make(map[string]venueAccountStatus, len(requestedAccounts))
+		snapshots := views.snapshots()
+		statuses := accountViewStatuses(snapshots)
 		versionInput := make(map[string]any, len(requestedAccounts)*2)
-		for venue := range requestedAccounts {
-			feed, found := accounts.Feed(venue)
-			if !found {
-				return true
-			}
-			statuses[venue] = accountStatus(accounts, venue, displayFreshness)
-			versionInput[venue] = feed.Snapshot()
+		for venue, snapshot := range snapshots {
+			versionInput[venue] = snapshot
 			versionInput[venue+"_fresh"] = statuses[venue].Fresh
 		}
 		version, err := json.Marshal(versionInput)
@@ -118,11 +106,12 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil || controller.Flush() != nil {
+			if err := writeStream(w, controller, ": heartbeat\n\n"); err != nil {
 				return
 			}
 		case <-ticker.C:
 			ticks++
+			views.retryMissing(time.Now())
 			if !emitBalances() || !emitSession() {
 				return
 			}

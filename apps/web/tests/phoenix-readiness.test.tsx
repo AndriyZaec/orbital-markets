@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { cleanup, renderHook, waitFor } from '@testing-library/react'
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { VenueReadinessProvider, useVenueReadiness } from '../src/hooks/useVenueReadiness'
 
@@ -36,7 +36,21 @@ beforeEach(() => {
   mocks.owner = 'SolanaOwner'; mocks.agentOwner = 'SolanaOwner'; mocks.liveReady = false
   mocks.registeredAgent = 'phoenix-agent'
 })
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.useRealTimers() })
+
+it('retries a failed account startup without user reauthorization or a provider remount', async () => {
+  vi.useFakeTimers()
+  mocks.apiFetch.mockRejectedValueOnce(new TypeError('offline')).mockResolvedValueOnce(Response.json({}))
+  const { result, rerender } = renderHook(useVenueReadiness, { wrapper })
+  await act(() => vi.advanceTimersByTimeAsync(0))
+  expect(result.current.ensureStatus).toBe('error')
+  await act(() => vi.advanceTimersByTimeAsync(5_000))
+  expect(result.current.ensureStatus).toBe('ready')
+  expect(mocks.apiFetch).toHaveBeenCalledTimes(2)
+  rerender()
+  await act(() => vi.advanceTimersByTimeAsync(10_000))
+  expect(mocks.apiFetch).toHaveBeenCalledTimes(2)
+})
 
 it('requires explicit server live readiness and a case-sensitive matching local Phoenix owner', () => {
   const { result, rerender } = renderHook(useVenueReadiness, { wrapper })

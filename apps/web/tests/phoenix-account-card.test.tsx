@@ -4,7 +4,7 @@ import { ConnectAccounts } from '../src/components/ConnectAccounts'
 import phoenixLogo from '../src/assets/phoenix-logo.svg'
 
 const mocks = vi.hoisted(() => ({ disconnect: vi.fn().mockResolvedValue(undefined), refresh: vi.fn().mockResolvedValue(undefined),
-  revoke: vi.fn().mockResolvedValue(undefined), positions: [{ state: 'open', venue_a: 'phoenix', venue_b: 'hyperliquid' }], phoenixStatus: 'ready',
+  revoke: vi.fn().mockResolvedValue(undefined), positions: [{ state: 'open', venue_a: 'phoenix', venue_b: 'hyperliquid' }], phoenixStatus: 'ready', riskReason: '',
 }))
 vi.mock('@solana/wallet-adapter-react-ui', () => ({ useWalletModal: () => ({ setVisible: vi.fn() }) }))
 vi.mock('@solana/wallet-adapter-react', () => ({ useWallet: () => ({ connected: true, publicKey: { toBase58: () => 'SolanaOwner' }, signTransaction: vi.fn() }) }))
@@ -21,17 +21,25 @@ vi.mock('@/hooks/useVenueReadiness', () => ({ useVenueReadiness: () => {
   const disconnected = { status: 'disconnected', walletConnected: false, blockingReasons: [], agentStatus: 'missing' }
   const connected = { ...disconnected, status: 'agent_missing', walletConnected: true, signerReady: true, agentReady: false }
   return { pacifica: connected, hyperliquid: disconnected, aster: disconnected,
-    phoenix: { ...connected, status: mocks.phoenixStatus === 'ready' ? 'ready' : 'agent_missing', agentReady: mocks.phoenixStatus === 'ready', agentStatus: mocks.phoenixStatus,
-      shortAddress: 'Sola…wner', balanceReady: true, equity: 100, available: 80 },
-    aggregate: { readyCount: 1, totalCount: 4, statusLabel: 'Needs attention', tradingReady: false, blockingReasons: [] },
+    phoenix: { ...connected, status: mocks.riskReason ? 'unavailable' : mocks.phoenixStatus === 'ready' ? 'ready' : 'agent_missing', agentReady: mocks.phoenixStatus === 'ready', agentStatus: mocks.phoenixStatus,
+      shortAddress: 'Sola…wner', balanceReady: !mocks.riskReason, equity: 100, available: 80, blockingReasons: mocks.riskReason ? [mocks.riskReason] : [] },
+    aggregate: { readyCount: 1, totalCount: 4, statusLabel: 'Needs attention', tradingReady: false, blockingReasons: mocks.riskReason ? [mocks.riskReason] : [] },
     ensureStatus: 'ready', refreshBalances: mocks.refresh }
 } }))
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.phoenixStatus = 'ready'
+  mocks.riskReason = ''
   mocks.positions = [{ state: 'open', venue_a: 'phoenix', venue_b: 'hyperliquid' }]
 })
 afterEach(cleanup)
+
+it('does not duplicate technical account blockers in the card and aggregate summary', () => {
+  mocks.riskReason = 'Phoenix account or exchange changed during verification'
+  render(<ConnectAccounts open onClose={() => {}} />)
+  expect(screen.queryByText(/changed during verification/)).toBeNull()
+  expect(within(screen.getByRole('group', { name: 'Phoenix account' })).queryByText('Unavailable')).toBeNull()
+})
 
 it('uses the shared branded account card and confirms Solana exposure before disconnecting Phoenix', async () => {
   render(<ConnectAccounts open onClose={() => {}} />)

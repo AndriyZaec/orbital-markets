@@ -5,6 +5,13 @@ import { subscribeLiveAccountUpdates } from '@/lib/live-events'
 import { useLiveExecution } from './useLiveExecution'
 import { usePageVisibility } from './usePageVisibility'
 import { liveAccountsQuery } from '@/lib/live-bindings'
+import { accountRead } from '@/lib/account-read'
+
+export interface BalanceObservation {
+  equity: number
+  available: number
+  observed_at: string
+}
 
 interface VenueBalance {
   venue: string
@@ -21,6 +28,7 @@ interface VenueBalance {
   age_seconds?: number
   reason?: string
   unavailable?: boolean
+  observation?: BalanceObservation
   phoenix?: { live_ready: boolean; live_unavailable_reason?: string; registered_agent?: string; action_verification_required?: boolean }
 }
 
@@ -49,18 +57,20 @@ export function useLiveBalances(
   accountPhoenix: string | null,
   pollInterval = 30_000,
 ) {
+  const hyperliquidOwner = accountHyperliquid?.toLowerCase() ?? null
+  const asterOwner = accountAster?.toLowerCase() ?? null
   const accounts = useMemo(() => Object.fromEntries(Object.entries({
     pacifica: accountPacifica,
-    hyperliquid: accountHyperliquid,
-    aster: accountAster,
+    hyperliquid: hyperliquidOwner,
+    aster: asterOwner,
     phoenix: accountPhoenix,
-  }).filter((entry): entry is [string, string] => !!entry[1])), [accountAster, accountHyperliquid, accountPacifica, accountPhoenix])
+  }).filter((entry): entry is [string, string] => !!entry[1])), [asterOwner, hyperliquidOwner, accountPacifica, accountPhoenix])
   const pair = Object.keys(accounts).length > 0 ? JSON.stringify(accounts) : null
-  const [result, setResult] = useState<{ pair: string | null; balances: Balances }>({
-    pair: null,
-    balances: EMPTY,
-  })
-  const polling = useRef({ running: false })
+  const [result, setResult] = useState<Record<string, { owner: string; balance: VenueBalance; expiresAt: number }>>({})
+  const [clock, setClock] = useState(() => Date.now())
+  const polling = useMemo(() => ({ accountKey: pair, running: false }), [pair])
+  const currentOwners = useRef(accounts)
+  useEffect(() => { currentOwners.current = accounts }, [accounts])
   const streamConnected = useRef(false)
   const requestSequence = useRef(0)
   const pageVisible = usePageVisibility()
@@ -71,44 +81,80 @@ export function useLiveBalances(
   })
   const executionActive = executionUsesPair &&
     execution.phase !== 'idle' && execution.phase !== 'failed' && execution.phase !== 'aborted'
-  const shouldMonitor = pageVisible || executionActive
+  // Wallet identity owns the subscription, not page/panel visibility. A hidden
+  // tab keeps its push feed; only fallback reads depend on activity.
+  const shouldMonitor = pair !== null
+  const merge = useCallback((data: Partial<Balances>) => {
+    const receivedAt = Date.now()
+    setClock(receivedAt)
+    setResult((previous) => {
+      const next = { ...previous }
+      for (const [venue, incoming] of Object.entries(data)) {
+        const owner = accounts[venue]
+        if (!owner || !incoming || currentOwners.current[venue] !== owner) continue
+        const prior = previous[venue]?.owner === owner ? previous[venue].balance : undefined
+        // Legacy responses can still supply a successful observation. Retained
+        // observations never restore current connected/fresh/readiness fields.
+        const observation = incoming.observation ?? (incoming.last_updated && (incoming.stream_ready ?? incoming.connected)
+          ? { equity: incoming.equity, available: incoming.available, observed_at: incoming.last_updated }
+          : prior?.observation)
+        const age = typeof incoming.age_seconds === 'number' && Number.isFinite(incoming.age_seconds) ? incoming.age_seconds : null
+        const expiresAt = age !== null ? receivedAt + Math.max(0, 30 - Math.max(0, age)) * 1_000
+          : incoming.last_updated ? Date.parse(incoming.last_updated) + 30_000 : receivedAt + 30_000
+        next[venue] = { owner, balance: { ...incoming, observation }, expiresAt: Number.isFinite(expiresAt) ? expiresAt : receivedAt }
+      }
+      return next
+    })
+  }, [accounts])
+
+  // Expire current readiness even when SSE and fallback HTTP are both down.
+  // This timer changes no observation timestamp and performs no network read.
+  useEffect(() => {
+    const next = Object.entries(result).filter(([venue, value]) => accounts[venue] === value.owner && value.balance.fresh !== false)
+      .map(([, value]) => value.expiresAt).filter((at) => at > clock)
+    if (next.length === 0) return
+    const timer = window.setTimeout(() => setClock(Date.now()), Math.max(0, Math.min(...next) - Date.now()) + 1)
+    return () => window.clearTimeout(timer)
+  }, [accounts, result, clock])
 
   const fetch_ = useCallback(async (signal?: AbortSignal) => {
     if (signal?.aborted) return
     if (!pair) return
-    await runSingleFlight(polling.current, async () => {
+    await runSingleFlight(polling, async () => {
       const request = ++requestSequence.current
       try {
-        const query = liveAccountsQuery(accounts)
-        const resp = await apiFetch(`/api/v1/live/balances?${query}`, { signal })
-        if (!resp.ok) return
-        const data = await resp.json() as Partial<Balances>
-        if (signal?.aborted || request !== requestSequence.current) return
-        setResult({ pair, balances: { ...EMPTY, ...data } })
+        await accountRead(async (readSignal) => {
+          const query = liveAccountsQuery(accounts)
+          const resp = await apiFetch(`/api/v1/live/balances?${query}`, { signal: readSignal })
+          if (!resp.ok) return
+          const data = await resp.json() as Partial<Balances>
+          if (readSignal.aborted || request !== requestSequence.current) return
+          merge(data)
+        }, signal)
       } catch {
         // silently ignore — balance display is best-effort
       }
     })
-  }, [accounts, pair])
+  }, [accounts, pair, polling, merge])
 
   useEffect(() => {
     streamConnected.current = false
     if (!shouldMonitor || !pair) return
-    return subscribeLiveAccountUpdates(accounts, (event) => {
+    let active = true
+    const unsubscribe = subscribeLiveAccountUpdates(accounts, (event) => {
+      if (!active) return
       if (event.type === 'connected') streamConnected.current = true
       else if (event.type === 'disconnected') streamConnected.current = false
       else if (event.type === 'balances') {
         requestSequence.current++
-        setResult((current) => ({
-          pair,
-          balances: { ...(current.pair === pair ? current.balances : EMPTY), ...(event.data as Partial<Balances>) },
-        }))
+        merge(event.data as Partial<Balances>)
       }
     })
-  }, [accounts, shouldMonitor, pair])
+    return () => { active = false; unsubscribe() }
+  }, [accounts, shouldMonitor, pair, merge])
 
   useEffect(() => {
-    if (!pageVisible) return
+    if (!pageVisible && !executionActive) return
     const controller = new AbortController()
     const initialId = setTimeout(() => fetch_(controller.signal), 0)
     const intervalId = setInterval(() => {
@@ -119,12 +165,16 @@ export function useLiveBalances(
       clearTimeout(initialId)
       clearInterval(intervalId)
     }
-  }, [fetch_, pollInterval, pageVisible])
+  }, [fetch_, pollInterval, pageVisible, executionActive])
 
   // Expose refetch so ensure-account-streams callers can force a poll and
   // move the UI to "ready" without waiting for the next fallback poll. Returned
   // shape is a superset of Balances (adds `refetch`); existing consumers
   // that only read pacifica/hyperliquid are unaffected.
-  const balances = result.pair === pair ? result.balances : EMPTY
+  const balances = Object.fromEntries(Object.entries(EMPTY).map(([venue, empty]) => [venue,
+    accounts[venue] && result[venue]?.owner === accounts[venue]
+      ? clock >= result[venue].expiresAt ? { ...result[venue].balance, fresh: false } : result[venue].balance
+      : empty,
+  ])) as unknown as Balances
   return { ...balances, refetch: fetch_ }
 }

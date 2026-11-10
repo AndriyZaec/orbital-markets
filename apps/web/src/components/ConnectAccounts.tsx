@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import telegramLogo from '@/assets/telegram-logo.svg'
 import { PhoenixAuthorization } from './PhoenixAuthorization'
+import { AccountBalance } from './AccountBalance'
 import { accountActionStyles } from './account-action-styles'
 
 // Static venue presentation. Runtime
@@ -45,20 +46,6 @@ interface Props {
   open: boolean
   onConnectionChange?: (count: number) => void
   onClose: () => void
-}
-
-function fmtUsd(n: number | null): string {
-  if (n === null || !Number.isFinite(n)) return '--'
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(2)}K`
-  return `$${n.toFixed(2)}`
-}
-
-function fmtLastUpdated(value: string | null): string {
-  if (!value) return 'Refreshing'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Unknown'
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 // Diagnostic pill state (label + colors). Copy is operator-friendly, not
@@ -93,20 +80,6 @@ function agentPill(r: VenueReadiness): DiagnosticPill {
   if (r.agentStatus === 'error') return { label: 'Error', tone: 'bad' }
   return r.agentReady ? { label: 'Ready', tone: 'ok' } : { label: 'Required', tone: 'pending' }
 }
-function balancePill(r: VenueReadiness): DiagnosticPill {
-  if (!r.walletConnected) return { label: '—', tone: 'off' }
-  if (r.balanceReady) return { label: 'Ready', tone: 'ok' }
-  if (r.status === 'unavailable') return { label: 'Unavailable', tone: 'bad' }
-  // Stream up but snapshot is old — surface as Stale, not Pending, so the
-  // operator can tell the difference between "still initializing" and
-  // "data went stale after being fresh".
-  if (r.streamReady && !r.accountFresh) return { label: 'Stale', tone: 'pending' }
-  if (r.status === 'balance_pending' || r.balanceConnected || r.streamReady) {
-    return { label: 'Refreshing', tone: 'pending', loading: true }
-  }
-  return { label: 'Not connected', tone: 'off' }
-}
-
 // Overall aggregate → header color + copy. Kept local so the aggregate
 // hook can stay purely data.
 function aggregateTone(label: 'Ready' | 'Needs attention' | 'Not connected'): PillTone {
@@ -122,8 +95,6 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     aster,
     phoenix,
     aggregate,
-    ensureStatus,
-    ensureError,
     refreshBalances,
   } = useVenueReadiness()
   const tradingAgents = useTradingAgents()
@@ -312,19 +283,6 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <span className={`font-medium ${summaryTone.text}`}>{aggregate.statusLabel}</span>
           </div>
         </div>
-        {!aggregate.tradingReady && aggregate.blockingReasons.length > 0 && (
-          <ul className="mt-2 flex flex-col gap-0.5">
-            {aggregate.blockingReasons.map((r, i) => (
-              <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
-            ))}
-          </ul>
-        )}
-        {ensureError && (
-          <p className="text-[10px] text-red-400 mt-2">Account data: {ensureError}</p>
-        )}
-        {ensureStatus === 'starting' && (
-          <p className="text-[10px] text-muted-foreground/70 mt-2">Starting account data…</p>
-        )}
       </div>
 
       {/* Venue list */}
@@ -384,30 +342,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     {venue.preview ? (
                       <DiagRow label="Live execution" pill={{ label: 'Not enabled', tone: 'off' }} />
                     ) : (
-                      <DiagRow label="Balance" pill={balancePill(readiness)} />
-                    )}
-                    {readiness.walletConnected && !venue.preview && (
-                      <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
-                        <span className="text-muted-foreground">Equity / Available</span>
-                        <span className="font-mono text-foreground">
-                          {fmtUsd(readiness.equity)} / {fmtUsd(readiness.available)}
-                        </span>
-                      </div>
-                    )}
-                    {readiness.walletConnected && !venue.preview && (
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-muted-foreground">Last update</span>
-                        <span className="font-mono text-muted-foreground">
-                          {fmtLastUpdated(readiness.lastUpdated)}
-                        </span>
-                      </div>
-                    )}
-                    {readiness.blockingReasons.length > 0 && !isReady && (
-                      <ul className="mt-1 flex flex-col gap-0.5">
-                        {readiness.blockingReasons.map((r, i) => (
-                          <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
-                        ))}
-                      </ul>
+                      <AccountBalance readiness={readiness} />
                     )}
                   </div>
                 )}

@@ -252,10 +252,23 @@ func (s *MarketStream) connectAndListen(ctx context.Context) error {
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		select {
-		case <-ctx.Done():
-			_ = connection.Close()
-		case <-done:
+		ticker := time.NewTicker(websocketReadTimeout / 2)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				_ = connection.Close()
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				// Control writes may run alongside subscription writes. Pongs
+				// renew transport liveness only, never market observation ages.
+				if err := connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					_ = connection.Close()
+					return
+				}
+			}
 		}
 	}()
 

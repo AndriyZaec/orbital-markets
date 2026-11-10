@@ -30,6 +30,50 @@ function missingState(venue: Venue, ownerAddress: string | null): TradingAgentSt
   return { venue, ownerAddress, agentAddress: null, status: 'missing', error: null }
 }
 
+// Each venue/owner restores independently. Connecting another wallet must not
+// reset an already authorized account or repeat its reconciliation requests.
+function restoreTradingAgent(venue: Venue, ownerAddress: string | null, storage: TradingAgentStore,
+  setState: (state: TradingAgentState) => void, isCurrent: () => boolean) {
+  let active = true
+  const restore = async () => {
+    await Promise.resolve()
+    if (!active || !isCurrent()) return
+    setState(initialState(venue, ownerAddress))
+    if (!ownerAddress) return
+    try {
+      let agent = venue === 'phoenix'
+        ? await withAgentLock('phoenix', ownerAddress, async () => {
+          const { restorePhoenixAgent, createPhoenixTransport } = await import('./phoenix-agent.ts')
+          return restorePhoenixAgent({ storage, ownerAddress, transport: createPhoenixTransport(), isCurrent: () => active && isCurrent() })
+        })
+        : venue === 'aster'
+        ? await withAgentLock('aster', ownerAddress, async () => {
+          const { reconcilePendingAsterAgent } = await import('./aster-agent.ts')
+          return await reconcilePendingAsterAgent({ storage, ownerAddress,
+            reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
+          }) ?? await storage.restore('aster', ownerAddress)
+        })
+        : await storage.restore(venue, ownerAddress)
+      const expectedBuilder = venue === 'hyperliquid' ? hyperliquidBuilderAddress : venue === 'aster' ? asterBuilderAddress : null
+      if (expectedBuilder && agent && agent.builderAddress?.toLowerCase() !== expectedBuilder.toLowerCase()) {
+        await storage.clear(venue, ownerAddress)
+        agent = null
+      }
+      if (!active || !isCurrent()) return
+      setState(agent ? { venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null }
+        : missingState(venue, ownerAddress))
+    } catch (error) {
+      if (!active || !isCurrent()) return
+      setState({ venue, ownerAddress, agentAddress: null,
+        status: venue === 'phoenix' && error instanceof Error && error.name === 'PhoenixPendingError' ? 'pending' : 'error',
+        error: error instanceof Error ? error.message : 'Unable to restore authorization',
+      })
+    }
+  }
+  void restore()
+  return () => { active = false }
+}
+
 let persistentStore: TradingAgentStore | null = null
 const volatilePendingPacificaRevocations = new Map<string, string>()
 
@@ -124,62 +168,14 @@ function TradingAgentSession({
   const revokedPacificaAgents = useRef(new Set<string>())
   owners.current = { pacifica: pacificaOwner, phoenix: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
 
-  useEffect(() => {
-    let active = true
-    const restore = async (
-      venue: Venue,
-      ownerAddress: string | null,
-      setState: (state: TradingAgentState) => void,
-    ) => {
-      await Promise.resolve()
-      if (!active) return
-      setState(initialState(venue, ownerAddress))
-      if (!ownerAddress) return
-      try {
-        let agent = venue === 'phoenix'
-          ? await withAgentLock('phoenix', ownerAddress, async () => {
-            const { restorePhoenixAgent, createPhoenixTransport } = await import('./phoenix-agent.ts')
-            return restorePhoenixAgent({ storage, ownerAddress, transport: createPhoenixTransport(), isCurrent: () => ownerStillCurrent('phoenix', ownerAddress, owners.current) })
-          })
-          : venue === 'aster'
-          ? await withAgentLock('aster', ownerAddress, async () => {
-            const { reconcilePendingAsterAgent } = await import('./aster-agent.ts')
-            return await reconcilePendingAsterAgent({
-              storage,
-              ownerAddress,
-              reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
-            }) ?? await storage.restore('aster', ownerAddress)
-          })
-          : await storage.restore(venue, ownerAddress)
-        const expectedBuilder = venue === 'hyperliquid'
-          ? hyperliquidBuilderAddress
-          : venue === 'aster' ? asterBuilderAddress : null
-        if (expectedBuilder && agent &&
-          agent.builderAddress?.toLowerCase() !== expectedBuilder.toLowerCase()) {
-          await storage.clear(venue, ownerAddress)
-          agent = null
-        }
-        if (!active) return
-        setState(agent
-          ? { venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null }
-          : missingState(venue, ownerAddress))
-      } catch (error) {
-        if (!active) return
-        setState({
-          venue,
-          ownerAddress,
-          agentAddress: null,
-          status: venue === 'phoenix' && error instanceof Error && error.name === 'PhoenixPendingError' ? 'pending' : 'error',
-          error: error instanceof Error ? error.message : 'Unable to restore authorization',
-        })
-      }
-    }
-    void restore('pacifica', pacificaOwner, setPacifica)
-    void restore('hyperliquid', hyperliquidOwner, setHyperliquid)
-    void restore('aster', asterOwner, setAster)
-    void restore('phoenix', pacificaOwner, setPhoenix)
-    return () => { active = false }
-  }, [asterOwner, hyperliquidOwner, pacificaOwner, storage])
+  useEffect(() => restoreTradingAgent('pacifica', pacificaOwner, storage, setPacifica,
+    () => ownerStillCurrent('pacifica', pacificaOwner, owners.current)), [pacificaOwner, storage])
+  useEffect(() => restoreTradingAgent('phoenix', pacificaOwner, storage, setPhoenix,
+    () => ownerStillCurrent('phoenix', pacificaOwner, owners.current)), [pacificaOwner, storage])
+  useEffect(() => restoreTradingAgent('hyperliquid', hyperliquidOwner, storage, setHyperliquid,
+    () => ownerStillCurrent('hyperliquid', hyperliquidOwner, owners.current)), [hyperliquidOwner, storage])
+  useEffect(() => restoreTradingAgent('aster', asterOwner, storage, setAster,
+    () => ownerStillCurrent('aster', asterOwner, owners.current)), [asterOwner, storage])
 
   const authorize = async (venue: Venue, options?: { replaceExistingDelegate?: boolean; expectedOwner?: string; expectedAuthority?: string }) => {
     const setState = venue === 'phoenix' ? setPhoenix : venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
@@ -485,10 +481,11 @@ function TradingAgentSession({
 
 function ownerStillCurrent(
   venue: Venue,
-  expectedOwner: string,
+  expectedOwner: string | null,
   owners: Record<Venue, string | null>,
 ): boolean {
   const current = owners[venue]
+  if (expectedOwner === null) return current === null
   return venue === 'pacifica' || venue === 'phoenix'
     ? current === expectedOwner
     : current?.toLowerCase() === expectedOwner.toLowerCase()

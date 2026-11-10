@@ -785,21 +785,12 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// Two freshness thresholds serve two different needs:
-//
-//	admissionFreshness — hard gate at /live/prepare and pretrade checks in
-//	  venue/*/account/pretrade.go. Must stay strict; this is what prevents
-//	  submitting orders against stale account state.
-//
-//	displayFreshness — soft gate for the balances/readiness UI. Push-driven
-//	  Pacifica WS doesn't heartbeat when nothing is happening, so a healthy
-//	  but quiet account naturally ages past 30s. Using the strict window for
-//	  display caused frequent false "Stale" flags with no user-visible fix.
-//	  5 minutes is generous enough to hide the quiet-account case while
-//	  still catching a genuinely broken stream.
+// Current readiness uses the same evidence window for every venue. Presentation
+// observations outlive this window without being promoted to admission evidence.
+// Venue pretrade checks remain the authority for actual order admission.
 const (
 	admissionFreshness                = 30 * time.Second
-	displayFreshness                  = 5 * time.Minute
+	displayFreshness                  = admissionFreshness
 	positionReconciliationQuietPeriod = 10 * time.Second
 )
 
@@ -817,6 +808,14 @@ type venueAccountStatus struct {
 	Reason      string                 `json:"reason,omitempty"` // human explanation when not ready
 	Unavailable bool                   `json:"unavailable,omitempty"`
 	Phoenix     *phoenixAccountDetails `json:"phoenix,omitempty"`
+	// Presentation evidence is independent of current execution admission.
+	Observation *accountBalanceObservation `json:"observation,omitempty"`
+}
+
+type accountBalanceObservation struct {
+	Equity     float64   `json:"equity"`
+	Available  float64   `json:"available"`
+	ObservedAt time.Time `json:"observed_at"`
 }
 
 // buildVenueAccountStatus derives the readiness view from a raw venue snapshot.
@@ -837,7 +836,8 @@ func buildVenueAccountStatus(venue string, connected bool, lastUpdated time.Time
 		age := time.Since(lastUpdated)
 		st.AgeSeconds = age.Seconds()
 		st.StreamReady = true
-		st.Fresh = age <= freshness
+		st.Fresh = age >= 0 && age <= freshness
+		st.Observation = &accountBalanceObservation{Equity: equity, Available: available, ObservedAt: lastUpdated}
 	}
 	if !st.Connected {
 		st.Reason = "account stream not connected"
@@ -858,17 +858,12 @@ func accountStatus(accounts *liveAccountContext, venue string, freshness time.Du
 }
 
 func buildVenueAccountStatusFromSnapshot(venue string, snapshot liveAccountSnapshot, freshness time.Duration) venueAccountStatus {
-	if (venue == "aster" || venue == "phoenix") && freshness > admissionFreshness {
-		freshness = admissionFreshness
-	}
 	status := buildVenueAccountStatus(
 		venue, snapshot.Connected, snapshot.LastUpdated,
 		snapshot.Equity, snapshot.Available, freshness,
 	)
 	status.Phoenix = snapshot.Phoenix
 	if snapshot.UnavailableReason != "" {
-		status.Connected = false
-		status.StreamReady = false
 		status.Fresh = false
 		status.Reason = snapshot.UnavailableReason
 		status.Unavailable = true

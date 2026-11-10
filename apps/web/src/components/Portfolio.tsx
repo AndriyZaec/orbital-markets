@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/dialog'
 import { isActivePositionState, isClosedPositionState, portfolioPositionCategory } from '@/lib/portfolio-position'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { accountObservation } from '@/lib/account-observation'
+import { cn } from '@/lib/utils'
 import {
   portfolioPerformance,
   type PortfolioPerformance,
@@ -113,10 +115,13 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
 
   // Sum only venues that actually report a value. If no venue has
   // reported equity, keep the tile as "--" rather than showing $0.00.
-  const equityValues = [pacifica.equity, hyperliquid.equity, aster.equity, phoenix.equity].filter(
+  const venues = [pacifica, hyperliquid, aster, phoenix]
+  const observations = venues.map(accountObservation)
+  const lastKnownBalances = venues.some((venue) => accountObservation(venue) && !venue.balanceReady)
+  const equityValues = observations.map((value) => value?.equity).filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
-  const availableValues = [pacifica.available, hyperliquid.available, aster.available, phoenix.available].filter(
+  const availableValues = observations.map((value) => value?.available).filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
   const totalEquity = equityValues.length > 0 ? equityValues.reduce((a, b) => a + b, 0) : null
@@ -227,8 +232,8 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
 
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Tile label="Total Equity" value={privateView ? MASKED_VALUE : fmtUsd(totalEquity)} hint="Across connected venues" tone="cyan" />
-        <Tile label="Available" value={privateView ? MASKED_VALUE : fmtUsd(totalAvailable)} hint="Free margin" />
+        <Tile label="Total Equity" value={privateView ? MASKED_VALUE : fmtUsd(totalEquity)} hint="Across connected venues" valueClassName={lastKnownBalances ? 'text-muted-foreground' : undefined} tone="cyan" />
+        <Tile label="Available" value={privateView ? MASKED_VALUE : fmtUsd(totalAvailable)} hint="Free margin" valueClassName={lastKnownBalances ? 'text-muted-foreground' : undefined} />
         <Tile label="Open Notional" value={privateView ? MASKED_VALUE : openCount > 0 ? fmtUsd(openNotional) : '--'} hint={`${openCount} open · ${degradedCount} degraded`} />
         <Tile
           label={privateView ? unrealizedPerformance.value === null || unrealizedPerformance.annualized ? 'uPnL Annualized Return' : 'uPnL Return' : 'Unrealized P&L'}
@@ -807,11 +812,13 @@ const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
 }
 
 function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; maskAmounts: boolean }) {
+  const observation = accountObservation(readiness)
+  const stale = observation && !readiness.balanceReady
   const view = STATUS_VIEW[readiness.status]
+  const showStatus = !observation || ['wallet_connected', 'signer_missing', 'agent_missing', 'agent_authorizing', 'error'].includes(readiness.status)
   const logo = venueMetadata(readiness.venue).logo
-  // Show a real number only when we actually have one from the backend.
-  // On disconnect (or before the first snapshot) equity/available are null;
-  // render "--" rather than an ambiguous $0.00.
+  // Display the owner's received observation independently of trading readiness;
+  // an owner disconnect hides it, while a background refresh only dims it.
   return (
     <div className={`relative overflow-hidden rounded-md border border-white/[0.07] bg-[#0b1018] px-3 py-3 transition-colors hover:border-white/[0.12] ${VENUE_CARD_STYLES[readiness.venue]}`}>
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
@@ -821,23 +828,23 @@ function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; mask
           </span>
           <span className="text-sm font-medium text-foreground">{readiness.label}</span>
         </div>
-        <span className={`text-[11px] flex items-center gap-1.5 ${view.color}`}>
+        {showStatus && <span className={`text-[11px] flex items-center gap-1.5 ${view.color}`}>
           {view.loading ? (
             <span className="size-2.5 animate-spin rounded-full border border-slate-500/40 border-t-cyan-400" />
           ) : (
             <span className={`size-1.5 rounded-full ${view.dot}`} />
           )}
           {view.label}
-        </span>
+        </span>}
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
         <div>
           <p className="text-muted-foreground">Equity</p>
-          <p className="font-mono text-foreground">{maskAmounts ? MASKED_VALUE : fmtUsd(readiness.equity)}</p>
+          <p className={cn('font-mono text-foreground', stale && 'text-muted-foreground')}>{maskAmounts ? MASKED_VALUE : fmtUsd(observation?.equity ?? null)}</p>
         </div>
         <div>
           <p className="text-muted-foreground">Available</p>
-          <p className="font-mono text-foreground">{maskAmounts ? MASKED_VALUE : fmtUsd(readiness.available)}</p>
+          <p className={cn('font-mono text-foreground', stale && 'text-muted-foreground')}>{maskAmounts ? MASKED_VALUE : fmtUsd(observation?.available ?? null)}</p>
         </div>
       </div>
       {readiness.shortAddress && (

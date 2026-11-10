@@ -18,19 +18,34 @@ export function GateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
+    let inflight: AbortController | null = null
+    let retry = 0
 
     async function probe() {
+      if (cancelled || inflight) return
+      window.clearTimeout(retry)
+      const controller = new AbortController()
+      inflight = controller
+      const deadline = window.setTimeout(() => controller.abort(), 5_000)
+      let transient = false
       try {
-        const resp = await apiFetch('/api/v1/access')
+        const resp = await apiFetch('/api/v1/access', { signal: controller.signal })
         if (cancelled) return
-        setStatus(resp.ok ? 'open' : 'gated')
+        if (resp.ok) setStatus('open')
+        else if ([401, 403, 404].includes(resp.status)) setStatus('gated')
+        else transient = true
         if (resp.ok && !appOpenedTrackedRef.current) {
           appOpenedTrackedRef.current = true
           trackAnalytics('app_opened')
         }
       } catch {
-        if (cancelled) return
-        setStatus('gated')
+        transient = true
+      } finally {
+        window.clearTimeout(deadline)
+        inflight = null
+        // A failed network probe is not an access revocation. Preserve the
+        // mounted account sessions and retry verification quietly.
+        if (!cancelled && transient) retry = window.setTimeout(() => void probe(), 5_000)
       }
     }
 
@@ -39,6 +54,8 @@ export function GateProvider({ children }: { children: ReactNode }) {
     window.addEventListener('focus', onFocus)
     return () => {
       cancelled = true
+      inflight?.abort()
+      window.clearTimeout(retry)
       window.removeEventListener('focus', onFocus)
     }
   }, [])

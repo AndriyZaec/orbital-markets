@@ -1,11 +1,12 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
 import { useVenueAuthority, type SigningReadiness } from './useVenueAuthority'
-import { useLiveBalances } from './useLiveBalances'
+import { useLiveBalances, type BalanceObservation } from './useLiveBalances'
 import { useTradingAgents } from './useTradingAgents'
 import type { TradingAgentState } from '@/agents/types'
 import { trackAnalytics } from '@/lib/analytics'
 import { liveAccountsKey, liveVenueBindingsBody, type VenueAddressMap } from '@/lib/live-bindings'
+import { accountRead } from '@/lib/account-read'
 
 // Single typed readiness layer for supported venues. Composes the
 // existing wallet-authority hook and the live-balances hook so the rest of
@@ -49,6 +50,7 @@ export interface VenueReadiness {
   lastUpdated: string | null
   equity: number | null
   available: number | null
+  balanceObservation?: BalanceObservation
   status: VenueStatus
   blockingReasons: string[]
 }
@@ -132,6 +134,7 @@ function buildReadiness(args: {
     last_updated?: string
     reason?: string
     unavailable?: boolean
+    observation?: BalanceObservation
     phoenix?: { live_ready: boolean; live_unavailable_reason?: string; registered_agent?: string; action_verification_required?: boolean }
   }
   unavailableReason?: string
@@ -152,7 +155,7 @@ function buildReadiness(args: {
   // the readiness layer still behaves sensibly. New backends drive both.
   const streamReady = balance.stream_ready ?? balance.connected
   const accountFresh = balance.fresh ?? balance.connected
-  const balanceReady = balanceConnected && signerReady && streamReady && accountFresh
+  const balanceReady = balanceConnected && signerReady && streamReady && accountFresh && !unavailableReason
 
   const blockingReasons: string[] = []
   if (errored) blockingReasons.push('Wallet reported an error')
@@ -174,7 +177,7 @@ function buildReadiness(args: {
   else if (!agentReady) status = agent.status === 'error' ? 'error' : 'agent_missing'
   else if (unavailableReason) status = 'unavailable'
   else if (!streamReady) status = 'balance_pending'
-  else if (!accountFresh) status = 'account_stale'
+  else if (!balanceConnected || !accountFresh) status = 'account_stale'
   else status = 'ready'
 
   return {
@@ -197,8 +200,9 @@ function buildReadiness(args: {
     // Backend subscribers keep running after wallet disconnect and can
     // report `connected: true` with 0/0; the wallet is the authoritative
     // signal for "does this user actually have this account right now".
-    equity: walletConnected && balance.connected ? balance.equity : null,
-    available: walletConnected && balance.connected ? balance.available : null,
+    equity: walletConnected && balanceReady && !unavailableReason ? balance.equity : null,
+    available: walletConnected && balanceReady && !unavailableReason ? balance.available : null,
+    balanceObservation: walletConnected ? balance.observation : undefined,
     status,
     blockingReasons,
   }
@@ -217,8 +221,8 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   // (via /live/prepare) is the only thing that starts the streams.
   const [ensureStatus, setEnsureStatus] = useState<EnsureStatus>('idle')
   const [ensureError, setEnsureError] = useState<string | null>(null)
-  const inflightRef = useRef<string | null>(null)   // pair currently being ensured
-  const attemptedRef = useRef<Set<string>>(new Set()) // pairs already auto-attempted
+  const inflightRef = useRef(new Map<string, { promise: Promise<boolean>; signal?: AbortSignal }>())
+  const ensuredRef = useRef(new Set<string>())
   const readyPairsTrackedRef = useRef<Set<string>>(new Set())
 
   const pacSignerReady = authority.pacifica.readiness === 'ready'
@@ -230,46 +234,68 @@ function useVenueReadinessState(): UseVenueReadinessResult {
     ['aster', asterSignerReady ? authority.aster.address : null],
     ['phoenix', authority.phoenix.readiness === 'ready' ? authority.phoenix.address : null],
   ].filter((entry): entry is [string, string] => !!entry[1])), [asterSignerReady, authority.aster.address, authority.phoenix.address, authority.phoenix.readiness, hlAddr, hlSignerReady, pacAddr, pacSignerReady])
+  const currentBindings = useRef('')
+  currentBindings.current = liveAccountsKey(ensureBindings)
 
-  const doEnsure = useCallback(async (accounts: VenueAddressMap) => {
+  const refetchBalances = balances.refetch
+  const doEnsure = useCallback((accounts: VenueAddressMap, signal?: AbortSignal): Promise<boolean> => {
     const pair = liveAccountsKey(accounts)
-    if (inflightRef.current === pair) return // dedup concurrent calls
-    inflightRef.current = pair
+    const existing = inflightRef.current.get(pair)
+    if (existing && !existing.signal?.aborted) return existing.promise
     setEnsureStatus('starting')
     setEnsureError(null)
+    const entry = { promise: Promise.resolve(false), signal }
+    inflightRef.current.set(pair, entry)
+    const operation = (async () => {
     try {
       // The read-only endpoint isolates startup failures per venue.
-      const resp = await apiFetch('/api/v1/live/accounts/ensure', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(liveVenueBindingsBody(accounts)),
-      })
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
-        throw apiError(resp.status, 'Unable to connect account data. Please try again.', body)
-      }
+      await accountRead(async (readSignal) => {
+        const resp = await apiFetch('/api/v1/live/accounts/ensure', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(liveVenueBindingsBody(accounts)), signal: readSignal,
+        })
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}))
+          throw apiError(resp.status, 'Unable to connect account data. Please try again.', body)
+        }
+      }, signal)
+      if (signal?.aborted || currentBindings.current !== pair) return false
+      ensuredRef.current.add(pair)
       setEnsureStatus('ready')
       // Nudge balances so readiness can move to ready without waiting for
       // the next fallback poll.
-      balances.refetch().catch(() => {})
+      refetchBalances().catch(() => {})
+      return true
     } catch (e) {
-      setEnsureStatus('error')
-      setEnsureError(userErrorMessage(e, 'Unable to connect account data. Please try again.'))
+      if (!signal?.aborted && currentBindings.current === pair) {
+        setEnsureStatus('error')
+        setEnsureError(userErrorMessage(e, 'Unable to connect account data. Please try again.'))
+      }
+      return false
     } finally {
-      inflightRef.current = null
+      if (inflightRef.current.get(pair) === entry) inflightRef.current.delete(pair)
     }
-  }, [balances])
+    })()
+    entry.promise = operation
+    return operation
+  }, [refetchBalances])
 
-  // Auto-start streams once per address pair as soon as BOTH signers are
-  // ready. Manual retry (ensureAccounts) bypasses the attempted-set check.
+  // Identity owns startup. Failed attempts retry; successful startup is reused.
   useEffect(() => {
-    if (Object.keys(ensureBindings).length < 2) return
+    if (Object.keys(ensureBindings).length === 0) return
     const pair = liveAccountsKey(ensureBindings)
-    if (attemptedRef.current.has(pair)) return
-    attemptedRef.current.add(pair)
-    doEnsure(ensureBindings)
+    if (ensuredRef.current.has(pair)) return
+    const controller = new AbortController()
+    let retry = 0
+    const attempt = async () => {
+      const ready = await doEnsure(ensureBindings, controller.signal)
+      if (!ready && !controller.signal.aborted) retry = window.setTimeout(() => void attempt(), 5_000)
+    }
+    void attempt()
+    return () => { controller.abort(); window.clearTimeout(retry) }
   }, [doEnsure, ensureBindings])
 
   const ensureAccounts = useCallback(async () => {
-    if (Object.keys(ensureBindings).length < 2) return
+    if (Object.keys(ensureBindings).length === 0) return
     // Manual retry: bypass the attempted-set gate.
     await doEnsure(ensureBindings)
   }, [doEnsure, ensureBindings])

@@ -223,7 +223,6 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 		return err
 	}
 	s.state.connected(generation)
-	connectedAt := time.Now()
 	s.notify()
 	type incoming struct {
 		raw []byte
@@ -282,9 +281,9 @@ func (s *Subscriber) connectAndListen(ctx context.Context) error {
 			}
 			s.notify()
 		case <-ticker.C:
-			if !s.state.Snapshot().Fresh(time.Now()) && time.Since(connectedAt) > Freshness {
-				return errors.New("Phoenix account stream stale; resync required")
-			}
+			// A stale observation is not evidence of a broken websocket. Keep
+			// transport alive and reconcile; sequence gaps already force resync
+			// through apply(), while stale state continues to block admission.
 			if err := connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(readTimeout)); err != nil {
 				return err
 			}

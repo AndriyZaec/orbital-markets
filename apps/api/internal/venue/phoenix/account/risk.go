@@ -13,6 +13,10 @@ type RiskComputer interface {
 	ComputeRisk(context.Context, helper.RiskRequest) (helper.RiskResult, error)
 }
 
+// ErrRiskSuperseded asks the refresh owner to capture the latest inputs, rather
+// than treating normal source progress as a provider outage.
+var ErrRiskSuperseded = errors.New("Phoenix risk capture superseded")
+
 // RiskInputs is a complete, immutable capture of venue parameters and prices
 // for every position, order and nonzero spot collateral pricing market.
 // Scanner metadata alone is deliberately insufficient to construct this view.
@@ -93,7 +97,7 @@ func (s *State) risk(ctx context.Context, computer RiskComputer, inputs RiskInpu
 	after := s.Snapshot()
 	at = now()
 	if !after.Fresh(at) || after.Generation != before.Generation || after.Slot != before.Slot || after.Sequence != before.Sequence {
-		return helper.RiskResult{}, errors.New("Phoenix account changed during risk computation")
+		return helper.RiskResult{}, ErrRiskSuperseded
 	}
 	if err := helper.ValidateRiskResult(q, result, at); err != nil {
 		return helper.RiskResult{}, err

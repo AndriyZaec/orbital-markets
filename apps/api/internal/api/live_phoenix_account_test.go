@@ -111,6 +111,7 @@ type phoenixAccountFixture struct {
 	send              chan map[string]any
 	cancel            context.CancelFunc
 	caps              map[string]any
+	fullSnapshot      map[string]any
 }
 
 func newPhoenixAccountFixture(t *testing.T) *phoenixAccountFixture {
@@ -153,6 +154,7 @@ func newPhoenixAccountFixture(t *testing.T) *phoenixAccountFixture {
 	wsSnapshot["authority"] = phoenixTestOwner
 	wsSnapshot["traderPdaIndex"] = 0
 	wsSnapshot["slot"] = 100
+	f.fullSnapshot = wsSnapshot
 	parameters, err := os.ReadFile("../venue/phoenix/risk/testdata/parameters.json")
 	if err != nil {
 		t.Fatal(err)

@@ -310,8 +310,8 @@ export function LivePositions({
 
       {/* Table */}
       <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
-        {loading && <p className="text-muted-foreground text-xs px-5 py-3">Loading...</p>}
-        {error && <p className="text-destructive text-xs px-5 py-3">Error: {error}</p>}
+        {loading && positions.length === 0 && <p className="text-muted-foreground text-xs px-5 py-3">Loading...</p>}
+        {error && <p className="text-muted-foreground text-xs px-5 py-3">{positions.length > 0 ? 'Showing last known positions. Some venues are reconnecting.' : 'Unable to load positions. Retrying.'}</p>}
 
         {!loading && !error && displayed.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-5 py-4 text-center">
@@ -335,7 +335,7 @@ export function LivePositions({
           </div>
         )}
 
-        {!loading && !error && displayed.length > 0 && (
+        {displayed.length > 0 && (
           <Table>
             <TableHeader className="sticky top-0 z-10">
               <TableRow className="border-border hover:bg-transparent bg-[#080b12]">

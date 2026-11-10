@@ -98,7 +98,7 @@ func (s *Source) Evaluate(ctx context.Context, state *account.State, computer ac
 	}
 	after := s.stream.Snapshot()
 	if !synchronized(after) || streamRevision(before) != streamRevision(after) {
-		return helper.RiskResult{}, errors.New("Phoenix exchange changed during risk computation")
+		return helper.RiskResult{}, fmt.Errorf("%w: exchange changed during risk computation", account.ErrRiskSuperseded)
 	}
 	return result, nil
 }
@@ -186,7 +186,7 @@ func (s *Source) inputs(ctx context.Context, acct account.Snapshot, stream phoen
 	// cannot be combined with the pre-read prices, even if REST itself succeeded.
 	after := s.stream.Snapshot()
 	if !synchronized(after) || streamRevision(after) != streamRevision(stream) {
-		return account.RiskInputs{}, errors.New("Phoenix exchange changed during parameter read")
+		return account.RiskInputs{}, fmt.Errorf("%w: exchange changed during parameter read", account.ErrRiskSuperseded)
 	}
 	needed := make(map[string]bool)
 	for _, symbol := range extraSymbols {
@@ -316,7 +316,7 @@ func (s *Source) parameters(ctx context.Context, rev revision) (*parameters, err
 			return nil, f.err
 		}
 		if f.params.revision != rev {
-			return nil, errors.New("Phoenix risk parameter generation changed; retry")
+			return nil, fmt.Errorf("%w: parameter generation changed", account.ErrRiskSuperseded)
 		}
 		return f.params, nil
 	}
