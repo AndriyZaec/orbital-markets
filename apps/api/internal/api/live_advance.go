@@ -557,6 +557,7 @@ func (s *Server) advanceLeg2(w http.ResponseWriter, r *http.Request, sess *LiveS
 		return
 	}
 	if !sub.Accepted {
+		s.recordHedgeRejection(ctx, sess, leg2Req, 1, sub)
 		s.prepareLeg2Retry(w, ctx, sess, "initial leg-2 submission rejected")
 		return
 	}

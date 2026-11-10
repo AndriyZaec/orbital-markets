@@ -51,6 +51,11 @@ func rejected(q *domain.SigningRequest, reason string) *domain.SubmissionResult 
 func outcome(a Attempt) (*domain.SubmissionResult, error) {
 	r := &domain.SubmissionResult{RequestID: a.Request.ID, ClientOrderID: a.Request.ClientOrderID, Venue: "phoenix", OrderID: a.Signature,
 		Accepted: a.State == "submitted" || a.State == "filled" || a.State == "no_fill", Error: a.Error, SubmittedAt: a.CreatedAt, RespondedAt: time.Now().UTC()}
+	if a.State == "failed" {
+		// The journal retains adapter evidence; public results must not expose it.
+		r.Error = "Phoenix order failed"
+		r.PrivateDiagnostic = a.Error
+	}
 	if a.State == "pending" {
 		return r, ErrUncertain
 	}
@@ -155,7 +160,11 @@ func (s *Service) Submit(ctx context.Context, q *domain.SigningRequest, signed d
 	}
 	failure := ""
 	if sendErr != nil {
-		failure = "Phoenix simulation/send rejected before broadcast"
+		failure = "Phoenix simulation/send rejected before broadcast: " + sendErr.Error()
+		var diagnostic interface{ Diagnostic() string }
+		if errors.As(sendErr, &diagnostic) {
+			failure = "Phoenix simulation/send rejected before broadcast: " + diagnostic.Diagnostic()
+		}
 	}
 	persist, done := persistenceContext(ctx)
 	defer done()

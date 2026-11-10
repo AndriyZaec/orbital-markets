@@ -166,6 +166,7 @@ func (s *Server) advanceLeg2Retry(
 		return
 	}
 	if !sub.Accepted {
+		s.recordHedgeRejection(ctx, session, retryReq, 2, sub)
 		s.recoverInvalidHedge(w, ctx, session, "leg-2 retry rejected")
 		return
 	}
@@ -248,9 +249,9 @@ func (s *Server) recoverInvalidHedge(w http.ResponseWriter, ctx context.Context,
 
 	state := executor.ExecStateDegraded
 	session.State = sessDegraded
-	if session.Leg1Fill == nil && session.Leg2Fill == nil {
+	if fillAmount(session.Leg1Fill) == 0 && fillAmount(session.Leg2Fill) == 0 && unwind.Confirmed() {
 		state = executor.ExecStateFailed
-		session.State = sessFailed
+		session.State = sessAborted
 	}
 	fullReason := reason + unwindReasonSuffix(unwind)
 	positionID := s.persistSession(ctx, session, state, fullReason)

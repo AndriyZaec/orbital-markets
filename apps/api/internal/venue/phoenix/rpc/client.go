@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -45,13 +46,63 @@ func New(endpoint string) (*Client, error) {
 	}}, nil
 }
 
-// RPCError intentionally omits provider text/data, which may echo credentials
-// or transaction payloads. Its code remains available for caller classification.
+// RPCError omits provider text and arbitrary data, which may echo credentials
+// or transaction payloads. Only allowlisted simulation evidence is kept privately.
 type RPCError struct {
-	Code int `json:"code"`
+	Code       int `json:"code"`
+	simulation *SimulationError
 }
 
 func (e *RPCError) Error() string { return fmt.Sprintf("phoenix RPC error %d", e.Code) }
+
+func (e *RPCError) Diagnostic() string {
+	if e.simulation != nil {
+		return e.Error() + ": " + e.simulation.Diagnostic()
+	}
+	return e.Error()
+}
+
+// SimulationError keeps the actual program failure separate from safe public copy.
+// Errors.Is continues to classify it as ErrSimulation.
+type SimulationError struct {
+	Slot          uint64          `json:"slot,omitempty"`
+	Err           json.RawMessage `json:"err"`
+	Logs          []string        `json:"logs,omitempty"`
+	UnitsConsumed *uint64         `json:"unitsConsumed,omitempty"`
+}
+
+func (*SimulationError) Error() string { return ErrSimulation.Error() }
+func (*SimulationError) Unwrap() error { return ErrSimulation }
+func (e *SimulationError) Diagnostic() string {
+	raw, _ := json.Marshal(e)
+	return ErrSimulation.Error() + ": " + string(raw)
+}
+
+func (c *Client) redactSimulation(e *SimulationError) {
+	// Provider logs must not reintroduce a credential-bearing endpoint into logs.
+	u, _ := url.Parse(c.endpoint)
+	redact := func(value string) string {
+		value = strings.ReplaceAll(value, c.endpoint, "[RPC endpoint]")
+		for _, values := range u.Query() {
+			for _, secret := range values {
+				if secret != "" {
+					value = strings.ReplaceAll(value, url.QueryEscape(secret), "[redacted]")
+					value = strings.ReplaceAll(value, secret, "[redacted]")
+				}
+			}
+		}
+		return value
+	}
+	for i, log := range e.Logs {
+		e.Logs[i] = redact(log)
+	}
+	clean := redact(string(e.Err))
+	if json.Valid([]byte(clean)) {
+		e.Err = json.RawMessage(clean)
+	} else {
+		e.Err, _ = json.Marshal(clean)
+	}
+}
 
 func (c *Client) call(ctx context.Context, method string, params any, out any) error {
 	id := c.nextID.Add(1)
@@ -98,13 +149,24 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		Version string          `json:"jsonrpc"`
 		ID      uint64          `json:"id"`
 		Result  json.RawMessage `json:"result"`
-		Error   *RPCError       `json:"error"`
+		Error   *struct {
+			Code int             `json:"code"`
+			Data json.RawMessage `json:"data"`
+		} `json:"error"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil || envelope.Version != "2.0" || envelope.ID != id {
 		return ErrInvalidResponse
 	}
 	if envelope.Error != nil {
-		return envelope.Error
+		rpcErr := &RPCError{Code: envelope.Error.Code}
+		if method == "simulateTransaction" || method == "sendTransaction" {
+			var evidence SimulationError
+			if json.Unmarshal(envelope.Error.Data, &evidence) == nil && len(evidence.Err) > 0 && !bytes.Equal(bytes.TrimSpace(evidence.Err), []byte("null")) {
+				c.redactSimulation(&evidence)
+				rpcErr.simulation = &evidence
+			}
+		}
+		return rpcErr
 	}
 	if len(envelope.Result) == 0 || bytes.Equal(envelope.Result, []byte("null")) || json.Unmarshal(envelope.Result, out) != nil {
 		return ErrInvalidResponse
@@ -321,9 +383,7 @@ func (c *Client) SimulateAndSend(ctx context.Context, transaction []byte, lastVa
 	if err := checkHeight(); err != nil {
 		return "", err
 	}
-	var simulation rpcValue[struct {
-		Err json.RawMessage `json:"err"`
-	}]
+	var simulation rpcValue[SimulationError]
 	if err := c.call(ctx, "simulateTransaction", []any{encoded, map[string]any{
 		"encoding": "base64", "commitment": "confirmed", "sigVerify": true,
 		"replaceRecentBlockhash": false, "minContextSlot": minSlot,
@@ -334,7 +394,9 @@ func (c *Client) SimulateAndSend(ctx context.Context, transaction []byte, lastVa
 		return "", ErrInvalidResponse
 	}
 	if !bytes.Equal(simulation.Value.Err, []byte("null")) {
-		return "", ErrSimulation
+		simulation.Value.Slot = simulation.Context.Slot
+		c.redactSimulation(simulation.Value)
+		return "", simulation.Value
 	}
 	if err := checkHeight(); err != nil {
 		return "", err

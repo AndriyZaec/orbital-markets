@@ -84,6 +84,9 @@ type SubmissionResult struct {
 	Accepted bool   `json:"accepted"`
 	Error    string `json:"error,omitempty"`
 
+	// PrivateDiagnostic is operator-only evidence, never a public rejection reason.
+	PrivateDiagnostic string `json:"-"`
+
 	// Timing
 	SubmittedAt time.Time `json:"submitted_at"`
 	RespondedAt time.Time `json:"responded_at"`

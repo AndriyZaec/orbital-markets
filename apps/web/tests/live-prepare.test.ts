@@ -38,17 +38,17 @@ test('streamed HTTP-200 transport does not hide a rejected execution result', as
     JSON.stringify({ type: 'result', status: 422, body: { error: 'Execution checks failed', reasons: ['fresh BBO depth unavailable'] } }),
   ])
   try {
-    await assert.rejects(prepareLive({}, () => {}), /fresh BBO depth unavailable/)
+    await assert.rejects(prepareLive({}, () => {}), { message: 'Unable to start trade.' })
   } finally { globalThis.fetch = original }
 })
 
-test('prepare supports a legacy JSON API and its detailed errors', async () => {
+test('prepare supports a legacy JSON API without exposing raw account diagnostics', async () => {
   const original = globalThis.fetch
   try {
     globalThis.fetch = async () => Response.json({ session_id: 'legacy' })
     assert.deepEqual(await prepareLive({}, () => {}), { session_id: 'legacy' })
-    globalThis.fetch = async () => Response.json({ error: 'account state not ready', reasons: ['Aster: waiting for balance'] }, { status: 409 })
-    await assert.rejects(prepareLive({}, () => {}), /Aster: waiting for balance/)
+    globalThis.fetch = async () => Response.json({ error: 'account state not ready', code: 'ACCOUNT_STATE_NOT_READY', reasons: ['Aster: waiting for balance'] }, { status: 409 })
+    await assert.rejects(prepareLive({}, () => {}), { message: 'Accounts are updating.' })
   } finally { globalThis.fetch = original }
 })
 
@@ -64,7 +64,7 @@ test('prepare deadline aborts a stalled body and cancels its reader', async () =
     }), { headers: { 'Content-Type': 'application/x-ndjson' } })
   }
   try {
-    await assert.rejects(prepareLive({}, () => {}, 20), /Preparation timed out.*No orders were submitted/)
+    await assert.rejects(prepareLive({}, () => {}, 20), /Preparation timed out/)
     assert.equal(signal?.aborted, true)
     assert.equal(canceled, true)
   } finally { globalThis.fetch = original }
@@ -82,7 +82,7 @@ test('a truncated stream never becomes a successful prepare', async () => {
   const original = globalThis.fetch
   globalThis.fetch = async () => streamed([JSON.stringify({ type: 'progress', stage: 'quotes' })])
   try {
-    await assert.rejects(prepareLive({}, () => {}), /ended before completion/)
+    await assert.rejects(prepareLive({}, () => {}), { message: 'Unable to start trade.' })
   } finally { globalThis.fetch = original }
 })
 
@@ -90,6 +90,19 @@ test('prepare network failures give an actionable connection message', async () 
   const original = globalThis.fetch
   globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
   try {
-    await assert.rejects(prepareLive({}, () => {}), /Check your connection and try again/)
+    await assert.rejects(prepareLive({}, () => {}), { message: 'Check your connection.' })
+  } finally { globalThis.fetch = original }
+})
+
+test('admission failure copy uses a structured code and never adapter reasons', async () => {
+  const original = globalThis.fetch
+  try {
+    for (const stream of [false, true]) {
+      const body = { error: 'live admission denied', code: 'LIVE_ADMISSION_DENIED', reasons: ['venue pair not in live scope'] }
+      globalThis.fetch = async () => stream
+        ? streamed([JSON.stringify({ type: 'result', status: 403, body })])
+        : Response.json(body, { status: 403 })
+      await assert.rejects(prepareLive({}, () => {}), { message: 'Trade unavailable.' })
+    }
   } finally { globalThis.fetch = original }
 })
