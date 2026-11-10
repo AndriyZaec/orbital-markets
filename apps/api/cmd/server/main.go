@@ -121,7 +121,7 @@ func main() {
 	if phoenixInfrastructure != nil {
 		phoenixAccounts = api.PhoenixAccountConfig{Backend: phoenixInfrastructure, Markets: phx}
 	}
-	liveDeps := startLive(ctx, logger, database, operationalDatabase, sc, pac, hl, ast, dataagent.ExcludeOwner(asterDataAgent, referenceAccount), phoenixAccounts)
+	liveDeps := startLive(ctx, logger, database, operationalDatabase, sc, pac, hl, ast, liveAsterReader(asterDataAgent, referenceAccount), phoenixAccounts)
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)

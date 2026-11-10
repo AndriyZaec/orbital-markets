@@ -18,6 +18,15 @@ import (
 	phoenixfunding "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/funding"
 )
 
+func liveAsterReader(service *dataagent.Service, referenceAccount string) dataagent.Reader {
+	// Converting a nil *Service to Reader creates a non-nil interface, which
+	// would incorrectly enable background account/funding reads.
+	if service == nil {
+		return nil
+	}
+	return dataagent.ExcludeOwner(service, referenceAccount)
+}
+
 // startLive creates the shared registry and stores eagerly. Venue account
 // feeds start lazily on connect/prepare and are reused by normalized account.
 func startLive(
