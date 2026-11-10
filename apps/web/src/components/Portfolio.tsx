@@ -17,6 +17,7 @@ import {
 import { isActivePositionState, isClosedPositionState, portfolioPositionCategory } from '@/lib/portfolio-position'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { accountObservation } from '@/lib/account-observation'
+import { positionPnL } from '@/lib/position-pnl'
 import { cn } from '@/lib/utils'
 import {
   portfolioPerformance,
@@ -150,13 +151,13 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
   }, [positions])
 
   const recentPositions = positions.filter((position) => isActivePositionState(position.state)).slice(0, 5)
-  const pendingFundingUnavailable = positions.some((position) => position.phoenix_pending_funding?.amount_usd === null)
+  const incompletePnl = positions.some((position) => isActivePositionState(position.state) && positionPnL(position).total === null)
   const unrealizedPerformance = useMemo(
-    () => portfolioPerformance(positions.filter((position) => {
+    () => portfolioPerformance(incompletePnl ? [] : positions.filter((position) => {
       const category = categorize(position)
       return category === 'open' || category === 'degraded'
     }), now),
-    [positions, now],
+    [positions, now, incompletePnl],
   )
   const realizedPerformance = useMemo(
     () => portfolioPerformance(
@@ -237,12 +238,12 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
         <Tile label="Open Notional" value={privateView ? MASKED_VALUE : openCount > 0 ? fmtUsd(openNotional) : '--'} hint={`${openCount} open · ${degradedCount} degraded`} />
         <Tile
           label={privateView ? unrealizedPerformance.value === null || unrealizedPerformance.annualized ? 'uPnL Annualized Return' : 'uPnL Return' : 'Unrealized P&L'}
-          value={privateView ? fmtReturn(unrealizedPerformance.value) : openCount > 0 ? fmtUsd(unrealizedPnl) : '--'}
-          hint={pendingFundingUnavailable ? 'Partial · Phoenix pending funding unavailable' : privateView ? 'On deployed capital' : 'Sum across open positions'}
-          valueClassName={privateView
+          value={privateView ? fmtReturn(unrealizedPerformance.value) : openCount > 0 ? fmtUsd(incompletePnl ? null : unrealizedPnl) : '--'}
+          hint={privateView ? 'On deployed capital' : 'Sum across open positions'}
+          valueClassName={incompletePnl ? 'text-muted-foreground' : privateView
             ? unrealizedPerformance.value !== null && unrealizedPerformance.value > 0 ? 'text-green-400' : unrealizedPerformance.value !== null && unrealizedPerformance.value < 0 ? 'text-red-400' : ''
             : unrealizedPnl > 0 ? 'text-green-400' : unrealizedPnl < 0 ? 'text-red-400' : ''}
-          tone={privateView ? unrealizedTone : unrealizedPnl > 0 ? 'green' : unrealizedPnl < 0 ? 'rose' : 'plain'}
+          tone={incompletePnl ? 'plain' : privateView ? unrealizedTone : unrealizedPnl > 0 ? 'green' : unrealizedPnl < 0 ? 'rose' : 'plain'}
         />
         <Tile
           label={privateView ? realizedPerformance.annualized ? 'Annualized Return' : 'Realized Return' : 'Realized P&L'}
@@ -300,6 +301,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
         {recentPositions.length > 0 && (
           <div className="divide-y divide-border/70 border-y border-border/70">
             {recentPositions.map((position) => {
+              const pnl = positionPnL(position)
               const category = categorize(position)
               const statusTone = category === 'degraded' ? 'text-orange-400' : position.state === 'pending' || position.state === 'closing' ? 'text-yellow-400' : 'text-green-400'
               return (
@@ -317,8 +319,8 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
                     </span>
                   </span>
                   <span className="hidden text-right font-mono text-xs text-muted-foreground sm:block">{privateView ? MASKED_VALUE : fmtUsd(position.notional)}</span>
-                  <span className={`text-right font-mono text-xs ${position.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {privateView ? fmtReturn(portfolioPerformance([position], now).value) : fmtUsd(position.total_pnl)}
+                  <span className={cn('text-right font-mono text-xs', pnl.total === null ? 'text-muted-foreground' : pnl.total >= 0 ? 'text-green-400' : 'text-red-400')}>
+                    {privateView ? fmtReturn(pnl.total === null ? null : portfolioPerformance([position], now).value) : fmtUsd(pnl.total)}
                   </span>
                 </button>
               )

@@ -5,6 +5,8 @@ import { useLiveClose, type CloseOutcome, type CloseState } from '@/hooks/useLiv
 import { canRequestLiveClose, hasActionableRecordedFills } from '@/lib/degraded-execution'
 import { monitoredLegVenues } from '@/lib/live-position-monitoring'
 import { formatSignedUsdPnL } from '@/lib/pnl-format'
+import { positionPnL } from '@/lib/position-pnl'
+import { isActivePositionState } from '@/lib/portfolio-position'
 import { venueTradeUrl } from '@/lib/venue-links'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -72,7 +74,8 @@ function liqRiskBadge(risk: string) {
   }
 }
 
-function pnlColor(n: number) {
+function pnlColor(n: number | null) {
+  if (n === null) return 'text-muted-foreground'
   if (n > 0) return 'text-green-400'
   if (n < 0) return 'text-red-400'
   return ''
@@ -143,6 +146,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
 }) {
   const { data, loading, error: detailError, refetch } = useLivePositionDetail(position.id, [position.venue_a, position.venue_b])
   const pos = data?.position ?? position
+  const pnl = positionPnL(pos)
   const fills = data?.fills ?? []
   const events = data?.events ?? []
   const [leg1Venue, leg2Venue] = monitoredLegVenues(fills, pos.venue_a, pos.venue_b)
@@ -284,23 +288,14 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
           </div>
         )}
 
-        {/* PnL — only for open positions */}
-        {(pos.state === 'open' || !!pos.phoenix_pending_funding) && (pos.price_pnl !== 0 || pos.funding_pnl !== 0 || !!pos.phoenix_pending_funding || (data?.chart_context.available && data.chart_context.price_pnl?.available)) && (
-          <div className="px-5 py-4 border-b border-border">
+        {/* Shared PnL presentation for every active venue pair. */}
+        {isActivePositionState(pos.state) && (
+          <div className="px-5 py-4 border-b border-border text-card-foreground">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
             <div className={`grid gap-4 ${compact ? 'grid-cols-2' : 'grid-cols-3'}`}>
               <div><p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{formatSignedUsdPnL(pos.price_pnl)}</p></div>
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">{pos.funding_pnl_source === 'realized' ? 'Realized Funding' : 'Estimated Funding'}</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{formatSignedUsdPnL(pos.funding_pnl)}</p></div>
-              {pos.phoenix_pending_funding && (
-                <div>
-                  <p className="text-[10px] text-muted-foreground mb-0.5">Phoenix Pending Funding</p>
-                  <p className="text-sm font-mono font-medium" title={pos.phoenix_pending_funding.unavailable_reason}>
-                    {pos.phoenix_pending_funding.amount_usd === null ? 'Unavailable' : formatSignedUsdPnL(pos.phoenix_pending_funding.amount_usd)}
-                  </p>
-                  {pos.phoenix_pending_funding.unavailable_reason && <p className="text-[10px] text-muted-foreground mt-1">{pos.phoenix_pending_funding.unavailable_reason}</p>}
-                </div>
-              )}
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">{pos.phoenix_pending_funding?.amount_usd === null ? 'Total PnL (partial)' : 'Total PnL'}</p><p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{formatSignedUsdPnL(pos.total_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Funding PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pnl.funding)}`}>{pnl.funding === null ? '—' : formatSignedUsdPnL(pnl.funding)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pnl.total)}`}>{pnl.total === null ? '—' : formatSignedUsdPnL(pnl.total)}</p></div>
             </div>
           </div>
         )}

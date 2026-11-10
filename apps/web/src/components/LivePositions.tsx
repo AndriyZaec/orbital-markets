@@ -24,15 +24,17 @@ import { DeferredBoundary } from '@/components/DeferredBoundary'
 import { AssetIcon } from '@/components/AssetIcon'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { isActivePositionState, isClosedPositionState } from '@/lib/portfolio-position'
+import { positionPnL } from '@/lib/position-pnl'
+import { cn } from '@/lib/utils'
 import { PositionShareDialog } from '@/components/PositionShareDialog'
 import type { LiveFillDetail } from '@/hooks/useLivePositionDetail'
 
 const LivePositionDetail = lazy(() => import('@/components/LivePositionDetail').then((module) => ({ default: module.LivePositionDetail })))
 
 function fmtPnL(n: number) {
-  const sign = n >= 0 ? '+' : ''
+  const sign = n < 0 ? '-' : '+'
   if (Math.abs(n) >= 1000) return sign + '$' + Math.abs(n).toFixed(0)
-  return sign + '$' + n.toFixed(2)
+  return sign + '$' + Math.abs(n).toFixed(2)
 }
 
 function fmtUsd(n: number) {
@@ -353,6 +355,7 @@ export function LivePositions({
             </TableHeader>
             <TableBody>
               {displayed.map((pos) => {
+                const pnl = positionPnL(pos)
                 const isDegraded = pos.state === 'degraded'
                 const liqRisk = worstLiqRisk(pos)
 
@@ -381,20 +384,10 @@ export function LivePositions({
                     <TC>{fmtUsd(pos.notional)}</TC>
                     <TC>{pos.leverage}x</TC>
                     <TC negative={pos.current_spread < 0}>{fmtPct(pos.current_spread, 2)}</TC>
-                    <TC negative={pos.funding_pnl < 0}>
-                      {fmtPnL(pos.funding_pnl)}
-                      {pos.phoenix_pending_funding && (
-                        <span className="block text-[10px] text-muted-foreground" title={pos.phoenix_pending_funding.unavailable_reason}>
-                          {pos.phoenix_pending_funding.amount_usd === null
-                            ? 'PHX pending unavailable'
-                            : `PHX pending ${fmtPnL(pos.phoenix_pending_funding.amount_usd)}`}
-                        </span>
-                      )}
-                    </TC>
+                    <TC negative={pnl.funding !== null && pnl.funding < 0}>{pnl.funding === null ? '—' : fmtPnL(pnl.funding)}</TC>
                     <TC negative={pos.price_pnl < 0}>{fmtPnL(pos.price_pnl)}</TC>
-                    <TableCell className={`text-right font-mono text-xs font-semibold py-2 ${pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`} style={{ textAlign: 'right' }}>
-                      {fmtPnL(pos.total_pnl)}
-                      {pos.phoenix_pending_funding?.amount_usd === null && <span className="block text-[10px] text-muted-foreground">Partial</span>}
+                    <TableCell className={cn('text-right font-mono text-xs font-semibold py-2', pnl.total === null ? 'text-muted-foreground' : pnl.total >= 0 ? 'text-green-400' : 'text-red-400')} style={{ textAlign: 'right' }}>
+                      {pnl.total === null ? '—' : fmtPnL(pnl.total)}
                     </TableCell>
                     <TableCell className="py-2">
                       {liqRisk ? (

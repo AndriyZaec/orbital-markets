@@ -159,39 +159,75 @@ describe('position-backed funding chart', () => {
     expect(screen.queryByText(/context deadline exceeded/)).toBeNull()
   })
 
-  it('shows Phoenix pending separately and keeps total unchanged when funding settles', () => {
+  it.each([
+    [2, 6, 16],
+    [-6, -2, 8],
+    [0, 4, 14],
+  ])('includes accrued funding %s in the common PnL and preserves totals through settlement', (accrued, funding, total) => {
     mocks.chartContext = availableContext
     const phoenixPosition: LivePosition = {
-      ...position, venue_a: 'phoenix', funding_pnl_source: 'realized', price_pnl: 10, funding_pnl: 4, total_pnl: 16,
-      phoenix_pending_funding: { amount_usd: 2, as_of: '2026-11-08T12:00:00Z' },
+      ...position, venue_a: 'phoenix', funding_pnl_source: 'realized', price_pnl: 10, funding_pnl: 4, total_pnl: total,
+      phoenix_pending_funding: { amount_usd: accrued, as_of: '2026-11-08T12:00:00Z' },
     }
     mocks.positionOverride = phoenixPosition
-    const tree = () => <LivePositionPanel position={phoenixPosition} onClose={() => {}} />
+    const tree = () => <><LivePositionPanel position={phoenixPosition} onClose={() => {}} /><LivePositions /></>
     const { rerender } = render(tree())
-    expect(within(screen.getByText('Phoenix Pending Funding').parentElement!).getByText('+$2.00')).toBeTruthy()
-    expect(within(screen.getByText('Realized Funding').parentElement!).getByText('+$4.00')).toBeTruthy()
-    expect(within(screen.getByText('Total PnL').parentElement!).getByText('+$16.00')).toBeTruthy()
+    const fundingText = `${funding < 0 ? '-' : '+'}$${Math.abs(funding).toFixed(2)}`
+    const totalText = `+$${total.toFixed(2)}`
+    const check = () => {
+      expect(within(screen.getByText('Funding PnL').parentElement!).getByText(fundingText)).toBeTruthy()
+      expect(within(screen.getAllByText('Total PnL')[0].parentElement!).getByText(totalText)).toBeTruthy()
+      const row = within(screen.getByRole('table')).getByText('2Z').closest('tr')!
+      const cells = within(row).getAllByRole('cell')
+      expect(cells[5].textContent).toBe(fundingText)
+      expect(cells[7].textContent).toBe(totalText)
+      expect(screen.queryByText(/PHX pending|Phoenix Pending Funding|Realized Funding|Estimated Funding/)).toBeNull()
+    }
+    check()
 
-    mocks.positionOverride = { ...phoenixPosition, funding_pnl: 6, phoenix_pending_funding: { amount_usd: 0 } }
+    mocks.positionOverride = { ...phoenixPosition, funding_pnl: funding, phoenix_pending_funding: { amount_usd: 0 } }
     rerender(tree())
-    expect(within(screen.getByText('Phoenix Pending Funding').parentElement!).getByText('+$0.00')).toBeTruthy()
-    expect(within(screen.getByText('Realized Funding').parentElement!).getByText('+$6.00')).toBeTruthy()
-    expect(within(screen.getByText('Total PnL').parentElement!).getByText('+$16.00')).toBeTruthy()
+    check()
   })
 
-  it('shows unavailable Phoenix funding and partial totals in the panel and table', () => {
+  it.each(['pacifica', 'hyperliquid', 'aster', 'phoenix'] as const)('uses the same PnL fields for %s including zero values', (venue) => {
+    mocks.chartContext = availableContext
+    mocks.positionOverride = {
+      ...position, venue_a: venue, venue_b: venue === 'pacifica' ? 'hyperliquid' : 'pacifica',
+      ...(venue === 'phoenix' ? { phoenix_pending_funding: { amount_usd: 0 } } : {}),
+    }
+    render(<LivePositionPanel position={mocks.positionOverride} onClose={() => {}} />)
+    for (const label of ['Price PnL', 'Funding PnL', 'Total PnL']) {
+      expect(within(screen.getByText(label).parentElement!).getByText('+$0.00')).toBeTruthy()
+    }
+    expect(screen.queryByText(/PHX pending|Phoenix Pending Funding|Realized Funding|Estimated Funding/)).toBeNull()
+  })
+
+  it('uses common unavailable values without venue diagnostics when funding cannot be calculated', () => {
     mocks.chartContext = availableContext
     mocks.positionOverride = {
       ...position, venue_a: 'phoenix', funding_pnl_source: 'realized', funding_pnl: 4, total_pnl: 4,
       phoenix_pending_funding: { amount_usd: null, unavailable_reason: 'Phoenix account exposure does not match the strategy leg' },
     }
     render(<><LivePositionPanel position={mocks.positionOverride} onClose={() => {}} /><LivePositions /></>)
-    expect(screen.getByText('Unavailable')).toBeTruthy()
-    expect(screen.getByText('Phoenix account exposure does not match the strategy leg')).toBeTruthy()
-    expect(screen.getByText('Total PnL (partial)')).toBeTruthy()
-    expect(screen.getByText('PHX pending unavailable')).toBeTruthy()
-    expect(screen.getByText('Partial')).toBeTruthy()
-    expect(screen.queryByText('PHX pending $0.00')).toBeNull()
+    expect(within(screen.getByText('Funding PnL').parentElement!).getByText('—')).toBeTruthy()
+    expect(within(screen.getAllByText('Total PnL')[0].parentElement!).getByText('—')).toBeTruthy()
+    const row = within(screen.getByRole('table')).getByText('2Z').closest('tr')!
+    const cells = within(row).getAllByRole('cell')
+    expect(cells[5].textContent).toBe('—')
+    expect(cells[7].textContent).toBe('—')
+    expect(screen.queryByText(/Phoenix account exposure|PHX pending|Phoenix Pending Funding|Partial/)).toBeNull()
+  })
+
+  it('uses estimated funding normally without adding another venue accrual', () => {
+    mocks.chartContext = availableContext
+    mocks.positionOverride = {
+      ...position, venue_a: 'phoenix', funding_pnl_source: 'estimated', price_pnl: 10, funding_pnl: 4, total_pnl: 14,
+      phoenix_pending_funding: { amount_usd: null },
+    }
+    render(<LivePositionPanel position={mocks.positionOverride} onClose={() => {}} />)
+    expect(within(screen.getByText('Funding PnL').parentElement!).getByText('+$4.00')).toBeTruthy()
+    expect(within(screen.getByText('Total PnL').parentElement!).getByText('+$14.00')).toBeTruthy()
   })
 
   it('keeps graph endpoint and panel Price PnL identical as the live snapshot updates', async () => {

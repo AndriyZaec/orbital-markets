@@ -159,13 +159,18 @@ describe('Portfolio activity sharing', () => {
 })
 
 describe('Portfolio position navigation', () => {
-  it('marks live portfolio PnL partial when Phoenix pending funding is unavailable', () => {
+  it('uses normal unavailable PnL values without venue-specific funding copy', async () => {
     mocks.positions = [{
       ...position('phoenix-position', 'open', 'SOL'), venue_a: 'phoenix',
+      funding_pnl_source: 'realized',
       phoenix_pending_funding: { amount_usd: null, unavailable_reason: 'Phoenix account snapshot unavailable' },
     }]
     render(<Portfolio onConnectWallets={() => {}} onViewPositions={() => {}} />)
-    expect(screen.getByText('Partial · Phoenix pending funding unavailable')).toBeTruthy()
+    expect(within(screen.getByText('Unrealized P&L').parentElement!).getByText('--')).toBeTruthy()
+    expect(screen.queryByText(/Phoenix pending funding|Partial/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Hide portfolio amounts' }))
+    expect(within(screen.getByText('uPnL Annualized Return').parentElement!).getByText('--')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Share annualized return' })).toBeNull()
   })
 
   it('shows at most five active positions including pending and selects the clicked position', async () => {
