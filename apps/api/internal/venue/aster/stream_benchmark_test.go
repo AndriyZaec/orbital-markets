@@ -3,7 +3,12 @@ package aster
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/gorilla/websocket"
 )
 
 func BenchmarkApplyStreamMessage(b *testing.B) {
@@ -57,6 +62,67 @@ func BenchmarkApplyStreamMessage(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+		})
+	}
+}
+
+// One operation is the same source workload: 100 all-market updates, of which
+// 42 reach us after server-side filtering. Includes TLS, WS read, and apply.
+func BenchmarkReadAndApplyStream(b *testing.B) {
+	for _, mode := range []string{"all_market_100", "per_symbol_42"} {
+		b.Run(mode, func(b *testing.B) {
+			a := newTestAdapter("http://unused")
+			a.streamConnected = true
+			a.markets["BTCUSDT"] = marketState{marketMetadata: marketMetadata{asset: "BTC"}}
+			a.markets["LOCALUSDT"] = marketState{marketMetadata: marketMetadata{asset: "LOCAL"}}
+			a.SetCrossVenueAssets([]string{"BTC"})
+			allowed, excluded := filterBookFrame("BTCUSDT"), filterBookFrame("LOCALUSDT")
+			frames := 100
+			if mode == "per_symbol_42" {
+				frames = 42
+				allowed = []byte(strings.Replace(string(allowed), `"!bookTicker"`, `"btcusdt@bookTicker"`, 1))
+			}
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				for i := 0; i < b.N; i++ {
+					for j := 0; j < frames; j++ {
+						frame := allowed
+						if mode == "all_market_100" && j < 58 {
+							frame = excluded
+						}
+						if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+							return
+						}
+					}
+				}
+			}))
+			defer server.Close()
+			dialer := websocket.Dialer{TLSClientConfig: server.Client().Transport.(*http.Transport).TLSClientConfig}
+			conn, _, err := dialer.Dial("wss"+strings.TrimPrefix(server.URL, "https"), nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer conn.Close()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				for j := 0; j < frames; j++ {
+					_, raw, err := conn.ReadMessage()
+					if err != nil {
+						b.Fatal(err)
+					}
+					if err := a.applyStreamMessage(raw); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(frames), "messages/op")
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*frames), "ns/message")
 		})
 	}
 }
