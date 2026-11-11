@@ -1,6 +1,7 @@
 package phoenix
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -98,6 +100,16 @@ type wsEnvelope struct {
 	Message string `json:"message"`
 }
 
+// These fields are also validated in the typed fast paths. Channel is supplied
+// by the data envelope, avoiding duplicate JSON tags in embedded structs.
+type wsControlFields struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Code    any    `json:"code"`
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}
+
 type exchangeEnvelope struct {
 	Channel        string             `json:"channel"`
 	MessageType    string             `json:"messageType"`
@@ -155,6 +167,82 @@ type orderbookEnvelope struct {
 type orderbookWire struct {
 	Bids [][]float64 `json:"bids"`
 	Asks [][]float64 `json:"asks"`
+}
+
+// topBookSide retains only the first level. encoding/json validates the entire
+// JSON value before calling UnmarshalJSON; we still check every level's numeric
+// shape and range, but avoid allocating levels and parsing ordinary tail floats.
+type topBookSide [][]float64
+
+func (side *topBookSide) UnmarshalJSON(data []byte) error {
+	*side = nil
+	data = bytes.TrimSpace(data)
+	if bytes.Equal(data, []byte("null")) {
+		return nil
+	}
+	if data[0] != '[' {
+		return errors.New("invalid Phoenix orderbook side shape")
+	}
+	first := true
+	rest := bytes.TrimSpace(data[1:])
+	for rest[0] != ']' {
+		var top []float64
+		if bytes.HasPrefix(rest, []byte("null")) {
+			rest = rest[4:]
+		} else {
+			if rest[0] != '[' {
+				return errors.New("invalid Phoenix orderbook level shape")
+			}
+			if first {
+				top = make([]float64, 0, 2)
+			}
+			rest = bytes.TrimSpace(rest[1:])
+			for rest[0] != ']' {
+				end := bytes.IndexAny(rest, ",]")
+				token := bytes.TrimSpace(rest[:end])
+				var value float64 // JSON null decodes to zero in []float64.
+				if !bytes.Equal(token, []byte("null")) {
+					if len(token) == 0 || token[0] != '-' && (token[0] < '0' || token[0] > '9') {
+						return errors.New("invalid Phoenix orderbook number type")
+					}
+					// Non-exponent numbers this short cannot overflow float64.
+					if first || len(token) > 300 || bytes.IndexAny(token, "eE") >= 0 {
+						var err error
+						if value, err = strconv.ParseFloat(string(token), 64); err != nil {
+							return err
+						}
+					}
+				}
+				if first {
+					top = append(top, value)
+				}
+				rest = rest[end:]
+				if rest[0] == ',' {
+					rest = bytes.TrimSpace(rest[1:])
+				}
+			}
+			rest = rest[1:]
+		}
+		if first {
+			*side = topBookSide{top}
+			first = false
+		}
+		rest = bytes.TrimSpace(rest)
+		if rest[0] == ',' {
+			rest = bytes.TrimSpace(rest[1:])
+		}
+	}
+	return nil
+}
+
+type topOrderbookEnvelope struct {
+	wsEnvelope
+	Symbol    string `json:"symbol"`
+	Orderbook struct {
+		Bids topBookSide `json:"bids"`
+		Asks topBookSide `json:"asks"`
+	} `json:"orderbook"`
+	BypassExecutionBand bool `json:"bypassExecutionBand"`
 }
 
 func NewMarketStream(client *Client, logger *slog.Logger) *MarketStream {
@@ -303,6 +391,40 @@ func (s *MarketStream) connectAndListen(ctx context.Context) error {
 }
 
 func (s *MarketStream) applyMessage(generation uint64, raw []byte) error {
+	// Phoenix's compact channel-first frames need one typed decode. Retain the
+	// original decoder for other layouts and errors, including malformed tails.
+	compact := bytes.TrimSpace(raw)
+	switch {
+	case bytes.HasPrefix(compact, []byte(`{"channel":"orderbook",`)):
+		var message topOrderbookEnvelope
+		if err := json.Unmarshal(raw, &message); err == nil && message.Channel == "orderbook" {
+			return s.applyOrderbook(generation, orderbookEnvelope{
+				Channel: message.Channel, Symbol: message.Symbol,
+				Orderbook:           orderbookWire{Bids: [][]float64(message.Orderbook.Bids), Asks: [][]float64(message.Orderbook.Asks)},
+				BypassExecutionBand: message.BypassExecutionBand,
+			})
+		}
+	case bytes.HasPrefix(compact, []byte(`{"channel":"marketStatsV2",`)):
+		var message struct {
+			wsControlFields
+			marketStatsV2Envelope
+		}
+		if err := json.Unmarshal(raw, &message); err == nil && message.Channel == "marketStatsV2" {
+			return s.applyMarketStats(generation, message.marketStatsV2Envelope)
+		}
+	case bytes.HasPrefix(compact, []byte(`{"channel":"exchange",`)):
+		var message struct {
+			wsControlFields
+			exchangeEnvelope
+		}
+		if err := json.Unmarshal(raw, &message); err == nil && message.Channel == "exchange" {
+			return s.applyExchangeMessage(generation, message.exchangeEnvelope)
+		}
+	}
+	return s.applyMessageFallback(generation, raw)
+}
+
+func (s *MarketStream) applyMessageFallback(generation uint64, raw []byte) error {
 	var envelope wsEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("decode Phoenix websocket envelope: %w", err)
