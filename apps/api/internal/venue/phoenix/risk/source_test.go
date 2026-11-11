@@ -265,6 +265,59 @@ func TestParametersInvalidatedByExchangeSequenceAndReconnect(t *testing.T) {
 	}
 }
 
+func TestSuccessfulParameterReadAllowsImmediateNewRevision(t *testing.T) {
+	now := time.Date(2026, time.November, 11, 12, 0, 14, 0, time.UTC)
+	stream := streamAt(now)
+	source, reads := sourceFor(t, &now, stream, nil)
+	firstRevision := streamRevision(stream.Snapshot())
+	first, err := source.parameters(context.Background(), firstRevision)
+	if err != nil || reads.Load() != 2 {
+		t.Fatalf("first parameter read: params=%+v err=%v reads=%d", first, err, reads.Load())
+	}
+	stream.update(func(s *phoenix.MarketStreamSnapshot) { s.Sequence++ })
+	secondRevision := streamRevision(stream.Snapshot())
+	second, err := source.parameters(context.Background(), secondRevision)
+	if err != nil {
+		t.Fatalf("successful read blocked immediate revision refresh: %v (HTTP reads=%d)", err, reads.Load())
+	}
+	if reads.Load() != 4 || second.revision != secondRevision || second.generation != first.generation+1 || !second.observedAt.Equal(now) {
+		t.Fatalf("new revision did not get its own fresh parameters: params=%+v reads=%d", second, reads.Load())
+	}
+}
+
+func TestFailedParameterReadBacksOffUntilRetryDelay(t *testing.T) {
+	now := time.Date(2026, time.November, 11, 12, 0, 14, 0, time.UTC)
+	stream := streamAt(now)
+	parameters, collateral := fixture(t, "parameters"), fixture(t, "collateral")
+	var failing atomic.Bool
+	failing.Store(true)
+	source, reads := sourceFor(t, &now, stream, func(w http.ResponseWriter, r *http.Request) {
+		if failing.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if r.URL.Path == "/v1/view/exchange" {
+			_, _ = w.Write(parameters)
+		} else {
+			_, _ = w.Write(collateral)
+		}
+	})
+	rev := streamRevision(stream.Snapshot())
+	if _, err := source.parameters(context.Background(), rev); err == nil || err.Error() != "Phoenix risk parameters HTTP 503" || reads.Load() != 1 {
+		t.Fatalf("failed read: err=%v reads=%d", err, reads.Load())
+	}
+	failing.Store(false)
+	now = now.Add(retryDelay - time.Nanosecond)
+	if _, err := source.parameters(context.Background(), rev); err == nil || err.Error() != "Phoenix risk parameters backing off" || reads.Load() != 1 {
+		t.Fatalf("retry during backoff: err=%v reads=%d", err, reads.Load())
+	}
+	now = now.Add(time.Nanosecond)
+	p, err := source.parameters(context.Background(), rev)
+	if err != nil || p.revision != rev || reads.Load() != 3 || !p.observedAt.Equal(now) {
+		t.Fatalf("retry after backoff: params=%+v err=%v reads=%d", p, err, reads.Load())
+	}
+}
+
 func TestParameterReadRacingExchangeUpdateIsRejected(t *testing.T) {
 	now := time.Now().UTC()
 	stream := streamAt(now)

@@ -292,7 +292,6 @@ func (s *Source) parameters(ctx context.Context, rev revision) (*parameters, err
 		}
 		f = &refresh{done: make(chan struct{})}
 		s.inflight = f
-		s.nextRead = s.now().Add(retryDelay)
 		go func() {
 			p, err := s.readParameters(context.WithoutCancel(ctx), rev)
 			s.mu.Lock()
@@ -300,6 +299,8 @@ func (s *Source) parameters(ctx context.Context, rev revision) (*parameters, err
 				s.generation++
 				p.generation = s.generation
 				s.cached = p
+			} else {
+				s.nextRead = maxTime(s.nextRead, s.now().Add(retryDelay))
 			}
 			f.params, f.err = p, err
 			s.inflight = nil
