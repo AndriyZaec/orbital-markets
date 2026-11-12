@@ -4,12 +4,85 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestAgentNameConfiguration(t *testing.T) {
+	for _, name := range []string{"", "OrbitalData", "OrbitalDataStg", "Org_data-1"} {
+		service := NewService(nil, nil, nil, nil)
+		if err := service.SetAgentName(name); err != nil {
+			t.Fatalf("valid agent name %q: %v", name, err)
+		}
+		want := name
+		if want == "" {
+			want = "OrbitalData"
+		}
+		if service.agentName != want {
+			t.Fatalf("agent name=%q want=%q", service.agentName, want)
+		}
+	}
+	for _, name := range []string{" ", "Orbital Data", "name\n", "name?key=value", "агент", strings.Repeat("a", 33)} {
+		service := NewService(nil, nil, nil, nil)
+		if err := service.SetAgentName(name); err == nil || err.Error() != "ASTER_DATA_AGENT_NAME must contain 1-32 ASCII letters, digits, underscores or hyphens" {
+			t.Fatalf("invalid name must produce a value-free config error: %v", err)
+		}
+	}
+}
+
+func TestAgentNameFromEnvUsedInApprovalAndValidation(t *testing.T) {
+	for _, existingApproved := range []bool{false, true} {
+		t.Run(fmt.Sprint(existingApproved), func(t *testing.T) {
+			service, _, now := newLifecycleService(t)
+			var oldProbeID string
+			if existingApproved {
+				old := prepareProbe(t, service)
+				oldProbeID = old.ProbeID
+				if err := service.Authorize(context.Background(), old.ProbeID, testSignature, testOwner, testExecutionAgent, old.Approval); err != nil {
+					t.Fatal(err)
+				}
+				*now = now.Add(time.Millisecond)
+			}
+			t.Setenv("ASTER_DATA_AGENT_NAME", "OrbitalDataStg")
+			if err := service.SetAgentName(os.Getenv("ASTER_DATA_AGENT_NAME")); err != nil {
+				t.Fatal(err)
+			}
+			names := make(chan string, 1)
+			venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/fapi/v3/approveAgent" {
+					t.Errorf("unexpected approval path: %s", r.URL.Path)
+				}
+				names <- r.FormValue("agentName")
+				fmt.Fprint(w, `{"code":200}`)
+			}))
+			defer venue.Close()
+			service.venue = NewClient(venue.URL, venue.Client(), func() time.Time { return *now })
+			prepared := prepareProbe(t, service)
+			if prepared.Approval.AgentName != "OrbitalDataStg" || existingApproved && prepared.ProbeID != oldProbeID {
+				t.Fatalf("configured preparation=%+v", prepared)
+			}
+			wrongName := prepared.Approval
+			wrongName.AgentName = "OrbitalData"
+			if err := service.Authorize(context.Background(), prepared.ProbeID, testSignature, testOwner, testExecutionAgent, wrongName); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("approval with wrong environment name was accepted: %v", err)
+			}
+			if err := service.Authorize(context.Background(), prepared.ProbeID, testSignature, testOwner, testExecutionAgent, prepared.Approval); err != nil {
+				t.Fatal(err)
+			}
+			if name := <-names; name != "OrbitalDataStg" {
+				t.Fatalf("venue approval name=%q", name)
+			}
+		})
+	}
+}
 
 type fakeVenue struct {
 	approveErr     error

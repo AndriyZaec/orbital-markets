@@ -103,6 +103,10 @@ func main() {
 		asterDataAgent = dataagent.NewService(
 			dataAgentStore, dataagent.NewDefaultClient(), liveexecutor.NewStore(database, operationalDatabase, logger), time.Now,
 		)
+		if err := asterDataAgent.SetAgentName(os.Getenv("ASTER_DATA_AGENT_NAME")); err != nil {
+			logger.Warn("Aster data agent disabled", "reason", err)
+			asterDataAgent = nil
+		}
 	}
 	var asterReference *bracketcache.Cache
 	referenceAccount := strings.TrimSpace(os.Getenv("ASTER_REFERENCE_ACCOUNT"))

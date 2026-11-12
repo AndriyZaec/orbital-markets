@@ -5,12 +5,12 @@ import { buildAsterApproveAgentTypedData } from './aster-approve-agent.ts'
 
 const ownerChainId = 56
 const dataAgentLifetime = 365 * 24 * 60 * 60 * 1000
-const dataAgentName = 'OrbitalData'
+type DataAgentName = 'OrbitalData' | 'OrbitalDataStg'
 
 export interface AsterDataAgentApproval {
   user: Address
   nonce: number
-  agentName: typeof dataAgentName
+  agentName: DataAgentName
   agentAddress: Address
   ipWhitelist: ''
   expired: number
@@ -52,7 +52,7 @@ export function parseAsterDataAgentPreparation(
   }
   const valid =
     isPositiveSafeInteger(fields.nonce) &&
-    fields.agentName === dataAgentName &&
+    (fields.agentName === 'OrbitalData' || fields.agentName === 'OrbitalDataStg') &&
     isAddress(fields.agentAddress) && fields.ipWhitelist === '' &&
     isPositiveSafeInteger(fields.expired) &&
     fields.expired - Math.floor(fields.nonce / 1000) === dataAgentLifetime &&
@@ -65,7 +65,7 @@ export function parseAsterDataAgentPreparation(
     approval: {
       user: fields.user,
       nonce: fields.nonce as number,
-      agentName: dataAgentName,
+      agentName: fields.agentName as DataAgentName,
       agentAddress: fields.agentAddress as Address,
       ipWhitelist: '',
       expired: fields.expired as number,
