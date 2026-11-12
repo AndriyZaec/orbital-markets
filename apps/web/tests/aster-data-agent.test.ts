@@ -43,6 +43,21 @@ test('validates the read-only approval and builds exact typed data', () => {
   }, owner), /invalid Aster read-only approval/)
 })
 
+test('accepts only the production and staging data-agent names and preserves the signed name', () => {
+  for (const name of ['OrbitalData', 'OrbitalDataStg']) {
+    const response = preparation()
+    response.approval.agentName = name
+    const prepared = parseAsterDataAgentPreparation(response, owner)
+    assert.equal(prepared.approval.agentName, name)
+    assert.equal(buildAsterDataAgentApprovalTypedData(prepared.approval).message.AgentName, name)
+  }
+  for (const name of ['', 'OtherValidName', 'OrbitalDataStg2', 'orbitaldata', 'OrbitalData ', 'OrbitalDataStg\n']) {
+    const response = preparation()
+    response.approval.agentName = name
+    assert.throws(() => parseAsterDataAgentPreparation(response, owner), /invalid Aster read-only approval/)
+  }
+})
+
 test('prepares and submits read-only authorization without browser read probes', async () => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ path: string; body: unknown }> = []

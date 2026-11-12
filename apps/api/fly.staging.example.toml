@@ -15,6 +15,7 @@ primary_region = 'iad'
   ENV = 'production'
   ALLOWED_ORIGIN = 'https://staging.example.com'
   BETA_COOKIE_NAME = '__beta_staging'
+  ASTER_DATA_AGENT_NAME = 'OrbitalDataStg'
   # Optional Phoenix configuration: set your registered public builder authority.
   # PHOENIX_BUILDER_AUTHORITY = '<registered-public-builder-authority>'
   PHOENIX_MAX_TRANSACTION_FEE_LAMPORTS = '100000'

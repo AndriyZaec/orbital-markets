@@ -22,6 +22,7 @@ const (
 
 var (
 	addressPattern   = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 	signaturePattern = regexp.MustCompile(`^0x[0-9a-fA-F]{130}$`)
 
 	ErrInvalidInput           = errors.New("invalid Aster data-agent request")
@@ -63,6 +64,7 @@ type ExecutionAuthorizationChecker interface {
 }
 
 type Service struct {
+	agentName string
 	store     repository
 	venue     venueClient
 	reader    dataReader
@@ -86,7 +88,19 @@ func NewService(store repository, venue venueClient, execution ExecutionAuthoriz
 		now = time.Now
 	}
 	reader, _ := venue.(dataReader)
-	return &Service{store: store, venue: venue, reader: reader, execution: execution, now: now}
+	return &Service{agentName: agentName, store: store, venue: venue, reader: reader, execution: execution, now: now}
+}
+
+// SetAgentName configures the approval identity before the service is used.
+func (s *Service) SetAgentName(name string) error {
+	if name == "" {
+		name = agentName
+	}
+	if !agentNamePattern.MatchString(name) {
+		return errors.New("ASTER_DATA_AGENT_NAME must contain 1-32 ASCII letters, digits, underscores or hyphens")
+	}
+	s.agentName = name
+	return nil
 }
 
 func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (Prepared, error) {
@@ -101,7 +115,7 @@ func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (
 		if existing.Status == StatusSubmitting || existing.Status == StatusUncertain {
 			return Prepared{}, stateError(existing.Status)
 		}
-		approval := newApproval(account, existing.AgentAddress, now)
+		approval := s.newApproval(account, existing.AgentAddress, now)
 		return Prepared{ProbeID: existing.ProbeID, Approval: approval}, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
@@ -114,7 +128,7 @@ func (s *Service) Prepare(ctx context.Context, account, executionAgent string) (
 	defer privateKey.Zero()
 	serializedKey := privateKey.Serialize()
 	defer clear(serializedKey)
-	approval := newApproval(account, addressFromPrivateKey(serializedKey), now)
+	approval := s.newApproval(account, addressFromPrivateKey(serializedKey), now)
 	record := Record{
 		ProbeID: uuid.NewString(), Owner: account, ExecutionAgent: executionAgent,
 		AgentAddress: approval.AgentAddress, PrivateKey: serializedKey, ApprovalNonce: approval.Nonce,
@@ -148,11 +162,11 @@ func (s *Service) Authorize(
 		return publicLoadError(err)
 	}
 	defer clear(record.PrivateKey)
-	if record.ProbeID != probeID || !validAuthorizationApproval(approval, record, account, s.now()) {
+	if record.ProbeID != probeID || !s.validAuthorizationApproval(approval, record, account, s.now()) {
 		return ErrInvalidInput
 	}
 
-	storedApproval := approvalFromRecord(record)
+	storedApproval := s.approvalFromRecord(record)
 	if record.Status == StatusApproved && record.ExecutionAgent == executionAgent &&
 		approvalsEqual(approval, storedApproval) {
 		return nil
@@ -230,7 +244,7 @@ func (s *Service) Validate(ctx context.Context, probeID, signature, account, exe
 		return Report{}, stateError(latest.Status)
 	}
 	record = submitting
-	approval := approvalFromRecord(record)
+	approval := s.approvalFromRecord(record)
 	if err := s.venue.Approve(ctx, approval, signature); err != nil {
 		return Report{}, s.recordApprovalFailure(ctx, record, err, now)
 	}
@@ -386,25 +400,25 @@ func stateError(status Status) error {
 	}
 }
 
-func approvalFromRecord(record Record) Approval {
-	return newApprovalAt(record.Owner, record.AgentAddress, record.ApprovalNonce, record.RequestedExpiry)
+func (s *Service) approvalFromRecord(record Record) Approval {
+	return s.newApprovalAt(record.Owner, record.AgentAddress, record.ApprovalNonce, record.RequestedExpiry)
 }
 
-func newApproval(owner, agent string, now time.Time) Approval {
-	return newApprovalAt(owner, agent, now.UnixMicro(), now.Add(agentLifetime).UnixMilli())
+func (s *Service) newApproval(owner, agent string, now time.Time) Approval {
+	return s.newApprovalAt(owner, agent, now.UnixMicro(), now.Add(agentLifetime).UnixMilli())
 }
 
-func newApprovalAt(owner, agent string, nonce, expiry int64) Approval {
+func (s *Service) newApprovalAt(owner, agent string, nonce, expiry int64) Approval {
 	return Approval{
-		User: owner, Nonce: nonce, AgentName: agentName, AgentAddress: agent,
+		User: owner, Nonce: nonce, AgentName: s.agentName, AgentAddress: agent,
 		Expired: expiry, AsterChain: "Mainnet", SignatureChainID: 56,
 	}
 }
 
-func validAuthorizationApproval(approval Approval, record Record, owner string, now time.Time) bool {
+func (s *Service) validAuthorizationApproval(approval Approval, record Record, owner string, now time.Time) bool {
 	issuedAt := time.UnixMicro(approval.Nonce)
 	return approval.User == owner && approval.AgentAddress == record.AgentAddress &&
-		approval.AgentName == agentName && approval.IPWhitelist == "" &&
+		approval.AgentName == s.agentName && approval.IPWhitelist == "" &&
 		!approval.CanSpotTrade && !approval.CanPerpTrade && !approval.CanWithdraw &&
 		approval.AsterChain == "Mainnet" && approval.SignatureChainID == 56 &&
 		approval.Expired == issuedAt.Add(agentLifetime).UnixMilli() &&

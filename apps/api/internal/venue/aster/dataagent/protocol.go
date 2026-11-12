@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -223,7 +224,19 @@ func (c *Client) signedGET(ctx context.Context, path string, params []pair, owne
 		return nil, fmt.Errorf("build Aster signed read")
 	}
 	body, status, err := c.do(request, maxReadResponse)
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+	if status != 0 && (status < 200 || status >= 300) {
+		var failure struct {
+			Code json.Number `json:"code"`
+		}
+		var code any
+		if json.Unmarshal(body, &failure) == nil {
+			if number, parseErr := failure.Code.Int64(); parseErr == nil {
+				code = number
+			}
+		}
+		slog.Warn("Aster signed read failed", "endpoint", endpointName(path), "http_status", status, "code", code)
+	}
+	if status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTeapot && status != http.StatusTooManyRequests {
 		return nil, ErrReadRejected
 	}
 	if err != nil || status < 200 || status >= 300 {
@@ -488,6 +501,8 @@ func endpointName(path string) string {
 	switch path {
 	case "/fapi/v3/agent":
 		return "agent-list"
+	case "/fapi/v3/builder":
+		return "builder-approval"
 	case "/fapi/v3/accountWithJoinMargin":
 		return "account"
 	case "/fapi/v3/positionRisk":

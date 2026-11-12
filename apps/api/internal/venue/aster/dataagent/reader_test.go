@@ -228,6 +228,22 @@ func TestReaderPreservesAsterReadRejection(t *testing.T) {
 	}
 }
 
+func TestReaderPreservesHTTP400RejectionForAccountAndBuilder(t *testing.T) {
+	store, now := approvedReaderService(t)
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"code":-2015,"msg":"rejected"}`)
+	}))
+	defer venue.Close()
+	reader := NewService(store, NewClient(venue.URL, venue.Client(), func() time.Time { return *now }), nil, func() time.Time { return *now })
+	if _, err := reader.ReadAccount(context.Background(), testOwner); !errors.Is(err, ErrReadRejected) {
+		t.Fatalf("account read error=%v", err)
+	}
+	if approved, err := reader.HasBuilderApproval(context.Background(), testOwner, testExecutionAgent, "0.0002"); approved || !errors.Is(err, ErrReadRejected) {
+		t.Fatalf("builder approval=%t err=%v", approved, err)
+	}
+}
+
 func TestReaderRejectsAccountWithoutPositionLeverageBrackets(t *testing.T) {
 	store, now := approvedReaderService(t)
 	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
