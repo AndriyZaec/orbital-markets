@@ -19,6 +19,8 @@ primary_region = 'iad'
   ENV = 'production'
   ALLOWED_ORIGIN = 'https://app.orbitalmarkets.xyz'
   PHOENIX_BUILDER_AUTHORITY = '2f7fPuH88eMwWW4x7o5fHUNJDzLzCZk6EN6wY3zHR4yC'
+  GOGC = '200'
+  GOMEMLIMIT = '400MiB'
 
 [[mounts]]
   source = 'orbital_data'
