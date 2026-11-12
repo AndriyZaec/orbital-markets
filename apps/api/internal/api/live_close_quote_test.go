@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
+	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 )
 
@@ -78,7 +80,7 @@ func TestHyperliquidCloseUsesFreshExecutableSideBBO(t *testing.T) {
 	}
 }
 
-func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
+func TestHyperliquidCachedClosePriceRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
 	modules, err := venue.NewLiveModuleRegistry(hllive.NewLiveModule(closeQuoteTestAssetMap{}))
 	if err != nil {
 		t.Fatal(err)
@@ -91,13 +93,65 @@ func TestHyperliquidCloseRejectsStaleBBOInsteadOfUsingEntryPrice(t *testing.T) {
 		live: &LiveDeps{modules: modules},
 	}
 
-	_, err = server.buildCloseSigningRequest(
+	_, err = server.cachedClosePrice(
 		context.Background(),
 		executor.LiveFill{Venue: "hyperliquid", Symbol: "2Z", Side: string(domain.SideLong), FilledAmount: 265, AvgFillPrice: 0.0566},
-		"close-order", "pacifica-owner", "hl-owner", "pacifica-agent", "hl-agent",
+		"2Z",
 	)
 	if err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("error = %v, want stale BBO rejection", err)
+	}
+}
+
+func TestMarketBBOCloseUsesBookHealthInsteadOfAggregateTimestamp(t *testing.T) {
+	now := time.Now()
+	for _, name := range []string{"hyperliquid", "aster"} {
+		for _, emergency := range []bool{false, true} {
+			for _, tc := range []struct {
+				name      string
+				aggregate time.Time
+				book      *venue.ComponentHealth
+				stale     bool
+			}{
+				{"fresh_REST_stale_BBO", now, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now.Add(-11 * time.Second), ReceivedAt: now}, true},
+				{"seven_second_book_still_valid_for_close", now, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now.Add(-7 * time.Second)}, false},
+				{"stale_aggregate_fresh_BBO", now.Add(-time.Minute), &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now}, false},
+				{"fresh_received_time_without_source", now, &venue.ComponentHealth{Status: venue.HealthAvailable, ReceivedAt: now}, false},
+				{"stale_received_time_without_source", now, &venue.ComponentHealth{Status: venue.HealthAvailable, ReceivedAt: now.Add(-11 * time.Second)}, true},
+				{"unavailable_book", now, &venue.ComponentHealth{Status: venue.HealthUnavailable, SourceTime: now}, true},
+				{"missing_book_time", now, &venue.ComponentHealth{Status: venue.HealthAvailable}, true},
+				{"future_book_time", now, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now.Add(time.Minute)}, true},
+				{"legacy_fresh_timestamp", now, nil, false},
+				{"legacy_stale_timestamp", now.Add(-11 * time.Second), nil, true},
+				{"legacy_missing_timestamp", time.Time{}, nil, true},
+			} {
+				t.Run(fmt.Sprintf("%s/emergency=%t/%s", name, emergency, tc.name), func(t *testing.T) {
+					var module venue.LiveModule = hllive.NewLiveModule(closeQuoteTestAssetMap{})
+					if name == "aster" {
+						module = asterlive.NewLiveModule(hedgeMatrixRules{}, nil)
+					}
+					modules, err := venue.NewLiveModuleRegistry(module)
+					if err != nil {
+						t.Fatal(err)
+					}
+					market := venue.MarketData{Venue: name, Asset: "BTC", BidPrice: 100, AskPrice: 101, BidSize: 500, AskSize: 500, Timestamp: tc.aggregate}
+					if tc.book != nil {
+						market.Health = &venue.MarketHealth{Book: *tc.book}
+					}
+					server := &Server{live: &LiveDeps{modules: modules}, closeMarkets: closeQuoteTestSource{snapshot: market}}
+					price, err := server.cachedClosePrice(context.Background(),
+						executor.LiveFill{Venue: name, Symbol: "BTC", Side: "long", FilledAmount: 1, AvgFillPrice: 100},
+						"BTC")
+					if tc.stale {
+						if price != 0 || err == nil || !strings.Contains(err.Error(), "BBO for BTC is stale") {
+							t.Fatalf("stale WS book accepted: price=%v err=%v", price, err)
+						}
+					} else if err != nil || price != 100 {
+						t.Fatalf("fresh WS book rejected: price=%v err=%v", price, err)
+					}
+				})
+			}
+		}
 	}
 }
 

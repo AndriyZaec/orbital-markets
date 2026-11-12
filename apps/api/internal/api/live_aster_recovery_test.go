@@ -107,7 +107,7 @@ func TestRecoveryReconcilesAsterOrderAfterRestart(t *testing.T) {
 		ClientOrderID: "orbital-leg1", Amount: 1,
 	}
 
-	evidence := (&Server{}).reconcileAsterRecoveryOrders(context.Background(), session, sessLeg1Submitted)
+	evidence := (&Server{}).reconcileRecoveryOrders(context.Background(), session, sessLeg1Submitted)
 	if !evidence.leg1Known || evidence.detail != "" || session.Leg1Fill == nil ||
 		session.Leg1Fill.OrderID != "42" || session.Leg1Fill.FilledAmount != 0.75 {
 		t.Fatalf("recovery evidence = %+v, fill = %+v", evidence, session.Leg1Fill)
@@ -123,7 +123,7 @@ func TestRecoveryKeepsAsterLookupFailureUncertain(t *testing.T) {
 		ClientOrderID: "orbital-leg1", Amount: 1,
 	}
 
-	evidence := (&Server{}).reconcileAsterRecoveryOrders(context.Background(), session, sessLeg1Submitting)
+	evidence := (&Server{}).reconcileRecoveryOrders(context.Background(), session, sessLeg1Submitting)
 	if evidence.leg1Known || evidence.detail == "" || session.Leg1Fill != nil {
 		t.Fatalf("recovery evidence = %+v, fill = %+v", evidence, session.Leg1Fill)
 	}
@@ -210,11 +210,11 @@ func TestRecoveryMergesAsterRetryOrderOnlyOnce(t *testing.T) {
 	}
 
 	server := &Server{}
-	evidence := server.reconcileAsterRecoveryOrders(context.Background(), session, sessLeg2Submitted)
+	evidence := server.reconcileRecoveryOrders(context.Background(), session, sessLeg2Submitted)
 	if !evidence.leg2Known || session.Leg2Fill.FilledAmount != 1 || session.Leg2Fill.OrderID != "retry-order" {
 		t.Fatalf("first retry recovery = %+v, fill = %+v", evidence, session.Leg2Fill)
 	}
-	server.reconcileAsterRecoveryOrders(context.Background(), session, sessLeg2Submitted)
+	server.reconcileRecoveryOrders(context.Background(), session, sessLeg2Submitted)
 	if session.Leg2Fill.FilledAmount != 1 {
 		t.Fatalf("repeated retry recovery duplicated fill: %+v", session.Leg2Fill)
 	}

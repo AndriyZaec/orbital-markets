@@ -1,13 +1,16 @@
 import type { ReactNode } from 'react'
-import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
+import { act, cleanup, renderHook, screen } from '@testing-library/react'
+import { renderWithQueryClient as render } from './render-with-query-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LiveExecutionProvider, useLiveExecution } from '../src/hooks/useLiveExecution'
+import { useLiveClose } from '../src/hooks/useLiveClose'
 import type { ExecutionIntent } from '../src/lib/live-execution-state'
 import type { SigningRequest } from '../src/types/signing'
 import { LiveExecutionModal } from '../src/components/LiveExecutionModal'
 
 const mocks = vi.hoisted(() => ({ apiFetch: vi.fn(), sign: vi.fn(),
-  authority: { pacificaAddress: null as string | null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner' },
+  sessionEvent: null as ((data: unknown) => void) | null,
+  authority: { pacificaAddress: null as string | null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner', phoenixAddress: null as string | null },
 }))
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/lib/api')>(), apiFetch: mocks.apiFetch,
@@ -17,9 +20,12 @@ vi.mock('@/hooks/useTradingAgents', () => ({ useTradingAgents: () => ({
   pacifica: { status: 'ready', agentAddress: 'pac-agent' },
   hyperliquid: { status: 'ready', agentAddress: 'hl-agent' },
   aster: { status: 'ready', agentAddress: 'aster-agent' },
+  phoenix: { status: 'ready', agentAddress: 'phoenix-agent' },
   sign: mocks.sign,
 }) }))
-vi.mock('@/lib/live-events', () => ({ subscribeLiveSessionEvents: () => () => {} }))
+vi.mock('@/lib/live-events', () => ({ subscribeLiveSessionEvents: (
+  _accounts: unknown, _sessionId: string, _connection: (connected: boolean) => void, listener: (data: unknown) => void,
+) => { mocks.sessionEvent = listener; return () => { mocks.sessionEvent = null } } }))
 
 function wrapper({ children }: { children: ReactNode }) {
   return <LiveExecutionProvider>{children}</LiveExecutionProvider>
@@ -64,7 +70,8 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-13T12:00:00Z'))
   mocks.apiFetch.mockReset()
-  mocks.authority = { pacificaAddress: null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner' }
+  mocks.sessionEvent = null
+  mocks.authority = { pacificaAddress: null, hyperliquidAddress: '0xhl-owner', asterAddress: '0xaster-owner', phoenixAddress: null }
   mocks.sign.mockReset().mockImplementation(async (request: SigningRequest) => ({
     request_id: request.id, client_order_id: request.client_order_id, venue: request.venue,
     signer_address: 'agent', signature: 'test-signature',
@@ -73,6 +80,101 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('prepare integration with the signing and advance flow', () => {
+  it.each(['confirmed', 'unconfirmed'] as const)('normalizes a failed hedge response using %s unwind evidence', async (unwind_status) => {
+    mocks.apiFetch.mockResolvedValueOnce(prepareResponse())
+      .mockResolvedValueOnce(Response.json({ status: 'awaiting_leg2_sign', leg1_fill: { filled_amount: .6, avg_price: 100, status: 'filled' },
+        signing_requests: [signingRequest('hyperliquid', 'open', .6)] }))
+      .mockResolvedValueOnce(Response.json({ status: 'failed', unwind_status, remaining_exposure: [], leg1_fill: null }))
+    const { result } = renderHook(useLiveExecution, { wrapper })
+    await act(async () => { await result.current.executeLive(intent()) })
+    expect(result.current.state.phase).toBe(unwind_status === 'confirmed' ? 'aborted' : 'degraded')
+    expect(result.current.state.leg1Fill?.filled_amount).toBe(.6)
+    expect(result.current.state.notStarted).not.toBe(true)
+    expect(mocks.apiFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps historical fill evidence when recovery SSE reports zero residuals with a failed status', async () => {
+    mocks.apiFetch.mockResolvedValueOnce(prepareResponse())
+      .mockResolvedValueOnce(Response.json({ status: 'awaiting_leg2_sign', leg1_fill: { filled_amount: .6, avg_price: 100, status: 'filled' },
+        signing_requests: [signingRequest('hyperliquid', 'open', .6)] }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const { result } = renderHook(useLiveExecution, { wrapper })
+    await act(async () => { await result.current.executeLive(intent()) })
+    expect(result.current.state.phase).toBe('recovering')
+    expect(mocks.sessionEvent).toBeTruthy()
+    act(() => mocks.sessionEvent?.({ status: 'failed', remaining_exposure: [],
+      leg1_fill: { filled_amount: 0, avg_price: 0, status: 'unconfirmed' } }))
+    expect(result.current.state.phase).toBe('degraded')
+    expect(result.current.state.leg1Fill?.filled_amount).toBe(.6)
+    render(<LiveExecutionModal state={result.current.state} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Try Again' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Review Positions' })).toBeTruthy()
+  })
+
+  it.each([false, true])('shows a pre-submission admission refusal without raw reasons (stream=%s)', async (stream) => {
+    const body = { error: 'live admission denied', code: 'LIVE_ADMISSION_DENIED', reasons: ['venue pair not in live scope'] }
+    mocks.apiFetch.mockResolvedValueOnce(stream
+      ? new Response(JSON.stringify({ type: 'result', status: 403, body }) + '\n', { headers: { 'Content-Type': 'application/x-ndjson' } })
+      : Response.json(body, { status: 403 }))
+    const { result } = renderHook(useLiveExecution, { wrapper })
+    await act(async () => { await result.current.executeLive(intent()) })
+    expect(result.current.state.notStarted).toBe(true)
+    expect(result.current.state.error).toBe('Trade unavailable.')
+    expect(mocks.sign).not.toHaveBeenCalled()
+    expect(mocks.apiFetch).toHaveBeenCalledTimes(1)
+    render(<LiveExecutionModal state={result.current.state} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
+    expect(screen.getByText('Trade not started')).toBeTruthy()
+    expect(screen.getByText('No orders were submitted.')).toBeTruthy()
+    expect(screen.queryByText('Execution failed')).toBeNull()
+    expect(screen.queryByText(/admission denied|live scope|Riskier/)).toBeNull()
+  })
+
+  it('prepares, signs and confirms a Phoenix close using its Solana account binding', async () => {
+    mocks.authority.phoenixAddress = 'SolanaOwnerCaseSensitive'
+    const request = { ...signingRequest('aster', 'unwind'), venue: 'phoenix', action: 'close', account: mocks.authority.phoenixAddress }
+    mocks.apiFetch.mockResolvedValueOnce(Response.json({ signing_requests: [request] }))
+      .mockResolvedValueOnce(Response.json({ accepted: true }))
+      .mockResolvedValueOnce(Response.json({ position: { state: 'closed' } }))
+    const { result } = renderHook(useLiveClose)
+    await act(async () => { await result.current.closePosition('phoenix-position', ['phoenix', 'hyperliquid']) })
+    expect(result.current.state.phase).toBe('done')
+    expect(mocks.sign).toHaveBeenCalledWith(request)
+    expect(JSON.parse(mocks.apiFetch.mock.calls[0][1].body)).toMatchObject({ accounts: { phoenix: 'SolanaOwnerCaseSensitive' }, agents: { phoenix: 'phoenix-agent' } })
+    expect(mocks.apiFetch.mock.calls[2][0]).toContain('accounts%5Bphoenix%5D=SolanaOwnerCaseSensitive')
+  })
+  for (const ownerChanges of [false, true]) it(`uses Phoenix owner/agent bindings and ${ownerChanges ? 'aborts on a case-only Solana owner change' : 'opens through the shared sequential hedge flow'}`, async () => {
+    mocks.authority.phoenixAddress = 'SolanaOwnerCaseSensitive'
+    const approved = intent()
+    approved.legs[0] = { ...approved.legs[0], venue: 'phoenix', symbol: 'BTC' }
+    const phoenixRequest = (action: 'open' | 'unwind'): SigningRequest => ({ ...signingRequest('aster', action), venue: 'phoenix',
+      id: `phoenix-${action}`, client_order_id: `phoenix-${action}`, account: mocks.authority.phoenixAddress!, symbol: 'BTC' })
+    let completeLeg1!: (response: Response) => void
+    mocks.apiFetch.mockResolvedValueOnce(Response.json({ session_id: 'session', asset: 'BTC', riskier_venue: 'phoenix', hedge_venue: 'hyperliquid',
+      signing_requests: [phoenixRequest('open'), phoenixRequest('unwind')] }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { completeLeg1 = resolve }))
+      .mockResolvedValueOnce(Response.json(ownerChanges ? { status: 'degraded', unwind_status: 'requires_signature' } : { status: 'open', position_id: 'phoenix-position', mismatch: 0 }))
+    const { result, rerender } = renderHook(useLiveExecution, { wrapper })
+    let execution: Promise<void>
+    await act(async () => { execution = result.current.executeLive(approved) })
+    expect(result.current.state.phase).toBe('submitting_leg1')
+    expect(JSON.parse(mocks.apiFetch.mock.calls[0][1].body)).toMatchObject({ accounts: { phoenix: 'SolanaOwnerCaseSensitive', hyperliquid: '0xhl-owner' }, agents: { phoenix: 'phoenix-agent' } })
+    if (ownerChanges) await act(async () => { mocks.authority.phoenixAddress = 'solanaownercasesensitive'; rerender() })
+    await act(async () => {
+      completeLeg1(Response.json({ status: 'awaiting_leg2_sign', leg1_fill: { filled_amount: .6, avg_price: 100, status: 'filled' },
+        signing_requests: [signingRequest('hyperliquid', 'open', .6)] }))
+      await execution
+    })
+    const last = JSON.parse(mocks.apiFetch.mock.calls[2][1].body)
+    expect(last.accounts.phoenix).toBe('SolanaOwnerCaseSensitive')
+    if (ownerChanges) {
+      expect(last.abort).toBe(true)
+      expect(result.current.state.unwindStatus).toBe('requires_signature')
+      expect(mocks.sign.mock.calls).toHaveLength(2)
+    } else {
+      expect(result.current.state.phase).toBe('open')
+      expect(mocks.sign.mock.calls.at(-1)?.[0].amount).toBe(.6)
+    }
+  })
   it('keeps the modal preparing with a spinner while BBO is pending, without signing or another request', async () => {
     let stream!: ReadableStreamDefaultController<Uint8Array>
     const encoder = new TextEncoder()
@@ -115,14 +217,15 @@ describe('prepare integration with the signing and advance flow', () => {
     expect(result.current.state.phase).toBe('preparing')
     await act(async () => { await vi.advanceTimersByTimeAsync(20_001); await execution })
     expect(result.current.state.phase).toBe('failed')
-    expect(result.current.state.error).toContain('No orders were submitted')
+    expect(result.current.state.notStarted).toBe(true)
+    expect(result.current.state.error).toBe('Preparation timed out.')
     expect(mocks.sign).not.toHaveBeenCalled()
     expect(mocks.apiFetch).toHaveBeenCalledTimes(1)
 
-    mocks.apiFetch.mockResolvedValueOnce(Response.json({ error: 'account state not ready' }, { status: 409 }))
+    mocks.apiFetch.mockResolvedValueOnce(Response.json({ error: 'account state not ready', code: 'ACCOUNT_STATE_NOT_READY' }, { status: 409 }))
     await act(async () => { await result.current.executeLive(intent()) })
     expect(mocks.apiFetch).toHaveBeenCalledTimes(2)
-    expect(result.current.state.error).toContain('account state not ready')
+    expect(result.current.state.error).toBe('Accounts are updating.')
   })
 
   it('signs leverage/open/unwind, hedges the actual partial fill, and never applies prepare timeout after submission', async () => {
@@ -165,6 +268,10 @@ describe('prepare integration with the signing and advance flow', () => {
     expect(result.current.state.phase).toBe('recovering')
     expect(result.current.state.sessionId).toBe('session')
     expect(result.current.state.reason).toContain('Leg-1 response is uncertain')
+    expect(result.current.state.notStarted).not.toBe(true)
+    render(<LiveExecutionModal state={result.current.state} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
+    expect(screen.queryByText('Trade not started')).toBeNull()
+    expect(screen.queryByText('No orders were submitted.')).toBeNull()
   })
 
   it('requests armed unwind when the hedge signing fails, without submitting the hedge', async () => {

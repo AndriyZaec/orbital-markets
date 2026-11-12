@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Opportunity } from '@/hooks/useOpportunities'
-import { usePlan } from '@/hooks/usePlan'
+import { usePlan, type ExecutionPlan } from '@/hooks/usePlan'
+import { useLoadingFeedback } from '@/hooks/useLoadingFeedback'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useVenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { LiveExecutionModal } from '@/components/LiveExecutionModal'
@@ -69,6 +71,10 @@ function venueLabel(venue: string): string {
   return venueMetadata(venue).label
 }
 
+function isLiveVenue(venue: string): venue is VenueId {
+  return venue === 'pacifica' || venue === 'hyperliquid' || venue === 'aster' || venue === 'phoenix'
+}
+
 function useCountdown(lastUpdated: Date | null, intervalSec: number) {
   const [remaining, setRemaining] = useState(intervalSec)
   useEffect(() => {
@@ -115,7 +121,9 @@ export function OpportunityPanel({
   const leverageIssue = leverageCapabilityMessage(opp.leverage_capabilities)
   const initialLeverage = opportunityMaxLev ?? 1
   const venuePair = `${longVenue}_${shortVenue}`
-  const liveVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()] as [VenueId, VenueId]
+  const opportunityVenues = [longVenue.toLowerCase(), shortVenue.toLowerCase()]
+  const liveExecutionSupported = opportunityVenues.every(isLiveVenue)
+  const liveVenues = opportunityVenues.filter(isLiveVenue)
 
   const [leverageSelection, setLeverageSelection] = useState({ opportunityId: opp.id, value: initialLeverage })
   const leverage = leverageSelection.opportunityId === opp.id
@@ -142,37 +150,33 @@ export function OpportunityPanel({
     pacifica: pacReadiness,
     hyperliquid: hlReadiness,
     aster: asterReadiness,
+    phoenix: phoenixReadiness,
     refreshBalances,
   } = useVenueReadiness()
   const readinessByVenue = {
     pacifica: pacReadiness,
     hyperliquid: hlReadiness,
     aster: asterReadiness,
+    phoenix: phoenixReadiness,
   }
   const selectedReadiness = liveVenues.map((venue) => readinessByVenue[venue])
-  const planAccounts = mode === 'live'
+  const planAccounts = mode === 'live' && liveExecutionSupported
     ? Object.fromEntries(selectedReadiness.flatMap((readiness) => readiness.address
       ? [[readiness.venue, readiness.address]]
       : []))
     : undefined
   const marketAvailable = opp.status === 'available'
-  const availabilityMessage = opp.availability_reasons?.map((reason) => {
-    const venue = reason.venue ? venueLabel(reason.venue) : 'Venue'
-    return reason.code === 'source_fetch_failed'
-      ? `${venue} market feed is unreachable.`
-      : `${venue} market data is temporarily unavailable.`
-  }).join(' ') || 'Market data is temporarily unavailable.'
-  const canRequestPlan = marketAvailable && (mode !== 'live' ||
+  const canRequestPlan = marketAvailable && (mode !== 'live' || liveExecutionSupported) && (mode !== 'live' ||
     !liveVenues.includes('aster') ||
     Boolean(asterReadiness.address))
-  const { plan, loading: planLoading, error: planError, maxLeverage, leverageCapabilityBlocked, refresh: refreshPlan } = usePlan(
+  const { plan, loading: planLoading, error: planError, marketDataPending, maxLeverage, leverageCapabilityBlocked, refresh: refreshPlan } = usePlan(
     canRequestPlan ? opp.id : null,
     debouncedLeverageForPlan,
     debouncedNotionalForPlan,
     planAccounts,
     opp.direction,
   )
-  const planUpdating = planLoading || planInputsPending
+  const planUpdating = planLoading || planInputsPending || marketDataPending
   const maxLev = leverageCapabilityBlocked ? null : maxLeverage ?? opportunityMaxLev
   useEffect(() => {
     if (maxLeverage === null) return
@@ -182,13 +186,31 @@ export function OpportunityPanel({
   }, [maxLeverage, opp.id, opportunityMaxLev])
   // Live execution is gated by the typed readiness layer (wallet + signer +
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
-  const isFullyReady = selectedReadiness.every((readiness) => readiness.status === 'ready')
-  const noSelectedWallets = selectedReadiness.every((readiness) => readiness.status === 'disconnected')
+  const isFullyReady = liveExecutionSupported && selectedReadiness.every((readiness) => readiness.status === 'ready')
+  const noSelectedWallets = liveExecutionSupported && selectedReadiness.every((readiness) => readiness.status === 'disconnected')
+  const accountsAuthorized = selectedReadiness.every((r) => r.status === 'ready' || (r.walletConnected && r.signerReady && r.agentReady))
+  const accountsUpdating = mode === 'live' && accountsAuthorized && !isFullyReady && selectedReadiness.some((r) => !r.balanceReady)
+  const accountActionRequired = mode === 'live' && !accountsAuthorized
+  const executionUnavailable = mode === 'live' && accountsAuthorized && !isFullyReady && !accountsUpdating
+  const waitingForData = !marketAvailable || accountsUpdating || planUpdating
+  const estimateKey = JSON.stringify([opp.id, opp.direction, leverage, notionalForPlan, planAccounts])
+  const [retrySequence, setRetrySequence] = useState(0)
+  const feedback = useLoadingFeedback(waitingForData, `${estimateKey}:${retrySequence}`)
+  const [estimate, setEstimate] = useState<{ key: string; fingerprint: string; plan: ExecutionPlan } | null>(null)
+  const fingerprint = plan && marketAvailable && !planInputsPending ? JSON.stringify([plan.id, plan.notional, plan.leverage, plan.leg_1, plan.leg_2]) : ''
+  if (plan && marketAvailable && !planInputsPending && (estimate?.key !== estimateKey || estimate.fingerprint !== fingerprint)) {
+    setEstimate({ key: estimateKey, fingerprint, plan })
+  }
+  // Last-known estimates are display-only. Execution still uses `plan` and all
+  // current readiness/intent gates, never this presentation history.
+  const displayPlan = planInputsPending ? null : marketAvailable && plan ? plan
+    : feedback !== 'unavailable' && estimate?.key === estimateKey ? estimate.plan : null
   const balanceByVenue = (venue: string): number | null => {
     const v = venue.toLowerCase()
     if (v === 'pacifica') return pacReadiness.available
     if (v === 'hyperliquid') return hlReadiness.available
     if (v === 'aster') return asterReadiness.available
+    if (v === 'phoenix') return phoenixReadiness.available
     return null
   }
 
@@ -212,8 +234,8 @@ export function OpportunityPanel({
     })
   }, [opp.id, opp.asset, opp.risk_tier, venuePair])
 
-  const longLeg = plan ? (plan.leg_1.side === 'long' ? plan.leg_1 : plan.leg_2) : null
-  const shortLeg = plan ? (plan.leg_1.side === 'short' ? plan.leg_1 : plan.leg_2) : null
+  const longLeg = displayPlan ? (displayPlan.leg_1.side === 'long' ? displayPlan.leg_1 : displayPlan.leg_2) : null
+  const shortLeg = displayPlan ? (displayPlan.leg_1.side === 'short' ? displayPlan.leg_1 : displayPlan.leg_2) : null
   const marginShortfalls = plan
     ? [plan.leg_1, plan.leg_2].flatMap((leg) => {
         const available = balanceByVenue(leg.venue)
@@ -338,22 +360,11 @@ export function OpportunityPanel({
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 3L3 11M3 3l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
-        {!marketAvailable && (
-          <div className={`mt-3 rounded border px-3 py-2 text-xs ${opp.status === 'degraded' ? 'border-yellow-500/20 bg-yellow-500/[0.06] text-yellow-300' : 'border-red-500/20 bg-red-500/[0.06] text-red-300'}`}>
-            <span className="font-medium capitalize">{opp.status}</span>
-            <span className="text-muted-foreground"> · {availabilityMessage}</span>
-          </div>
-        )}
       </div>
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto">
-        {!marketAvailable && (
-          <p className="px-5 py-6 text-sm text-muted-foreground">
-            Latest market metrics are hidden until both venue feeds publish a fresh snapshot.
-          </p>
-        )}
-        <div className={marketAvailable ? '' : 'hidden'}>
+        <div>
         {/* Position Size + Currency */}
         <div className="px-5 py-4 border-b border-border">
           <div className="flex gap-2">
@@ -400,11 +411,12 @@ export function OpportunityPanel({
               </span>}
             </div>
             <div
-              aria-hidden={!plan}
-              className={cn('mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70', !plan && 'invisible')}
+              aria-hidden={!displayPlan}
+              title={!plan && displayPlan ? 'Last known estimate' : undefined}
+              className={cn('mt-1 flex items-center justify-between text-[11px] text-muted-foreground/70', !displayPlan && 'invisible')}
             >
-              <span>Margin {plan ? fmtUsd(plan.leverage.margin_required) : '--'}</span>
-              <span>Exposure {plan ? fmtUsd(plan.leverage.gross_exposure) : '--'}</span>
+              <span>Margin {displayPlan ? fmtUsd(displayPlan.leverage.margin_required) : '--'}</span>
+              <span>Exposure {displayPlan ? fmtUsd(displayPlan.leverage.gross_exposure) : '--'}</span>
             </div>
           </div>
           {maxLev !== null && (
@@ -442,9 +454,9 @@ export function OpportunityPanel({
               <div className="rounded border border-border bg-white/[0.03] px-3 py-2 mb-3">
                 <p className="text-sm text-muted-foreground">Market</p>
               </div>
-              <div className="flex flex-col gap-0">
+              <div className={cn('flex flex-col gap-0', !plan && 'opacity-60')} title={!plan && displayPlan ? 'Last known estimate' : undefined}>
                 <Row label="Required Margin" value={longLeg ? `${fmtUsd(longLeg.margin_required)} · ${longLeg.leverage}x` : '--'} />
-                <Row label="Position Size" value={plan && longLeg ? fmtUsd(plan.notional) : '--'} />
+                <Row label="Position Size" value={displayPlan && longLeg ? fmtUsd(displayPlan.notional) : '--'} />
                 <Row label="Mid Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
                 <Row label="Est. Liquidation Price" value={fmtLiqPrice(longLeg)} />
                 <Row label="Est. Entry Price" value={longLeg ? fmtPrice(longLeg.expected_price) : '--'} />
@@ -469,9 +481,9 @@ export function OpportunityPanel({
               <div className="rounded border border-border bg-white/[0.03] px-3 py-2 mb-3">
                 <p className="text-sm text-muted-foreground">Market</p>
               </div>
-              <div className="flex flex-col gap-0">
+              <div className={cn('flex flex-col gap-0', !plan && 'opacity-60')} title={!plan && displayPlan ? 'Last known estimate' : undefined}>
                 <Row label="Required Margin" value={shortLeg ? `${fmtUsd(shortLeg.margin_required)} · ${shortLeg.leverage}x` : '--'} />
-                <Row label="Position Size" value={plan && shortLeg ? fmtUsd(plan.notional) : '--'} />
+                <Row label="Position Size" value={displayPlan && shortLeg ? fmtUsd(displayPlan.notional) : '--'} />
                 <Row label="Mid Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
                 <Row label="Est. Liquidation Price" value={fmtLiqPrice(shortLeg)} />
                 <Row label="Est. Entry Price" value={shortLeg ? fmtPrice(shortLeg.expected_price) : '--'} />
@@ -500,7 +512,7 @@ export function OpportunityPanel({
       {/* Action */}
       <div className="px-5 py-4 border-t border-border">
         {canRequestPlan && planError && (
-          <p className="text-[11px] text-red-400 mb-2">Plan error: {planError}</p>
+          <p className="text-[11px] text-muted-foreground mb-2">{planError}</p>
         )}
         <div className="flex items-center gap-1.5 mb-3">
           <div className={`size-1.5 rounded-full ${isLive ? 'bg-green-400' : 'bg-yellow-400'}`} />
@@ -543,14 +555,20 @@ export function OpportunityPanel({
           </TooltipProvider>
         )}
 
-        {mode === 'paper' ? (
+        {(feedback === 'unavailable' || planError) && canRequestPlan && !accountsUpdating && !accountActionRequired && !executionUnavailable ? (
+          <Button className="w-full" size="lg" variant="secondary" onClick={() => {
+            setRetrySequence((value) => value + 1)
+            void refreshPlan()
+          }} title="Unable to load trade">Try again</Button>
+        ) : mode === 'paper' ? (
           <Button
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium"
             size="lg"
             disabled={!marketAvailable || !plan?.executable || executing || planUpdating || !notionalValid || !risksAcknowledged}
             onClick={handleExecute}
           >
-            {!marketAvailable ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}` : leverageCapabilityBlocked ? 'Execution Unavailable' : executing ? 'Executing...' : planUpdating ? 'Loading Plan...' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
+            {waitingForData && feedback === 'loading' && <Spinner data-icon="inline-start" aria-label="Updating trade" />}
+            {feedback === 'unavailable' ? 'Market unavailable' : leverageCapabilityBlocked ? 'Execution Unavailable' : executing ? 'Executing...' : opp.execution_status === 'blocked' ? 'Not Executable' : 'Open Paper Trade'}
           </Button>
         ) : (
           <>
@@ -562,19 +580,20 @@ export function OpportunityPanel({
               // route the click to open Connect Accounts. Plan/notional
               // failures still hard-disable (nothing to fix in Accounts).
               disabled={
-                !marketAvailable || (isFullyReady
-                  ? !plan?.executable || planUpdating || !notionalValid || hasMarginShortfall || !risksAcknowledged
-                  : false)
+                 !liveExecutionSupported || (!accountActionRequired && (
+                   executionUnavailable || waitingForData || !marketAvailable || !plan?.executable || !notionalValid || hasMarginShortfall || !risksAcknowledged
+                 ))
               }
               onClick={isFullyReady ? handleExecuteLive : (onOpenAccounts ?? (() => {}))}
             >
-              {!marketAvailable
-                ? `Market ${opp.status === 'degraded' ? 'Degraded' : 'Unavailable'}`
-                : isFullyReady
-                ? leverageCapabilityBlocked ? 'Execution Unavailable' : hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'
-                : noSelectedWallets
-                  ? 'Connect Wallets to Go Live'
-                  : 'Accounts Not Ready'}
+              {waitingForData && !accountActionRequired && feedback === 'loading' && <Spinner data-icon="inline-start" aria-label="Updating trade" />}
+              {!liveExecutionSupported ? 'Live Execution Coming Soon'
+                : accountActionRequired ? noSelectedWallets ? 'Connect Wallets to Go Live' : 'Accounts Not Ready'
+                : executionUnavailable ? 'Trading unavailable'
+                : feedback === 'unavailable'
+                 ? accountsUpdating ? 'Accounts unavailable' : 'Market unavailable'
+                 : waitingForData ? 'Execute Live'
+                : leverageCapabilityBlocked ? 'Execution Unavailable' : hasMarginShortfall ? 'Insufficient Balance' : 'Execute Live'}
             </Button>
           </>
         )}

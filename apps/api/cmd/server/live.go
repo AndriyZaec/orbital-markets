@@ -15,7 +15,17 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
+	phoenixfunding "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/funding"
 )
+
+func liveAsterReader(service *dataagent.Service, referenceAccount string) dataagent.Reader {
+	// Converting a nil *Service to Reader creates a non-nil interface, which
+	// would incorrectly enable background account/funding reads.
+	if service == nil {
+		return nil
+	}
+	return dataagent.ExcludeOwner(service, referenceAccount)
+}
 
 // startLive creates the shared registry and stores eagerly. Venue account
 // feeds start lazily on connect/prepare and are reused by normalized account.
@@ -29,6 +39,7 @@ func startLive(
 	hl *hyperliquid.Adapter,
 	ast *aster.Adapter,
 	asterReader dataagent.Reader,
+	phoenixConfigs ...api.PhoenixAccountConfig,
 ) *api.LiveDeps {
 	logger.Info("live execution: starting runtime")
 
@@ -37,7 +48,7 @@ func startLive(
 	// --- Live position store + monitor ---
 	liveStore := executor.NewStore(writer, reader, logger)
 	signingStore := domain.NewSigningRequestStore()
-	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader)
+	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader, phoenixConfigs...)
 	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)
 	fundingSources := map[string]venue.FundingHistory{
 		"pacifica":    pac,
@@ -45,6 +56,10 @@ func startLive(
 	}
 	if asterReader != nil {
 		fundingSources["aster"] = asterFundingHistory{reader: asterReader}
+	}
+	if len(phoenixConfigs) > 0 && phoenixConfigs[0].Backend != nil && phoenixConfigs[0].Markets != nil {
+		config := phoenixConfigs[0]
+		fundingSources["phoenix"] = phoenixfunding.NewReader(config.RESTURL, config.HTTPClient, config.Markets)
 	}
 	fundingMonitor := executor.NewFundingMonitor(logger, liveStore, fundingSources)
 	go liveMonitor.Run(ctx)

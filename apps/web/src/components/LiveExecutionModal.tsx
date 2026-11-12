@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { LiveExecutionState, ExecutionPhase, LegFillView, UnwindStatus } from '@/hooks/useLiveExecution'
-import { recoveryPresentation, type RecoveryTone } from '@/lib/degraded-execution'
+import { recoveryPresentation, type RecoveryPresentation, type RecoveryTone } from '@/lib/degraded-execution'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { AssetIcon } from '@/components/AssetIcon'
-import { executionGuardActionLabel } from '@/lib/live-execution-state'
+import { executionGuardActionLabel, executionPhaseFromStatus } from '@/lib/live-execution-state'
 import { PREPARE_STAGE_LABELS } from '@/lib/live-prepare'
 import { Spinner } from '@/components/ui/spinner'
 
@@ -52,7 +52,7 @@ function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatu
     case 'degraded':
     case 'aborted':
       if (unwindStatus === 'confirmed') return 'unwound'
-      if (unwindStatus === 'unconfirmed' || unwindStatus === 'submit_failed') return 'failed'
+      if (unwindStatus === 'unconfirmed' || unwindStatus === 'submit_failed' || unwindStatus === 'requires_signature') return 'failed'
       return 'failed'
     case 'failed': return 'failed'
     default: return 'pending'
@@ -81,7 +81,7 @@ const STATUS_STYLE: Record<LegStatus, { dot: string; text: string; label: string
   accepted: { dot: 'bg-green-400', text: 'text-green-400', label: 'Filled' },
   partial: { dot: 'bg-orange-400', text: 'text-orange-400', label: 'Partial fill' },
   failed: { dot: 'bg-red-400', text: 'text-red-400', label: 'Failed' },
-  unwound: { dot: 'bg-orange-400', text: 'text-orange-400', label: 'Unwound' },
+  unwound: { dot: 'bg-orange-400', text: 'text-orange-400', label: 'Closed' },
   skipped: { dot: 'bg-zinc-600', text: 'text-muted-foreground', label: 'Not attempted' },
 }
 
@@ -136,21 +136,9 @@ function LegCard({
 }
 
 function UnwindNotice({ status }: { status: UnwindStatus }) {
-  if (!status) return null
-  switch (status) {
-    case 'confirmed':
-      return <p className="text-[10px] text-muted-foreground mt-1">Leg 1 was unwound via the pre-signed order.</p>
-    case 'unconfirmed':
-      return <p className="text-[10px] text-red-400/80 mt-1">Leg 1 unwind was submitted but fill was not confirmed. Manual close or kill switch may be required.</p>
-    case 'submit_failed':
-      return <p className="text-[10px] text-red-400 mt-1">Leg 1 unwind failed to submit. Manual close or kill switch is required.</p>
-    case 'not_armed':
-      return <p className="text-[10px] text-muted-foreground mt-1">No unwind was armed for this session.</p>
-    case 'skipped':
-      return <p className="text-[10px] text-orange-300/80 mt-1">Leg 1 unwind was skipped because it would increase directional exposure.</p>
-    default:
-      return null
-  }
+  return status === 'requires_signature'
+    ? <p className="text-[10px] text-muted-foreground mt-1">Your signature is needed to close the remaining position.</p>
+    : null
 }
 
 const PHASE_HINT: Partial<Record<ExecutionPhase, string>> = {
@@ -173,13 +161,20 @@ const TONE_STYLE: Record<RecoveryTone, { border: string; background: string; tit
 
 export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }: Props) {
   const countdown = useCountdownToExpiry(state.expiresAt)
-  const isTerminal = TERMINAL.includes(state.phase)
+  const phase = state.phase === 'failed' ? executionPhaseFromStatus('failed', {
+    unwindStatus: state.unwindStatus, exposureCount: state.remainingExposure.length,
+    hasRecordedFill: (state.leg1Fill?.filled_amount ?? 0) > 0 || (state.leg2Fill?.filled_amount ?? 0) > 0,
+  }) : state.phase
+  const isTerminal = TERMINAL.includes(phase)
+  const notStarted = phase === 'failed' && state.notStarted === true
   const leg1Venue = state.riskierVenue
   const leg2Venue = state.hedgeVenue
   const leg1Amount = state.leg1Requests[0]?.amount
   const leg2Amount = state.leg2Request?.amount
-  const terminalPresentation = isTerminal
-    ? recoveryPresentation(state.phase as 'open' | 'recovering' | 'degraded' | 'aborted' | 'failed', state.unwindStatus, state.remainingExposure.length)
+  const terminalPresentation: RecoveryPresentation | null = notStarted
+    ? { title: 'Trade not started', description: 'No orders were submitted.', action: 'retry', actionLabel: 'Try Again', tone: 'blue' }
+    : isTerminal
+    ? recoveryPresentation(phase as 'open' | 'recovering' | 'degraded' | 'aborted' | 'failed', state.unwindStatus, state.remainingExposure.length)
     : null
   const terminalStyle = terminalPresentation ? TONE_STYLE[terminalPresentation.tone] : null
 
@@ -230,23 +225,15 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           {state.phase === 'preparing' && (
             <p className="text-xs text-muted-foreground mb-4">Checking your trade before signing. No orders have been submitted.</p>
           )}
-          {state.phase !== 'idle' && (
+          {state.phase !== 'idle' && !notStarted && (
             <div className="flex flex-col gap-3 mb-4">
-              <LegCard label="Leg 1 · Riskier" venue={leg1Venue} status={leg1Status(state.phase, state.unwindStatus)} amount={leg1Amount} fill={state.leg1Fill} />
-              <LegCard label="Leg 2 · Hedge" venue={leg2Venue} status={leg2Status(state.phase, state.leg2Fill)} amount={leg2Amount} fill={state.leg2Fill} />
+              <LegCard label="Leg 1 · Riskier" venue={leg1Venue} status={leg1Status(phase, state.unwindStatus)} amount={leg1Amount} fill={state.leg1Fill} />
+              <LegCard label="Leg 2 · Hedge" venue={leg2Venue} status={leg2Status(phase, state.leg2Fill)} amount={leg2Amount} fill={state.leg2Fill} />
             </div>
           )}
 
-          {/* Armed-unwind reassurance during the exposed window */}
-          {(state.phase === 'awaiting_leg2' || state.phase === 'submitting_leg2' ||
-            state.phase === 'awaiting_leg2_retry' || state.phase === 'submitting_leg2_retry') && (
-            <p className="text-[10px] text-muted-foreground/70 text-center mb-3">
-              Safety: leg-1 unwind is pre-signed — if the hedge fails, it closes automatically.
-            </p>
-          )}
-
           {/* Mismatch readout */}
-          {state.mismatch != null && state.phase !== 'failed' && state.phase !== 'aborted' && (
+          {state.mismatch != null && phase !== 'failed' && phase !== 'aborted' && (
             <p className="text-[11px] text-muted-foreground text-center mb-3">
               Hedge mismatch: <span className="font-mono text-foreground">{(state.mismatch * 100).toFixed(2)}%</span>
             </p>
@@ -257,10 +244,10 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
             <div className={`rounded border px-4 py-3 ${terminalStyle.border} ${terminalStyle.background}`}>
               <p className={`text-xs font-medium ${terminalStyle.title}`}>{terminalPresentation.title}</p>
               <p className="mt-1 text-[10px] text-muted-foreground">{terminalPresentation.description}</p>
-              {(state.error || state.reason) && (
-                <p className={`mt-2 text-[11px] ${terminalStyle.title} opacity-75`}>{state.error || state.reason}</p>
+              {phase === 'failed' && state.userMessage && (
+                <p className={`mt-2 text-[11px] ${terminalStyle.title} opacity-75`}>{state.userMessage}</p>
               )}
-              {(state.phase === 'degraded' || state.phase === 'aborted') && <UnwindNotice status={state.unwindStatus} />}
+              {(phase === 'degraded' || phase === 'aborted') && <UnwindNotice status={state.unwindStatus} />}
               {state.remainingExposure.length > 0 && (
                 <div className="mt-3 space-y-1.5 rounded border border-orange-500/15 bg-black/10 px-3 py-2">
                   <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Last reported exposure</p>

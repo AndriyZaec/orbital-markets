@@ -34,6 +34,49 @@ const replacementAsterAgent: StoredTradingAgent = {
   privateKey: replacementPrivateKey,
 }
 
+function phoenixAgent(seed: number): StoredTradingAgent {
+  const pair = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(seed))
+  return { version: 2, venue: 'phoenix', ownerAddress: bs58.encode(nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(9)).publicKey), agentAddress: bs58.encode(pair.publicKey), privateKey: bs58.encode(pair.secretKey), authorizedAt: '2026-10-01T12:00:00Z' }
+}
+
+test('Phoenix pending operations survive encrypted reload and authenticate submit phase', async () => {
+  const indexedDB = new IDBFactory()
+  const store = createTradingAgentStore(indexedDB, cryptography)
+  const candidate = phoenixAgent(1)
+  await store.savePending(candidate)
+  const pending = { ...candidate, phoenixOperation: { requestID: 'request-1', action: 'delegate' as const, targetAuthority: candidate.agentAddress, submissionStarted: true } }
+  await store.updatePending(pending)
+  const storedKey = `pending:${storageKey('phoenix', candidate.ownerAddress)}`
+  const envelope = await readVaultValue(indexedDB, 'agents', storedKey) as Record<string, unknown>
+  assert.equal(envelope.keyAlgorithm, 'ed25519')
+  assert.equal(JSON.stringify(envelope).includes(candidate.privateKey), false)
+  const reopened = createTradingAgentStore(indexedDB, cryptography)
+  assert.deepEqual(await reopened.loadPendingForSigning('phoenix', candidate.ownerAddress), pending)
+  await reopened.promotePending(pending)
+  assert.equal(await reopened.loadPendingForSigning('phoenix', candidate.ownerAddress), null)
+  assert.equal((await reopened.restore('phoenix', candidate.ownerAddress))?.phoenixOperation?.submissionStarted, true)
+  const activeKey = storageKey('phoenix', candidate.ownerAddress)
+  const active = await readVaultValue(indexedDB, 'agents', activeKey) as Record<string, unknown>
+  const operation = active.phoenixOperation as Record<string, unknown>
+  operation.submissionStarted = false
+  await writeVaultValue(indexedDB, 'agents', activeKey, active)
+  assert.equal(await reopened.restore('phoenix', candidate.ownerAddress), null)
+})
+
+test('Phoenix pending updates and conditional clears cannot destroy another key generation', async () => {
+  const indexedDB = new IDBFactory()
+  const store = createTradingAgentStore(indexedDB, cryptography)
+  const first = phoenixAgent(1), next = phoenixAgent(2)
+  await store.savePending(first)
+  await assert.rejects(store.updatePending(next), /changed/)
+  await store.clearPending('phoenix', first.ownerAddress, first.agentAddress.toLowerCase())
+  assert.ok(await store.loadPendingForSigning('phoenix', first.ownerAddress))
+  await store.save(first)
+  await store.save(next)
+  await store.clear('phoenix', first.ownerAddress, first.agentAddress)
+  assert.equal((await store.loadForSigning('phoenix', first.ownerAddress))?.agentAddress, next.agentAddress)
+})
+
 test('encrypted agents survive reopening without persisting plaintext keys', async () => {
   const indexedDB = new IDBFactory()
   const store = createTradingAgentStore(indexedDB, cryptography)

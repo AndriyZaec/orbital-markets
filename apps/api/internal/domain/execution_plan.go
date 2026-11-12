@@ -68,7 +68,7 @@ type ExecutionPlan struct {
 }
 
 type ExecutionLiquidity struct {
-	Status                  string    `json:"status"` // bbo, l2, insufficient, unavailable
+	Status                  string    `json:"status"` // bbo, l2, pending (preview only), insufficient, unavailable
 	Impact                  float64   `json:"impact"`
 	RequiresAcknowledgement bool      `json:"requires_acknowledgement"`
 	ObservedAt              time.Time `json:"observed_at"`

@@ -31,6 +31,7 @@ func mergeNormFills(first, second *normFill) *normFill {
 		FilledAmount: total,
 		AvgFillPrice: avgPrice,
 		Fee:          first.Fee + second.Fee,
+		FeeComplete:  first.FeeComplete && second.FeeComplete,
 		OrderID:      second.OrderID,
 		Status:       second.Status,
 		Filled:       total > 0,
@@ -75,7 +76,7 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 	}
 	clientOrderID := fmt.Sprintf("orbital-l2retry-%d", time.Now().UnixNano())
 	retryReq, err := s.buildOpenSigningRequest(
-		session.Leg2, remaining, clientOrderID,
+		ctx, session.Leg2, remaining, clientOrderID,
 		session.venueBindings(),
 	)
 	if err != nil {
@@ -89,7 +90,9 @@ func (s *Server) prepareLeg2Retry(w http.ResponseWriter, ctx context.Context, se
 			fmt.Sprintf("%s; normalized residual retry value $%.2f is below %s minimum $%.2f", reason, retryReq.Amount*retryReq.Price, venueDisplayName(retryReq.Venue), minimumRetryNotional))
 		return
 	}
-	retryReq.ExpiresAt = time.Now().Add(leg2RetrySigningWindow)
+	if deadline := time.Now().Add(leg2RetrySigningWindow); deadline.Before(retryReq.ExpiresAt) {
+		retryReq.ExpiresAt = deadline
+	}
 	session.Leg2RetryReqID = retryReq.ID
 	session.Leg2RetryReq = retryReq
 	session.State = sessAwaitingLeg2RetrySign
@@ -163,6 +166,7 @@ func (s *Server) advanceLeg2Retry(
 		return
 	}
 	if !sub.Accepted {
+		s.recordHedgeRejection(ctx, session, retryReq, 2, sub)
 		s.recoverInvalidHedge(w, ctx, session, "leg-2 retry rejected")
 		return
 	}
@@ -245,9 +249,9 @@ func (s *Server) recoverInvalidHedge(w http.ResponseWriter, ctx context.Context,
 
 	state := executor.ExecStateDegraded
 	session.State = sessDegraded
-	if session.Leg1Fill == nil && session.Leg2Fill == nil {
+	if fillAmount(session.Leg1Fill) == 0 && fillAmount(session.Leg2Fill) == 0 && unwind.Confirmed() {
 		state = executor.ExecStateFailed
-		session.State = sessFailed
+		session.State = sessAborted
 	}
 	fullReason := reason + unwindReasonSuffix(unwind)
 	positionID := s.persistSession(ctx, session, state, fullReason)

@@ -1,17 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
+import { renderWithQueryClient as render } from './render-with-query-client'
 import userEvent from '@testing-library/user-event'
 import { Portfolio } from '../src/components/Portfolio'
+import { LivePositions } from '../src/components/LivePositions'
 import type { LivePosition } from '../src/hooks/useLivePositions'
 import type { LiveActivityItem } from '../src/hooks/useLiveActivity'
 
 const mocks = vi.hoisted(() => ({
   positions: [] as LivePosition[],
   activityItems: [] as LiveActivityItem[],
+  stale: false, positionsError: null as string | null, positionsLoading: false,
 }))
 
 vi.mock('@/hooks/useLivePositions', () => ({
-  useLivePositions: () => ({ positions: mocks.positions, loading: false, error: null, refetch: vi.fn() }),
+  useLivePositions: () => ({ positions: mocks.positions, loading: mocks.positionsLoading, error: mocks.positionsError, refetch: vi.fn() }),
 }))
 
 vi.mock('@/hooks/useLiveActivity', () => ({
@@ -35,20 +38,24 @@ vi.mock('@/hooks/useVenueReadiness', () => ({
     const venue = (name: string) => ({
       venue: name,
       label: name,
-      status: 'ready',
+      status: mocks.stale ? 'account_stale' : 'ready',
+      walletConnected: true, balanceReady: !mocks.stale,
       address: `${name}-account`,
       shortAddress: '0x1234',
-      equity: 100,
-      available: 80,
+      equity: mocks.stale ? null : 100,
+      available: mocks.stale ? null : 80,
+      balanceObservation: { equity: 100, available: 80, observed_at: '2026-11-10T12:00:00Z' },
     })
     return {
       pacifica: venue('pacifica'),
       hyperliquid: venue('hyperliquid'),
       aster: venue('aster'),
+      phoenix: venue('phoenix'),
       aggregate: { tradingReady: true },
     }
   },
 }))
+vi.mock('@/hooks/useKillSwitch', () => ({ useKillSwitch: () => ({ state: { phase: 'idle', errors: [], positions: [] }, reset: vi.fn(), execute: vi.fn() }) }))
 
 const position = (id: string, state: string, asset: string): LivePosition => ({
   id,
@@ -87,9 +94,34 @@ afterEach(() => {
   cleanup()
   mocks.positions = []
   mocks.activityItems = []
+  mocks.stale = false
+  mocks.positionsError = null
+  mocks.positionsLoading = false
 })
 
 describe('Portfolio activity sharing', () => {
+  it('retains and dims portfolio balances without technical status labels while readiness refreshes', () => {
+    const view = render(<Portfolio onConnectWallets={vi.fn()} onViewPositions={vi.fn()} />)
+    expect(screen.getByText('$400.00')).toBeTruthy()
+    mocks.stale = true
+    view.rerender(<Portfolio onConnectWallets={vi.fn()} onViewPositions={vi.fn()} />)
+    expect(screen.getByText('$400.00')).toBeTruthy()
+    expect(screen.queryByText(/Last known|Includes last known|Unavailable/)).toBeNull()
+    expect(screen.getByText('$400.00').className).toContain('text-muted-foreground')
+    expect(screen.getAllByText('$100.00')).toHaveLength(4)
+  })
+
+  it('keeps cached positions visible while another pair loads or fails', () => {
+    mocks.positions = [position('cached-position', 'open', 'BTC')]
+    const view = render(<LivePositions />)
+    expect(screen.getByText('BTC')).toBeTruthy()
+    mocks.positionsLoading = true
+    mocks.positionsError = 'another venue timed out'
+    view.rerender(<LivePositions />)
+    expect(screen.getByText('BTC')).toBeTruthy()
+    expect(screen.getByText(/Showing last known positions/)).toBeTruthy()
+    expect(screen.queryByText('Loading...')).toBeNull()
+  })
   it('shares active and closed positions without changing the action-column geometry', async () => {
     const active = position('active-position', 'open', 'SOL')
     const closed = { ...position('closed-position', 'closed', 'BTC'), completed_at: '2026-09-30T13:00:00Z' }
@@ -127,6 +159,20 @@ describe('Portfolio activity sharing', () => {
 })
 
 describe('Portfolio position navigation', () => {
+  it('uses normal unavailable PnL values without venue-specific funding copy', async () => {
+    mocks.positions = [{
+      ...position('phoenix-position', 'open', 'SOL'), venue_a: 'phoenix',
+      funding_pnl_source: 'realized',
+      phoenix_pending_funding: { amount_usd: null, unavailable_reason: 'Phoenix account snapshot unavailable' },
+    }]
+    render(<Portfolio onConnectWallets={() => {}} onViewPositions={() => {}} />)
+    expect(within(screen.getByText('Unrealized P&L').parentElement!).getByText('--')).toBeTruthy()
+    expect(screen.queryByText(/Phoenix pending funding|Partial/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Hide portfolio amounts' }))
+    expect(within(screen.getByText('uPnL Annualized Return').parentElement!).getByText('--')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Share annualized return' })).toBeNull()
+  })
+
   it('shows at most five active positions including pending and selects the clicked position', async () => {
     const pending = position('pending-position', 'pending', 'PEND')
     mocks.positions = [

@@ -177,7 +177,16 @@ export function normalizeHyperliquidAddress(address: string | null): string | nu
   return address ? address.trim().toLowerCase() : null
 }
 
-export function executionPhaseFromStatus(status: AdvanceStatus) {
+export function executionPhaseFromStatus(status: AdvanceStatus, evidence?: {
+  unwindStatus: string | null; exposureCount: number; hasRecordedFill: boolean
+}) {
+  // A generic failed status cannot erase a known fill. Explicit remaining
+  // exposure wins over unwind confirmation; only confirmed flat recovery retries.
+  if (status === 'failed' && evidence) {
+    if (evidence.exposureCount > 0) return 'degraded' as const
+    if (evidence.unwindStatus === 'confirmed') return 'aborted' as const
+    if (evidence.hasRecordedFill || (evidence.unwindStatus && evidence.unwindStatus !== 'not_armed')) return 'degraded' as const
+  }
   switch (status) {
     case 'awaiting_leg2_sign': return 'awaiting_leg2' as const
     case 'awaiting_leg2_retry_sign': return 'awaiting_leg2_retry' as const

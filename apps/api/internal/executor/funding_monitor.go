@@ -145,7 +145,13 @@ func (m *FundingMonitor) finalizeClosed(ctx context.Context) {
 		position := &positions[i]
 		completedAt, completedErr := time.Parse(time.RFC3339, position.CompletedAt)
 		openedAt, openedErr := time.Parse(time.RFC3339, position.OpenedAt)
-		if completedErr != nil || openedErr != nil || time.Since(completedAt) < fundingFinalizationDelay {
+		delay := fundingFinalizationDelay
+		for _, name := range []string{position.VenueA, position.VenueB} {
+			if policy, ok := m.sources[name].(venue.FundingFinalizationPolicy); ok {
+				delay = max(delay, policy.FundingFinalizationDelay())
+			}
+		}
+		if completedErr != nil || openedErr != nil || time.Since(completedAt) < delay {
 			continue
 		}
 		lastAttempt := m.finalizationAttemptedAt[position.ID]

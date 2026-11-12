@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, screen, within } from '@testing-library/react'
+import { renderWithQueryClient as render } from './render-with-query-client'
 import userEvent from '@testing-library/user-event'
 import { PositionFundingDetail } from '../src/components/PositionFundingDetail'
 import { LivePositionPanel } from '../src/components/LivePositionDetail'
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hooks/useLivePositions', () => ({
-  useLivePositions: () => ({ positions: [position, closedPosition], loading: false, error: null, refetch: mocks.positionsRefetch }),
+  useLivePositions: () => ({ positions: [mocks.positionOverride ?? position, closedPosition], loading: false, error: null, refetch: mocks.positionsRefetch }),
 }))
 
 vi.mock('@/hooks/useVenueReadiness', () => ({
@@ -141,6 +142,94 @@ afterEach(() => {
 })
 
 describe('position-backed funding chart', () => {
+  it.each([
+    ['degraded', 'Recovery required'],
+    ['failed', 'Execution failed'],
+    ['open', 'Hedge opened'],
+    ['closed', 'Position closed'],
+    ['unknown', 'Execution update'],
+  ])('presents a terminal %s event as its outcome without raw recovery diagnostics', (state, label) => {
+    mocks.chartContext = availableContext
+    mocks.events = [{ id: 1, position_id: position.id, event: 'complete', state,
+      detail: 'leg 1 fill wait failed: context deadline exceeded; internal-request-id',
+      at: '2026-09-22T12:00:00Z' }]
+    render(<LivePositionPanel position={position} onClose={() => {}} />)
+    expect(screen.getByText(label)).toBeTruthy()
+    expect(screen.queryByText('Complete')).toBeNull()
+    expect(screen.queryByText(/context deadline exceeded/)).toBeNull()
+  })
+
+  it.each([
+    [2, 6, 16],
+    [-6, -2, 8],
+    [0, 4, 14],
+  ])('includes accrued funding %s in the common PnL and preserves totals through settlement', (accrued, funding, total) => {
+    mocks.chartContext = availableContext
+    const phoenixPosition: LivePosition = {
+      ...position, venue_a: 'phoenix', funding_pnl_source: 'realized', price_pnl: 10, funding_pnl: 4, total_pnl: total,
+      phoenix_pending_funding: { amount_usd: accrued, as_of: '2026-11-08T12:00:00Z' },
+    }
+    mocks.positionOverride = phoenixPosition
+    const tree = () => <><LivePositionPanel position={phoenixPosition} onClose={() => {}} /><LivePositions /></>
+    const { rerender } = render(tree())
+    const fundingText = `${funding < 0 ? '-' : '+'}$${Math.abs(funding).toFixed(2)}`
+    const totalText = `+$${total.toFixed(2)}`
+    const check = () => {
+      expect(within(screen.getByText('Funding PnL').parentElement!).getByText(fundingText)).toBeTruthy()
+      expect(within(screen.getAllByText('Total PnL')[0].parentElement!).getByText(totalText)).toBeTruthy()
+      const row = within(screen.getByRole('table')).getByText('2Z').closest('tr')!
+      const cells = within(row).getAllByRole('cell')
+      expect(cells[5].textContent).toBe(fundingText)
+      expect(cells[7].textContent).toBe(totalText)
+      expect(screen.queryByText(/PHX pending|Phoenix Pending Funding|Realized Funding|Estimated Funding/)).toBeNull()
+    }
+    check()
+
+    mocks.positionOverride = { ...phoenixPosition, funding_pnl: funding, phoenix_pending_funding: { amount_usd: 0 } }
+    rerender(tree())
+    check()
+  })
+
+  it.each(['pacifica', 'hyperliquid', 'aster', 'phoenix'] as const)('uses the same PnL fields for %s including zero values', (venue) => {
+    mocks.chartContext = availableContext
+    mocks.positionOverride = {
+      ...position, venue_a: venue, venue_b: venue === 'pacifica' ? 'hyperliquid' : 'pacifica',
+      ...(venue === 'phoenix' ? { phoenix_pending_funding: { amount_usd: 0 } } : {}),
+    }
+    render(<LivePositionPanel position={mocks.positionOverride} onClose={() => {}} />)
+    for (const label of ['Price PnL', 'Funding PnL', 'Total PnL']) {
+      expect(within(screen.getByText(label).parentElement!).getByText('+$0.00')).toBeTruthy()
+    }
+    expect(screen.queryByText(/PHX pending|Phoenix Pending Funding|Realized Funding|Estimated Funding/)).toBeNull()
+  })
+
+  it('uses common unavailable values without venue diagnostics when funding cannot be calculated', () => {
+    mocks.chartContext = availableContext
+    mocks.positionOverride = {
+      ...position, venue_a: 'phoenix', funding_pnl_source: 'realized', funding_pnl: 4, total_pnl: 4,
+      phoenix_pending_funding: { amount_usd: null, unavailable_reason: 'Phoenix account exposure does not match the strategy leg' },
+    }
+    render(<><LivePositionPanel position={mocks.positionOverride} onClose={() => {}} /><LivePositions /></>)
+    expect(within(screen.getByText('Funding PnL').parentElement!).getByText('—')).toBeTruthy()
+    expect(within(screen.getAllByText('Total PnL')[0].parentElement!).getByText('—')).toBeTruthy()
+    const row = within(screen.getByRole('table')).getByText('2Z').closest('tr')!
+    const cells = within(row).getAllByRole('cell')
+    expect(cells[5].textContent).toBe('—')
+    expect(cells[7].textContent).toBe('—')
+    expect(screen.queryByText(/Phoenix account exposure|PHX pending|Phoenix Pending Funding|Partial/)).toBeNull()
+  })
+
+  it('uses estimated funding normally without adding another venue accrual', () => {
+    mocks.chartContext = availableContext
+    mocks.positionOverride = {
+      ...position, venue_a: 'phoenix', funding_pnl_source: 'estimated', price_pnl: 10, funding_pnl: 4, total_pnl: 14,
+      phoenix_pending_funding: { amount_usd: null },
+    }
+    render(<LivePositionPanel position={mocks.positionOverride} onClose={() => {}} />)
+    expect(within(screen.getByText('Funding PnL').parentElement!).getByText('+$4.00')).toBeTruthy()
+    expect(within(screen.getByText('Total PnL').parentElement!).getByText('+$14.00')).toBeTruthy()
+  })
+
   it('keeps graph endpoint and panel Price PnL identical as the live snapshot updates', async () => {
     mocks.positionOverride = { ...position, price_pnl: 7.5 }
     mocks.chartContext = { ...availableContext, price_pnl: {

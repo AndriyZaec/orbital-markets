@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { assetIconUrls } from '@/lib/asset-icons'
+import { useQuery } from '@tanstack/react-query'
+import { assetIconUrls, fetchPhoenixAssetIcons } from '@/lib/asset-icons'
 
 const DARK_ICON_STYLES: Record<string, string> = {
   MEGA: 'brightness-0 invert',
@@ -24,11 +25,21 @@ const SIZES = {
 
 export function AssetIcon({ asset, size = 'md' }: { asset: string; size?: keyof typeof SIZES }) {
   const [failedSource, setFailedSource] = useState<{ asset: string; index: number } | null>(null)
-  const iconURLs = assetIconUrls(asset)
   const sourceIndex = failedSource?.asset === asset ? failedSource.index : 0
+  const existingURLs = assetIconUrls(asset)
+  const { data: phoenixIcons } = useQuery({
+    queryKey: ['phoenix-asset-icons'],
+    queryFn: fetchPhoenixAssetIcons,
+    enabled: sourceIndex >= existingURLs.length,
+    staleTime: 5 * 60_000,
+    gcTime: 60 * 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+  const iconURLs = assetIconUrls(asset, phoenixIcons?.[asset.toUpperCase()])
   const iconURL = iconURLs[sourceIndex]
   const styles = SIZES[size]
-  const iconStyle = DARK_ICON_STYLES[asset.toUpperCase()] ?? ''
+  const iconStyle = sourceIndex === 0 ? DARK_ICON_STYLES[asset.toUpperCase()] ?? '' : ''
 
   return (
     <span className={`flex shrink-0 items-center justify-center ${styles.slot}`}>

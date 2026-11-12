@@ -2,12 +2,14 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
@@ -147,27 +149,144 @@ func TestBBOCoveredPlansAndExecutionNeverReadL2(t *testing.T) {
 
 func TestBBOFreshnessUsesBookComponentAndFailsClosed(t *testing.T) {
 	s, a, _, source := bboFirstScanner(t)
+	source.err = liquidity.ErrUnavailable
 	for _, health := range []venue.ComponentHealth{
 		{Status: venue.HealthAvailable, SourceTime: time.Now().Add(-45 * time.Second)},
-		{Status: venue.HealthUnavailable, ReceivedAt: time.Now()},
 		{Status: venue.HealthAvailable},
 	} {
 		a.data[0].Health.Book = health
+		calls := source.calls
 		plan, err := s.BuildPlan(context.Background(), s.Opportunities()[0].ID, 2, 90)
-		if err != nil || plan.Executable || plan.Liquidity.Status != "unavailable" {
-			t.Fatalf("stale BBO admitted: %+v, %v", plan, err)
+		if err != nil || !plan.Executable || plan.Liquidity.Status != "pending" {
+			t.Fatalf("stale BBO preview should defer verification: %+v, %v", plan, err)
+		}
+		if math.Abs(plan.Leg1.LimitPrice-100.5) > 1e-12 || math.Abs(plan.Leg2.LimitPrice-99.5) > 1e-12 {
+			t.Fatal("pending preview lost approved price bounds")
+		}
+		if source.calls != calls {
+			t.Fatal("ordinary BBO-sized previews started L2 polling")
 		}
 		if err := s.ValidateExecutionLiquidity(context.Background(), plan, plan.BaseAmount); err == nil {
-			t.Fatal("stale BBO admitted before submission")
+			t.Fatal("unavailable L2 admitted stale BBO before submission")
+		}
+		if source.calls != calls+1 || !source.fresh {
+			t.Fatal("execution did not try exactly one fresh L2 quote")
 		}
 	}
-	if source.calls != 0 {
-		t.Fatal("ordinary BBO-sized previews started L2 polling")
-	}
+	calls := source.calls
 	a.data[0].Health.Book = venue.ComponentHealth{Status: venue.HealthAvailable, ReceivedAt: time.Now()}
 	plan, err := s.BuildPlan(context.Background(), s.Opportunities()[0].ID, 2, 90)
-	if err != nil || !plan.Executable {
+	if err != nil || !plan.Executable || plan.Liquidity.Status != "bbo" || source.calls != calls {
 		t.Fatalf("received-time book fallback failed: %v", err)
+	}
+}
+
+func TestUnavailableBookCannotBecomePendingOrUseL2(t *testing.T) {
+	s, _, b, source := bboFirstScanner(t)
+	id := s.Opportunities()[0].ID
+	for _, reason := range []string{venue.HealthReasonDisconnected, venue.HealthReasonNotObserved, venue.HealthReasonInvalidValue} {
+		for _, notional := range []float64{90, 500} {
+			b.data[0].Timestamp = time.Now() // REST remains fresh throughout the outage.
+			b.data[0].Health.Book = venue.ComponentHealth{Status: venue.HealthUnavailable, Reason: reason, SourceTime: time.Now()}
+			plan, err := s.BuildPlan(context.Background(), id, 2, notional)
+			if err != nil || plan.Executable || plan.Liquidity.Status != "unavailable" {
+				t.Fatalf("unavailable book admitted: reason=%s size=%g plan=%+v err=%v", reason, notional, plan, err)
+			}
+			if err := s.ValidateExecutionLiquidity(context.Background(), plan, plan.BaseAmount); err == nil || errors.Is(err, ErrFreshBBOUnavailable) {
+				t.Fatalf("unavailable book should fail immediately, not wait as pending: %v", err)
+			}
+			if source.calls != 0 {
+				t.Fatal("unavailable book triggered L2")
+			}
+		}
+	}
+	b.data[0].Health.Book = venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: time.Now()}
+	plan, err := s.BuildPlan(context.Background(), id, 2, 90)
+	if err != nil || !plan.Executable || plan.Liquidity.Status != "bbo" || source.calls != 0 {
+		t.Fatalf("fresh BBO did not restore preview: %+v err=%v", plan, err)
+	}
+}
+
+func TestFreshBookTimeUsesAggregateOnlyWithoutHealth(t *testing.T) {
+	now := time.Now()
+	stale := now.Add(-6 * time.Second)
+	for _, tc := range []struct {
+		name      string
+		aggregate time.Time
+		health    *venue.MarketHealth
+		wantFresh bool
+	}{
+		{"fresh_aggregate_stale_book", now, &venue.MarketHealth{Book: venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: stale, ReceivedAt: now}}, false},
+		{"stale_aggregate_fresh_book", stale, &venue.MarketHealth{Book: venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now}}, true},
+		{"missing_book_time", now, &venue.MarketHealth{Book: venue.ComponentHealth{Status: venue.HealthAvailable}}, false},
+		{"legacy_fresh_timestamp", now, nil, true},
+		{"legacy_stale_timestamp", stale, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, fresh := freshBookTime(venue.MarketData{Timestamp: tc.aggregate, Health: tc.health}, now)
+			if fresh != tc.wantFresh {
+				t.Fatalf("book fresh=%t, want %t", fresh, tc.wantFresh)
+			}
+		})
+	}
+}
+
+func TestQuietBookStaysInDiscoveryButRequiresFreshExecutionDepth(t *testing.T) {
+	s, _, b, source := bboFirstScanner(t)
+	bookAt := time.Now().Add(-31 * time.Second)
+	b.data[0].Health.Book.SourceTime = bookAt
+	// Aggregate timestamp represents fresh REST, not the last BBO.
+	b.data[0].Timestamp = time.Now()
+	if !isValid(b.data[0], time.Now()) || !isDiscoverable(b.data[0], time.Now()) {
+		t.Fatal("fresh market components with a quiet book were rejected")
+	}
+	s.scan(context.Background())
+	opps := s.Opportunities()
+	if len(opps) != 1 || opps[0].Status != domain.OpportunityAvailable {
+		t.Fatalf("quiet market disappeared: %+v", opps)
+	}
+	plan, err := s.BuildPlan(context.Background(), opps[0].ID, 2, 90)
+	if err != nil || !plan.Executable || plan.Liquidity.Status != "pending" || source.calls != 0 {
+		t.Fatalf("pending preview: %+v, %v, reads=%d", plan, err, source.calls)
+	}
+	if _, fresh := freshBookTime(b.data[0], time.Now()); fresh {
+		t.Fatal("aggregate refresh made old BBO executable")
+	}
+	if err := s.ValidateExecutionLiquidity(context.Background(), plan, plan.BaseAmount); err != nil {
+		t.Fatalf("fresh L2 did not resolve quiet BBO: %v", err)
+	}
+	if source.calls != 1 || !source.fresh || b.data[0].Health.Book.SourceTime != bookAt {
+		t.Fatal("L2 fallback polled or rewrote BBO freshness")
+	}
+	if plan.Liquidity.Status != "pending" {
+		t.Fatal("validation mutated the approved preview")
+	}
+}
+
+func TestPendingBBODoesNotOverrideOtherPlanBlockers(t *testing.T) {
+	s, a, _, source := bboFirstScanner(t)
+	a.data[0].Health.Book.SourceTime = time.Now().Add(-6 * time.Second)
+	a.data[0].AskSize = 0
+	plan, err := s.BuildPlan(context.Background(), s.Opportunities()[0].ID, 2, 90)
+	if err != nil || plan.Executable || source.calls != 0 {
+		t.Fatalf("missing depth became executable: %+v, %v", plan, err)
+	}
+}
+
+func TestPendingBBOWithoutL2FailsClosedUntilFresh(t *testing.T) {
+	s, a, _, _ := bboFirstScanner(t)
+	s.EnableExecutionLiquidity(nil)
+	a.data[0].Health.Book.SourceTime = time.Now().Add(-6 * time.Second)
+	plan, err := s.BuildPlan(context.Background(), s.Opportunities()[0].ID, 2, 90)
+	if err != nil || !plan.Executable || plan.Liquidity.Status != "pending" {
+		t.Fatalf("pending preview: %+v, %v", plan, err)
+	}
+	if err := s.EvaluateExecutionLiquidity(context.Background(), plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, true); !errors.Is(err, ErrFreshBBOUnavailable) {
+		t.Fatalf("missing L2 must still require fresh BBO: %v", err)
+	}
+	a.data[0].Health.Book.SourceTime = time.Now()
+	if err := s.EvaluateExecutionLiquidity(context.Background(), plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, true); err != nil || plan.Liquidity.Status != "bbo" {
+		t.Fatalf("fresh BBO did not clear pending state: %v", err)
 	}
 }
 

@@ -59,6 +59,7 @@ type durableLiveSession struct {
 	Leg2Fill                   *normFill                         `json:"leg_2_fill,omitempty"`
 	Leg2Attempts               int                               `json:"leg_2_attempts"`
 	Recovery                   []executor.RecoveryAction         `json:"recovery,omitempty"`
+	SubmissionRejections       []submissionRejection             `json:"submission_rejections,omitempty"`
 	BaselineLeg1Size           float64                           `json:"baseline_leg_1_size"`
 	BaselineLeg2Size           float64                           `json:"baseline_leg_2_size"`
 	CreatedAt                  string                            `json:"created_at"`
@@ -96,9 +97,10 @@ func marshalLiveSession(session *LiveSession) ([]byte, error) {
 		ArmedUnwindSigned: session.ArmedUnwindSigned, ArmedUnwindReq: session.ArmedUnwindReq,
 		Leg1Fill: session.Leg1Fill, Leg2Fill: session.Leg2Fill,
 		Leg2Attempts: session.Leg2Attempts, Recovery: session.Recovery,
-		BaselineLeg1Size: session.BaselineLeg1Size,
-		BaselineLeg2Size: session.BaselineLeg2Size,
-		CreatedAt:        session.CreatedAt.UTC().Format(timeFormat), UpdatedAt: session.UpdatedAt.UTC().Format(timeFormat),
+		SubmissionRejections: session.SubmissionRejections,
+		BaselineLeg1Size:     session.BaselineLeg1Size,
+		BaselineLeg2Size:     session.BaselineLeg2Size,
+		CreatedAt:            session.CreatedAt.UTC().Format(timeFormat), UpdatedAt: session.UpdatedAt.UTC().Format(timeFormat),
 	}
 	return json.Marshal(durable)
 }
@@ -160,9 +162,10 @@ func unmarshalLiveSession(payload []byte) (*LiveSession, error) {
 		ArmedUnwindSigned: durable.ArmedUnwindSigned, ArmedUnwindReq: durable.ArmedUnwindReq,
 		Leg1Fill: durable.Leg1Fill, Leg2Fill: durable.Leg2Fill,
 		Leg2Attempts: durable.Leg2Attempts, Recovery: durable.Recovery,
-		BaselineLeg1Size: durable.BaselineLeg1Size,
-		BaselineLeg2Size: durable.BaselineLeg2Size,
-		CreatedAt:        createdAt, UpdatedAt: updatedAt,
+		SubmissionRejections: durable.SubmissionRejections,
+		BaselineLeg1Size:     durable.BaselineLeg1Size,
+		BaselineLeg2Size:     durable.BaselineLeg2Size,
+		CreatedAt:            createdAt, UpdatedAt: updatedAt,
 	}
 	backfillSigningRequestAccounts(session)
 	return session, nil
@@ -281,7 +284,7 @@ func requireCurrentLiveVenuePair(venues []string) error {
 }
 
 func supportedLiveVenue(venue string) bool {
-	return venue == "pacifica" || venue == "hyperliquid" || venue == "aster"
+	return domain.IsSupportedLiveVenue(venue)
 }
 
 func (s *Server) saveLiveSession(ctx context.Context, session *LiveSession) error {

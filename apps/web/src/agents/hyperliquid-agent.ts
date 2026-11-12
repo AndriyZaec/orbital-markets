@@ -403,7 +403,17 @@ function validateOrderAction(
   const orderType = order?.t as Record<string, unknown> | undefined
   const limit = orderType?.limit as Record<string, unknown> | undefined
   const expectedBuy = request.side === 'buy'
-  const explicitLimit = request.action === 'open' && request.limit_price !== undefined
+  const closeAction = request.action === 'close' || request.action === 'emergency_close'
+  const explicitLimit = (request.action === 'open' || closeAction) && request.limit_price !== undefined
+  const closeLimit = request.limit_price ?? 0
+  const closeEpsilon = Math.max(request.price, closeLimit) * Number.EPSILON * 8
+  const closeLimitAllowed = !closeAction || !explicitLimit || (
+    Number.isFinite(request.price) && request.price > 0 &&
+    Number.isFinite(closeLimit) && closeLimit > 0 &&
+    (expectedBuy
+      ? closeLimit >= request.price - closeEpsilon && closeLimit <= request.price * 1.005 + closeEpsilon
+      : closeLimit <= request.price + closeEpsilon && closeLimit >= request.price * 0.995 - closeEpsilon)
+  )
   const expectedPrices = new Set(
     explicitLimit
       ? [request.limit_price]
@@ -425,6 +435,7 @@ function validateOrderAction(
     order.b === expectedBuy &&
     typeof order.p === 'string' &&
     Number.isFinite(Number(order.p)) && Number(order.p) > 0 &&
+    closeLimitAllowed &&
     expectedPrices.has(Number(order.p)) &&
     Number.isFinite(amount) &&
     Math.abs(amount - request.amount) < 1e-12 &&

@@ -4,9 +4,10 @@ export interface SigningRequest {
   client_order_id: string
   position_id?: string
   leg?: number
-  venue: 'pacifica' | 'hyperliquid' | 'aster'
+  venue: 'pacifica' | 'hyperliquid' | 'aster' | 'phoenix'
   action:
     | 'open' | 'close' | 'unwind' | 'emergency_close' | 'update_leverage'
+    | 'delegate' | 'revoke'
   account: string
   signer?: string
   symbol: string

@@ -17,9 +17,15 @@ export class TestTradingAgentStore implements TradingAgentStore {
     this.pendingValues.set(storageKey, structuredClone(agent))
   }
 
+  async updatePending(agent: StoredTradingAgent): Promise<void> {
+    const existing = this.pendingValues.get(key(agent.venue, agent.ownerAddress))
+    if (!existing || existing.agentAddress !== agent.agentAddress) throw new Error('Pending agent changed')
+    this.pendingValues.set(key(agent.venue, agent.ownerAddress), structuredClone(agent))
+  }
+
   async promotePending(agent: StoredTradingAgent): Promise<void> {
     const pending = this.pendingValues.get(key(agent.venue, agent.ownerAddress))
-    if (!pending || pending.agentAddress.toLowerCase() !== agent.agentAddress.toLowerCase()) {
+    if (!pending || (agent.venue === 'phoenix' ? pending.agentAddress !== agent.agentAddress : pending.agentAddress.toLowerCase() !== agent.agentAddress.toLowerCase())) {
       throw new Error('Pending trading agent changed before promotion')
     }
     await this.save(agent)
@@ -42,12 +48,14 @@ export class TestTradingAgentStore implements TradingAgentStore {
 
   async clearPending(venue: Venue, ownerAddress: string, expectedAgentAddress: string): Promise<void> {
     const storageKey = key(venue, ownerAddress)
-    if (this.pendingValues.get(storageKey)?.agentAddress.toLowerCase() === expectedAgentAddress.toLowerCase()) {
+    const current = this.pendingValues.get(storageKey)?.agentAddress
+    if (venue === 'phoenix' ? current === expectedAgentAddress : current?.toLowerCase() === expectedAgentAddress.toLowerCase()) {
       this.pendingValues.delete(storageKey)
     }
   }
 
-  async clear(venue: Venue, ownerAddress: string): Promise<void> {
+  async clear(venue: Venue, ownerAddress: string, expectedAgentAddress?: string): Promise<void> {
+    if (expectedAgentAddress && this.values.get(key(venue, ownerAddress))?.agentAddress !== expectedAgentAddress) return
     this.values.delete(key(venue, ownerAddress))
   }
 }
@@ -61,11 +69,12 @@ function metadata(agent: StoredTradingAgent): Omit<StoredTradingAgent, 'privateK
     authorizedAt: agent.authorizedAt,
     ...(agent.expiresAt ? { expiresAt: agent.expiresAt } : {}),
     ...(agent.builderAddress ? { builderAddress: agent.builderAddress } : {}),
-    ...(agent.builderCode ? { builderCode: agent.builderCode } : {}),
+      ...(agent.builderCode ? { builderCode: agent.builderCode } : {}),
+    ...(agent.phoenixOperation ? { phoenixOperation: agent.phoenixOperation } : {}),
   }
 }
 
 function key(venue: Venue, ownerAddress: string): string {
-  const owner = venue === 'pacifica' ? ownerAddress : ownerAddress.toLowerCase()
+  const owner = venue === 'pacifica' || venue === 'phoenix' ? ownerAddress : ownerAddress.toLowerCase()
   return `${venue}:${owner}`
 }

@@ -20,7 +20,7 @@ export function hasActiveLiveExposure(data: unknown): boolean {
 
 export function hasActiveLiveExposureForWallet(data: unknown, wallet: 'evm' | 'solana'): boolean {
   if (!Array.isArray(data)) return false
-  const venues = wallet === 'solana' ? ['pacifica'] : ['hyperliquid', 'aster']
+  const venues = wallet === 'solana' ? ['pacifica', 'phoenix'] : ['hyperliquid', 'aster']
   return data.some((position) => isActiveLivePosition(position) && venues.some((venue) =>
     position.venue_a === venue || position.venue_b === venue))
 }

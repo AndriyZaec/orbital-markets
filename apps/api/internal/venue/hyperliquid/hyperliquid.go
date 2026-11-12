@@ -228,6 +228,14 @@ func (a *Adapter) FetchMarketData(ctx context.Context) ([]venue.MarketData, erro
 			ts = a.now()
 		}
 		book := componentHealth(s.bookHealth)
+		if !a.streamConnected && a.streamGeneration > 0 {
+			book.Status = venue.HealthUnavailable
+			book.Reason = venue.HealthReasonDisconnected
+		} else if a.streamConnected && book.SourceGeneration != a.streamGeneration {
+			// Reconnecting alone cannot revalidate the previous connection's BBO.
+			book.Status = venue.HealthUnavailable
+			book.Reason = venue.HealthReasonNotObserved
+		}
 		restSource := venue.SourceHealth{Status: venue.HealthUnavailable, Reason: venue.HealthReasonNotObserved}
 		if !a.restReceivedAt.IsZero() || a.restReason != "" {
 			restSource = venue.SourceHealth{
@@ -398,6 +406,9 @@ func (a *Adapter) pollREST(ctx context.Context) {
 		state.indexPrice, state.indexHealth = parseRESTComponent(c.OraclePx, a.restReceivedAt, a.restGeneration)
 		state.fundingRate, state.fundingHealth = parseRESTComponent(c.Funding, a.restReceivedAt, a.restGeneration)
 		state.openInterest, state.openInterestHealth = parseRESTComponent(c.OpenInterest, a.restReceivedAt, a.restGeneration)
+		// Aggregate market freshness includes REST observations; book freshness
+		// remains bound to the separate BBO component timestamps.
+		state.timestamp = a.restReceivedAt
 		if meta.Universe[i].MaxLeverage > 0 {
 			state.maxLeverage = meta.Universe[i].MaxLeverage
 		}

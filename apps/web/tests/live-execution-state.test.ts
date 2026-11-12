@@ -21,6 +21,13 @@ test('maps recovery statuses to explicit UI phases', () => {
   assert.equal(executionPhaseFromStatus('degraded'), 'degraded')
 })
 
+test('failed status cannot erase fill or exposure evidence', () => {
+  assert.equal(executionPhaseFromStatus('failed', { unwindStatus: 'confirmed', exposureCount: 0, hasRecordedFill: true }), 'aborted')
+  assert.equal(executionPhaseFromStatus('failed', { unwindStatus: null, exposureCount: 0, hasRecordedFill: true }), 'degraded')
+  assert.equal(executionPhaseFromStatus('failed', { unwindStatus: 'confirmed', exposureCount: 1, hasRecordedFill: true }), 'degraded')
+  assert.equal(executionPhaseFromStatus('failed', { unwindStatus: null, exposureCount: 0, hasRecordedFill: false }), 'failed')
+})
+
 test('routes failures after submission to recovery', () => {
   assert.equal(executionFailurePhase(false), 'failed')
   assert.equal(executionFailurePhase(true), 'recovering')

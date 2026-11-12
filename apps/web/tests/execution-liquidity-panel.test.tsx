@@ -1,21 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { renderWithQueryClient as render } from './render-with-query-client'
 import { OpportunityPanel } from '../src/components/OpportunityPanel'
 import type { Opportunity } from '../src/hooks/useOpportunities'
 import type { ExecutionPlan } from '../src/hooks/usePlan'
 
-const mocks = vi.hoisted(() => ({ execute: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined), executable: true, impact: 0.003, planReady: true }))
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), refresh: vi.fn().mockResolvedValue(undefined), executable: true, impact: 0.003, planReady: true, marketDataPending: false, accountsUpdating: false, pendingBook: false }))
 vi.mock('@/hooks/useLiveExecution', () => ({ useLiveExecution: () => ({ state: { phase: 'idle' }, executeLive: mocks.execute, reset: vi.fn() }) }))
 vi.mock('@/components/LiveExecutionModal', () => ({ LiveExecutionModal: () => null }))
 vi.mock('@/lib/analytics', () => ({ trackAnalytics: vi.fn() }))
 vi.mock('@/hooks/useVenueReadiness', () => ({ useVenueReadiness: () => ({
-  pacifica: { venue: 'pacifica', address: 'pac-owner', status: 'ready', available: 100000 },
+  pacifica: { venue: 'pacifica', address: 'pac-owner', status: mocks.accountsUpdating ? 'account_stale' : 'ready', available: mocks.accountsUpdating ? null : 100000,
+    walletConnected: true, signerReady: true, agentReady: true, balanceReady: !mocks.accountsUpdating },
   hyperliquid: { venue: 'hyperliquid', address: 'hl-owner', status: 'ready', available: 100000 },
   aster: { venue: 'aster', address: null, status: 'disconnected', available: null },
   refreshBalances: mocks.refresh,
 }) }))
 vi.mock('@/hooks/usePlan', () => ({ usePlan: (_id: string, leverage: number, notional: number) => ({
-  plan: mocks.planReady ? makePlan(leverage, notional) : null, loading: !mocks.planReady, error: null, maxLeverage: null, leverageCapabilityBlocked: false, refresh: mocks.refresh,
+  plan: mocks.planReady ? makePlan(leverage, notional) : null, loading: !mocks.planReady, error: null, marketDataPending: mocks.marketDataPending, maxLeverage: null, leverageCapabilityBlocked: false, refresh: mocks.refresh,
 }) }))
 
 function makePlan(leverage = 2, notional = 500): ExecutionPlan {
@@ -27,7 +29,7 @@ function makePlan(leverage = 2, notional = 500): ExecutionPlan {
     leg_2: { ...leg, venue: 'hyperliquid', side: 'short', limit_price: 98 },
     leverage: { leverage, margin_required: notional, gross_exposure: 2 * notional, effective_leverage: leverage },
     expected_spread: 0, estimated_net_edge: 0.1, bounds: { max_slippage_pct: 0.005, max_entry_spread_pct: 0.01, min_net_edge_pct: 0.01 },
-    liquidity: { status: mocks.executable ? 'l2' : 'insufficient', impact: mocks.impact, requires_acknowledgement: mocks.impact > 0.002, observed_at: new Date().toISOString() },
+    liquidity: { status: mocks.pendingBook ? 'pending' : mocks.executable ? 'l2' : 'insufficient', impact: mocks.impact, requires_acknowledgement: mocks.impact > 0.002, observed_at: new Date(Date.now() - (mocks.pendingBook ? 31_000 : 0)).toISOString() },
     risk_tier: 'standard', confidence: 'high', executable: mocks.executable,
     warnings: mocks.executable ? [] : ['Insufficient visible order-book depth'], created_at: '', expires_at: '',
   }
@@ -42,9 +44,120 @@ const opportunity: Opportunity = { id: 'opp', asset: 'BTC', detected_at: '', ven
   signal_7d: null, signal_7d_state: 'unavailable', signal_7d_version: 0,
 }
 const props = { opportunity, lastUpdated: null, mode: 'live' as const, notionalInput: '500', onNotionalInputChange: vi.fn(), onClose: vi.fn(), onExecute: vi.fn() }
-afterEach(() => { cleanup(); mocks.execute.mockClear(); mocks.executable = true; mocks.impact = 0.003; mocks.planReady = true })
+afterEach(() => { cleanup(); vi.useRealTimers(); mocks.execute.mockClear(); mocks.executable = true; mocks.impact = 0.003; mocks.planReady = true; mocks.marketDataPending = false; mocks.accountsUpdating = false; mocks.pendingBook = false })
 
 describe('automatic execution depth and acknowledgement', () => {
+  it('allows explicit prepare for a pending book while retaining preview price approvals and account gates', () => {
+    mocks.pendingBook = true
+    mocks.impact = 0
+    mocks.accountsUpdating = true
+    const view = render(<OpportunityPanel {...props} />)
+    expect((screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement).disabled).toBe(true)
+    mocks.accountsUpdating = false
+    view.rerender(<OpportunityPanel {...props} />)
+    const execute = screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement
+    expect(execute.disabled).toBe(false)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(mocks.execute).not.toHaveBeenCalled()
+    fireEvent.click(execute)
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+    expect(mocks.execute.mock.calls[0][0]).toMatchObject({
+      approvedBaseAmount: 5,
+      legs: [{ venue: 'pacifica', limitPrice: 102 }, { venue: 'hyperliquid', limitPrice: 98 }],
+    })
+  })
+
+  it('does not rebind the old plan estimate to a new size during debounce', async () => {
+    vi.useFakeTimers()
+    mocks.impact = 0
+    const view = render(<OpportunityPanel {...props} />)
+    expect(screen.getByText('Margin $500.00')).toBeTruthy()
+    view.rerender(<OpportunityPanel {...props} notionalInput="5000" />)
+    expect(screen.queryByText('Margin $500.00')).toBeNull()
+    mocks.planReady = false
+    await act(() => vi.advanceTimersByTimeAsync(301))
+    expect(screen.queryByText('Margin $500.00')).toBeNull()
+    expect((screen.getByRole('button', { name: /Execute Live/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('does not route a transient balance refresh to account setup or allow a ready plan to bypass it', async () => {
+    vi.useFakeTimers()
+    mocks.impact = 0
+    mocks.accountsUpdating = true
+    const openAccounts = vi.fn()
+    const view = render(<OpportunityPanel {...props} onOpenAccounts={openAccounts} />)
+    const execute = screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement
+    expect(execute.disabled).toBe(true)
+    fireEvent.click(execute)
+    expect(openAccounts).not.toHaveBeenCalled()
+    expect(mocks.execute).not.toHaveBeenCalled()
+    await act(() => vi.advanceTimersByTimeAsync(20_000))
+    expect((screen.getByRole('button', { name: 'Accounts unavailable' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('status')).toBeNull()
+    mocks.accountsUpdating = false
+    view.rerender(<OpportunityPanel {...props} onOpenAccounts={openAccounts} />)
+    expect((screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+
+  it('keeps the selected trade panel open through a temporary market outage and requires a fresh plan to execute', async () => {
+    vi.useFakeTimers()
+    mocks.planReady = false
+    mocks.marketDataPending = true
+    mocks.impact = 0
+    const view = render(<OpportunityPanel {...props} />)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(/Retrying automatically/)).toBeNull()
+    await act(() => vi.advanceTimersByTimeAsync(300))
+    expect(screen.getByRole('status', { name: 'Updating trade' })).toBeTruthy()
+    const waiting = screen.getByRole('button', { name: /Execute Live/ }) as HTMLButtonElement
+    expect(waiting.disabled).toBe(true)
+    expect(screen.queryByText(/Plan error:/)).toBeNull()
+    fireEvent.click(waiting)
+    expect(mocks.execute).not.toHaveBeenCalled()
+    mocks.planReady = true
+    mocks.marketDataPending = false
+    view.rerender(<OpportunityPanel {...props} />)
+    const execute = screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement
+    expect(execute.disabled).toBe(false)
+    expect(screen.queryByRole('status')).toBeNull()
+    await act(async () => fireEvent.click(execute))
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+    expect(mocks.execute.mock.calls[0][0]).toMatchObject({ requestedNotional: 500 })
+  })
+
+  it('preserves a last-known estimate without allowing it to execute during a refresh', async () => {
+    vi.useFakeTimers()
+    mocks.impact = 0
+    const view = render(<OpportunityPanel {...props} />)
+    expect(screen.getByText('Margin $500.00')).toBeTruthy()
+    mocks.planReady = false
+    mocks.marketDataPending = true
+    view.rerender(<OpportunityPanel {...props} />)
+    expect(screen.getByText('Margin $500.00').parentElement?.title).toBe('Last known estimate')
+    expect((screen.getByRole('button', { name: 'Execute Live' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('textbox', { name: 'Position Size (per leg)' }).getAttribute('value')).toBe('500')
+    await act(() => vi.advanceTimersByTimeAsync(20_000))
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+    expect(screen.queryByText('Margin $500.00')).toBeNull()
+    expect(mocks.execute).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await act(() => vi.advanceTimersByTimeAsync(300))
+    expect(screen.getByRole('status', { name: 'Updating trade' })).toBeTruthy()
+  })
+
+  it('keeps inputs available when the selected market temporarily becomes unavailable', async () => {
+    vi.useFakeTimers()
+    const view = render(<OpportunityPanel {...props} />)
+    mocks.planReady = false
+    view.rerender(<OpportunityPanel {...props} opportunity={{ ...opportunity, status: 'unavailable' }} />)
+    expect(screen.getByRole('textbox', { name: 'Position Size (per leg)' }).getAttribute('value')).toBe('500')
+    expect(screen.queryByText(/snapshot|market feed/i)).toBeNull()
+    await act(() => vi.advanceTimersByTimeAsync(20_000))
+    expect((screen.getByRole('button', { name: 'Market unavailable' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+
   it('keeps the margin summary slot mounted while the opening plan loads', () => {
     mocks.planReady = false
     const view = render(<OpportunityPanel {...props} />)

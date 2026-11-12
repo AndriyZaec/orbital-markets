@@ -22,6 +22,7 @@ func (s *Server) runLiveSessionRecovery() {
 	s.reconcileClosingPositions()
 	s.reconcileOpenPositions()
 	s.refreshUnfinalizedAsterFunding()
+	s.refreshUnfinalizedPhoenixAccounting()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -34,6 +35,7 @@ func (s *Server) runLiveSessionRecovery() {
 			s.reconcileClosingPositions()
 			s.reconcileOpenPositions()
 			s.refreshUnfinalizedAsterFunding()
+			s.refreshUnfinalizedPhoenixAccounting()
 		}
 	}
 }
@@ -95,6 +97,7 @@ func (s *Server) reconcileOpenPositions() {
 	}
 	for i := range positions {
 		position := &positions[i]
+		s.reconcilePhoenixPositionOrders(s.ctx, position)
 		exposure, ready, err := s.cachedVenueExposure(position)
 		if err != nil {
 			s.logger.Warn("live exposure recovery: account snapshots unavailable", "err", err, "id", position.ID)
@@ -149,7 +152,7 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 		return nil, false, nil
 	}
 	exposure := make(map[string]float64, 2)
-	symbols, err := s.positionVenueSymbols(s.ctx, position.ID, position.Asset)
+	symbols, err := s.positionVenueSymbols(s.ctx, position)
 	if err != nil {
 		return nil, false, err
 	}
@@ -158,7 +161,7 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 		if !ok {
 			return nil, false, nil
 		}
-		snapshot := feed.Snapshot()
+		snapshot := recoveryPositionSnapshot(feed)
 		if snapshot.PositionsUpdatedAt.IsZero() || !snapshot.PositionsUpdatedAt.After(after) ||
 			time.Since(snapshot.PositionsUpdatedAt) > admissionFreshness {
 			return nil, false, nil
@@ -169,6 +172,9 @@ func (s *Server) cachedVenueExposure(position *executor.LivePosition) (map[strin
 				break
 			}
 		}
+	}
+	if pending, err := recoveryOrdersUnresolved(s.ctx, accounts); err != nil || pending {
+		return nil, false, err
 	}
 	return exposure, true, nil
 }
@@ -204,6 +210,8 @@ func (s *Server) reconcileClosingPositions() {
 	for i := range positions {
 		position := &positions[i]
 		ctx, cancel := context.WithTimeout(s.ctx, recoveryAccountTimeout)
+		s.reconcilePhoenixPositionOrders(ctx, position)
+		s.reconcilePhoenixCloseOutcomes(ctx, position)
 		exposureState, err := s.inspectPositionAfterCloseActivity(
 			ctx, position,
 		)
@@ -489,7 +497,7 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 		originalState == sessLeg2Submitting || originalState == sessLeg2Submitted
 	orderEvidenceReady := make(chan recoveryOrderEvidence, 1)
 	go func() {
-		orderEvidenceReady <- s.reconcileAsterRecoveryOrders(ctx, session, originalState)
+		orderEvidenceReady <- s.reconcileRecoveryOrders(ctx, session, originalState)
 	}()
 	mutationGeneration := accounts.mutationGeneration()
 	accountsLocked = false
@@ -510,6 +518,11 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 	leg2Size, leg2Price := currentVenuePosition(accounts, session.Leg2.venue, session.Leg2.symbol)
 	leg1Delta := leg1Size - session.BaselineLeg1Size
 	leg2Delta := leg2Size - session.BaselineLeg2Size
+	if orderEvidence.phoenixUnknown {
+		session.State = sessDegraded
+		s.persistSession(s.ctx, session, executor.ExecStateDegraded, reason+"; Phoenix transaction remains unresolved; current flat/delta state cannot prove no execution; no automatic resend or unwind")
+		return
+	}
 	if orderEvidence.leg1Known && !fillPresent(session.Leg1Fill) {
 		session.Leg1Fill = nil
 		session.Leg2Fill = nil
@@ -585,12 +598,13 @@ func (s *Server) recoverExposedSession(session *LiveSession, reason string) {
 }
 
 type recoveryOrderEvidence struct {
-	leg1Known bool
-	leg2Known bool
-	detail    string
+	leg1Known      bool
+	leg2Known      bool
+	detail         string
+	phoenixUnknown bool
 }
 
-func (s *Server) reconcileAsterRecoveryOrders(
+func (s *Server) reconcileRecoveryOrders(
 	ctx context.Context,
 	session *LiveSession,
 	originalState sessionState,
@@ -598,18 +612,34 @@ func (s *Server) reconcileAsterRecoveryOrders(
 	evidence := recoveryOrderEvidence{}
 	details := make([]string, 0, 2)
 	lookup := func(req *domain.SigningRequest) (*normFill, bool) {
-		if req == nil || req.Venue != "aster" {
+		if req == nil || (req.Venue != "aster" && req.Venue != "phoenix") {
 			return nil, false
 		}
-		fill, err := s.waitForLegFillForAccounts(ctx, req, session.accounts)
+		var fill *normFill
+		var err error
+		if req.Venue == "phoenix" {
+			feed, ok := session.accounts.Feed("phoenix")
+			if source, ready := feed.(exactOrderReconciler); ok && ready {
+				fill, err = source.ReconcileOrder(ctx, req)
+			} else {
+				err = fmt.Errorf("Phoenix exact-order recovery unavailable")
+			}
+		} else {
+			fill, err = s.waitForLegFillForAccounts(ctx, req, session.accounts)
+		}
 		if err != nil || fill == nil {
-			details = append(details, "Aster exact-order lookup unavailable for "+req.ClientOrderID)
+			label := "Aster"
+			if req.Venue == "phoenix" {
+				label = "Phoenix"
+				evidence.phoenixUnknown = true
+			}
+			details = append(details, label+" exact-order lookup unavailable for "+req.ClientOrderID)
 			return nil, false
 		}
 		return fill, true
 	}
 
-	if originalState == sessLeg1Submitting || originalState == sessLeg1Submitted {
+	if originalState == sessLeg1Submitting || originalState == sessLeg1Submitted || (session.Leg1.venue == "phoenix" && !fillPresent(session.Leg1Fill)) {
 		if fill, known := lookup(session.Leg1OpenReq); known {
 			session.Leg1Fill = fill
 			evidence.leg1Known = true
@@ -618,14 +648,14 @@ func (s *Server) reconcileAsterRecoveryOrders(
 		evidence.leg1Known = true
 	}
 
-	if originalState == sessLeg2Submitting || originalState == sessLeg2Submitted {
+	if originalState == sessLeg2Submitting || originalState == sessLeg2Submitted || (session.Leg2.venue == "phoenix" && session.Leg2OpenReq != nil) {
 		request := session.Leg2OpenReq
 		if session.Leg2Attempts >= 2 && session.Leg2RetryReq != nil {
 			request = session.Leg2RetryReq
 		}
 		if fill, known := lookup(request); known {
 			if request == session.Leg2RetryReq && fillPresent(session.Leg2Fill) {
-				if fill.OrderID == "" || session.Leg2Fill.OrderID != fill.OrderID {
+				if (request.Venue != "phoenix" || fillPresent(fill)) && (fill.OrderID == "" || session.Leg2Fill.OrderID != fill.OrderID) {
 					session.Leg2Fill = mergeNormFills(session.Leg2Fill, fill)
 				}
 			} else {
@@ -679,7 +709,7 @@ func refreshRecoveryAccountState(ctx context.Context, session *LiveSession, need
 		if !ok {
 			continue
 		}
-		go func() { _ = feed.RefreshPositions(ctx) }()
+		go func() { _ = refreshRecoveryPositions(ctx, feed) }()
 	}
 }
 
@@ -752,7 +782,7 @@ func venuePositionStateReadyAfter(accounts *liveAccountContext, venue string, af
 	if !ok {
 		return false
 	}
-	return positionStateReady(feed.Snapshot().PositionsUpdatedAt, after)
+	return positionStateReady(recoveryPositionSnapshot(feed).PositionsUpdatedAt, after)
 }
 
 func positionStateReady(updatedAt, after time.Time) bool {
@@ -770,8 +800,8 @@ func currentVenuePosition(accounts *liveAccountContext, venue, symbol string) (f
 	if !ok {
 		return 0, 0
 	}
-	for _, position := range feed.Snapshot().Positions {
-		if strings.EqualFold(position.Symbol, symbol) {
+	for _, position := range recoveryPositionSnapshot(feed).Positions {
+		if (venue == "phoenix" && position.Symbol == symbol) || (venue != "phoenix" && strings.EqualFold(position.Symbol, symbol)) {
 			return signedSize(position.Side, position.Size), position.EntryPrice
 		}
 	}

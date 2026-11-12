@@ -1,0 +1,51 @@
+{
+  "authority": "11111111111111111111111111111111",
+  "traderPdaIndex": 0,
+  "slot": 100,
+  "slotIndex": 0,
+  "snapshot": {
+    "version": 1,
+    "capabilities": {
+      "flags": 63,
+      "state": "active",
+      "capabilities": {
+        "placeLimitOrder": {"immediate": true},
+        "placeMarketOrder": {"immediate": true},
+        "riskIncreasingTrade": {"immediate": true},
+        "riskReducingTrade": {"immediate": true},
+        "depositCollateral": {"immediate": true},
+        "withdrawCollateral": {"immediate": true}
+      }
+    },
+    "makerFeeOverrideMultiplier": 1.0,
+    "takerFeeOverrideMultiplier": 0.8,
+    "subaccounts": [
+      {
+        "subaccountIndex": 0,
+        "sequence": 41,
+        "collateral": "9007199254740993",
+        "spotCollaterals": [{"assetIndex": 1, "symbol": "SOL", "balance": "1000000001", "decimals": 9, "maxBalance": "2000000000"}],
+        "positions": [{
+          "symbol": "BTC",
+          "positionSequenceNumber": "7",
+          "basePositionLots": "-9007199254740993",
+          "entryPriceTicks": "60000",
+          "entryPriceUsd": "60000.125",
+          "virtualQuotePositionLots": "1000000",
+          "unsettledFundingQuoteLots": "-123",
+          "accumulatedFundingQuoteLots": "456",
+          "takeProfitTriggers": [],
+          "stopLossTriggers": []
+        }],
+        "orders": [{"symbol": "BTC", "orders": [{
+          "orderSequenceNumber": "18446744073709551615",
+          "side": "bid", "orderType": "limit", "priceTicks": "59000", "priceUsd": "59000.25",
+          "sizeRemainingLots": "10", "initialSizeLots": "20", "reduceOnly": true, "status": "open"
+        }]}],
+        "splines": [{"symbol": "BTC", "midPriceTicks": "60000", "bidFilledAmountLots": "1", "askFilledAmountLots": "2", "bidRegions": [{"startPriceTicks": "59000", "endPriceTicks": "59500", "densityLotsPerTick": "1", "totalSizeLots": "500", "filledSizeLots": "1"}], "askRegions": []}],
+        "triggers": [{"symbol": "BTC", "takeProfitTriggers": [], "stopLossTriggers": []}]
+      },
+      {"subaccountIndex": 1, "sequence": 500, "collateral": "999999999999", "positions": [], "orders": []}
+    ]
+  }
+}

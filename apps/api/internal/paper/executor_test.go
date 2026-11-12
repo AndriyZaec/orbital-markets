@@ -23,3 +23,12 @@ func TestExecuteRejectsLiveOnlyVenueBeforeCreatingPosition(t *testing.T) {
 		t.Fatalf("rejected paper execution created position: %+v", position)
 	}
 }
+
+func TestSupportsVenuePairRejectsPhoenixBeforeAsyncExecution(t *testing.T) {
+	if SupportsVenuePair("phoenix", "pacifica") {
+		t.Fatal("Phoenix paper execution was reported as supported")
+	}
+	if !SupportsVenuePair("pacifica", "hyperliquid") {
+		t.Fatal("existing paper venue pair was reported as unsupported")
+	}
+}

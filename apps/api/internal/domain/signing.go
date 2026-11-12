@@ -20,7 +20,7 @@ type SigningRequest struct {
 	Leg           int    `json:"leg,omitempty"`
 
 	// Venue context
-	Venue  string `json:"venue"`  // "pacifica", "hyperliquid", or "aster"
+	Venue  string `json:"venue"`  // "pacifica", "hyperliquid", "aster", or "phoenix"
 	Action string `json:"action"` // order/configuration action or allowlisted private-data operation
 	// Account owns venue state; Signer is the owner or authorized agent expected to sign.
 	Account string `json:"account"`
@@ -39,6 +39,7 @@ type SigningRequest struct {
 	// Unsigned venue-specific payload — the exact bytes the frontend must sign.
 	// Pacifica: JSON bytes of the order message.
 	// Hyperliquid: JSON-encoded EIP-712 typed data.
+	// Phoenix: JSON envelope with exact Solana message_base64 to sign.
 	UnsignedPayload json.RawMessage `json:"unsigned_payload"`
 
 	// Venue-specific metadata needed for submission but not part of the signed payload.
@@ -82,6 +83,9 @@ type SubmissionResult struct {
 	OrderID  string `json:"order_id,omitempty"`
 	Accepted bool   `json:"accepted"`
 	Error    string `json:"error,omitempty"`
+
+	// PrivateDiagnostic is operator-only evidence, never a public rejection reason.
+	PrivateDiagnostic string `json:"-"`
 
 	// Timing
 	SubmittedAt time.Time `json:"submitted_at"`

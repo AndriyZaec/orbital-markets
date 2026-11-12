@@ -304,7 +304,8 @@ func (s *Store) UpsertCloseOutcome(ctx context.Context, outcome CloseOutcome) er
 			confirmed = excluded.confirmed,
 			resolved = excluded.resolved,
 			error = excluded.error,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+		WHERE live_close_outcomes.venue != 'phoenix' OR live_close_outcomes.resolved = 0 OR excluded.resolved = 1`,
 		outcome.PositionID, outcome.Leg, outcome.Venue, outcome.ClientOrderID, outcome.OrderID,
 		outcome.RequestedAmount, outcome.FilledAmount, outcome.AvgFillPrice, outcome.FillRatio,
 		boolToInt(outcome.Accepted), boolToInt(outcome.Confirmed), boolToInt(outcome.Resolved), outcome.Error,
@@ -980,6 +981,11 @@ func insertFundingPaymentsTx(
 			window != nil && (paidAt.Before(window.Since) || paidAt.After(window.Until)) {
 			return 0, 0, fmt.Errorf("invalid funding payment")
 		}
+		if venueName == "phoenix" && payment.AmountUSD != 0 {
+			if err := validatePhoenixFundingAttribution(ctx, tx, positionID, payment); err != nil {
+				return 0, 0, err
+			}
+		}
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO live_funding_payments (
 				position_id, venue, account, external_id, asset, amount_usd, paid_at, paid_at_ms, created_at
@@ -1219,6 +1225,26 @@ type LivePosition struct {
 	CompletedAt        string            `json:"completed_at,omitempty"`
 	MonitorAt          string            `json:"monitor_at,omitempty"`
 	UpdatedAt          string            `json:"updated_at"`
+
+	// Response-only live component. Never persisted as a settled payment.
+	PhoenixPendingFunding *PendingFundingPnL `json:"phoenix_pending_funding,omitempty"`
+}
+
+type PendingFundingPnL struct {
+	AmountUSD         *float64   `json:"amount_usd"`
+	AsOf              *time.Time `json:"as_of,omitempty"`
+	UnavailableReason string     `json:"unavailable_reason,omitempty"`
+}
+
+// LatestFundingPaymentAt lets a live view reject an account snapshot that
+// predates a settlement already recorded in the cash ledger.
+func (s *Store) LatestFundingPaymentAt(ctx context.Context, positionID, venueName string) (time.Time, error) {
+	var paid sql.NullInt64
+	err := s.reader.QueryRowContext(ctx, `SELECT MAX(paid_at_ms) FROM live_funding_payments WHERE position_id=? AND venue=?`, positionID, venueName).Scan(&paid)
+	if err != nil || !paid.Valid {
+		return time.Time{}, err
+	}
+	return time.UnixMilli(paid.Int64).UTC(), nil
 }
 
 // LiveFill is the read model for a leg fill.

@@ -52,7 +52,7 @@ func NewExecutor(
 
 // Execute runs the paper open flow synchronously. Call in a goroutine.
 func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Position, error) {
-	if !paperVenueSupported(plan.Leg1.Venue) || !paperVenueSupported(plan.Leg2.Venue) {
+	if !SupportsVenuePair(plan.Leg1.Venue, plan.Leg2.Venue) {
 		return nil, fmt.Errorf("paper execution does not support venue pair %s + %s", plan.Leg1.Venue, plan.Leg2.Venue)
 	}
 	pos := &Position{
@@ -168,6 +168,11 @@ func (e *Executor) Execute(ctx context.Context, plan *domain.ExecutionPlan) (*Po
 
 func paperVenueSupported(venue string) bool {
 	return venue == "pacifica" || venue == "hyperliquid"
+}
+
+// SupportsVenuePair reports whether paper execution can model both legs.
+func SupportsVenuePair(left, right string) bool {
+	return left != right && paperVenueSupported(left) && paperVenueSupported(right)
 }
 
 // CloseByID closes a position by ID. Safe for concurrent use.

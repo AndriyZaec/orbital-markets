@@ -2,12 +2,33 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 )
+
+func TestLiveAsterReaderWithoutServiceIsNil(t *testing.T) {
+	for _, referenceAccount := range []string{"", "0x1111111111111111111111111111111111111111"} {
+		if reader := liveAsterReader(nil, referenceAccount); reader != nil {
+			t.Fatalf("disabled service became a non-nil reader (%T), reference=%q", reader, referenceAccount)
+		}
+	}
+}
+
+func TestLiveAsterReaderPreservesEnabledServiceAndReferenceExclusion(t *testing.T) {
+	service := &dataagent.Service{}
+	if reader := liveAsterReader(service, ""); reader != service {
+		t.Fatal("enabled service was not preserved")
+	}
+	const reference = "0x1111111111111111111111111111111111111111"
+	reader := liveAsterReader(service, reference)
+	if _, err := reader.ReadAccount(context.Background(), reference); !errors.Is(err, dataagent.ErrNotApproved) {
+		t.Fatalf("reference account must remain excluded, got %v", err)
+	}
+}
 
 type stubAsterFundingReader struct {
 	dataagent.Reader

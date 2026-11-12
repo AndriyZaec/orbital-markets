@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -19,37 +18,29 @@ func (s *Server) handleLiveAccountEvents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	bindings, err := liveVenueBindingsFromQuery(r.URL.Query())
-	if err != nil || len(bindings.Accounts) == 0 || bindings.requireAccountsWithin(supportedLiveVenues) != nil {
+	if err != nil || len(bindings.Accounts) == 0 || bindings.requireAccountsWithin(supportedAccountVenues) != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account bindings for supported live venues required"})
 		return
 	}
-	accounts, err := s.live.acquireAccountContext(bindings.Accounts, false)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-		return
-	}
-	defer accounts.Release()
+	views := newAccountViews(s.live.accounts, bindings.Accounts)
+	defer views.accounts.Release()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	controller := http.NewResponseController(w)
-	if err := controller.Flush(); err != nil {
+	controller := streamController(w)
+	if err := flushStream(controller); err != nil {
 		return
 	}
 
 	var lastVersion []byte
 	emitBalances := func() bool {
-		statuses := make(map[string]venueAccountStatus, len(bindings.Accounts))
+		snapshots := views.snapshots()
+		statuses := accountViewStatuses(snapshots)
 		versionInput := make(map[string]any, len(bindings.Accounts)*2)
-		for venue := range bindings.Accounts {
-			feed, found := accounts.Feed(venue)
-			if !found {
-				return true
-			}
-			statuses[venue] = accountStatus(accounts, venue, displayFreshness)
-			versionInput[venue] = feed.Snapshot()
+		for venue, snapshot := range snapshots {
+			versionInput[venue] = snapshot
 			versionInput[venue+"_fresh"] = statuses[venue].Fresh
 		}
 		version, err := json.Marshal(versionInput)
@@ -60,7 +51,7 @@ func (s *Server) handleLiveAccountEvents(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			return true
 		}
-		if _, err := fmt.Fprintf(w, "event: balances\ndata: %s\n\n", data); err != nil || controller.Flush() != nil {
+		if err := writeStream(w, controller, "event: balances\ndata: %s\n\n", data); err != nil {
 			return false
 		}
 		lastVersion = version
@@ -79,10 +70,11 @@ func (s *Server) handleLiveAccountEvents(w http.ResponseWriter, r *http.Request)
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil || controller.Flush() != nil {
+			if err := writeStream(w, controller, ": heartbeat\n\n"); err != nil {
 				return
 			}
 		case <-ticker.C:
+			views.retryMissing(time.Now())
 			if !emitBalances() {
 				return
 			}

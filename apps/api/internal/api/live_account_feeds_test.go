@@ -417,6 +417,27 @@ func TestAsterAccountFeedReportsExpiredAuthorizationAfterSnapshotStales(t *testi
 	}
 }
 
+func TestAsterAccountFeedWithoutConfiguredReaderStaysUnavailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	factory := &asterAccountFeedFactory{backendReads: true}
+	started, err := factory.Start(ctx, "0x1111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed := started.(*asterAccountFeed)
+	if err := feed.RefreshPositions(ctx); err == nil || err.Error() != "Aster backend account reader not configured" {
+		t.Fatalf("disabled reader refresh = %v", err)
+	}
+	if err := feed.RefreshFunding(ctx); err == nil || err.Error() != "Aster backend funding reader not configured" {
+		t.Fatalf("disabled funding refresh = %v", err)
+	}
+	if snapshot := feed.Snapshot(); snapshot.Connected || !snapshot.LastUpdated.IsZero() ||
+		snapshot.UnavailableReason != "Aster backend account reader is not configured" {
+		t.Fatalf("disabled reader must remain explicitly unavailable: %+v", snapshot)
+	}
+}
+
 func TestAsterAccountFeedDoesNotUseBrowserReadsAsBackendFallback(t *testing.T) {
 	feed := &asterAccountFeed{
 		state:        asteraccount.NewAccountState("0x1111111111111111111111111111111111111111"),

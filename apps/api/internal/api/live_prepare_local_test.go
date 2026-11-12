@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,6 +39,7 @@ type localPrepareDepth struct {
 	freshChecks int
 	delay       time.Duration
 	quote       liquidity.OrderQuote
+	err         error
 }
 
 func (d *localPrepareDepth) Quote(ctx context.Context, _ liquidity.Pair, size liquidity.OrderSize, fresh bool) (liquidity.OrderQuote, error) {
@@ -54,7 +56,7 @@ func (d *localPrepareDepth) Quote(ctx context.Context, _ liquidity.Pair, size li
 	}
 	quote := d.quote
 	quote.BaseAmount, quote.ObservedAt = size.BaseAmount, time.Now()
-	return quote, nil
+	return quote, d.err
 }
 
 type localPrepareFixture struct {
@@ -71,7 +73,7 @@ type localPreparedResult struct {
 	SigningRequests []*domain.SigningRequest `json:"signing_requests"`
 }
 
-func newLocalPrepareFixture(t *testing.T) *localPrepareFixture {
+func newLocalPrepareFixture(t *testing.T, primaryVenues ...string) *localPrepareFixture {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -84,8 +86,18 @@ func newLocalPrepareFixture(t *testing.T) *localPrepareFixture {
 	store := executor.NewStore(database, database, logger)
 	deps := NewLiveDeps(ctx, logger, domain.NewSigningRequestStore(), store,
 		liveAmountTestAssetMap{decimals: 3}, liveAmountTestLotSizes{"BTC": "0.001"}, nil, nil)
-	accounts := map[string]string{"pacifica": "11111111111111111111111111111111", "hyperliquid": "0x1111111111111111111111111111111111111111"}
-	agents := map[string]string{"pacifica": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "hyperliquid": "0x2222222222222222222222222222222222222222"}
+	primary := "pacifica"
+	if len(primaryVenues) > 0 {
+		primary = primaryVenues[0]
+		base, _ := deps.modules.Module("pacifica")
+		hl, _ := deps.modules.Module("hyperliquid")
+		deps.modules, err = venue.NewLiveModuleRegistry(&admissionCheckpointModule{LiveModule: base, name: primary}, hl)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	accounts := map[string]string{primary: "11111111111111111111111111111111", "hyperliquid": "0x1111111111111111111111111111111111111111"}
+	agents := map[string]string{primary: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "hyperliquid": "0x2222222222222222222222222222222222222222"}
 	f := &localPrepareFixture{feeds: make(map[string]*localPrepareFeed)}
 	factories := make(map[string]accountFeedFactory)
 	for name, account := range accounts {
@@ -105,7 +117,7 @@ func newLocalPrepareFixture(t *testing.T) *localPrepareFixture {
 			MaxLeverage: 10, FundingRate: funding,
 		}}
 	}
-	f.markets = []*prepareMarketAdapter{market("pacifica", 0.001), market("hyperliquid", 0.002)}
+	f.markets = []*prepareMarketAdapter{market(primary, 0.001), market("hyperliquid", 0.002)}
 	f.depth = &localPrepareDepth{quote: liquidity.OrderQuote{
 		Sufficient: true, LongPrice: 100, ShortPrice: 100,
 		LongWorstPrice: 100.1, ShortWorstPrice: 99.9, LongImpact: 0.001, ShortImpact: 0.001,
@@ -133,6 +145,34 @@ func newLocalPrepareFixture(t *testing.T) *localPrepareFixture {
 		}
 	})
 	return f
+}
+
+// Keep the HTTP admission test independent of Phoenix payload construction,
+// which is covered separately with the real SDK. Never build or send an order.
+type admissionCheckpointModule struct {
+	venue.LiveModule
+	name    string
+	reached bool
+}
+
+func (m *admissionCheckpointModule) Name() string { return m.name }
+func (m *admissionCheckpointModule) BuildOpen(venue.LiveOrderParams) (*domain.SigningRequest, error) {
+	m.reached = true
+	return nil, errors.New("test signing checkpoint")
+}
+
+func TestPhoenixHTTPPreparePassesAdmissionBeforeBuildingSigningRequests(t *testing.T) {
+	for _, streamed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", streamed), func(t *testing.T) {
+			f := newLocalPrepareFixture(t, "phoenix")
+			module, _ := f.s.live.liveModule("phoenix")
+			probe := module.(*admissionCheckpointModule)
+			_, _, body, _ := f.prepare(t, context.Background(), streamed)
+			if !probe.reached || !strings.Contains(body, "test signing checkpoint") {
+				t.Fatalf("Phoenix did not reach signing construction: %s", body)
+			}
+		})
+	}
 }
 
 func (f *localPrepareFixture) freshen() {

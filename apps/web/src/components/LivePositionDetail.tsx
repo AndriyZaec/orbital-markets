@@ -5,6 +5,8 @@ import { useLiveClose, type CloseOutcome, type CloseState } from '@/hooks/useLiv
 import { canRequestLiveClose, hasActionableRecordedFills } from '@/lib/degraded-execution'
 import { monitoredLegVenues } from '@/lib/live-position-monitoring'
 import { formatSignedUsdPnL } from '@/lib/pnl-format'
+import { positionPnL } from '@/lib/position-pnl'
+import { isActivePositionState } from '@/lib/portfolio-position'
 import { venueTradeUrl } from '@/lib/venue-links'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,6 +14,7 @@ import { Progress } from '@/components/ui/progress'
 import { AssetIcon } from '@/components/AssetIcon'
 import { ExternalLinkIcon, Share2Icon } from 'lucide-react'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { cn } from '@/lib/utils'
 
 interface Props {
   position: LivePosition
@@ -71,7 +74,8 @@ function liqRiskBadge(risk: string) {
   }
 }
 
-function pnlColor(n: number) {
+function pnlColor(n: number | null) {
+  if (n === null) return 'text-muted-foreground'
   if (n > 0) return 'text-green-400'
   if (n < 0) return 'text-red-400'
   return ''
@@ -142,6 +146,7 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
 }) {
   const { data, loading, error: detailError, refetch } = useLivePositionDetail(position.id, [position.venue_a, position.venue_b])
   const pos = data?.position ?? position
+  const pnl = positionPnL(pos)
   const fills = data?.fills ?? []
   const events = data?.events ?? []
   const [leg1Venue, leg2Venue] = monitoredLegVenues(fills, pos.venue_a, pos.venue_b)
@@ -283,14 +288,14 @@ function LivePositionContent({ position, onDismiss, onRefresh, onShare, compact 
           </div>
         )}
 
-        {/* PnL — only for open positions */}
-        {pos.state === 'open' && (pos.price_pnl !== 0 || pos.funding_pnl !== 0 || (data?.chart_context.available && data.chart_context.price_pnl?.available)) && (
-          <div className="px-5 py-4 border-b border-border">
+        {/* Shared PnL presentation for every active venue pair. */}
+        {isActivePositionState(pos.state) && (
+          <div className="px-5 py-4 border-b border-border text-card-foreground">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-3">Profit & Loss</p>
             <div className={`grid gap-4 ${compact ? 'grid-cols-2' : 'grid-cols-3'}`}>
               <div><p className="text-[10px] text-muted-foreground mb-0.5">Price PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.price_pnl)}`}>{formatSignedUsdPnL(pos.price_pnl)}</p></div>
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">{pos.funding_pnl_source === 'realized' ? 'Realized Funding' : 'Estimated Funding'}</p><p className={`text-sm font-mono font-medium ${pnlColor(pos.funding_pnl)}`}>{formatSignedUsdPnL(pos.funding_pnl)}</p></div>
-              <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pos.total_pnl)}`}>{formatSignedUsdPnL(pos.total_pnl)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Funding PnL</p><p className={`text-sm font-mono font-medium ${pnlColor(pnl.funding)}`}>{pnl.funding === null ? '—' : formatSignedUsdPnL(pnl.funding)}</p></div>
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Total PnL</p><p className={`text-sm font-mono font-semibold ${pnlColor(pnl.total)}`}>{pnl.total === null ? '—' : formatSignedUsdPnL(pnl.total)}</p></div>
             </div>
           </div>
         )}
@@ -455,10 +460,19 @@ function FillCard({ fill }: { fill: LiveFillDetail }) {
   )
 }
 
+function executionOutcomeLabel(state: string) {
+  switch (state) {
+    case 'degraded': return 'Recovery required'
+    case 'failed': return 'Execution failed'
+    case 'open': return 'Hedge opened'
+    case 'closed': return 'Position closed'
+    default: return 'Execution update'
+  }
+}
+
 function EventRow({ event: ev }: { event: LiveEventDetail }) {
   const isComplete = ev.event === 'complete'
-  const isError = ev.state === 'degraded' || ev.state === 'failed'
-  const label = ev.event
+  const label = isComplete ? executionOutcomeLabel(ev.state) : ev.event
     .split('_')
     .filter(Boolean)
     .map((word, index) => index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word)
@@ -467,12 +481,12 @@ function EventRow({ event: ev }: { event: LiveEventDetail }) {
   return (
     <div className="min-w-0 text-[10px]">
       <div className="flex min-w-0 items-baseline justify-between gap-3">
-        <span className={`min-w-0 font-medium leading-relaxed ${
-          isComplete && isError ? 'text-red-400' : isComplete ? 'text-green-400' : 'text-foreground'
-        }`}>{label}</span>
+        <span className={cn('min-w-0 font-medium leading-relaxed',
+          isComplete ? stateColor(ev.state) : 'text-foreground',
+        )}>{label}</span>
         <span className="shrink-0 whitespace-nowrap font-mono text-[9px] text-muted-foreground/60">{fmtEventTime(ev.at)}</span>
       </div>
-      {ev.detail && <p className="mt-1 min-w-0 break-words leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{ev.detail}</p>}
+      {!isComplete && ev.detail && <p className="mt-1 min-w-0 break-words leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{ev.detail}</p>}
     </div>
   )
 }

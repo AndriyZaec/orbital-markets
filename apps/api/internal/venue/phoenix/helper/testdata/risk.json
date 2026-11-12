@@ -1,0 +1,33 @@
+{
+  "owner_authority": "11111111111111111111111111111111",
+  "trader_pda_index": 0,
+  "subaccount_index": 0,
+  "account_generation": 1,
+  "account_slot": 100,
+  "account_sequence": 41,
+  "metadata_generation": 7,
+  "as_of_unix_ms": 1000000,
+  "account_observed_unix_ms": 999000,
+  "params_observed_unix_ms": 990000,
+  "collateral_quote_lots": "100000000",
+  "has_splines": false,
+  "positions": [{
+    "symbol": "SOL", "sequence": "1", "base_lots": "1000", "virtual_quote_lots": "-100000000",
+    "unsettled_funding_quote_lots": "-2000000", "accumulated_funding_quote_lots": "5000000"
+  }],
+  "orders": [],
+  "spot_balances": [],
+  "markets": [{
+    "symbol": "SOL", "asset_id": 1, "base_lot_decimals": 3,
+    "tick_size": "10", "mark_price_ticks": "11000", "index_price_ticks": "10000", "price_observed_unix_ms": 999500,
+    "leverage_tiers": [
+      {"upper_bound_base_lots": "1000000", "max_leverage": 10, "limit_order_risk_factor_bps": 10000},
+      {"upper_bound_base_lots": "10000000", "max_leverage": 5, "limit_order_risk_factor_bps": 10000},
+      {"upper_bound_base_lots": "100000000", "max_leverage": 2, "limit_order_risk_factor_bps": 10000},
+      {"upper_bound_base_lots": "1000000000", "max_leverage": 1, "limit_order_risk_factor_bps": 10000}
+    ],
+    "risk_factors_bps": [5000, 4000, 3000], "cancel_order_risk_factor_bps": 5500,
+    "upnl_risk_factor_bps": 5000, "upnl_withdrawal_risk_factor_bps": 5000
+  }],
+  "spot_params": []
+}

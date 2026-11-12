@@ -80,13 +80,25 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 	coveredByBBO := positiveFinite(long.AskPrice) && positiveFinite(short.BidPrice) &&
 		positiveFinite(long.AskSize) && positiveFinite(short.BidSize) &&
 		amount <= long.AskSize/long.AskPrice && amount <= short.BidSize/short.BidPrice
+	pendingBBO := coveredByBBO && (!longFresh || !shortFresh)
+	// A stale covered BBO is a bounded preview estimate, never execution proof.
+	// Execution can fall back to one fresh L2 quote; previews never do so here.
+	useBBO := coveredByBBO && (!fresh || !pendingBBO)
 	result := &domain.ExecutionLiquidity{Status: "unavailable"}
 	plan.Liquidity = result
-	if coveredByBBO {
-		if !longFresh || !shortFresh {
-			return ErrFreshBBOUnavailable
+	for _, market := range []venue.MarketData{long, short} {
+		if market.Health != nil && market.Health.Book.Status != venue.HealthAvailable {
+			return fmt.Errorf("order-book data unavailable for %s; checking again automatically", market.Venue)
 		}
+	}
+	if pendingBBO && fresh && source == nil {
+		return ErrFreshBBOUnavailable
+	}
+	if useBBO {
 		result.Status = "bbo"
+		if pendingBBO {
+			result.Status = "pending"
+		}
 		result.ObservedAt = minSnapshotTime(longAt, shortAt)
 		quote.BaseAmount = amount
 		quote.LongPrice, quote.ShortPrice = long.AskPrice, short.BidPrice
@@ -97,7 +109,7 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 			Short: liquidity.Market{Venue: short.Venue, Key: short.MarketKey},
 		}, liquidity.OrderSize{BaseAmount: amount}, fresh)
 	}
-	if !coveredByBBO && quoteErr == nil {
+	if !useBBO && quoteErr == nil {
 		if !positiveFinite(quote.BaseAmount) {
 			return fmt.Errorf("invalid quoted order amount")
 		}
@@ -110,7 +122,7 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 		result.Status = "l2"
 		result.Impact = quote.LongImpact + quote.ShortImpact
 		result.RequiresAcknowledgement = result.Impact > liquidity.PairImpactBudget+1e-12
-	} else if !coveredByBBO {
+	} else if !useBBO {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -142,6 +154,9 @@ func (s *Scanner) EvaluateExecutionLiquidity(ctx context.Context, plan *domain.E
 	plan.Leverage.EffectiveLeverage = plan.Leverage.GrossExposure / plan.Leverage.MarginRequired
 	plan.ExpectedSpread = (plan.Leg2.ExpectedPrice - plan.Leg1.ExpectedPrice) / plan.Leg1.ExpectedPrice
 	plan.EstimatedNetEdge = domain.EstimatedNetEdge(domain.AnnualizedGrossEdge(short.FundingRate, long.FundingRate), plan.Leg1.Slippage+plan.Leg1.Fee+plan.Leg2.Slippage+plan.Leg2.Fee)
+	if result.Status == "pending" {
+		return ErrFreshBBOUnavailable
+	}
 	return nil
 }
 

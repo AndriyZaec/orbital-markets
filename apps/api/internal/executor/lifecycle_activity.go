@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
 )
 
 // LifecycleActivityType identifies a user-visible position lifecycle transition.
@@ -105,8 +107,8 @@ func (s *Store) ListLifecycleActivity(ctx context.Context, query LifecycleActivi
 }
 
 func lifecycleAccountMatch(accounts map[string]string) (string, []any, error) {
-	if len(accounts) < 2 || len(accounts) > 3 {
-		return "", nil, fmt.Errorf("two or three account bindings required")
+	if len(accounts) < 2 || len(accounts) > len(domain.SupportedLiveVenues()) {
+		return "", nil, fmt.Errorf("at least two supported venue account bindings required")
 	}
 	venues := make([]string, 0, len(accounts))
 	for venue := range accounts {

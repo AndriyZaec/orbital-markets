@@ -41,7 +41,11 @@ var (
 //
 // If secret is empty the middleware is a no-op (dev bypass). Production wiring
 // must ensure a secret is set.
-func Auth(secret string, logger *slog.Logger) func(http.Handler) http.Handler {
+func Auth(secret string, logger *slog.Logger, cookieNames ...string) func(http.Handler) http.Handler {
+	authCookie := cookieName
+	if len(cookieNames) > 0 && cookieNames[0] != "" {
+		authCookie = cookieNames[0]
+	}
 	if secret == "" {
 		logger.Warn("auth middleware disabled (empty JWT_SECRET) — DEV ONLY")
 		return func(next http.Handler) http.Handler { return next }
@@ -53,7 +57,7 @@ func Auth(secret string, logger *slog.Logger) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			token := extractToken(r)
+			token := extractToken(r, authCookie)
 			if token == "" {
 				http.NotFound(w, r)
 				return
@@ -67,8 +71,8 @@ func Auth(secret string, logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-func extractToken(r *http.Request) string {
-	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
+func extractToken(r *http.Request, authCookie string) string {
+	if c, err := r.Cookie(authCookie); err == nil && c.Value != "" {
 		return c.Value
 	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, bearerPrefix) {

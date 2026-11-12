@@ -44,14 +44,14 @@ export interface LivePositionDetailData {
 }
 
 export function useLivePositionDetail(positionId: string | null, venues: [Venue, Venue]) {
-  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress } = useVenueAuthority()
   const [venueA, venueB] = venues
   const accounts = useMemo(
     () => ({
-      [venueA]: authorityAddress(venueA, pacificaAddress, hyperliquidAddress, asterAddress),
-      [venueB]: authorityAddress(venueB, pacificaAddress, hyperliquidAddress, asterAddress),
+      [venueA]: authorityAddress(venueA, pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress),
+      [venueB]: authorityAddress(venueB, pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress),
     }),
-    [asterAddress, hyperliquidAddress, pacificaAddress, venueA, venueB],
+    [asterAddress, hyperliquidAddress, pacificaAddress, phoenixAddress, venueA, venueB],
   )
 
   const enabled = Boolean(positionId) && Object.values(accounts).every(Boolean)
@@ -82,6 +82,7 @@ function authorityAddress(
   pacifica: string | null,
   hyperliquid: string | null,
   aster: string | null,
+  phoenix: string | null,
 ): string {
-  return (venue === 'pacifica' ? pacifica : venue === 'aster' ? aster : hyperliquid) ?? ''
+  return (venue === 'phoenix' ? phoenix : venue === 'pacifica' ? pacifica : venue === 'aster' ? aster : hyperliquid) ?? ''
 }

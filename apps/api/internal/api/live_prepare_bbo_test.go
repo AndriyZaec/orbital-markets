@@ -10,6 +10,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/executor"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/liquidity"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
 type prepareStageWriter struct {
@@ -35,8 +40,10 @@ func agePrepareBook(f *localPrepareFixture) {
 
 func TestPrepareStreamsBBOWaitThenUsesFreshQuotes(t *testing.T) {
 	for _, finalCheck := range []bool{false, true} {
-		t.Run(map[bool]string{false: "initial_plan", true: "final_liquidity"}[finalCheck], func(t *testing.T) {
+		t.Run(map[bool]string{false: "stale_preview", true: "final_liquidity"}[finalCheck], func(t *testing.T) {
 			f := newLocalPrepareFixture(t)
+			// Optional/unconfigured L2 retains bounded cached-feed waiting.
+			f.s.scanner.EnableExecutionLiquidity(nil)
 			if !finalCheck {
 				agePrepareBook(f)
 			}
@@ -107,6 +114,7 @@ func TestPrepareStreamsBBOWaitThenUsesFreshQuotes(t *testing.T) {
 
 func TestPrepareBBOTimeoutCreatesNoSessionAndCanRetry(t *testing.T) {
 	f := newLocalPrepareFixture(t)
+	f.s.scanner.EnableExecutionLiquidity(nil)
 	agePrepareBook(f)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancel()
@@ -127,6 +135,7 @@ func TestPrepareBBOTimeoutCreatesNoSessionAndCanRetry(t *testing.T) {
 
 func TestPrepareBBORecoveryStillRejectsChangedFunding(t *testing.T) {
 	f := newLocalPrepareFixture(t)
+	f.s.scanner.EnableExecutionLiquidity(nil)
 	agePrepareBook(f)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/live/prepare", jsonBody(t, f.body))
@@ -148,6 +157,7 @@ func TestPrepareBBORecoveryStillRejectsChangedFunding(t *testing.T) {
 
 func TestPrepareBBORecoveryPreservesApprovedPriceBounds(t *testing.T) {
 	f := newLocalPrepareFixture(t)
+	f.s.scanner.EnableExecutionLiquidity(nil)
 	f.body["approved_price_limits"] = map[string]float64{"pacifica": 100.5, "hyperliquid": 99.5}
 	agePrepareBook(f)
 	w := httptest.NewRecorder()
@@ -174,6 +184,7 @@ func TestPrepareBBORecoveryPreservesApprovedPriceBounds(t *testing.T) {
 
 func TestPrepareBBOWaitHonorsCancellation(t *testing.T) {
 	f := newLocalPrepareFixture(t)
+	f.s.scanner.EnableExecutionLiquidity(nil)
 	agePrepareBook(f)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -191,5 +202,146 @@ func TestPrepareBBOWaitHonorsCancellation(t *testing.T) {
 	_, err := f.s.liveStore.ActiveDurableSessionForBindings(context.Background(), f.body["accounts"].(map[string]string), "BTC")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cancellation created a session: %v", err)
+	}
+}
+
+func TestPreparePendingBBOUsesOneFreshL2QuoteWithinPreviewLimits(t *testing.T) {
+	for _, finalCheck := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stale_preview", true: "ages_during_accounts"}[finalCheck], func(t *testing.T) {
+			f := newLocalPrepareFixture(t)
+			if !finalCheck {
+				agePrepareBook(f)
+			}
+			preview, err := f.s.scanner.BuildPlan(context.Background(), f.body["opportunity_id"].(string), 2, 90)
+			if err != nil || !preview.Executable {
+				t.Fatalf("preview=%+v err=%v", preview, err)
+			}
+			limits := map[string]float64{preview.Leg1.Venue: preview.Leg1.LimitPrice, preview.Leg2.Venue: preview.Leg2.LimitPrice}
+			f.body["approved_price_limits"] = limits
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/live/prepare", jsonBody(t, f.body))
+			r.Header.Set("Accept", "application/x-ndjson")
+			f.s.handleLivePrepare(&prepareStageWriter{ResponseWriter: w, onStage: func(stage string) {
+				if finalCheck && stage == "accounts" {
+					agePrepareBook(f)
+				}
+			}}, r)
+			if !strings.Contains(w.Body.String(), `"status":200`) || strings.Contains(w.Body.String(), `"stage":"waiting_bbo"`) {
+				t.Fatalf("fresh L2 did not complete prepare directly: %s", w.Body.String())
+			}
+			if f.depth.calls != 1 || f.depth.freshChecks != 1 {
+				t.Fatalf("pending preview/prepare polled L2: calls=%d fresh=%d", f.depth.calls, f.depth.freshChecks)
+			}
+			durable, err := f.s.liveStore.ActiveDurableSessionForBindings(context.Background(), f.body["accounts"].(map[string]string), "BTC")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, found, claimed := f.s.live.sessions.claimForAccounts(durable.ID, f.body["accounts"].(map[string]string))
+			if !found || !claimed {
+				t.Fatal("prepared session not available")
+			}
+			defer f.s.live.sessions.release(durable.ID)
+			if session.Plan.Liquidity.Status != "l2" {
+				t.Fatal("pending liquidity reached signing")
+			}
+			for _, leg := range []domain.Leg{session.Plan.Leg1, session.Plan.Leg2} {
+				if leg.Side == domain.SideLong && leg.LimitPrice > limits[leg.Venue] || leg.Side == domain.SideShort && leg.LimitPrice < limits[leg.Venue] {
+					t.Fatal("L2 fallback widened preview approval")
+				}
+			}
+		})
+	}
+}
+
+func TestDisconnectedHyperliquidBookBlocksOpeningButAllowsRESTClose(t *testing.T) {
+	f := newLocalPrepareFixture(t)
+	market := f.markets[1]
+	market.mu.Lock()
+	market.data.Timestamp = time.Now() // Fresh REST cannot restore frozen BBO.
+	market.data.Health.Book = venue.ComponentHealth{
+		Status: venue.HealthUnavailable, Reason: venue.HealthReasonDisconnected, SourceTime: time.Now(),
+	}
+	market.mu.Unlock()
+	f.s.closeMarkets = f.s.scanner
+	closeReads := 0
+	f.s.closeBooks = closeBookSourceFunc(func(context.Context, liquidity.Market) (liquidity.BBOQuote, error) {
+		closeReads++
+		return liquidity.BBOQuote{BidPrice: 100, AskPrice: 100, ObservedAt: time.Now()}, nil
+	})
+	preview, err := f.s.scanner.BuildPlan(context.Background(), f.body["opportunity_id"].(string), 2, 90)
+	if err != nil || preview.Executable || preview.Liquidity.Status != "unavailable" {
+		t.Fatalf("disconnected preview became executable: %+v err=%v", preview, err)
+	}
+	status, _, body, _ := f.prepare(t, context.Background(), true)
+	if status != http.StatusUnprocessableEntity || !strings.Contains(body, "PLAN_NOT_EXECUTABLE") {
+		t.Fatalf("disconnected prepare did not reject immediately: %d %s", status, body)
+	}
+	bindings := liveVenueBindings{Accounts: f.body["accounts"].(map[string]string), Agents: f.body["agents"].(map[string]string)}
+	fill := executor.LiveFill{Venue: "hyperliquid", Symbol: "BTC", Side: "long", FilledAmount: 1, AvgFillPrice: 100}
+	request, err := f.s.buildCloseSigningRequestForBindings(context.Background(), fill, "BTC", "disconnected-close", bindings, false)
+	if request == nil || err != nil || closeReads != 1 {
+		t.Fatalf("disconnected close did not use REST: request=%+v err=%v reads=%d", request, err, closeReads)
+	}
+	_, err = f.s.liveStore.ActiveDurableSessionForBindings(context.Background(), bindings.Accounts, "BTC")
+	if !errors.Is(err, sql.ErrNoRows) || f.depth.calls != 0 {
+		t.Fatalf("disconnected book created a session or fetched L2: err=%v reads=%d", err, f.depth.calls)
+	}
+	// The adapter contract test separately verifies reconnect alone stays unavailable.
+	// Here the first new BBO restores the consumer-facing snapshot.
+	f.freshen()
+	status, _, body, _ = f.prepare(t, context.Background(), true)
+	if status != http.StatusOK {
+		t.Fatalf("new BBO did not restore prepare: %d %s", status, body)
+	}
+	request, err = f.s.buildCloseSigningRequestForBindings(context.Background(), fill, "BTC", "reconnected-close", bindings, false)
+	if err != nil || request == nil || f.depth.calls != 0 || closeReads != 1 {
+		t.Fatalf("new BBO did not restore close without L2: request=%+v err=%v reads=%d", request, err, f.depth.calls)
+	}
+}
+
+func TestPreparePendingBBORejectsFailedOrUnapprovedL2WithoutPolling(t *testing.T) {
+	for _, scenario := range []string{"unavailable_or_quota_exhausted", "insufficient", "price_moved", "unacknowledged_impact", "funding_changed", "deadline"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newLocalPrepareFixture(t)
+			agePrepareBook(f)
+			f.body["approved_price_limits"] = map[string]float64{"pacifica": 100.5, "hyperliquid": 99.5}
+			ctx := context.Background()
+			wantStatus, wantText, wantCalls := http.StatusUnprocessableEntity, "depth verification unavailable", 1
+			switch scenario {
+			case "unavailable_or_quota_exhausted":
+				f.depth.err = liquidity.ErrUnavailable
+			case "insufficient":
+				f.depth.quote.Sufficient = false
+				wantText = "insufficient visible"
+			case "price_moved":
+				f.depth.quote.LongPrice, f.depth.quote.LongWorstPrice = 102, 102
+				wantText = "PRICE_MOVED"
+			case "unacknowledged_impact":
+				f.depth.quote.LongImpact = 0.003
+				wantText = "acknowledge elevated price impact"
+			case "funding_changed":
+				f.markets[0].mu.Lock()
+				f.markets[0].data.FundingRate = 0.003
+				f.markets[0].mu.Unlock()
+				wantText, wantCalls = "funding direction changed", 0
+			case "deadline":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 40*time.Millisecond)
+				defer cancel()
+				f.depth.delay = time.Second
+				wantStatus, wantText = http.StatusGatewayTimeout, "PREPARE_TIMEOUT"
+			}
+			status, _, body, _ := f.prepare(t, ctx, true)
+			if status != wantStatus || !strings.Contains(body, wantText) {
+				t.Fatalf("failure=%d %s, want %d %s", status, body, wantStatus, wantText)
+			}
+			if f.depth.calls != wantCalls || f.depth.freshChecks != wantCalls {
+				t.Fatalf("failed fallback polled L2: calls=%d fresh=%d", f.depth.calls, f.depth.freshChecks)
+			}
+			_, err := f.s.liveStore.ActiveDurableSessionForBindings(context.Background(), f.body["accounts"].(map[string]string), "BTC")
+			if !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("failed fallback created a session: %v", err)
+			}
+		})
 	}
 }

@@ -10,8 +10,67 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
+
+func TestRESTRefreshKeepsQuietMarketDiscoverableWithoutRefreshingBook(t *testing.T) {
+	now := time.Now().Add(-31 * time.Second)
+	fail := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fail {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, `[
+			{"universe":[{"name":"SOL","maxLeverage":20,"szDecimals":2}]},
+			[{"markPx":"150","oraclePx":"149","funding":"0.0001","openInterest":"1000"}]
+		]`)
+	}))
+	defer server.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	adapter := New(logger)
+	adapter.client, adapter.marketURL = server.Client(), server.URL
+	adapter.now = func() time.Time { return now }
+	adapter.pollREST(context.Background())
+	generation := adapter.markStreamConnected()
+	adapter.applyBBO(generation, bboData{Coin: "SOL", Time: now.UnixMilli(), BBO: []bboLevel{{Px: "149", Sz: "2"}, {Px: "151", Sz: "3"}}})
+	before, _ := adapter.FetchMarketData(context.Background())
+	book := before[0].Health.Book
+	sc := scanner.New(logger, adapter)
+	if snapshots := sc.MarketData(context.Background()); len(snapshots) != 0 {
+		t.Fatal("31-second-old aggregate snapshot should be stale")
+	}
+	now = now.Add(31 * time.Second)
+	adapter.pollREST(context.Background())
+	snapshots := sc.MarketData(context.Background())
+	if len(snapshots) != 1 {
+		t.Fatal("fresh REST did not restore quiet market to scanner")
+	}
+	if !snapshots[0].Timestamp.Equal(now) || snapshots[0].Health.Book != book {
+		t.Fatalf("REST must refresh market, not book: %+v", snapshots[0])
+	}
+	lastREST := now
+	now = now.Add(time.Second)
+	fail = true
+	adapter.pollREST(context.Background())
+	snapshots, _ = adapter.FetchMarketData(context.Background())
+	if !snapshots[0].Timestamp.Equal(lastREST) || snapshots[0].Health.Book != book {
+		t.Fatal("failed REST fetch refreshed observations")
+	}
+	fail = false
+	adapter.markStreamDisconnected(generation)
+	adapter.pollREST(context.Background())
+	snapshots, err := adapter.FetchMarketData(context.Background())
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots after disconnected REST refresh = %+v, err = %v", snapshots, err)
+	}
+	if !snapshots[0].Timestamp.Equal(now) || snapshots[0].Health.REST.Status != venue.HealthAvailable ||
+		snapshots[0].Health.Book.Status != venue.HealthUnavailable || snapshots[0].Health.Book.Reason != venue.HealthReasonDisconnected ||
+		!snapshots[0].Health.Book.SourceTime.Equal(book.SourceTime) {
+		t.Fatalf("fresh REST hid market WS disconnect: %+v", snapshots[0])
+	}
+}
 
 func TestFetchMarketDataReportsRESTComponentsBeforeFirstBookUpdate(t *testing.T) {
 	now := time.Date(2026, time.September, 25, 12, 0, 0, 0, time.UTC)
@@ -194,6 +253,28 @@ func TestFetchMarketDataPreservesBookAfterStreamDisconnect(t *testing.T) {
 	if snapshot.Health.Stream.Status != venue.HealthUnavailable ||
 		snapshot.Health.Stream.Reason != venue.HealthReasonDisconnected {
 		t.Fatalf("disconnected stream health = %+v", snapshot.Health.Stream)
+	}
+	if snapshot.Health.Book.Status != venue.HealthUnavailable || snapshot.Health.Book.Reason != venue.HealthReasonDisconnected ||
+		!snapshot.Health.Book.SourceTime.Equal(sourceTime) || !snapshot.Health.Book.ReceivedAt.Equal(receivedAt) {
+		t.Fatalf("disconnected book health = %+v", snapshot.Health.Book)
+	}
+
+	nextGeneration := adapter.markStreamConnected()
+	snapshots, err = adapter.FetchMarketData(context.Background())
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots after reconnect = %+v, err = %v", snapshots, err)
+	}
+	if snapshots[0].Health.Book.Status != venue.HealthUnavailable || snapshots[0].Health.Book.Reason != venue.HealthReasonNotObserved {
+		t.Fatal("reconnect without a new BBO restored the old book")
+	}
+	adapter.applyBBO(nextGeneration, bboData{Coin: "SOL", Time: receivedAt.UnixMilli(), BBO: []bboLevel{{Px: "150", Sz: "2"}, {Px: "152", Sz: "3"}}})
+	snapshots, err = adapter.FetchMarketData(context.Background())
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots after new BBO = %+v, err = %v", snapshots, err)
+	}
+	if snapshots[0].Health.Book.Status != venue.HealthAvailable || snapshots[0].Health.Book.Reason != "" ||
+		snapshots[0].Health.Book.SourceGeneration != nextGeneration || snapshots[0].BidPrice != 150 {
+		t.Fatalf("first new-generation BBO did not restore book: %+v", snapshots[0])
 	}
 }
 

@@ -88,6 +88,11 @@ func (s *Server) liveSessionStatusSnapshot(
 		}
 		response["remaining_exposure"] = remaining
 	}
+	// Persisted fills describe residual exposure after unwind. A clean abort
+	// still has an executed historical leg; do not replace it with a zero fill.
+	if status == string(sessAborted) && fillAmount(session.Leg1Fill) > 0 {
+		response["leg1_fill"] = fillView(session.Leg1Fill, 0)
+	}
 
 	return response, nil
 }

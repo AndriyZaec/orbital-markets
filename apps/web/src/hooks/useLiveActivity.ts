@@ -18,12 +18,13 @@ interface LiveActivityResponse {
 }
 
 export function useLiveActivity() {
-  const { pacificaAddress, hyperliquidAddress, asterAddress } = useVenueAuthority()
+  const { pacificaAddress, hyperliquidAddress, asterAddress, phoenixAddress } = useVenueAuthority()
   const accounts = useMemo<VenueAddressMap>(() => Object.fromEntries(Object.entries({
     pacifica: pacificaAddress,
     hyperliquid: hyperliquidAddress,
     aster: asterAddress,
-  }).filter((entry): entry is [string, string] => Boolean(entry[1]))), [asterAddress, hyperliquidAddress, pacificaAddress])
+    phoenix: phoenixAddress,
+  }).filter((entry): entry is [string, string] => Boolean(entry[1]))), [asterAddress, hyperliquidAddress, pacificaAddress, phoenixAddress])
   const accountKey = liveAccountsKey(accounts)
   const accountPairs = useMemo(() => {
     const entries = Object.entries(accounts)

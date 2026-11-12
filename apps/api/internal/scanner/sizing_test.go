@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,34 @@ func TestLiquidityCheckComparesDepthWithUSDOpenInterest(t *testing.T) {
 	check := CheckLiquidity(market, market, 0, time.Now())
 	if !check.Suspect {
 		t.Fatal("liquidity check did not flag $50 depth against $1m open interest")
+	}
+}
+
+func TestLiquidityStaleQuoteSignalUsesBookTime(t *testing.T) {
+	now := time.Now()
+	stale := now.Add(-61 * time.Second)
+	for _, tc := range []struct {
+		name      string
+		aggregate time.Time
+		book      *venue.ComponentHealth
+		wantStale bool
+	}{
+		{"fresh_REST_stale_BBO", now, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: stale, ReceivedAt: now}, true},
+		{"fresh_REST_stale_received_time", now, &venue.ComponentHealth{Status: venue.HealthAvailable, ReceivedAt: stale}, true},
+		{"stale_aggregate_fresh_BBO", stale, &venue.ComponentHealth{Status: venue.HealthAvailable, SourceTime: now}, false},
+		{"legacy_stale_timestamp", stale, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			market := venue.MarketData{Venue: "hyperliquid", BidSize: 500, AskSize: 500, Timestamp: tc.aggregate}
+			if tc.book != nil {
+				market.Health = &venue.MarketHealth{Book: *tc.book}
+			}
+			check := CheckLiquidity(market, venue.MarketData{Venue: "other", BidSize: 500, AskSize: 500, Timestamp: now}, 0, now)
+			staleReason := strings.Contains(strings.Join(check.Reasons, ";"), "quote 61s old")
+			if staleReason != tc.wantStale || check.Blocking {
+				t.Fatalf("stale book informational signal changed: %+v", check)
+			}
+		})
 	}
 }
 

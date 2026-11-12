@@ -55,8 +55,5 @@ func isAllowedVenuePair(vp VenuePair) bool {
 	if a == b {
 		return false
 	}
-	supported := func(venue string) bool {
-		return venue == "pacifica" || venue == "hyperliquid" || venue == "aster"
-	}
-	return supported(a) && supported(b)
+	return IsSupportedLiveVenue(a) && IsSupportedLiveVenue(b)
 }

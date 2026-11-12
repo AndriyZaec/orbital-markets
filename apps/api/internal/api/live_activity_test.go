@@ -124,6 +124,83 @@ func TestLiveActivityPaginatesEqualTimestampsByActivityID(t *testing.T) {
 	}
 }
 
+func TestLiveActivitySupportsAllFourVenuesWithoutCrossAccountRows(t *testing.T) {
+	database, err := appdb.Open(filepath.Join(t.TempDir(), "activity-four-venues.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := NewServer(t.Context(), logger, nil, nil, nil, database, nil, "", "")
+	accounts := map[string]string{"pacifica": "SolOwner", "hyperliquid": "0xhyper", "aster": "0xaster", "phoenix": "SolOwner"}
+	venues := []string{"pacifica", "hyperliquid", "aster", "phoenix"}
+	insert := func(id, venueA, venueB string, bindings map[string]string) {
+		t.Helper()
+		encoded, err := json.Marshal(bindings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = database.Exec(`INSERT INTO live_positions (
+			id, plan_id, opportunity_id, asset, venue_a, venue_b, state,
+			account_bindings_json, account_bindings_key, notional, leverage,
+			started_at, opened_at, updated_at
+		) VALUES (?, ?, 'opportunity', 'SOL', ?, ?, 'open', ?, ?, 100, 2,
+			'2026-09-30T12:00:00Z', '2026-09-30T12:00:00Z', '2026-09-30T12:00:00Z')`,
+			id, id, venueA, venueB, string(encoded), string(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := map[string]bool{}
+	for i, venueA := range venues {
+		for _, venueB := range venues[i+1:] {
+			id := venueA + "-" + venueB
+			insert(id, venueA, venueB, map[string]string{venueA: accounts[venueA], venueB: accounts[venueB]})
+			want[id+":opened"] = true
+		}
+	}
+	insert("other-phoenix-owner", "phoenix", "aster", map[string]string{"phoenix": "OtherOwner", "aster": "0xaster"})
+	insert("wrong-solana-case", "phoenix", "pacifica", map[string]string{"phoenix": "solowner", "pacifica": "SolOwner"})
+
+	t.Run("store", func(t *testing.T) {
+		items, err := server.liveStore.ListLifecycleActivity(t.Context(), executor.LifecycleActivityQuery{
+			Accounts: accounts, Types: []executor.LifecycleActivityType{executor.LifecycleActivityOpened}, Limit: 50,
+		})
+		if err != nil || len(items) != 6 {
+			t.Fatalf("four-venue store activity: rows=%d err=%v", len(items), err)
+		}
+		for _, item := range items {
+			if !want[item.ID] {
+				t.Fatalf("unbound account activity returned: %s", item.ID)
+			}
+		}
+	})
+	t.Run("HTTP pagination", func(t *testing.T) {
+		query := url.Values{"accounts[pacifica]": {"SolOwner"}, "accounts[hyperliquid]": {"0xHyper"},
+			"accounts[aster]": {"0xAster"}, "accounts[phoenix]": {"SolOwner"}, "limit": {"2"}}
+		seen := map[string]bool{}
+		for page := 0; page < 3; page++ {
+			response := getLiveActivity(t, server, query)
+			if len(response.Items) != 2 {
+				t.Fatalf("page %d rows=%d, want 2", page, len(response.Items))
+			}
+			for _, item := range response.Items {
+				if !want[item.ID] || seen[item.ID] {
+					t.Fatalf("unbound or duplicated account activity returned: %s", item.ID)
+				}
+				seen[item.ID] = true
+			}
+			if (page < 2) != (response.NextCursor != "") {
+				t.Fatalf("page %d has incorrect cursor coverage", page)
+			}
+			query.Set("cursor", response.NextCursor)
+		}
+		if len(seen) != len(want) {
+			t.Fatal("missing venue-pair activity", seen)
+		}
+	})
+}
+
 func TestLiveActivityRejectsInvalidQuery(t *testing.T) {
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "activity-validation.db"))
 	if err != nil {

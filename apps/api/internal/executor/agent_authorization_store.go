@@ -26,6 +26,13 @@ func (s *Store) AgentAuthorizationMatches(
 	ctx context.Context,
 	venue, ownerAccount, agentAddress string,
 ) (bool, error) {
+	expected, err := s.RegisteredAgent(ctx, venue, ownerAccount)
+	return expected != "" && expected == agentAddress, err
+}
+
+// RegisteredAgent returns the last confirmed local registration, not fresh
+// on-chain authority. Trading admission must verify the chain independently.
+func (s *Store) RegisteredAgent(ctx context.Context, venue, ownerAccount string) (string, error) {
 	var expected string
 	err := s.reader.QueryRowContext(ctx, `
 		SELECT agent_address
@@ -34,12 +41,12 @@ func (s *Store) AgentAuthorizationMatches(
 		venue, ownerAccount,
 	).Scan(&expected)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return "", nil
 	}
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	return expected == agentAddress, nil
+	return expected, nil
 }
 
 func (s *Store) DeleteAgentAuthorization(ctx context.Context, venue, ownerAccount, agentAddress string) error {

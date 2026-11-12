@@ -24,15 +24,17 @@ import { DeferredBoundary } from '@/components/DeferredBoundary'
 import { AssetIcon } from '@/components/AssetIcon'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { isActivePositionState, isClosedPositionState } from '@/lib/portfolio-position'
+import { positionPnL } from '@/lib/position-pnl'
+import { cn } from '@/lib/utils'
 import { PositionShareDialog } from '@/components/PositionShareDialog'
 import type { LiveFillDetail } from '@/hooks/useLivePositionDetail'
 
 const LivePositionDetail = lazy(() => import('@/components/LivePositionDetail').then((module) => ({ default: module.LivePositionDetail })))
 
 function fmtPnL(n: number) {
-  const sign = n >= 0 ? '+' : ''
+  const sign = n < 0 ? '-' : '+'
   if (Math.abs(n) >= 1000) return sign + '$' + Math.abs(n).toFixed(0)
-  return sign + '$' + n.toFixed(2)
+  return sign + '$' + Math.abs(n).toFixed(2)
 }
 
 function fmtUsd(n: number) {
@@ -310,8 +312,8 @@ export function LivePositions({
 
       {/* Table */}
       <div className="flex-1 overflow-auto min-h-0 bg-[#080b12]">
-        {loading && <p className="text-muted-foreground text-xs px-5 py-3">Loading...</p>}
-        {error && <p className="text-destructive text-xs px-5 py-3">Error: {error}</p>}
+        {loading && positions.length === 0 && <p className="text-muted-foreground text-xs px-5 py-3">Loading...</p>}
+        {error && <p className="text-muted-foreground text-xs px-5 py-3">{positions.length > 0 ? 'Showing last known positions. Some venues are reconnecting.' : 'Unable to load positions. Retrying.'}</p>}
 
         {!loading && !error && displayed.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-5 py-4 text-center">
@@ -335,7 +337,7 @@ export function LivePositions({
           </div>
         )}
 
-        {!loading && !error && displayed.length > 0 && (
+        {displayed.length > 0 && (
           <Table>
             <TableHeader className="sticky top-0 z-10">
               <TableRow className="border-border hover:bg-transparent bg-[#080b12]">
@@ -353,6 +355,7 @@ export function LivePositions({
             </TableHeader>
             <TableBody>
               {displayed.map((pos) => {
+                const pnl = positionPnL(pos)
                 const isDegraded = pos.state === 'degraded'
                 const liqRisk = worstLiqRisk(pos)
 
@@ -381,10 +384,10 @@ export function LivePositions({
                     <TC>{fmtUsd(pos.notional)}</TC>
                     <TC>{pos.leverage}x</TC>
                     <TC negative={pos.current_spread < 0}>{fmtPct(pos.current_spread, 2)}</TC>
-                    <TC negative={pos.funding_pnl < 0}>{fmtPnL(pos.funding_pnl)}</TC>
+                    <TC negative={pnl.funding !== null && pnl.funding < 0}>{pnl.funding === null ? '—' : fmtPnL(pnl.funding)}</TC>
                     <TC negative={pos.price_pnl < 0}>{fmtPnL(pos.price_pnl)}</TC>
-                    <TableCell className={`text-right font-mono text-xs font-semibold py-2 ${pos.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`} style={{ textAlign: 'right' }}>
-                      {fmtPnL(pos.total_pnl)}
+                    <TableCell className={cn('text-right font-mono text-xs font-semibold py-2', pnl.total === null ? 'text-muted-foreground' : pnl.total >= 0 ? 'text-green-400' : 'text-red-400')} style={{ textAlign: 'right' }}>
+                      {pnl.total === null ? '—' : fmtPnL(pnl.total)}
                     </TableCell>
                     <TableCell className="py-2">
                       {liqRisk ? (

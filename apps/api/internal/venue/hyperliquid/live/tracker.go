@@ -46,19 +46,23 @@ type fillEvent struct {
 
 // Tracker subscribes to Hyperliquid WS orderUpdates and correlates fills.
 type Tracker struct {
-	mu      sync.RWMutex
-	byOID   map[string]*trackedOrder // keyed by orderID
-	byCloid map[string]*trackedOrder // keyed by clientOrderID
-	address string
-	logger  *slog.Logger
+	mu                sync.RWMutex
+	byOID             map[string]*trackedOrder // keyed by orderID
+	byCloid           map[string]*trackedOrder // keyed by clientOrderID
+	address           string
+	logger            *slog.Logger
+	wsURL             string
+	heartbeatInterval time.Duration
 }
 
 func NewTracker(logger *slog.Logger, address string) *Tracker {
 	return &Tracker{
-		byOID:   make(map[string]*trackedOrder),
-		byCloid: make(map[string]*trackedOrder),
-		address: address,
-		logger:  logger,
+		byOID:             make(map[string]*trackedOrder),
+		byCloid:           make(map[string]*trackedOrder),
+		address:           address,
+		logger:            logger,
+		wsURL:             wsURL,
+		heartbeatInterval: 30 * time.Second,
 	}
 }
 
@@ -108,7 +112,7 @@ func (t *Tracker) Run(ctx context.Context) {
 }
 
 func (t *Tracker) connectAndListen(ctx context.Context) error {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
@@ -136,6 +140,25 @@ func (t *Tracker) connectAndListen(ctx context.Context) error {
 			return fmt.Errorf("subscribe %s: %w", subType, err)
 		}
 	}
+
+	// Subscriptions are complete; only this goroutine writes from now on.
+	go func() {
+		heartbeat := time.NewTicker(t.heartbeatInterval)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-closed:
+				return
+			case <-heartbeat.C:
+				if err := conn.WriteJSON(map[string]string{"method": "ping"}); err != nil {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
 
 	t.logger.Info("hyperliquid order tracker ws connected")
 

@@ -41,6 +41,10 @@ func (s *Server) handlePaperOpen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "plan not executable"})
 		return
 	}
+	if !paper.SupportsVenuePair(plan.Leg1.Venue, plan.Leg2.Venue) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "paper execution does not support this venue pair"})
+		return
+	}
 	if err := s.scanner.EvaluateExecutionLiquidity(r.Context(), plan, liquidity.OrderSize{BaseAmount: plan.BaseAmount}, true); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return

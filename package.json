@@ -1,4 +1,7 @@
 {
+	"scripts": {
+		"deploy:staging": "node scripts/deploy-staging.mjs"
+	},
 	"devDependencies": {
 		"wrangler": "^4.99.0"
 	}

@@ -28,6 +28,7 @@ const (
 	livePrepareExistingSession       = "EXISTING_SESSION"
 	livePreparePreTradeBlocked       = "PRETRADE_BLOCKED"
 	livePrepareExecutionDataNotReady = "EXECUTION_DATA_NOT_READY"
+	livePrepareAdmissionDenied       = "LIVE_ADMISSION_DENIED"
 )
 
 func newLivePlanID() string {
@@ -115,20 +116,12 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 	// 1. Build a fresh execution plan
 	progress.Stage("quotes")
-	var plan *domain.ExecutionPlan
-	err = waitForLiveBBO(r.Context(), progress, func() error {
-		var err error
-		plan, err = s.scanner.BuildPlanWithLeverageCaps(
-			r.Context(), req.OpportunityID, req.Leverage, notional,
-			s.live.accountLeverageResolver(bindings.Accounts),
-		)
-		if err == nil && !plan.Executable && len(plan.Warnings) > 0 &&
-			plan.Warnings[len(plan.Warnings)-1] == scanner.ErrFreshBBOUnavailable.Error() {
-			// The planner appends this only after all other executable checks pass.
-			return scanner.ErrFreshBBOUnavailable
-		}
-		return err
-	})
+	// Pending preview liquidity is resolved by the mandatory fresh depth check
+	// before signing below; warnings are presentation, not readiness evidence.
+	plan, err := s.scanner.BuildPlanWithLeverageCaps(
+		r.Context(), req.OpportunityID, req.Leverage, notional,
+		s.live.accountLeverageResolver(bindings.Accounts),
+	)
 	if err != nil {
 		s.logger.Error("live prepare: build plan failed", "err", err)
 		writePlanError(w, http.StatusUnprocessableEntity, err)
@@ -263,6 +256,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		)
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"error":   "live admission denied",
+			"code":    livePrepareAdmissionDenied,
 			"reasons": admission.Reasons,
 		})
 		return
@@ -386,7 +380,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	leg1UnwindCloid := fmt.Sprintf("orbital-l1unwind-%d", now.UnixNano()+1)
 
 	leg1Open, err := s.buildOpenSigningRequest(
-		leg1, leg1Amount, leg1OpenCloid, bindings,
+		r.Context(), leg1, leg1Amount, leg1OpenCloid, bindings,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 open", "err", err)
@@ -397,7 +391,7 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leg1Unwind, err := s.buildUnwindSigningRequest(
-		leg1, leg1Amount, leg1UnwindCloid, bindings,
+		r.Context(), leg1, leg1Amount, leg1UnwindCloid, bindings,
 	)
 	if err != nil {
 		s.logger.Error("live prepare: build leg1 unwind", "err", err)
@@ -629,13 +623,14 @@ func legMarketKey(leg domain.Leg) string {
 
 // buildOpenSigningRequest builds an open-order signing request for one leg.
 func (s *Server) buildOpenSigningRequest(
-	leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
+	ctx context.Context, leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
 ) (*domain.SigningRequest, error) {
 	module, err := s.live.liveModule(leg.venue)
 	if err != nil {
 		return nil, err
 	}
 	return module.BuildOpen(venue.LiveOrderParams{
+		Context: ctx,
 		Account: bindings.Accounts[leg.venue],
 		Signer:  bindings.Agents[leg.venue],
 		Symbol:  leg.symbol, Side: leg.side, Amount: amount, Price: leg.price,
@@ -647,7 +642,7 @@ func (s *Server) buildOpenSigningRequest(
 // buildUnwindSigningRequest builds a reduce-only close signing request for one leg.
 // Side is the position side; the close payload inverts it internally.
 func (s *Server) buildUnwindSigningRequest(
-	leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
+	ctx context.Context, leg legPlan, amount float64, clientOrderID string, bindings liveVenueBindings,
 ) (*domain.SigningRequest, error) {
 	module, err := s.live.liveModule(leg.venue)
 	if err != nil {
@@ -655,6 +650,7 @@ func (s *Server) buildUnwindSigningRequest(
 	}
 	return module.BuildReduce(venue.LiveReduceParams{
 		LiveOrderParams: venue.LiveOrderParams{
+			Context: ctx,
 			Account: bindings.Accounts[leg.venue],
 			Signer:  bindings.Agents[leg.venue],
 			Symbol:  leg.symbol, Side: leg.side, Amount: amount, Price: leg.price,
@@ -781,37 +777,37 @@ func (s *Server) handleLiveSubmit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// Two freshness thresholds serve two different needs:
-//
-//	admissionFreshness — hard gate at /live/prepare and pretrade checks in
-//	  venue/*/account/pretrade.go. Must stay strict; this is what prevents
-//	  submitting orders against stale account state.
-//
-//	displayFreshness — soft gate for the balances/readiness UI. Push-driven
-//	  Pacifica WS doesn't heartbeat when nothing is happening, so a healthy
-//	  but quiet account naturally ages past 30s. Using the strict window for
-//	  display caused frequent false "Stale" flags with no user-visible fix.
-//	  5 minutes is generous enough to hide the quiet-account case while
-//	  still catching a genuinely broken stream.
+// Current readiness uses the same evidence window for every venue. Presentation
+// observations outlive this window without being promoted to admission evidence.
+// Venue pretrade checks remain the authority for actual order admission.
 const (
 	admissionFreshness                = 30 * time.Second
-	displayFreshness                  = 5 * time.Minute
+	displayFreshness                  = admissionFreshness
 	positionReconciliationQuietPeriod = 10 * time.Second
 )
 
 // venueAccountStatus is the per-venue account-data readiness view returned by
 // /live/balances and consumed by the /live/prepare gate.
 type venueAccountStatus struct {
-	Venue       string     `json:"venue"`
-	Equity      float64    `json:"equity"`
-	Available   float64    `json:"available"`
-	Connected   bool       `json:"connected"`    // wallet-derived stream is up
-	StreamReady bool       `json:"stream_ready"` // account snapshot has been populated at least once
-	Fresh       bool       `json:"fresh"`        // snapshot age within liveAccountFreshness
-	LastUpdated *time.Time `json:"last_updated,omitempty"`
-	AgeSeconds  float64    `json:"age_seconds"`
-	Reason      string     `json:"reason,omitempty"` // human explanation when not ready
-	Unavailable bool       `json:"unavailable,omitempty"`
+	Venue       string                 `json:"venue"`
+	Equity      float64                `json:"equity"`
+	Available   float64                `json:"available"`
+	Connected   bool                   `json:"connected"`    // wallet-derived stream is up
+	StreamReady bool                   `json:"stream_ready"` // account snapshot has been populated at least once
+	Fresh       bool                   `json:"fresh"`        // snapshot age within liveAccountFreshness
+	LastUpdated *time.Time             `json:"last_updated,omitempty"`
+	AgeSeconds  float64                `json:"age_seconds"`
+	Reason      string                 `json:"reason,omitempty"` // human explanation when not ready
+	Unavailable bool                   `json:"unavailable,omitempty"`
+	Phoenix     *phoenixAccountDetails `json:"phoenix,omitempty"`
+	// Presentation evidence is independent of current execution admission.
+	Observation *accountBalanceObservation `json:"observation,omitempty"`
+}
+
+type accountBalanceObservation struct {
+	Equity     float64   `json:"equity"`
+	Available  float64   `json:"available"`
+	ObservedAt time.Time `json:"observed_at"`
 }
 
 // buildVenueAccountStatus derives the readiness view from a raw venue snapshot.
@@ -832,7 +828,8 @@ func buildVenueAccountStatus(venue string, connected bool, lastUpdated time.Time
 		age := time.Since(lastUpdated)
 		st.AgeSeconds = age.Seconds()
 		st.StreamReady = true
-		st.Fresh = age <= freshness
+		st.Fresh = age >= 0 && age <= freshness
+		st.Observation = &accountBalanceObservation{Equity: equity, Available: available, ObservedAt: lastUpdated}
 	}
 	if !st.Connected {
 		st.Reason = "account stream not connected"
@@ -849,9 +846,6 @@ func liveAccountStatuses(accounts *liveAccountContext, freshness time.Duration) 
 }
 
 func accountStatus(accounts *liveAccountContext, venue string, freshness time.Duration) venueAccountStatus {
-	if venue == "aster" && freshness > admissionFreshness {
-		freshness = admissionFreshness
-	}
 	return buildVenueAccountStatusFromSnapshot(venue, accountSnapshot(accounts, venue), freshness)
 }
 
@@ -860,9 +854,8 @@ func buildVenueAccountStatusFromSnapshot(venue string, snapshot liveAccountSnaps
 		venue, snapshot.Connected, snapshot.LastUpdated,
 		snapshot.Equity, snapshot.Available, freshness,
 	)
+	status.Phoenix = snapshot.Phoenix
 	if snapshot.UnavailableReason != "" {
-		status.Connected = false
-		status.StreamReady = false
 		status.Fresh = false
 		status.Reason = snapshot.UnavailableReason
 		status.Unavailable = true
@@ -891,7 +884,7 @@ func (s *Server) handleLiveBalances(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := bindings.requireAccountsWithin(supportedLiveVenues); err != nil {
+	if err := bindings.requireAccountsWithin(supportedAccountVenues); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -963,7 +956,7 @@ func (s *Server) liveAccountStatusesFor(pacAccount, hlAddress string, freshness 
 // The handler intentionally does NOT build a plan, create a session, or
 // return signing requests — those remain on /live/prepare.
 func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request) {
-	if s.live == nil {
+	if s.live == nil || s.live.accounts == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "live execution not configured",
 		})
@@ -983,22 +976,18 @@ func (s *Server) handleLiveAccountsEnsure(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one account binding required"})
 		return
 	}
-	if err := bindings.requireAccountsWithin(supportedLiveVenues); err != nil {
+	if err := bindings.requireAccountsWithin(supportedAccountVenues); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	accounts, err := s.live.acquireAccountContext(bindings.Accounts, false)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-		return
-	}
-	defer accounts.Release()
+	views := newAccountViews(s.live.accounts, bindings.Accounts)
+	defer views.accounts.Release()
 
 	// Snapshot readiness right after the call. On a very first ensure the
 	// snapshot will typically still be empty (streams start asynchronously);
-	// the frontend polls /live/balances to see them go ready.
-	writeJSON(w, http.StatusOK, s.liveAccountStatusesForBindings(bindings.Accounts, displayFreshness))
+	// the shared account SSE reports each venue becoming ready independently.
+	writeJSON(w, http.StatusOK, accountViewStatuses(views.snapshots()))
 }
 
 // handleLivePositions returns all live positions, newest first.
@@ -1020,6 +1009,9 @@ func (s *Server) handleLivePositions(w http.ResponseWriter, r *http.Request) {
 
 	if positions == nil {
 		positions = []executor.LivePosition{}
+	}
+	for i := range positions {
+		s.addPhoenixPendingFunding(r.Context(), &positions[i], nil)
 	}
 	writeJSON(w, http.StatusOK, positions)
 }
@@ -1066,6 +1058,7 @@ func (s *Server) handleLivePosition(w http.ResponseWriter, r *http.Request) {
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.Error("live position: get durable plan", "err", err, "id", id, "plan_id", pos.PlanID)
 	}
+	s.addPhoenixPendingFunding(r.Context(), pos, fills)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"position":      pos,
@@ -1113,6 +1106,9 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	closeCtx, cancelClose := context.WithTimeout(r.Context(), liveClosePrepareTimeout)
+	defer cancelClose()
+	r = r.WithContext(closeCtx)
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/live/close/")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "position id required"})
@@ -1155,7 +1151,7 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pos.State == string(executor.ExecStateClosing) {
+	if pos.State == string(executor.ExecStateClosing) || ((pos.VenueA == "phoenix" || pos.VenueB == "phoenix") && pos.State == string(executor.ExecStateDegraded)) {
 		progress, progressErr := s.liveStore.GetCloseProgress(r.Context(), id)
 		if progressErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get close progress"})
@@ -1211,8 +1207,17 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var signingRequests []*domain.SigningRequest
+	venueDerived := false
+	if (pos.VenueA == "phoenix" || pos.VenueB == "phoenix") && (pos.State == string(executor.ExecStateDegraded) || pos.State == string(executor.ExecStateClosing)) {
+		fills, err = s.freshVenueExposureFills(r.Context(), pos)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "Current Phoenix close exposure is unavailable; reconcile before retrying.", "code": "CLOSE_EXPOSURE_NOT_READY", "retryable": true})
+			return
+		}
+		venueDerived = true
+	}
 	for _, fill := range fills {
-		if !fill.Filled || fill.FilledAmount <= 0 || confirmedLegs[fill.Leg] {
+		if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
 			continue
 		}
 		if fill.Side != string(domain.SideLong) && fill.Side != string(domain.SideShort) {
@@ -1240,6 +1245,25 @@ func (s *Server) handleLiveClose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(signingRequests) == 0 {
+		if venueDerived {
+			// A manual venue close may have flattened exposure while the original
+			// Phoenix attempt is still submitted locally. Resolve that journal
+			// evidence first, then re-read both venues through the existing flat
+			// proof (freshness, native symbols and unresolved-order gates).
+			s.reconcilePhoenixPositionOrders(r.Context(), pos)
+			state, err := s.inspectPositionAfterCloseActivity(r.Context(), pos)
+			if err == nil && state == positionExposureFlat {
+				if _, err := s.markPositionClosedFromVenueTruth(r.Context(), pos); err != nil {
+					s.logger.Error("live close: persist reconciled closure", "err", err, "id", id)
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Could not save the position status. Try again shortly."})
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"position_id": id, "reconciled_closed": true, "signing_requests": []any{},
+				})
+				return
+			}
+		}
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":     "Current close exposure is not ready. Try again shortly.",
 			"code":      "CLOSE_EXPOSURE_NOT_READY",
@@ -1279,14 +1303,14 @@ func (s *Server) freshVenueExposureFills(
 	if s.live.accounts == nil {
 		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
 	}
-	accounts, err := s.live.acquireAccountContext(position.AccountBindings, false)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, true)
 	if err != nil {
 		return nil, fmt.Errorf("venue exposure is unavailable; verify both venues directly")
 	}
 	defer accounts.Release()
 	unlock := accounts.Lock()
 	defer unlock()
-	symbols, err := s.positionVenueSymbols(ctx, position.ID, position.Asset)
+	symbols, err := s.positionVenueSymbols(ctx, position)
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve venue symbols")
 	}
@@ -1309,10 +1333,10 @@ func (s *Server) freshVenueExposureFills(
 		if !ok {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
 		}
-		if feed.RefreshPositions(refreshCtx) != nil {
+		if refreshRecoveryPositions(refreshCtx, feed) != nil {
 			return nil, fmt.Errorf("could not refresh %s exposure; verify both venues directly", venue)
 		}
-		snapshot := feed.Snapshot()
+		snapshot := recoveryPositionSnapshot(feed)
 		if !positionStateReady(snapshot.PositionsUpdatedAt, updatedAfter) {
 			return nil, fmt.Errorf("fresh %s exposure is unavailable; verify both venues directly", venue)
 		}
@@ -1407,7 +1431,7 @@ func (s *Server) inspectPositionVenueTruth(
 	if s.live == nil || s.live.accounts == nil {
 		return positionExposureUnknown, nil
 	}
-	accounts, err := s.live.acquireAccountContext(position.AccountBindings, false)
+	accounts, err := s.live.acquireAccountContext(position.AccountBindings, true)
 	if err != nil {
 		s.logger.Warn("live position: venue reconciliation unavailable", "err", err, "id", position.ID)
 		return positionExposureUnknown, nil
@@ -1418,7 +1442,7 @@ func (s *Server) inspectPositionVenueTruth(
 	reconcileCtx, cancel := context.WithTimeout(ctx, recoveryAccountTimeout)
 	defer cancel()
 	venues := []string{position.VenueA, position.VenueB}
-	symbols, err := s.positionVenueSymbols(ctx, position.ID, position.Asset)
+	symbols, err := s.positionVenueSymbols(ctx, position)
 	if err != nil {
 		return positionExposureUnknown, err
 	}
@@ -1427,7 +1451,7 @@ func (s *Server) inspectPositionVenueTruth(
 		if !ok {
 			return positionExposureUnknown, nil
 		}
-		if err := feed.RefreshPositions(reconcileCtx); err != nil {
+		if err := refreshRecoveryPositions(reconcileCtx, feed); err != nil {
 			s.logger.Warn("live position: venue position refresh failed", "venue", venue, "err", err, "id", position.ID)
 			return positionExposureUnknown, nil
 		}
@@ -1446,11 +1470,14 @@ func (s *Server) inspectPositionVenueTruth(
 			return positionExposurePresent, nil
 		}
 	}
+	if pending, err := recoveryOrdersUnresolved(reconcileCtx, accounts); err != nil || pending {
+		return positionExposureUnknown, err
+	}
 	return positionExposureFlat, nil
 }
 
-func (s *Server) positionVenueSymbols(ctx context.Context, positionID, fallback string) (map[string]string, error) {
-	fills, err := s.liveStore.GetFills(ctx, positionID)
+func (s *Server) positionVenueSymbols(ctx context.Context, position *executor.LivePosition) (map[string]string, error) {
+	fills, err := s.liveStore.GetFills(ctx, position.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1462,7 +1489,25 @@ func (s *Server) positionVenueSymbols(ctx context.Context, positionID, fallback 
 	}
 	for _, venue := range []string{"pacifica", "hyperliquid", "aster"} {
 		if symbols[venue] == "" {
-			symbols[venue] = fallback
+			symbols[venue] = position.Asset
+		}
+	}
+	if (position.VenueA == "phoenix" || position.VenueB == "phoenix") && symbols["phoenix"] == "" {
+		record, err := s.liveStore.GetDurableSessionForPlan(ctx, position.PlanID)
+		if err != nil {
+			return nil, fmt.Errorf("Phoenix native market identity unavailable")
+		}
+		session, err := unmarshalLiveSession(record.Payload)
+		if err != nil || validateDurableSessionOwnership(record, session) != nil || session.Plan.ID != position.PlanID || session.Plan.Asset != position.Asset || !session.Bindings.matchesAccounts(position.AccountBindings) {
+			return nil, fmt.Errorf("Phoenix durable market identity unavailable")
+		}
+		for _, leg := range []legPlan{session.Leg1, session.Leg2} {
+			if leg.venue == "phoenix" {
+				symbols["phoenix"] = leg.symbol
+			}
+		}
+		if symbols["phoenix"] == "" {
+			return nil, fmt.Errorf("Phoenix native market identity missing")
 		}
 	}
 	return symbols, nil
@@ -1475,7 +1520,7 @@ func waitForPositionState(ctx context.Context, accounts *liveAccountContext, ven
 		ready := true
 		for _, venue := range venues {
 			feed, ok := accounts.Feed(venue)
-			if !ok || !positionStateReady(feed.Snapshot().PositionsUpdatedAt, after) {
+			if !ok || !positionStateReady(recoveryPositionSnapshot(feed).PositionsUpdatedAt, after) {
 				ready = false
 				break
 			}
@@ -1518,6 +1563,9 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	closeCtx, cancelClose := context.WithTimeout(r.Context(), liveClosePrepareTimeout)
+	defer cancelClose()
+	r = r.WithContext(closeCtx)
 	var req liveVenueBindingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -1576,9 +1624,10 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			Amount float64 `json:"amount"`
 		} `json:"remaining_exposure"`
 		Error string `json:"error,omitempty"`
+		Code  string `json:"code,omitempty"`
 	}
 
-	var signingRequests []*domain.SigningRequest
+	signingRequests := make([]*domain.SigningRequest, 0)
 	var posResults []positionClose
 
 	for _, pos := range positions {
@@ -1586,6 +1635,12 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			ID:    pos.ID,
 			Asset: pos.Asset,
 			State: pos.State,
+		}
+		if ctx.Err() != nil {
+			pc.Error = "Close preparation timed out. Try again shortly."
+			pc.Code = "CLOSE_PREPARATION_UNAVAILABLE"
+			posResults = append(posResults, pc)
+			continue
 		}
 
 		fills, err := s.live.liveStore.GetFills(ctx, pos.ID)
@@ -1602,7 +1657,7 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			posResults = append(posResults, pc)
 			continue
 		}
-		if pos.State == string(executor.ExecStateClosing) {
+		if pos.State == string(executor.ExecStateClosing) || ((pos.VenueA == "phoenix" || pos.VenueB == "phoenix") && pos.State == string(executor.ExecStateDegraded)) {
 			progress, err := s.live.liveStore.GetCloseProgress(ctx, pos.ID)
 			if err != nil {
 				s.logger.Error("kill switch: get close progress", "err", err, "id", pos.ID)
@@ -1631,7 +1686,8 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			venueDerived = true
 		}
 
-		legsClosed := 0
+		// Publish nothing for this position until all outstanding legs prepare.
+		var positionRequests []*domain.SigningRequest
 		for _, fill := range closeFills {
 			if !fill.Filled || fill.FilledAmount <= 0 || (!venueDerived && confirmedLegs[fill.Leg]) {
 				continue
@@ -1643,6 +1699,11 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 				Side   string  `json:"side"`
 				Amount float64 `json:"amount"`
 			}{fill.Leg, fill.Venue, fill.Symbol, fill.Side, fill.FilledAmount})
+			if pc.Error != "" {
+				// Preserve the complete exposure list without spending more of the
+				// shared budget on a position that can no longer prepare fully.
+				continue
+			}
 
 			cloid := closeClientOrderID("kill", pos.ID, fill.Leg, time.Now())
 
@@ -1650,31 +1711,35 @@ func (s *Server) handleLiveKill(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				s.logger.Error("kill switch: build close payload",
 					"err", err, "id", pos.ID, "leg", fill.Leg, "venue", fill.Venue)
-				pc.Error = fmt.Sprintf("leg %d: %s", fill.Leg, err)
+				pc.Error = fmt.Sprintf("Leg %d close preparation is temporarily unavailable.", fill.Leg)
+				pc.Code = "CLOSE_PREPARATION_UNAVAILABLE"
 				continue
 			}
 			sigReq.PositionID = pos.ID
 			sigReq.Leg = fill.Leg
 
-			s.live.signingStore.Store(sigReq)
-			signingRequests = append(signingRequests, sigReq)
-			legsClosed++
-
-			s.logger.Info("kill switch: close payload ready",
-				"position", pos.ID,
-				"leg", fill.Leg,
-				"venue", fill.Venue,
-				"symbol", fill.Symbol,
-				"amount", fill.FilledAmount,
-			)
+			positionRequests = append(positionRequests, sigReq)
 		}
 
-		pc.Legs = legsClosed
+		if pc.Error == "" && ctx.Err() != nil {
+			pc.Error = "Close preparation timed out. Try again shortly."
+			pc.Code = "CLOSE_PREPARATION_UNAVAILABLE"
+		}
+		if pc.Error == "" {
+			for _, sigReq := range positionRequests {
+				s.live.signingStore.Store(sigReq)
+				signingRequests = append(signingRequests, sigReq)
+				s.logger.Info("kill switch: close payload ready",
+					"position", pos.ID, "leg", sigReq.Leg, "venue", sigReq.Venue,
+					"symbol", sigReq.Symbol, "amount", sigReq.Amount)
+			}
+			pc.Legs = len(positionRequests)
+		}
 
-		if legsClosed > 0 {
+		if pc.Legs > 0 {
 			s.live.liveStore.InsertEvent(ctx, pos.ID, "emergency_close_prepared",
 				executor.ExecState(pos.State),
-				fmt.Sprintf("kill switch: %d close orders prepared", legsClosed))
+				fmt.Sprintf("kill switch: %d close orders prepared", pc.Legs))
 		}
 
 		posResults = append(posResults, pc)
@@ -1746,6 +1811,16 @@ func (s *Server) buildCloseSigningRequestForBindings(
 	emergency bool,
 ) (*domain.SigningRequest, error) {
 	positionSide := domain.Side(fill.Side)
+	timeout := liveClosePrepareTimeout
+	if emergency {
+		timeout = liveKillLegPrepareTimeout
+	}
+	// The parent request's 8s deadline is never extended by a per-leg budget.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	price := fill.AvgFillPrice // use fill price as reference for slippage calc
 	module, err := s.live.liveModule(fill.Venue)
 	if err != nil {
@@ -1753,35 +1828,9 @@ func (s *Server) buildCloseSigningRequestForBindings(
 	}
 	closePricePolicy := module.Capabilities().ClosePricePolicy
 	if closePricePolicy == venue.ClosePriceFromMarketBBO {
-		if s.closeMarkets == nil {
-			return nil, fmt.Errorf("current %s BBO for %s unavailable", fill.Venue, fill.Symbol)
-		}
-		marketCtx, cancelMarket := context.WithTimeout(ctx, 3*time.Second)
-		defer cancelMarket()
-		market, marketErr := s.closeMarkets.MarketSnapshot(marketCtx, fill.Venue, marketAsset)
-		if marketErr != nil {
-			return nil, fmt.Errorf("current %s BBO for %s unavailable: %w", fill.Venue, fill.Symbol, marketErr)
-		}
-		quoteAge := time.Since(market.Timestamp)
-		if market.Timestamp.IsZero() || quoteAge > maxCloseQuoteAge || quoteAge < -time.Second {
-			return nil, fmt.Errorf("current %s BBO for %s is stale", fill.Venue, fill.Symbol)
-		}
-		switch positionSide {
-		case domain.SideLong:
-			price = market.BidPrice
-			if price <= 0 || market.BidSize <= 0 {
-				return nil, fmt.Errorf("current %s bid for %s unavailable", fill.Venue, fill.Symbol)
-			}
-		case domain.SideShort:
-			price = market.AskPrice
-			if price <= 0 || market.AskSize <= 0 {
-				return nil, fmt.Errorf("current %s ask for %s unavailable", fill.Venue, fill.Symbol)
-			}
-		default:
-			return nil, fmt.Errorf("invalid position side: %q", fill.Side)
-		}
-		if math.IsNaN(price) || math.IsInf(price, 0) {
-			return nil, fmt.Errorf("current %s BBO for %s is invalid", fill.Venue, fill.Symbol)
+		price, err = s.closeReferencePrice(ctx, fill, marketAsset)
+		if err != nil {
+			return nil, err
 		}
 	} else if closePricePolicy != venue.ClosePriceFromFill {
 		return nil, fmt.Errorf("unsupported close price policy for venue %s", fill.Venue)
@@ -1790,8 +1839,9 @@ func (s *Server) buildCloseSigningRequestForBindings(
 	if emergency {
 		action = venue.ReduceActionEmergencyClose
 	}
-	return module.BuildReduce(venue.LiveReduceParams{
+	request, err := module.BuildReduce(venue.LiveReduceParams{
 		LiveOrderParams: venue.LiveOrderParams{
+			Context: ctx,
 			Account: bindings.Accounts[fill.Venue],
 			Signer:  bindings.Agents[fill.Venue],
 			Symbol:  fill.Symbol, Side: positionSide, Amount: fill.FilledAmount,
@@ -1799,4 +1849,8 @@ func (s *Server) buildCloseSigningRequestForBindings(
 		},
 		Action: action,
 	})
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return request, err
 }

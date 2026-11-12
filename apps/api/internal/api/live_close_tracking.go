@@ -78,6 +78,12 @@ func (s *Server) awaitCloseFill(req *domain.SigningRequest, orderID string) {
 	defer cancel()
 
 	fill, err := s.waitForLegFill(ctx, req)
+	if req.Venue == "phoenix" && err != nil {
+		persist, done := context.WithTimeout(s.ctx, 5*time.Second)
+		defer done()
+		_ = s.liveStore.UpsertCloseOutcome(persist, executor.CloseOutcome{PositionID: req.PositionID, Leg: req.Leg, Venue: req.Venue, ClientOrderID: req.ClientOrderID, OrderID: orderID, RequestedAmount: req.Amount, Accepted: orderID != "", Resolved: false, Error: "Phoenix close outcome remains uncertain; reconciliation required"})
+		return
+	}
 	ratio := 0.0
 	if fill != nil && req.Amount > 0 {
 		ratio = fill.FilledAmount / req.Amount

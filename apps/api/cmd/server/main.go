@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/analytics"
@@ -22,6 +23,8 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/dataagent"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/pacifica"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix"
+	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/phoenix/delegation"
 )
 
 func main() {
@@ -55,8 +58,9 @@ func main() {
 	pac := pacifica.New(logger)
 	hl := hyperliquid.New(logger)
 	ast := aster.New(logger)
+	phx := phoenix.New(logger)
 
-	sc := scanner.New(logger, pac, hl, ast)
+	sc := scanner.New(logger, pac, hl, ast, phx)
 
 	// Snapshot recorder + retention janitor + rollup aggregator
 	recorder := db.NewRecorder(database, sc, logger)
@@ -71,13 +75,19 @@ func main() {
 	executor := paper.NewExecutor(logger, store, sc)
 	monitor := paper.NewMonitor(logger, executor, store, sc)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	sc.EnableExecutionLiquidity(liquidity.New(ctx, logger))
+	phoenixInfrastructure := startPhoenixInfrastructure(ctx, logger)
+	if phoenixInfrastructure != nil {
+		defer phoenixInfrastructure.Close()
+	}
+	books := liquidity.New(ctx, logger)
+	sc.EnableExecutionLiquidity(books)
 
 	go pac.Connect(ctx)
 	go hl.Run(ctx)
 	go ast.Run(ctx)
+	go phx.Run(ctx)
 	go sc.Run(ctx, 60*time.Second)
 	go recorder.Run(ctx)
 	go janitor.Run(ctx)
@@ -108,12 +118,25 @@ func main() {
 	}
 
 	// Live execution deps (non-custodial signing flow)
-	liveDeps := startLive(ctx, logger, database, operationalDatabase, sc, pac, hl, ast, dataagent.ExcludeOwner(asterDataAgent, referenceAccount))
+	phoenixAccounts := api.PhoenixAccountConfig{}
+	if phoenixInfrastructure != nil {
+		phoenixAccounts = api.PhoenixAccountConfig{Backend: phoenixInfrastructure, Markets: phx}
+	}
+	liveDeps := startLive(ctx, logger, database, operationalDatabase, sc, pac, hl, ast, liveAsterReader(asterDataAgent, referenceAccount), phoenixAccounts)
 	productAnalytics := analytics.NewEmitter(logger, os.Getenv("POSTHOG_API_KEY"), os.Getenv("POSTHOG_HOST"))
 	defer productAnalytics.Close()
 	telegram := buildTelegramIntegration(logger, sc, database, operationalDatabase)
 
-	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"))
+	srv := api.NewServer(ctx, logger, sc, executor, store, analyticsDatabase, liveDeps, jwtSecret, os.Getenv("ALLOWED_ORIGIN"), os.Getenv("BETA_COOKIE_NAME"))
+	srv.EnableCloseBooks(books)
+	if phoenixInfrastructure != nil {
+		srv.EnablePhoenixInfrastructure(phoenixInfrastructure)
+		if delegationStore, err := delegation.NewStore(database, operationalDatabase); err != nil {
+			logger.Warn("Phoenix delegation disabled", "reason", err)
+		} else {
+			srv.EnablePhoenixDelegation(delegation.NewService(delegationStore, phoenixInfrastructure))
+		}
+	}
 	if asterDataAgent != nil {
 		srv.EnableAsterDataAgentProbe(dataagent.ExcludeProbeOwner(asterDataAgent, referenceAccount))
 	}
@@ -152,6 +175,10 @@ func main() {
 
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		logger.Error("server error", "err", err)
+		cancel()
+		if phoenixInfrastructure != nil {
+			phoenixInfrastructure.Close()
+		}
 		os.Exit(1)
 	}
 }

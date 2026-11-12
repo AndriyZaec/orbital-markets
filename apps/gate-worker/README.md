@@ -16,6 +16,25 @@ Three responsibilities:
 Accepted requests fall through to the Pages origin via the Worker route
 binding.
 
+## Staging
+
+From the repository root, copy the examples to ignored local configs:
+
+```bash
+cp apps/api/fly.staging.example.toml apps/api/fly.staging.local.toml
+cp apps/gate-worker/wrangler.staging.example.jsonc apps/gate-worker/wrangler.staging.local.jsonc
+```
+
+Fill in your staging app, domain, volume, KV and D1 identifiers and provision those
+resources. Install dependencies and authenticate `flyctl` and Wrangler. Set secrets
+in the providers; the staging API and Worker need matching `JWT_SECRET` and
+`BETA_COOKIE_NAME`, separate from production. Never commit credentials or invites.
+
+```bash
+pnpm deploy:staging --dry-run  # Validate configs, typecheck and build; no remote changes.
+pnpm deploy:staging           # Build, apply staging D1 migrations, deploy API and frontend.
+```
+
 ## Local dev
 
 ```bash

@@ -20,7 +20,7 @@ describe('venue-labelled opportunity prices', () => {
   it('labels both curves by venue and side using the existing venue colors', () => {
     const { container } = render(<VenuePriceChart {...props} data={[sample(0, 100, 100.2), sample(180, 101, 101.2)]} />)
     expect(screen.getByLabelText('Hyperliquid Long price curve').getAttribute('stroke')).toBe('#a78bfa')
-    expect(screen.getByLabelText('Aster Short price curve').getAttribute('stroke')).toBe('#f59e0b')
+    expect(screen.getByLabelText('Aster Short price curve').getAttribute('stroke')).toBe('#fcd34d')
     expect(screen.getByText('Hyperliquid · Long')).toBeTruthy()
     expect(screen.getByText('Aster · Short')).toBeTruthy()
     expect(screen.getByLabelText('Hyperliquid Long price curve').getAttribute('d')).toContain(' C ')
@@ -56,7 +56,7 @@ describe('venue-labelled opportunity prices', () => {
 
   it('keeps venue colors when long/short reverse and puts the legend below the chart', () => {
     render(<VenuePriceChart {...props} direction="long_b_short_a" data={[sample(0, 100, 100)]} />)
-    expect(screen.getByLabelText('Aster Long price curve').getAttribute('stroke')).toBe('#f59e0b')
+    expect(screen.getByLabelText('Aster Long price curve').getAttribute('stroke')).toBe('#fcd34d')
     expect(screen.getByLabelText('Hyperliquid Short price curve').getAttribute('stroke')).toBe('#a78bfa')
     expect(screen.getByText('Aster · Long').closest('svg')).toBeNull()
     expect(screen.getByText('Hyperliquid · Short').closest('svg')).toBeNull()

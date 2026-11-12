@@ -56,6 +56,7 @@ type normFill struct {
 	FilledAmount float64
 	AvgFillPrice float64
 	Fee          float64
+	FeeComplete  bool `json:"fee_complete,omitempty"`
 	OrderID      string
 	Status       string
 	Filled       bool // filled or partial with amount > 0
@@ -98,6 +99,8 @@ type LiveSession struct {
 	Leg2Fill     *normFill
 	Leg2Attempts int
 	Recovery     []executor.RecoveryAction
+	// Internal operator diagnostics; never emitted as public recovery events.
+	SubmissionRejections []submissionRejection
 
 	// Signed venue position size before leg 1 submission. Recovery compares
 	// current venue truth with this baseline to isolate this session's exposure.
@@ -108,6 +111,14 @@ type LiveSession struct {
 	UpdatedAt time.Time
 
 	accounts *liveAccountContext
+}
+
+type submissionRejection struct {
+	Venue         string `json:"venue"`
+	RequestID     string `json:"request_id"`
+	ClientOrderID string `json:"client_order_id"`
+	Attempt       int    `json:"attempt"`
+	Reason        string `json:"reason"`
 }
 
 func (s *LiveSession) venueBindings() liveVenueBindings {

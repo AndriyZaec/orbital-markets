@@ -1,0 +1,32 @@
+{
+  "markets": [
+    {
+      "symbol": "SOL", "assetId": 0, "marketStatus": "active",
+      "marketPubkey": "11111111111111111111111111111111", "splinePubkey": "11111111111111111111111111111111",
+      "tickSize": 100, "baseLotsDecimals": 2, "takerFee": 0.00035, "makerFee": 0.00005,
+      "leverageTiers": [
+        {"maxLeverage": 25.0, "maxSizeBaseLots": 32164684, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000},
+        {"maxLeverage": 1.0, "maxSizeBaseLots": 32164685, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000},
+        {"maxLeverage": 1.0, "maxSizeBaseLots": 32164686, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000},
+        {"maxLeverage": 1.0, "maxSizeBaseLots": 32164687, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000}
+      ],
+      "riskFactors": {"maintenance": 50.0, "maintenanceBps": 5000, "backstop": 20.0, "backstopBps": 2000, "highRisk": 10.0, "highRiskBps": 1000, "upnl": 100.0, "upnlBps": 10000, "upnlForWithdrawals": 70.0, "upnlForWithdrawalsBps": 7000, "cancelOrder": 75.0, "cancelOrderBps": 7500},
+      "fundingIntervalSeconds": 3600, "fundingPeriodSeconds": 86400, "maxFundingRatePerInterval": 2125,
+      "openInterestCapBaseLots": "32164684", "maxLiquidationSizeBaseLots": "500000", "isolatedOnly": false
+    },
+    {
+      "symbol": "BTC", "assetId": 1, "marketStatus": "active",
+      "marketPubkey": "11111111111111111111111111111111", "splinePubkey": "11111111111111111111111111111111",
+      "tickSize": 100, "baseLotsDecimals": 4, "takerFee": 0.00035, "makerFee": 0.00005,
+      "leverageTiers": [
+        {"maxLeverage": 20.0, "maxSizeBaseLots": 1000000, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000},
+        {"maxLeverage": 10.0, "maxSizeBaseLots": 10000000, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000},
+        {"maxLeverage": 5.0, "maxSizeBaseLots": 100000000, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000},
+        {"maxLeverage": 1.0, "maxSizeBaseLots": 1000000000, "limitOrderRiskFactor": 100.0, "limitOrderRiskFactorBps": 10000}
+      ],
+      "riskFactors": {"maintenance": 50.0, "maintenanceBps": 5000, "backstop": 20.0, "backstopBps": 2000, "highRisk": 10.0, "highRiskBps": 1000, "upnl": 100.0, "upnlBps": 10000, "upnlForWithdrawals": 70.0, "upnlForWithdrawalsBps": 7000, "cancelOrder": 75.0, "cancelOrderBps": 7500},
+      "fundingIntervalSeconds": 3600, "fundingPeriodSeconds": 86400, "maxFundingRatePerInterval": 1000,
+      "openInterestCapBaseLots": "1000000", "maxLiquidationSizeBaseLots": "100000", "isolatedOnly": false
+    }
+  ]
+}

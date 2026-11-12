@@ -1,6 +1,7 @@
 package aster
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -186,13 +187,18 @@ type Adapter struct {
 	mu        sync.RWMutex
 	refreshMu sync.Mutex
 	markets   map[string]marketState
-	inactive  map[string]string
-	logger    *slog.Logger
-	client    *http.Client
-	restURL   string
-	wsURL     string
-	wsDialer  *websocket.Dialer
-	now       func() time.Time
+	// Cross-venue assets only grow. Readers use an immutable symbol snapshot
+	// so discarded book frames never contend on mu.
+	crossVenueAssets      map[string]struct{}
+	excludedStreamSymbols atomic.Pointer[map[string]struct{}]
+	subscriptionUpdates   chan struct{}
+	inactive              map[string]string
+	logger                *slog.Logger
+	client                *http.Client
+	restURL               string
+	wsURL                 string
+	wsDialer              *websocket.Dialer
+	now                   func() time.Time
 
 	streamGeneration      uint64
 	streamConnected       bool
@@ -475,6 +481,7 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 	}
 	a.applyPendingStreamUpdates(markets)
 	a.markets = markets
+	a.publishStreamFilterLocked()
 	if token.synchronize {
 		a.streamSynchronized = true
 		if a.lastStreamReceivedAt.IsZero() {
@@ -482,6 +489,7 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 		}
 	}
 	oiFresh, oiStale, oiExpired, oiMissing, oiQueued := a.openInterestCacheCountsLocked(a.now())
+	knownSymbols := len(markets)
 	a.mu.Unlock()
 	if token.synchronize {
 		a.notifyMarketDataUpdate()
@@ -498,7 +506,7 @@ func (a *Adapter) refresh(ctx context.Context, token refreshToken) error {
 		"preserved_components", preserved,
 		"metadata_omitted_symbols", metadataOmitted,
 		"removed_symbols", removed,
-		"known_symbols", len(markets),
+		"known_symbols", knownSymbols,
 		"oi_demanded", oiFresh+oiStale+oiExpired+oiMissing,
 		"oi_fresh", oiFresh,
 		"oi_stale", oiStale,
@@ -530,7 +538,7 @@ func (a *Adapter) refreshSuperseded(token refreshToken) bool {
 }
 
 // Run bootstraps from REST, maintains metadata at low frequency, and reconnects
-// the two all-market streams until the context is cancelled.
+// the mark stream and demanded book streams until the context is cancelled.
 func (a *Adapter) Run(ctx context.Context) {
 	for {
 		if err := a.Refresh(ctx); err == nil {
@@ -577,20 +585,17 @@ func (a *Adapter) restRefreshLoop(ctx context.Context) {
 
 func (a *Adapter) connectAndListen(ctx context.Context) error {
 	resyncStarted := time.Now()
-	connection, _, err := a.wsDialer.DialContext(ctx, a.wsURL, nil)
+	streamURL, allBooks, updates, err := a.bookSubscriptionURL()
+	if err != nil {
+		return err
+	}
+	connection, _, err := a.wsDialer.DialContext(ctx, streamURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial Aster market websocket: %w", err)
 	}
 	defer connection.Close()
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = connection.Close()
-		case <-done:
-		}
-	}()
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
 	a.mu.Lock()
 	a.streamGeneration++
 	generation := a.streamGeneration
@@ -605,17 +610,69 @@ func (a *Adapter) connectAndListen(ctx context.Context) error {
 		a.disconnectStreamGeneration(generation)
 	}()
 	readErrors := make(chan error, 1)
+	var streamWorkers sync.WaitGroup
+	defer func() {
+		cancelStream()
+		streamWorkers.Wait()
+	}()
+	failStream := func(err error) {
+		a.disconnectStreamGeneration(generation)
+		select {
+		case readErrors <- err:
+		default:
+		}
+		cancelStream()
+	}
+	startReader := func(conn *websocket.Conn) <-chan streamSubscriptionAck {
+		acks := make(chan streamSubscriptionAck, 1)
+		go func() {
+			<-streamCtx.Done()
+			_ = conn.Close()
+		}()
+		streamWorkers.Add(1)
+		go func() {
+			defer streamWorkers.Done()
+			for {
+				_, raw, err := conn.ReadMessage()
+				if err != nil {
+					failStream(fmt.Errorf("read Aster market websocket: %w", err))
+					return
+				}
+				if bytes.Contains(raw, []byte(`"id":`)) {
+					var ack streamSubscriptionAck
+					if err := json.Unmarshal(raw, &ack); err == nil {
+						select {
+						case acks <- ack:
+						case <-streamCtx.Done():
+							return
+						}
+						continue
+					}
+				}
+				if err := a.applyStreamMessage(raw); err != nil {
+					a.logger.Warn("aster websocket message rejected", "err", err, "generation", generation)
+				}
+			}
+		}()
+		return acks
+	}
+	acks := startReader(connection)
+	openShard := func(streams []string) (*websocket.Conn, <-chan streamSubscriptionAck, error) {
+		endpoint, err := a.bookShardURL(streams)
+		if err != nil {
+			return nil, nil, err
+		}
+		conn, _, err := a.wsDialer.DialContext(streamCtx, endpoint, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("dial Aster book shard: %w", err)
+		}
+		return conn, startReader(conn), nil
+	}
+	streamWorkers.Add(1)
 	go func() {
-		for {
-			_, raw, err := connection.ReadMessage()
-			if err != nil {
-				a.disconnectStreamGeneration(generation)
-				readErrors <- fmt.Errorf("read Aster market websocket: %w", err)
-				return
-			}
-			if err := a.applyStreamMessage(raw); err != nil {
-				a.logger.Warn("aster websocket message rejected", "err", err, "generation", generation)
-			}
+		defer streamWorkers.Done()
+		if err := a.maintainBookSubscriptions(streamCtx, connection, allBooks, updates, acks, openShard); err != nil {
+			failStream(err)
 		}
 	}()
 
@@ -676,6 +733,28 @@ func (a *Adapter) disconnectStreamGeneration(generation uint64) {
 }
 
 func (a *Adapter) applyStreamMessage(raw []byte) error {
+	if bytes.HasPrefix(raw, []byte(`{"stream":"!markPrice@arr@1s",`)) {
+		var marks struct {
+			Data []markPriceUpdate `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &marks); err != nil {
+			return fmt.Errorf("decode mark price updates: %w", err)
+		}
+		a.observeStreamMessage()
+		a.applyMarkPriceUpdates(marks.Data)
+		return nil
+	}
+	if excluded := a.excludedStreamSymbols.Load(); excluded != nil &&
+		bytes.Contains(raw, []byte(`"stream":"!bookTicker"`)) {
+		if start := bytes.Index(raw, []byte(`"s":"`)); start >= 0 {
+			symbol := raw[start+5:]
+			if end := bytes.IndexByte(symbol, '"'); end >= 0 {
+				if _, skip := (*excluded)[string(symbol[:end])]; skip {
+					return nil
+				}
+			}
+		}
+	}
 	// Book frames dominate this combined stream. Decode them directly instead
 	// of copying RawMessage and parsing the same object twice. The existing
 	// path below retains mark-array and malformed-message handling.
@@ -683,7 +762,7 @@ func (a *Adapter) applyStreamMessage(raw []byte) error {
 		Stream string           `json:"stream"`
 		Data   bookTickerUpdate `json:"data"`
 	}
-	if err := json.Unmarshal(raw, &book); err == nil && book.Stream == "!bookTicker" {
+	if err := json.Unmarshal(raw, &book); err == nil && isBookTickerStream(book.Stream) {
 		a.observeStreamMessage()
 		a.applyBookTickerUpdate(book.Data)
 		return nil
@@ -700,7 +779,10 @@ func (a *Adapter) applyStreamMessage(raw []byte) error {
 		}
 		a.observeStreamMessage()
 		a.applyMarkPriceUpdates(updates)
-	case "!bookTicker":
+	default:
+		if !isBookTickerStream(envelope.Stream) {
+			return nil
+		}
 		var update bookTickerUpdate
 		if err := json.Unmarshal(envelope.Data, &update); err != nil {
 			return fmt.Errorf("decode book ticker update: %w", err)
@@ -709,6 +791,52 @@ func (a *Adapter) applyStreamMessage(raw []byte) error {
 		a.applyBookTickerUpdate(update)
 	}
 	return nil
+}
+
+// SetCrossVenueAssets accumulates normalized assets published by other venues.
+// A missing venue in a later scan must not silence previously paired markets.
+func (a *Adapter) SetCrossVenueAssets(assets []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	changed := a.crossVenueAssets == nil
+	if changed {
+		a.crossVenueAssets = make(map[string]struct{}, len(assets))
+	}
+	for _, asset := range assets {
+		asset = strings.ToUpper(strings.TrimSpace(asset))
+		if asset == "" {
+			continue
+		}
+		if _, found := a.crossVenueAssets[asset]; !found {
+			a.crossVenueAssets[asset] = struct{}{}
+			changed = true
+		}
+	}
+	if changed {
+		a.publishStreamFilterLocked()
+	}
+}
+
+// publishStreamFilterLocked runs only when metadata or the allow-list changes.
+// It never publishes unknown symbols, preserving their existing pending path.
+func (a *Adapter) publishStreamFilterLocked() {
+	if a.crossVenueAssets == nil {
+		return
+	}
+	excluded := make(map[string]struct{})
+	for symbol, market := range a.markets {
+		asset := strings.ToUpper(strings.TrimSpace(market.asset))
+		if _, allowed := a.crossVenueAssets[asset]; !allowed {
+			excluded[symbol] = struct{}{}
+		}
+	}
+	a.excludedStreamSymbols.Store(&excluded)
+	if a.subscriptionUpdates != nil {
+		select {
+		case a.subscriptionUpdates <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (a *Adapter) observeStreamMessage() {

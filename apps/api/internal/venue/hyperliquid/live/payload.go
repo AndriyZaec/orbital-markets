@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -145,6 +146,14 @@ func buildClosePayload(
 	if positionSide == domain.SideLong {
 		closeSide = domain.SideShort
 	}
+	var limits []float64
+	if action == "close" || action == "emergency_close" {
+		limit, err := hyperliquidCloseCollar(price, closeSide == domain.SideLong)
+		if err != nil {
+			return nil, err
+		}
+		limits = []float64{limit}
+	}
 
 	return buildPayload(
 		assetMap,
@@ -156,7 +165,24 @@ func buildClosePayload(
 		clientOrderID,
 		action,
 		builder,
+		limits...,
 	)
+}
+
+// Calculate the collar in decimal before converting to the existing strict
+// explicit-limit normalizer. A binary float product can move an exact tick one
+// ULP inward and cause that normalizer to add a whole extra tick.
+func hyperliquidCloseCollar(price float64, isBuy bool) (float64, error) {
+	reference, ok := new(big.Rat).SetString(strconv.FormatFloat(price, 'f', -1, 64))
+	if !ok || reference.Sign() <= 0 {
+		return 0, fmt.Errorf("invalid price: %v", price)
+	}
+	numerator := int64(995)
+	if isBuy {
+		numerator = 1005
+	}
+	limit, _ := new(big.Rat).Mul(reference, big.NewRat(numerator, 1000)).Float64()
+	return limit, nil
 }
 
 func BuildUpdateLeveragePayload(

@@ -1,0 +1,7 @@
+{
+  "assets": [
+    {"assetIndex": 4294967295, "symbol": "USDC", "decimals": 6},
+    {"assetIndex": 4294901760, "symbol": "SOL", "decimals": 9, "spot": {"isActive": true, "perpAssetIndex": 0, "maxPerTraderBalance": "1000000000000", "maxGlobalBalance": "50000000000000", "currGlobalBalance": "0", "minMarginDiscountBps": 2000, "maxMarginDiscountBps": 2000, "maxLiquidationDiscountBps": 150, "minLiquidationSlippageBps": 20, "maxLiquidationSize": "1000000000000"}},
+    {"assetIndex": 4294836323, "symbol": "cbBTC", "decimals": 8, "spot": {"isActive": true, "perpAssetIndex": 1, "maxPerTraderBalance": "100000000", "maxGlobalBalance": "2500000000", "currGlobalBalance": "0", "minMarginDiscountBps": 2000, "maxMarginDiscountBps": 2000, "maxLiquidationDiscountBps": 150, "minLiquidationSlippageBps": 20, "maxLiquidationSize": "100000000"}}
+  ]
+}

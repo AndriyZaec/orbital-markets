@@ -24,9 +24,54 @@ import {
 } from './storage.ts'
 import type { TradingAgentState, Venue, WalletKind } from './types'
 import { TradingAgentContext } from './TradingAgentContext'
+import type { OwnerTransactionSigner } from './phoenix-message.ts'
 
 function missingState(venue: Venue, ownerAddress: string | null): TradingAgentState {
   return { venue, ownerAddress, agentAddress: null, status: 'missing', error: null }
+}
+
+// Each venue/owner restores independently. Connecting another wallet must not
+// reset an already authorized account or repeat its reconciliation requests.
+function restoreTradingAgent(venue: Venue, ownerAddress: string | null, storage: TradingAgentStore,
+  setState: (state: TradingAgentState) => void, isCurrent: () => boolean) {
+  let active = true
+  const restore = async () => {
+    await Promise.resolve()
+    if (!active || !isCurrent()) return
+    setState(initialState(venue, ownerAddress))
+    if (!ownerAddress) return
+    try {
+      let agent = venue === 'phoenix'
+        ? await withAgentLock('phoenix', ownerAddress, async () => {
+          const { restorePhoenixAgent, createPhoenixTransport } = await import('./phoenix-agent.ts')
+          return restorePhoenixAgent({ storage, ownerAddress, transport: createPhoenixTransport(), isCurrent: () => active && isCurrent() })
+        })
+        : venue === 'aster'
+        ? await withAgentLock('aster', ownerAddress, async () => {
+          const { reconcilePendingAsterAgent } = await import('./aster-agent.ts')
+          return await reconcilePendingAsterAgent({ storage, ownerAddress,
+            reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
+          }) ?? await storage.restore('aster', ownerAddress)
+        })
+        : await storage.restore(venue, ownerAddress)
+      const expectedBuilder = venue === 'hyperliquid' ? hyperliquidBuilderAddress : venue === 'aster' ? asterBuilderAddress : null
+      if (expectedBuilder && agent && agent.builderAddress?.toLowerCase() !== expectedBuilder.toLowerCase()) {
+        await storage.clear(venue, ownerAddress)
+        agent = null
+      }
+      if (!active || !isCurrent()) return
+      setState(agent ? { venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null }
+        : missingState(venue, ownerAddress))
+    } catch (error) {
+      if (!active || !isCurrent()) return
+      setState({ venue, ownerAddress, agentAddress: null,
+        status: venue === 'phoenix' && error instanceof Error && error.name === 'PhoenixPendingError' ? 'pending' : 'error',
+        error: error instanceof Error ? error.message : 'Unable to restore authorization',
+      })
+    }
+  }
+  void restore()
+  return () => { active = false }
 }
 
 let persistentStore: TradingAgentStore | null = null
@@ -72,6 +117,7 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
       chainId={evm.chainId}
       switchToAuthorizationChain={(targetChainId) => switchChainAsync({ chainId: targetChainId })}
       solanaSignMessage={solana.signMessage}
+      solanaSignTransaction={solana.signTransaction}
       signTypedData={signTypedDataAsync}
       signAsterTypedData={(typedData) => typedData.primaryType === 'ApproveBuilder'
         ? signTypedDataAsync(typedData)
@@ -93,6 +139,7 @@ function TradingAgentSession({
   chainId,
   switchToAuthorizationChain,
   solanaSignMessage,
+  solanaSignTransaction,
   signTypedData,
   signAsterTypedData,
   disconnectSolana,
@@ -106,6 +153,7 @@ function TradingAgentSession({
   chainId?: number
   switchToAuthorizationChain: (chainId: typeof mainnet.id | typeof bsc.id) => Promise<unknown>
   solanaSignMessage?: (message: Uint8Array) => Promise<Uint8Array>
+  solanaSignTransaction?: OwnerTransactionSigner
   signTypedData: ReturnType<typeof useSignTypedData>['signTypedDataAsync']
   signAsterTypedData: (typedData: AsterApprovalTypedData | AsterDataAgentApprovalTypedData) => Promise<Hex>
   disconnectSolana: () => Promise<void>
@@ -114,70 +162,35 @@ function TradingAgentSession({
   const [pacifica, setPacifica] = useState(() => initialState('pacifica', pacificaOwner))
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
   const [aster, setAster] = useState(() => initialState('aster', asterOwner))
-  const owners = useRef({ pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
+  const [phoenix, setPhoenix] = useState(() => initialState('phoenix', pacificaOwner))
+  const owners = useRef({ pacifica: pacificaOwner, phoenix: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
   const revokedPacificaAgents = useRef(new Set<string>())
-  owners.current = { pacifica: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
+  owners.current = { pacifica: pacificaOwner, phoenix: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
 
-  useEffect(() => {
-    let active = true
-    const restore = async (
-      venue: Venue,
-      ownerAddress: string | null,
-      setState: (state: TradingAgentState) => void,
-    ) => {
-      await Promise.resolve()
-      if (!active) return
-      setState(initialState(venue, ownerAddress))
-      if (!ownerAddress) return
-      try {
-        let agent = venue === 'aster'
-          ? await withAgentLock('aster', ownerAddress, async () => {
-            const { reconcilePendingAsterAgent } = await import('./aster-agent.ts')
-            return await reconcilePendingAsterAgent({
-              storage,
-              ownerAddress,
-              reconcile: (candidates) => reconcileAsterAuthorization(ownerAddress, candidates),
-            }) ?? await storage.restore('aster', ownerAddress)
-          })
-          : await storage.restore(venue, ownerAddress)
-        const expectedBuilder = venue === 'hyperliquid'
-          ? hyperliquidBuilderAddress
-          : venue === 'aster' ? asterBuilderAddress : null
-        if (expectedBuilder && agent &&
-          agent.builderAddress?.toLowerCase() !== expectedBuilder.toLowerCase()) {
-          await storage.clear(venue, ownerAddress)
-          agent = null
-        }
-        if (!active) return
-        setState(agent
-          ? { venue, ownerAddress, agentAddress: agent.agentAddress, status: 'ready', error: null }
-          : missingState(venue, ownerAddress))
-      } catch (error) {
-        if (!active) return
-        setState({
-          venue,
-          ownerAddress,
-          agentAddress: null,
-          status: 'error',
-          error: error instanceof Error ? error.message : 'Unable to restore authorization',
-        })
-      }
-    }
-    void restore('pacifica', pacificaOwner, setPacifica)
-    void restore('hyperliquid', hyperliquidOwner, setHyperliquid)
-    void restore('aster', asterOwner, setAster)
-    return () => { active = false }
-  }, [asterOwner, hyperliquidOwner, pacificaOwner, storage])
+  useEffect(() => restoreTradingAgent('pacifica', pacificaOwner, storage, setPacifica,
+    () => ownerStillCurrent('pacifica', pacificaOwner, owners.current)), [pacificaOwner, storage])
+  useEffect(() => restoreTradingAgent('phoenix', pacificaOwner, storage, setPhoenix,
+    () => ownerStillCurrent('phoenix', pacificaOwner, owners.current)), [pacificaOwner, storage])
+  useEffect(() => restoreTradingAgent('hyperliquid', hyperliquidOwner, storage, setHyperliquid,
+    () => ownerStillCurrent('hyperliquid', hyperliquidOwner, owners.current)), [hyperliquidOwner, storage])
+  useEffect(() => restoreTradingAgent('aster', asterOwner, storage, setAster,
+    () => ownerStillCurrent('aster', asterOwner, owners.current)), [asterOwner, storage])
 
-  const authorize = async (venue: Venue) => {
-    const setState = venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
-    const ownerAddress = venue === 'pacifica' ? pacificaOwner : venue === 'aster' ? asterOwner : hyperliquidOwner
+  const authorize = async (venue: Venue, options?: { replaceExistingDelegate?: boolean; expectedOwner?: string; expectedAuthority?: string }) => {
+    const setState = venue === 'phoenix' ? setPhoenix : venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
+    const ownerAddress = venue === 'phoenix' || venue === 'pacifica' ? pacificaOwner : venue === 'aster' ? asterOwner : hyperliquidOwner
     if (!ownerAddress) throw new Error(`Connect the ${venue} owner wallet first`)
+    if (venue === 'phoenix' && options?.expectedOwner && options.expectedOwner !== ownerAddress) throw new Error('Phoenix owner changed before delegate replacement')
     setState({ venue, ownerAddress, agentAddress: null, status: 'authorizing', error: null })
     try {
       const agent = await withAgentLock(venue, ownerAddress, async () => {
         await storage.ready()
+        if (venue === 'phoenix') {
+          const { authorizePhoenixAgent, createPhoenixTransport } = await import('./phoenix-agent.ts')
+          return authorizePhoenixAgent({ storage, ownerAddress, transport: createPhoenixTransport(), signTransaction: solanaSignTransaction,
+            isCurrent: () => ownerStillCurrent('phoenix', ownerAddress, owners.current), replaceExistingDelegate: options?.replaceExistingDelegate, expectedAuthority: options?.expectedAuthority })
+        }
         return venue === 'pacifica'
           ? reauthorizePacifica(ownerAddress)
           : venue === 'aster'
@@ -191,7 +204,7 @@ function TradingAgentSession({
     } catch (error) {
       const message = userErrorMessage(error, 'Authorization failed')
       if (ownerStillCurrent(venue, ownerAddress, owners.current)) {
-        setState({ venue, ownerAddress, agentAddress: null, status: 'error', error: message })
+        setState({ venue, ownerAddress, agentAddress: null, status: venue === 'phoenix' && error instanceof Error && error.name === 'PhoenixPendingError' ? 'pending' : 'error', error: message })
       }
       throw error
     }
@@ -344,10 +357,11 @@ function TradingAgentSession({
 
   const sign = async (request: SigningRequest) => {
     const { signWithStoredTradingAgent } = await import('./signing.ts')
-    const currentOwner = request.venue === 'pacifica'
+    const solanaVenue = request.venue === 'pacifica' || request.venue === 'phoenix'
+    const currentOwner = solanaVenue
       ? pacificaOwner
       : request.venue === 'aster' ? asterOwner : hyperliquidOwner
-    const matches = request.venue === 'pacifica'
+    const matches = solanaVenue
       ? currentOwner === request.account
       : currentOwner?.toLowerCase() === request.account.toLowerCase()
     if (!matches) throw new Error(`${request.venue} owner changed during execution`)
@@ -357,15 +371,36 @@ function TradingAgentSession({
     if (!ownerStillCurrent(request.venue, request.account, owners.current)) {
       throw new Error(`${request.venue} owner changed during execution`)
     }
-    const signed = await signWithStoredTradingAgent(storage, request)
+    const isCurrent = () => ownerStillCurrent(request.venue, request.account, owners.current)
+    const signed = request.venue === 'phoenix'
+      ? await withAgentLock('phoenix', request.account, () => signWithStoredTradingAgent(storage, request, isCurrent))
+      : await signWithStoredTradingAgent(storage, request)
     if (!ownerStillCurrent(request.venue, request.account, owners.current)) {
       throw new Error(`${request.venue} owner changed during signing`)
     }
     return signed
   }
 
+  const revokePhoenix = async () => {
+    const ownerAddress = owners.current.phoenix
+    if (!ownerAddress) return
+    setPhoenix((current) => ({ ...current, status: 'disconnecting', error: null }))
+    try {
+      await withAgentLock('phoenix', ownerAddress, async () => {
+        const { revokePhoenixAgent, createPhoenixTransport } = await import('./phoenix-agent.ts')
+        await revokePhoenixAgent({ storage, ownerAddress, transport: createPhoenixTransport(), signTransaction: solanaSignTransaction,
+          isCurrent: () => ownerStillCurrent('phoenix', ownerAddress, owners.current) })
+      })
+      if (ownerStillCurrent('phoenix', ownerAddress, owners.current)) setPhoenix(missingState('phoenix', ownerAddress))
+    } catch (error) {
+      if (ownerStillCurrent('phoenix', ownerAddress, owners.current)) setPhoenix({ ...missingState('phoenix', ownerAddress), status: error instanceof Error && error.name === 'PhoenixPendingError' ? 'pending' : 'error', error: userErrorMessage(error, 'Phoenix revoke could not be confirmed; key preserved') })
+      throw error
+    }
+  }
+
   const disconnectWallet = async (wallet: WalletKind) => {
     if (wallet === 'solana') {
+      await revokePhoenix()
       const ownerAddress = owners.current.pacifica
       if (ownerAddress) {
         setPacifica((current) => ({ ...current, status: 'disconnecting', error: null }))
@@ -437,7 +472,7 @@ function TradingAgentSession({
 
   return (
     <TradingAgentContext.Provider value={{
-      pacifica, hyperliquid, aster, authorize, sign, disconnectWallet,
+      pacifica, hyperliquid, aster, phoenix, authorize, sign, disconnectWallet, revokePhoenix,
     }}>
       {children}
     </TradingAgentContext.Provider>
@@ -446,11 +481,12 @@ function TradingAgentSession({
 
 function ownerStillCurrent(
   venue: Venue,
-  expectedOwner: string,
-  owners: { pacifica: string | null; hyperliquid: string | null; aster: string | null },
+  expectedOwner: string | null,
+  owners: Record<Venue, string | null>,
 ): boolean {
-  const current = venue === 'pacifica' ? owners.pacifica : venue === 'aster' ? owners.aster : owners.hyperliquid
-  return venue === 'pacifica'
+  const current = owners[venue]
+  if (expectedOwner === null) return current === null
+  return venue === 'pacifica' || venue === 'phoenix'
     ? current === expectedOwner
     : current?.toLowerCase() === expectedOwner.toLowerCase()
 }
@@ -464,7 +500,7 @@ function initialState(venue: Venue, ownerAddress: string | null): TradingAgentSt
 function withAgentLock<T>(venue: Venue, ownerAddress: string, task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks
   if (!locks) return task()
-  const normalizedOwner = venue === 'pacifica' ? ownerAddress : ownerAddress.toLowerCase()
+  const normalizedOwner = venue === 'pacifica' || venue === 'phoenix' ? ownerAddress : ownerAddress.toLowerCase()
   return locks.request(`orbital-agent:${venue}:${normalizedOwner}`, task)
 }
 

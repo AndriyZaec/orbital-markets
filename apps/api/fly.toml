@@ -18,6 +18,9 @@ primary_region = 'iad'
   DB_PATH = '/data/orbital.db'
   ENV = 'production'
   ALLOWED_ORIGIN = 'https://app.orbitalmarkets.xyz'
+  PHOENIX_BUILDER_AUTHORITY = '2f7fPuH88eMwWW4x7o5fHUNJDzLzCZk6EN6wY3zHR4yC'
+  GOGC = '200'
+  GOMEMLIMIT = '400MiB'
 
 [[mounts]]
   source = 'orbital_data'
@@ -53,7 +56,7 @@ primary_region = 'iad'
     protocol = 'http'
 
 [[vm]]
-  size = 'shared-cpu-1x'
-  memory = '256mb'
-  cpus = 1
-  memory_mb = 256
+  size = 'shared-cpu-2x'
+  memory = '512mb'
+  cpus = 2
+  memory_mb = 512

@@ -1,6 +1,6 @@
 import type { Hex } from 'viem'
 
-import type { StoredTradingAgent, Venue } from './types'
+import type { PhoenixOperation, StoredTradingAgent, Venue } from './types'
 
 const databaseName = 'orbital-trading-agent-vault'
 const databaseVersion = 1
@@ -21,6 +21,7 @@ interface EncryptedTradingAgent {
   expiresAt?: string
   builderAddress?: string
   builderCode?: string
+  phoenixOperation?: PhoenixOperation
   iv: Uint8Array<ArrayBuffer>
   ciphertext: Uint8Array<ArrayBuffer>
   verificationIv: Uint8Array<ArrayBuffer>
@@ -31,12 +32,13 @@ export interface TradingAgentStore {
   ready(): Promise<void>
   save(agent: StoredTradingAgent): Promise<void>
   savePending(agent: StoredTradingAgent): Promise<void>
+  updatePending(agent: StoredTradingAgent): Promise<void>
   promotePending(agent: StoredTradingAgent): Promise<void>
   restore(venue: Venue, ownerAddress: string): Promise<Omit<StoredTradingAgent, 'privateKey'> | null>
   loadForSigning(venue: Venue, ownerAddress: string): Promise<StoredTradingAgent | null>
   loadPendingForSigning(venue: Venue, ownerAddress: string): Promise<StoredTradingAgent | null>
   clearPending(venue: Venue, ownerAddress: string, expectedAgentAddress: string): Promise<void>
-  clear(venue: Venue, ownerAddress: string): Promise<void>
+  clear(venue: Venue, ownerAddress: string, expectedAgentAddress?: string): Promise<void>
 }
 
 export function createTradingAgentStore(
@@ -91,6 +93,28 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
     await writeValue(database, agentStoreName, key, encrypted)
   }
 
+  async updatePending(agent: StoredTradingAgent): Promise<void> {
+    const encrypted = await this.encryptAgent(agent)
+    const database = await this.database
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(agentStoreName, 'readwrite')
+      const store = transaction.objectStore(agentStoreName)
+      const key = pendingStorageKey(agent.venue, agent.ownerAddress)
+      const pending = store.get(key)
+      pending.onsuccess = () => {
+        if (!validEnvelope(pending.result, agent.venue, agent.ownerAddress) ||
+          !sameAgentAddress(agent.venue, pending.result.agentAddress, agent.agentAddress)) {
+          transaction.abort()
+          return
+        }
+        store.put(encrypted, key)
+      }
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error ?? new Error('Unable to update pending agent'))
+      transaction.onabort = () => reject(new Error('Pending agent changed before update'))
+    })
+  }
+
   async promotePending(agent: StoredTradingAgent): Promise<void> {
     const encrypted = await this.encryptAgent(agent)
     const database = await this.database
@@ -101,7 +125,7 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
       const pending = store.get(pendingKey)
       pending.onsuccess = () => {
         if (!validEnvelope(pending.result, agent.venue, agent.ownerAddress) ||
-          pending.result.agentAddress.toLowerCase() !== agent.agentAddress.toLowerCase()) {
+          !sameAgentAddress(agent.venue, pending.result.agentAddress, agent.agentAddress)) {
           transaction.abort()
           return
         }
@@ -181,6 +205,7 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
       ...(value.expiresAt ? { expiresAt: value.expiresAt } : {}),
       ...(value.builderAddress ? { builderAddress: value.builderAddress } : {}),
       ...(value.builderCode ? { builderCode: value.builderCode } : {}),
+      ...(value.phoenixOperation ? { phoenixOperation: value.phoenixOperation } : {}),
     }
   }
 
@@ -223,14 +248,30 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
       ...(value.expiresAt ? { expiresAt: value.expiresAt } : {}),
       ...(value.builderAddress ? { builderAddress: value.builderAddress } : {}),
       ...(value.builderCode ? { builderCode: value.builderCode } : {}),
+      ...(value.phoenixOperation ? { phoenixOperation: value.phoenixOperation } : {}),
     }
     if (await keyPairMatches(agent)) return agent
     await deleteValue(database, agentStoreName, key)
     return null
   }
 
-  async clear(venue: Venue, ownerAddress: string): Promise<void> {
+  async clear(venue: Venue, ownerAddress: string, expectedAgentAddress?: string): Promise<void> {
     const database = await this.database
+    if (expectedAgentAddress) {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction(agentStoreName, 'readwrite')
+        const store = transaction.objectStore(agentStoreName)
+        const key = storageKey(venue, ownerAddress)
+        const request = store.get(key)
+        request.onsuccess = () => {
+          if (validEnvelope(request.result, venue, ownerAddress) && sameAgentAddress(venue, request.result.agentAddress, expectedAgentAddress)) store.delete(key)
+        }
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error ?? new Error('Unable to clear agent'))
+        transaction.onabort = () => reject(new Error('Agent clear aborted'))
+      })
+      return
+    }
     await deleteValue(database, agentStoreName, storageKey(venue, ownerAddress))
   }
 
@@ -243,7 +284,7 @@ class IndexedDBTradingAgentStore implements TradingAgentStore {
       const pending = store.get(key)
       pending.onsuccess = () => {
         if (validEnvelope(pending.result, venue, ownerAddress) &&
-          pending.result.agentAddress.toLowerCase() === expectedAgentAddress.toLowerCase()) {
+          sameAgentAddress(venue, pending.result.agentAddress, expectedAgentAddress)) {
           store.delete(key)
         }
       }
@@ -313,7 +354,11 @@ function isEVMVenue(venue: Venue): boolean {
 }
 
 function keyAlgorithm(venue: Venue): KeyAlgorithm {
-  return venue === 'pacifica' ? 'ed25519' : 'secp256k1'
+  return venue === 'pacifica' || venue === 'phoenix' ? 'ed25519' : 'secp256k1'
+}
+
+function sameAgentAddress(venue: Venue, left: string, right: string): boolean {
+  return venue === 'phoenix' ? left === right : left.toLowerCase() === right.toLowerCase()
 }
 
 async function keyPairMatches(agent: StoredTradingAgent): Promise<boolean> {
@@ -347,13 +392,18 @@ function validAgent(agent: StoredTradingAgent): boolean {
 
 function validMetadata(value: Omit<EncryptedTradingAgent, 'iv' | 'ciphertext'> | StoredTradingAgent): boolean {
   return (
-    (value.venue === 'hyperliquid' || value.venue === 'pacifica' || value.venue === 'aster') &&
+    (value.venue === 'hyperliquid' || value.venue === 'pacifica' || value.venue === 'aster' || value.venue === 'phoenix') &&
     typeof value.ownerAddress === 'string' && value.ownerAddress.length > 0 &&
     typeof value.agentAddress === 'string' && value.agentAddress.length > 0 &&
     typeof value.authorizedAt === 'string' && Number.isFinite(Date.parse(value.authorizedAt)) &&
     (value.expiresAt === undefined || Number.isFinite(Date.parse(value.expiresAt))) &&
     (value.builderAddress === undefined || /^0x[0-9a-fA-F]{40}$/.test(value.builderAddress)) &&
-    (value.builderCode === undefined || /^[A-Za-z0-9]{3,16}$/.test(value.builderCode))
+    (value.builderCode === undefined || /^[A-Za-z0-9]{3,16}$/.test(value.builderCode)) &&
+    (value.phoenixOperation === undefined || (value.venue === 'phoenix' &&
+      typeof value.phoenixOperation.requestID === 'string' && !!value.phoenixOperation.requestID &&
+      ['delegate', 'revoke'].includes(value.phoenixOperation.action) &&
+      typeof value.phoenixOperation.targetAuthority === 'string' && !!value.phoenixOperation.targetAuthority &&
+      typeof value.phoenixOperation.submissionStarted === 'boolean'))
   )
 }
 
@@ -370,6 +420,7 @@ function envelopeMetadata(agent: StoredTradingAgent): EnvelopeMetadata {
     ...(agent.expiresAt ? { expiresAt: agent.expiresAt } : {}),
     ...(agent.builderAddress ? { builderAddress: agent.builderAddress } : {}),
     ...(agent.builderCode ? { builderCode: agent.builderCode } : {}),
+    ...(agent.phoenixOperation ? { phoenixOperation: agent.phoenixOperation } : {}),
   }
 }
 
@@ -384,6 +435,7 @@ function associatedData(value: EnvelopeMetadata): Uint8Array<ArrayBuffer> {
     expiresAt: value.expiresAt ?? null,
     builderAddress: value.builderAddress ?? null,
     builderCode: value.builderCode ?? null,
+    ...(value.phoenixOperation ? { phoenixOperation: value.phoenixOperation } : {}),
   }))
 }
 

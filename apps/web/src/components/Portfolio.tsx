@@ -16,6 +16,9 @@ import {
 } from '@/components/ui/dialog'
 import { isActivePositionState, isClosedPositionState, portfolioPositionCategory } from '@/lib/portfolio-position'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { accountObservation } from '@/lib/account-observation'
+import { positionPnL } from '@/lib/position-pnl'
+import { cn } from '@/lib/utils'
 import {
   portfolioPerformance,
   type PortfolioPerformance,
@@ -92,7 +95,7 @@ function categorize(p: LivePosition) {
 export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }: Props) {
   const { positions, loading: positionsLoading, error: positionsError } = useLivePositions()
   // One typed readiness layer, shared with the header and ConnectAccounts.
-  const { pacifica, hyperliquid, aster, aggregate: readiness } = useVenueReadiness()
+  const { pacifica, hyperliquid, aster, phoenix, aggregate: readiness } = useVenueReadiness()
   const [privateView, setPrivateView] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [sharePerformance, setSharePerformance] = useState<PortfolioPerformance | null>(null)
@@ -113,10 +116,13 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
 
   // Sum only venues that actually report a value. If no venue has
   // reported equity, keep the tile as "--" rather than showing $0.00.
-  const equityValues = [pacifica.equity, hyperliquid.equity, aster.equity].filter(
+  const venues = [pacifica, hyperliquid, aster, phoenix]
+  const observations = venues.map(accountObservation)
+  const lastKnownBalances = venues.some((venue) => accountObservation(venue) && !venue.balanceReady)
+  const equityValues = observations.map((value) => value?.equity).filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
-  const availableValues = [pacifica.available, hyperliquid.available, aster.available].filter(
+  const availableValues = observations.map((value) => value?.available).filter(
     (v): v is number => typeof v === 'number' && Number.isFinite(v),
   )
   const totalEquity = equityValues.length > 0 ? equityValues.reduce((a, b) => a + b, 0) : null
@@ -145,12 +151,13 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
   }, [positions])
 
   const recentPositions = positions.filter((position) => isActivePositionState(position.state)).slice(0, 5)
+  const incompletePnl = positions.some((position) => isActivePositionState(position.state) && positionPnL(position).total === null)
   const unrealizedPerformance = useMemo(
-    () => portfolioPerformance(positions.filter((position) => {
+    () => portfolioPerformance(incompletePnl ? [] : positions.filter((position) => {
       const category = categorize(position)
       return category === 'open' || category === 'degraded'
     }), now),
-    [positions, now],
+    [positions, now, incompletePnl],
   )
   const realizedPerformance = useMemo(
     () => portfolioPerformance(
@@ -226,17 +233,17 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
 
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Tile label="Total Equity" value={privateView ? MASKED_VALUE : fmtUsd(totalEquity)} hint="Across connected venues" tone="cyan" />
-        <Tile label="Available" value={privateView ? MASKED_VALUE : fmtUsd(totalAvailable)} hint="Free margin" />
+        <Tile label="Total Equity" value={privateView ? MASKED_VALUE : fmtUsd(totalEquity)} hint="Across connected venues" valueClassName={lastKnownBalances ? 'text-muted-foreground' : undefined} tone="cyan" />
+        <Tile label="Available" value={privateView ? MASKED_VALUE : fmtUsd(totalAvailable)} hint="Free margin" valueClassName={lastKnownBalances ? 'text-muted-foreground' : undefined} />
         <Tile label="Open Notional" value={privateView ? MASKED_VALUE : openCount > 0 ? fmtUsd(openNotional) : '--'} hint={`${openCount} open · ${degradedCount} degraded`} />
         <Tile
           label={privateView ? unrealizedPerformance.value === null || unrealizedPerformance.annualized ? 'uPnL Annualized Return' : 'uPnL Return' : 'Unrealized P&L'}
-          value={privateView ? fmtReturn(unrealizedPerformance.value) : openCount > 0 ? fmtUsd(unrealizedPnl) : '--'}
+          value={privateView ? fmtReturn(unrealizedPerformance.value) : openCount > 0 ? fmtUsd(incompletePnl ? null : unrealizedPnl) : '--'}
           hint={privateView ? 'On deployed capital' : 'Sum across open positions'}
-          valueClassName={privateView
+          valueClassName={incompletePnl ? 'text-muted-foreground' : privateView
             ? unrealizedPerformance.value !== null && unrealizedPerformance.value > 0 ? 'text-green-400' : unrealizedPerformance.value !== null && unrealizedPerformance.value < 0 ? 'text-red-400' : ''
             : unrealizedPnl > 0 ? 'text-green-400' : unrealizedPnl < 0 ? 'text-red-400' : ''}
-          tone={privateView ? unrealizedTone : unrealizedPnl > 0 ? 'green' : unrealizedPnl < 0 ? 'rose' : 'plain'}
+          tone={incompletePnl ? 'plain' : privateView ? unrealizedTone : unrealizedPnl > 0 ? 'green' : unrealizedPnl < 0 ? 'rose' : 'plain'}
         />
         <Tile
           label={privateView ? realizedPerformance.annualized ? 'Annualized Return' : 'Realized Return' : 'Realized P&L'}
@@ -265,10 +272,11 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
           )
         }
       >
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <VenueCard readiness={pacifica} maskAmounts={privateView} />
           <VenueCard readiness={hyperliquid} maskAmounts={privateView} />
           <VenueCard readiness={aster} maskAmounts={privateView} />
+          <VenueCard readiness={phoenix} maskAmounts={privateView} />
         </div>
       </Section>
 
@@ -293,6 +301,7 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
         {recentPositions.length > 0 && (
           <div className="divide-y divide-border/70 border-y border-border/70">
             {recentPositions.map((position) => {
+              const pnl = positionPnL(position)
               const category = categorize(position)
               const statusTone = category === 'degraded' ? 'text-orange-400' : position.state === 'pending' || position.state === 'closing' ? 'text-yellow-400' : 'text-green-400'
               return (
@@ -310,8 +319,8 @@ export function Portfolio({ onConnectWallets, onViewPositions, onOpenPosition }:
                     </span>
                   </span>
                   <span className="hidden text-right font-mono text-xs text-muted-foreground sm:block">{privateView ? MASKED_VALUE : fmtUsd(position.notional)}</span>
-                  <span className={`text-right font-mono text-xs ${position.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {privateView ? fmtReturn(portfolioPerformance([position], now).value) : fmtUsd(position.total_pnl)}
+                  <span className={cn('text-right font-mono text-xs', pnl.total === null ? 'text-muted-foreground' : pnl.total >= 0 ? 'text-green-400' : 'text-red-400')}>
+                    {privateView ? fmtReturn(pnl.total === null ? null : portfolioPerformance([position], now).value) : fmtUsd(pnl.total)}
                   </span>
                 </button>
               )
@@ -798,43 +807,46 @@ const STATUS_VIEW: Record<
 }
 
 const VENUE_CARD_STYLES: Record<VenueReadiness['venue'], string> = {
+  phoenix: 'bg-[radial-gradient(circle_at_8%_0%,color-mix(in_srgb,var(--color-venue-phoenix)_5.5%,transparent),transparent_52%)]',
   pacifica: 'bg-[radial-gradient(circle_at_8%_0%,rgba(34,211,238,0.055),transparent_52%)]',
   hyperliquid: 'bg-[radial-gradient(circle_at_8%_0%,rgba(139,92,246,0.055),transparent_52%)]',
   aster: 'bg-[radial-gradient(circle_at_8%_0%,rgba(245,158,11,0.055),transparent_52%)]',
 }
 
 function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; maskAmounts: boolean }) {
+  const observation = accountObservation(readiness)
+  const stale = observation && !readiness.balanceReady
   const view = STATUS_VIEW[readiness.status]
+  const showStatus = !observation || ['wallet_connected', 'signer_missing', 'agent_missing', 'agent_authorizing', 'error'].includes(readiness.status)
   const logo = venueMetadata(readiness.venue).logo
-  // Show a real number only when we actually have one from the backend.
-  // On disconnect (or before the first snapshot) equity/available are null;
-  // render "--" rather than an ambiguous $0.00.
+  // Display the owner's received observation independently of trading readiness;
+  // an owner disconnect hides it, while a background refresh only dims it.
   return (
     <div className={`relative overflow-hidden rounded-md border border-white/[0.07] bg-[#0b1018] px-3 py-3 transition-colors hover:border-white/[0.12] ${VENUE_CARD_STYLES[readiness.venue]}`}>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <div className="flex items-center gap-2">
           <span className="flex size-7 items-center justify-center rounded-md border border-border bg-white/[0.035]">
             {logo ? <img src={logo} alt="" className="size-5 object-contain" /> : readiness.label[0]}
           </span>
           <span className="text-sm font-medium text-foreground">{readiness.label}</span>
         </div>
-        <span className={`text-[11px] flex items-center gap-1.5 ${view.color}`}>
+        {showStatus && <span className={`text-[11px] flex items-center gap-1.5 ${view.color}`}>
           {view.loading ? (
             <span className="size-2.5 animate-spin rounded-full border border-slate-500/40 border-t-cyan-400" />
           ) : (
             <span className={`size-1.5 rounded-full ${view.dot}`} />
           )}
           {view.label}
-        </span>
+        </span>}
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
         <div>
           <p className="text-muted-foreground">Equity</p>
-          <p className="font-mono text-foreground">{maskAmounts ? MASKED_VALUE : fmtUsd(readiness.equity)}</p>
+          <p className={cn('font-mono text-foreground', stale && 'text-muted-foreground')}>{maskAmounts ? MASKED_VALUE : fmtUsd(observation?.equity ?? null)}</p>
         </div>
         <div>
           <p className="text-muted-foreground">Available</p>
-          <p className="font-mono text-foreground">{maskAmounts ? MASKED_VALUE : fmtUsd(readiness.available)}</p>
+          <p className={cn('font-mono text-foreground', stale && 'text-muted-foreground')}>{maskAmounts ? MASKED_VALUE : fmtUsd(observation?.available ?? null)}</p>
         </div>
       </div>
       {readiness.shortAddress && (

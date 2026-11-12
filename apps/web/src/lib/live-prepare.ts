@@ -1,4 +1,4 @@
-import { apiError, apiFetch, userErrorMessage } from './api.ts'
+import { apiError, apiFetch } from './api.ts'
 
 export const PREPARE_STAGE_LABELS = {
   validating: 'Checking execution request',
@@ -16,16 +16,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object'
 }
 
+export class PrepareError extends Error {}
+
+const PREPARE_FEEDBACK: Record<string, string> = {
+  ACCOUNT_STATE_NOT_READY: 'Accounts are updating.',
+  POSITION_STATE_NOT_READY: 'Accounts are updating.',
+  EXECUTION_DATA_NOT_READY: 'Market data is updating.',
+  PREPARE_TIMEOUT: 'Preparation timed out.',
+  LIVE_ADMISSION_DENIED: 'Trade unavailable.',
+  PLAN_NOT_EXECUTABLE: 'Trade unavailable.',
+  PRETRADE_BLOCKED: 'Trade unavailable.',
+  EXISTING_POSITION: 'Close the existing position first.',
+  EXISTING_SESSION: 'A trade is already in progress.',
+  PRICE_MOVED: 'Prices changed. Review the trade.',
+}
+
 function resultBody<T>(status: number, body: unknown): T {
   if (status >= 200 && status < 300) {
-    if (!isRecord(body)) throw new Error('Invalid preparation response. Please try again.')
+    if (!isRecord(body)) throw new PrepareError('Unable to start trade.')
     return body as T
   }
-  const reasons = isRecord(body) && Array.isArray(body.reasons)
-    ? body.reasons.filter((reason): reason is string => typeof reason === 'string')
-    : []
-  const message = apiError(status, 'Unable to prepare execution. Refresh the opportunity and try again.', body).message
-  throw new Error(reasons.length > 0 ? `${message}: ${reasons.join('; ')}` : message)
+  const code = isRecord(body) && typeof body.code === 'string' ? body.code : ''
+  // Adapter diagnostics remain on the backend. Only structured, allowlisted
+  // feedback is UI copy; an unknown code falls back without exposing reasons.
+  throw new PrepareError(Object.hasOwn(PREPARE_FEEDBACK, code) ? PREPARE_FEEDBACK[code]
+    : apiError(status, 'Unable to start trade.').message)
 }
 
 // One request, no progress polling. The deadline covers headers AND the body,
@@ -39,7 +54,7 @@ export async function prepareLive<T>(
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new Error('Preparation timed out. No orders were submitted. Refresh the opportunity and try again.'))
+      reject(new PrepareError('Preparation timed out.'))
       controller.abort()
     }, timeoutMs)
   })
@@ -56,7 +71,7 @@ export async function prepareLive<T>(
       const payload: unknown = await response.json().catch(() => null)
       return resultBody<T>(response.status, payload)
     }
-    if (!response.body) throw new Error('Preparation response was empty. Please try again.')
+    if (!response.body) throw new PrepareError('Unable to start trade.')
     const reader = response.body.getReader()
     const cancelReader = () => { void reader.cancel().catch(() => {}) }
     controller.signal.addEventListener('abort', cancelReader, { once: true })
@@ -74,14 +89,14 @@ export async function prepareLive<T>(
         for (const line of lines) {
           if (!line.trim()) continue
           const event: unknown = JSON.parse(line)
-          if (!isRecord(event)) throw new Error('Invalid preparation response. Please try again.')
+          if (!isRecord(event)) throw new PrepareError('Unable to start trade.')
           if (event.type === 'progress' && typeof event.stage === 'string' && Object.hasOwn(PREPARE_STAGE_LABELS, event.stage)) {
             onProgress(event.stage as PrepareStage)
           } else if (event.type === 'result' && typeof event.status === 'number' && Number.isInteger(event.status) && event.status >= 200 && event.status < 600 && 'body' in event) {
             return resultBody<T>(event.status, event.body)
           }
         }
-        if (done) throw new Error('Preparation connection ended before completion. No orders were submitted. Please try again.')
+        if (done) throw new PrepareError('Unable to start trade.')
       }
     } finally {
       controller.signal.removeEventListener('abort', cancelReader)
@@ -92,7 +107,8 @@ export async function prepareLive<T>(
   try {
     return await Promise.race([request(), timeout])
   } catch (cause) {
-    throw new Error(userErrorMessage(cause, 'Unable to prepare execution. Refresh the opportunity and try again.'))
+    if (cause instanceof PrepareError) throw cause
+    throw new PrepareError(cause instanceof TypeError ? 'Check your connection.' : 'Unable to start trade.')
   } finally {
     clearTimeout(timer)
   }

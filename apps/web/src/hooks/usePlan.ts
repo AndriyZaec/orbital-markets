@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
+import { apiError, apiFetch } from '@/lib/api'
 import { leverageCapabilityMessage } from '@/lib/leverage'
 import { usePageVisibility } from './usePageVisibility'
 import type { LeverageCapability } from './useOpportunities'
@@ -48,7 +48,7 @@ interface ExecutionPlan {
   notional: number
   base_amount?: number
   liquidity?: {
-    status: 'bbo' | 'l2' | 'insufficient' | 'unavailable'
+    status: 'bbo' | 'l2' | 'pending' | 'insufficient' | 'unavailable'
     impact: number
     requires_acknowledgement: boolean
     observed_at: string
@@ -80,6 +80,7 @@ export function usePlan(
   const [resultKey, setResultKey] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [marketDataPendingKey, setMarketDataPendingKey] = useState('')
   const [maxLeverageResult, setMaxLeverageResult] = useState<{ key: string; value: number | null }>({ key: '', value: null })
   const [capabilityErrorKey, setCapabilityErrorKey] = useState('')
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -119,9 +120,10 @@ export function usePlan(
         signal,
       })
       if (!resp.ok) {
-        const body: { error?: string; pair_max_leverage?: number; venue?: string; capability?: LeverageCapability } = await resp.json().catch(() => ({}))
+        const body: { error?: string; opportunity_status?: string; pair_max_leverage?: number; venue?: string; capability?: LeverageCapability } = await resp.json().catch(() => ({}))
         if (signal?.aborted || requestId !== requestSequence.current) return
         setResultKey(requestKey ?? '')
+        setMarketDataPendingKey('')
         if (typeof body.pair_max_leverage === 'number') {
           setMaxLeverageResult({ key: requestKey ?? '', value: body.pair_max_leverage })
         } else {
@@ -131,29 +133,53 @@ export function usePlan(
           ? leverageCapabilityMessage({ [body.venue ?? 'venue']: body.capability })
           : null
         setCapabilityErrorKey(body.capability ? requestKey ?? '' : '')
+        if (body.opportunity_status === 'unavailable' || body.opportunity_status === 'degraded' ||
+          resp.status >= 500 || resp.status === 408 || resp.status === 429) {
+          // The existing visible-tab refresh retries the preview. Never retain
+          // an executable plan while either venue's current data is unavailable.
+          setMarketDataPendingKey(requestKey ?? '')
+          setError(null)
+          setPlan(null)
+          return
+        }
         if (body.capability && !capabilityMessage) {
           setError(null)
           setPlan(null)
           return
         }
-        throw apiError(resp.status, 'Unable to build an execution plan. Please try again.', capabilityMessage
-          ? { ...body, error: capabilityMessage }
-          : body)
+        const message = capabilityMessage ?? (typeof body.pair_max_leverage === 'number'
+          ? `Choose leverage up to ${body.pair_max_leverage}x.` : null)
+        setError(apiError(resp.status, 'Unable to load trade.', message ? { error: message } : undefined).message)
+        setPlan(null)
+        return
       }
       const data: ExecutionPlan = await resp.json()
       if (signal?.aborted || requestId !== requestSequence.current) return
       if (expectedDirection && data.direction !== expectedDirection) {
-        throw apiError(409, 'Funding direction changed. The opportunity is updating automatically.')
+        setError('Funding direction changed.')
+        setPlan(null)
+        setMarketDataPendingKey('')
+        setResultKey(requestKey ?? '')
+        return
       }
       setPlan(data)
       setResultKey(requestKey ?? '')
       setMaxLeverageResult({ key: requestKey ?? '', value: data.max_leverage })
       setCapabilityErrorKey('')
+      setMarketDataPendingKey('')
       setError(null)
       return data
     } catch (e) {
       if (signal?.aborted || requestId !== requestSequence.current) return
-      setError(userErrorMessage(e, 'Unable to build an execution plan. Please try again.'))
+      if (e instanceof TypeError) {
+        setMarketDataPendingKey(requestKey ?? '')
+        setError(null)
+        setPlan(null)
+        setResultKey(requestKey ?? '')
+        return
+      }
+      setMarketDataPendingKey('')
+      setError('Unable to load trade.')
       setPlan(null)
       setResultKey(requestKey ?? '')
     } finally {
@@ -170,6 +196,7 @@ export function usePlan(
         setPlan(null)
         setLoading(false)
         setError(null)
+        setMarketDataPendingKey('')
         setMaxLeverageResult({ key: '', value: null })
         setCapabilityErrorKey('')
       }, 0)
@@ -199,6 +226,7 @@ export function usePlan(
     setPlan(null)
     setLoading(false)
     setError(null)
+    setMarketDataPendingKey('')
     setMaxLeverageResult({ key: '', value: null })
     setCapabilityErrorKey('')
   }, [])
@@ -212,6 +240,7 @@ export function usePlan(
     plan: resultKey === planKey ? plan : null,
     loading: loading || Boolean(opportunityId && pageVisible && resultKey !== planKey),
     error: resultKey === planKey ? error : null,
+    marketDataPending: marketDataPendingKey === planKey,
     maxLeverage, leverageCapabilityBlocked, clear, refresh,
   }
 }

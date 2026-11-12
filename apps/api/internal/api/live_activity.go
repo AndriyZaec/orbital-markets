@@ -122,8 +122,8 @@ func liveActivityAccounts(values url.Values) (map[string]string, error) {
 			return nil, err
 		}
 	}
-	if len(accounts) < 2 || len(accounts) > 3 {
-		return nil, fmt.Errorf("account bindings required for two or three supported venues")
+	if len(accounts) < 2 || len(accounts) > len(supportedLiveVenues) {
+		return nil, fmt.Errorf("account bindings required for at least two supported venues")
 	}
 	return accounts, nil
 }

@@ -7,8 +7,9 @@ import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import { useTelegramLink } from '@/hooks/useTelegramLink'
 import { trackAnalytics } from '@/lib/analytics'
-import { hasActiveLiveExposureForWallet } from '@/lib/live-events'
+import { hasActiveLiveExposure, hasActiveLiveExposureForWallet } from '@/lib/live-events'
 import { venueMetadata } from '@/lib/venue-metadata'
+import { cn } from '@/lib/utils'
 import type { WalletKind } from '@/agents/types'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,6 +21,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import telegramLogo from '@/assets/telegram-logo.svg'
+import { PhoenixAuthorization } from './PhoenixAuthorization'
+import { AccountBalance } from './AccountBalance'
+import { accountActionStyles } from './account-action-styles'
 
 // Static venue presentation. Runtime
 // readiness comes from useVenueReadiness — the single typed layer that
@@ -35,26 +39,13 @@ const VENUES: VenueDef[] = [
   { id: 'pacifica', name: venueMetadata('pacifica').label, logo: venueMetadata('pacifica').logo },
   { id: 'hyperliquid', name: venueMetadata('hyperliquid').label, logo: venueMetadata('hyperliquid').logo },
   { id: 'aster', name: venueMetadata('aster').label, logo: venueMetadata('aster').logo },
+  { id: 'phoenix', name: venueMetadata('phoenix').label, logo: venueMetadata('phoenix').logo },
 ]
 
 interface Props {
   open: boolean
   onConnectionChange?: (count: number) => void
   onClose: () => void
-}
-
-function fmtUsd(n: number | null): string {
-  if (n === null || !Number.isFinite(n)) return '--'
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(2)}K`
-  return `$${n.toFixed(2)}`
-}
-
-function fmtLastUpdated(value: string | null): string {
-  if (!value) return 'Refreshing'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Unknown'
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 // Diagnostic pill state (label + colors). Copy is operator-friendly, not
@@ -89,20 +80,6 @@ function agentPill(r: VenueReadiness): DiagnosticPill {
   if (r.agentStatus === 'error') return { label: 'Error', tone: 'bad' }
   return r.agentReady ? { label: 'Ready', tone: 'ok' } : { label: 'Required', tone: 'pending' }
 }
-function balancePill(r: VenueReadiness): DiagnosticPill {
-  if (!r.walletConnected) return { label: '—', tone: 'off' }
-  if (r.balanceReady) return { label: 'Ready', tone: 'ok' }
-  if (r.status === 'unavailable') return { label: 'Unavailable', tone: 'bad' }
-  // Stream up but snapshot is old — surface as Stale, not Pending, so the
-  // operator can tell the difference between "still initializing" and
-  // "data went stale after being fresh".
-  if (r.streamReady && !r.accountFresh) return { label: 'Stale', tone: 'pending' }
-  if (r.status === 'balance_pending' || r.balanceConnected || r.streamReady) {
-    return { label: 'Refreshing', tone: 'pending', loading: true }
-  }
-  return { label: 'Not connected', tone: 'off' }
-}
-
 // Overall aggregate → header color + copy. Kept local so the aggregate
 // hook can stay purely data.
 function aggregateTone(label: 'Ready' | 'Needs attention' | 'Not connected'): PillTone {
@@ -116,9 +93,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     pacifica,
     hyperliquid,
     aster,
+    phoenix,
     aggregate,
-    ensureStatus,
-    ensureError,
     refreshBalances,
   } = useVenueReadiness()
   const tradingAgents = useTradingAgents()
@@ -149,6 +125,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   const [pickerOpen, setPickerOpen] = useState<VenueId | null>(null)
   const [pendingDisconnect, setPendingDisconnect] = useState<WalletKind | null>(null)
   const previousWalletConnectedRef = useRef<Record<VenueId, boolean>>({
+    phoenix: false,
     pacifica: false,
     hyperliquid: false,
     aster: false,
@@ -156,6 +133,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   // Wallet providers restore persisted sessions on mount; only count a
   // transition that follows an explicit connect action.
   const manualConnectRequestedRef = useRef<Record<VenueId, boolean>>({
+    phoenix: false,
     pacifica: false,
     hyperliquid: false,
     aster: false,
@@ -172,11 +150,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
 
   useEffect(() => {
     const current: Record<VenueId, boolean> = {
+      phoenix: phoenix.walletConnected,
       pacifica: pacifica.walletConnected,
       hyperliquid: hyperliquid.walletConnected,
       aster: aster.walletConnected,
     }
-    for (const venue of ['pacifica', 'hyperliquid', 'aster'] as const) {
+    for (const venue of ['pacifica', 'hyperliquid', 'aster', 'phoenix'] as const) {
       if (
         current[venue]
         && !previousWalletConnectedRef.current[venue]
@@ -187,12 +166,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       }
     }
     previousWalletConnectedRef.current = current
-  }, [pacifica.walletConnected, hyperliquid.walletConnected, aster.walletConnected])
+  }, [pacifica.walletConnected, hyperliquid.walletConnected, aster.walletConnected, phoenix.walletConnected])
 
   const handleConnect = (venueId: string) => {
-    if (venueId === 'pacifica') {
-      requestManualConnect('pacifica')
-      window.setTimeout(() => { manualConnectRequestedRef.current.pacifica = false }, 30_000)
+    if (venueId === 'pacifica' || venueId === 'phoenix') {
+      requestManualConnect(venueId)
+      window.setTimeout(() => { manualConnectRequestedRef.current[venueId] = false }, 30_000)
       setSolModalVisible(true)
       return
     }
@@ -235,7 +214,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   }
 
   const handleDisconnect = (venueId: VenueId) => {
-    const wallet = venueId === 'pacifica' ? 'solana' : 'evm'
+    const wallet = venueId === 'pacifica' || venueId === 'phoenix' ? 'solana' : 'evm'
     if (hasActiveLiveExposureForWallet(positions, wallet)) {
       setPendingDisconnect(wallet)
       return
@@ -262,6 +241,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     if (venueId === 'pacifica') return pacifica
     if (venueId === 'hyperliquid') return hyperliquid
     if (venueId === 'aster') return aster
+    if (venueId === 'phoenix') return phoenix
     return null
   }
 
@@ -303,19 +283,6 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             <span className={`font-medium ${summaryTone.text}`}>{aggregate.statusLabel}</span>
           </div>
         </div>
-        {!aggregate.tradingReady && aggregate.blockingReasons.length > 0 && (
-          <ul className="mt-2 flex flex-col gap-0.5">
-            {aggregate.blockingReasons.map((r, i) => (
-              <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
-            ))}
-          </ul>
-        )}
-        {ensureError && (
-          <p className="text-[10px] text-red-400 mt-2">Account data: {ensureError}</p>
-        )}
-        {ensureStatus === 'starting' && (
-          <p className="text-[10px] text-muted-foreground/70 mt-2">Starting account data…</p>
-        )}
       </div>
 
       {/* Venue list */}
@@ -326,15 +293,18 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             const readiness = getReadiness(venue.id)
             const isReady = readiness?.status === 'ready'
             const isErr = readiness?.status === 'error'
+            const solanaVenue = venue.id === 'pacifica' || venue.id === 'phoenix'
             const disconnectBlocked = agentChangeBlocked || readiness?.agentStatus === 'restoring'
+              || (venue.id === 'pacifica' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))
+              || (venue.id === 'phoenix' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.pacifica.status))
               || readiness?.agentStatus === 'authorizing' || readiness?.agentStatus === 'disconnecting'
-              || (venue.id !== 'pacifica' && (hyperliquid.agentStatus === 'restoring'
+              || (!solanaVenue && (hyperliquid.agentStatus === 'restoring'
                 || hyperliquid.agentStatus === 'authorizing' || hyperliquid.agentStatus === 'disconnecting'
                 || aster.agentStatus === 'restoring' || aster.agentStatus === 'authorizing'
                 || aster.agentStatus === 'disconnecting'))
 
             return (
-              <div key={venue.id}
+              <div key={venue.id} role="group" aria-label={`${venue.name} account`}
                 className={`rounded-lg border px-3 py-3 ${
                   isReady
                     ? 'border-green-500/20 bg-green-500/[0.03]'
@@ -347,7 +317,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                 <div className="flex items-center gap-2.5 mb-2">
                   <div className="size-8 rounded-md bg-white/[0.04] border border-border flex items-center justify-center shrink-0 overflow-hidden">
                     {venue.logo ? (
-                      <img src={venue.logo} alt={venue.name} className="size-full object-cover" />
+                      <img src={venue.logo} alt={venue.name} className={cn('object-contain', venue.id === 'phoenix' ? 'size-6' : 'size-full')} />
                     ) : (
                       <span className="text-xs font-bold text-muted-foreground">{venue.name[0]}</span>
                     )}
@@ -372,43 +342,26 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                     {venue.preview ? (
                       <DiagRow label="Live execution" pill={{ label: 'Not enabled', tone: 'off' }} />
                     ) : (
-                      <DiagRow label="Balance" pill={balancePill(readiness)} />
-                    )}
-                    {readiness.walletConnected && !venue.preview && (
-                      <div className="flex items-center justify-between text-[10px] pt-1 mt-0.5 border-t border-border/40">
-                        <span className="text-muted-foreground">Equity / Available</span>
-                        <span className="font-mono text-foreground">
-                          {fmtUsd(readiness.equity)} / {fmtUsd(readiness.available)}
-                        </span>
-                      </div>
-                    )}
-                    {readiness.walletConnected && !venue.preview && (
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-muted-foreground">Last update</span>
-                        <span className="font-mono text-muted-foreground">
-                          {fmtLastUpdated(readiness.lastUpdated)}
-                        </span>
-                      </div>
-                    )}
-                    {readiness.blockingReasons.length > 0 && !isReady && (
-                      <ul className="mt-1 flex flex-col gap-0.5">
-                        {readiness.blockingReasons.map((r, i) => (
-                          <li key={i} className="text-[10px] text-muted-foreground/70 leading-snug">• {r}</li>
-                        ))}
-                      </ul>
+                      <AccountBalance readiness={readiness} />
                     )}
                   </div>
                 )}
 
                 {/* Action */}
-                <div className="flex items-center justify-end">
+                {venue.id === 'phoenix' ? (
+                  <PhoenixAuthorization key={tradingAgents.phoenix.ownerAddress ?? 'no-owner'}
+                    disabled={agentChangeBlocked || disconnectBlocked}
+                    hasActiveExposure={hasActiveLiveExposure(positions.filter((position) => position.venue_a === 'phoenix' || position.venue_b === 'phoenix'))}
+                    onConnect={() => handleConnect('phoenix')}
+                    onDisconnect={() => handleDisconnect('phoenix')} />
+                ) : <div className="flex items-center justify-end">
                   {readiness?.walletConnected ? (
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
                       {!readiness.agentReady && (
                         <button
                           onClick={() => handleAuthorize(venue.id as VenueId)}
-                          disabled={readiness.agentStatus === 'restoring' || readiness.agentStatus === 'authorizing' || !readiness.signerReady}
-                          className="px-3 py-1 rounded text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          disabled={readiness.agentStatus === 'restoring' || readiness.agentStatus === 'authorizing' || !readiness.signerReady || (venue.id === 'pacifica' && ['authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))}
+                          className={accountActionStyles.primary}
                         >
                           {readiness.agentStatus === 'restoring'
                             ? 'Restoring authorization...'
@@ -422,7 +375,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                           <button
                             onClick={() => handleAuthorize(venue.id as VenueId)}
                             disabled={agentChangeBlocked}
-                            className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            className={accountActionStyles.secondary}
                           >
                             Reauthorize
                           </button>
@@ -431,7 +384,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       <button
                         onClick={() => handleDisconnect(venue.id)}
                         disabled={disconnectBlocked}
-                        className="px-3 py-1 rounded text-[10px] font-medium bg-white/[0.06] text-muted-foreground hover:text-foreground hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className={accountActionStyles.secondary}
                       >
                         {venue.id === 'pacifica' ? 'Disconnect' : 'Disconnect EVM Wallet'}
                       </button>
@@ -439,12 +392,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   ) : (
                     <button
                       onClick={() => handleConnect(venue.id)}
-                      className="px-3 py-1 rounded text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+                      className={accountActionStyles.primary}
                     >
                       Connect
                     </button>
                   )}
-                </div>
+                </div>}
 
               </div>
             )
