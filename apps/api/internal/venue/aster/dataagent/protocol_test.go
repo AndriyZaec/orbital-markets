@@ -1,16 +1,54 @@
 package dataagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSignedGETClassifiesHTTPFailuresAndLogsOnlyPrivateMetadata(t *testing.T) {
+	privateKey, _ := hex.DecodeString("0123456789012345678901234567890123456789012345678901234567890123")
+	for _, status := range []int{400, 401, 403, 404, 422, 408, 418, 429, 500, 502, 302} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				fmt.Fprintf(w, `{"code":-2015,"msg":%q}`, r.URL.String()+testOwner)
+			}))
+			defer venue.Close()
+			client := NewClient(venue.URL, venue.Client(), time.Now)
+			_, err := client.signedGET(context.Background(), "/fapi/v3/builder", nil, testOwner, testDataAgent, privateKey, 1)
+			wantRejected := status >= 400 && status < 500 && status != 408 && status != 418 && status != 429
+			if err == nil || errors.Is(err, ErrReadRejected) != wantRejected {
+				t.Fatalf("HTTP %d: err=%v, wantRejected=%t", status, err, wantRejected)
+			}
+			var entry map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &entry); err != nil {
+				t.Fatalf("missing private WARN: %v logs=%s", err, logs.String())
+			}
+			if entry["level"] != "WARN" || entry["endpoint"] != "builder-approval" || entry["http_status"] != float64(status) || entry["code"] != float64(-2015) {
+				t.Fatalf("unexpected log metadata: %+v", entry)
+			}
+			for _, secret := range []string{venue.URL, testOwner, testDataAgent, "signature", "nonce", "?", hex.EncodeToString(privateKey)} {
+				if strings.Contains(logs.String(), secret) {
+					t.Fatalf("private log leaked request data: %s", logs.String())
+				}
+			}
+		})
+	}
+}
 
 const (
 	testOwner                      = "0x1111111111111111111111111111111111111111"

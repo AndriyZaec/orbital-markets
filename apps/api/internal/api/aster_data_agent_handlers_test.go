@@ -134,6 +134,21 @@ func TestAsterBuilderApprovalReturnsCurrentStatus(t *testing.T) {
 	}
 }
 
+func TestAsterBuilderApprovalRejectedReadReturnsNotApproved(t *testing.T) {
+	server := &Server{
+		asterDataAgent: &fakeAsterDataAgentProbe{err: dataagent.ErrReadRejected},
+		live: &LiveDeps{asterBuilder: &asterlive.BuilderConfig{
+			Address: "0xe625a2d279815749c647daed24df41bc8dd14bfe", FeeRate: "0.0002",
+		}},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/live/agents/aster/builder-approval?account="+testHTTPAsterOwner, nil)
+	response := httptest.NewRecorder()
+	server.handleAsterBuilderApproval(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "{\"approved\":false}\n" {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestAsterDataAgentReturnsSanitizedActionableErrors(t *testing.T) {
 	fake := &fakeAsterDataAgentProbe{err: dataagent.ErrUncertain}
 	response := serveDataAgentRequest(t, fake, http.MethodPost, "/api/v1/live/aster/data-agent/validate",

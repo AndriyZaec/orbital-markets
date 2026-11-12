@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -390,6 +391,36 @@ func TestAsterAccountFeedReportsMissingReadAuthorization(t *testing.T) {
 	}
 	if snapshot := feed.Snapshot(); snapshot.UnavailableReason != "Aster read authorization required" {
 		t.Fatalf("unavailable snapshot = %+v", snapshot)
+	}
+}
+
+func TestAsterAccountFeedReportsRejectedReadAuthorization(t *testing.T) {
+	for _, staleSnapshot := range []bool{false, true} {
+		t.Run(fmt.Sprint(staleSnapshot), func(t *testing.T) {
+			reader := &fakeAsterAccountReader{read: func(_ context.Context, _ string, call int) (asteraccount.Observation, error) {
+				if staleSnapshot && call == 1 {
+					return completeAsterObservation(time.Now().Add(-31 * time.Second)), nil
+				}
+				return asteraccount.Observation{}, dataagent.ErrReadRejected
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			feed := &asterAccountFeed{
+				state:   asteraccount.NewAccountState("0x1111111111111111111111111111111111111111"),
+				account: "0x1111111111111111111111111111111111111111", reader: reader, ctx: ctx, backendReads: true,
+			}
+			if staleSnapshot {
+				if err := feed.RefreshPositions(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := feed.RefreshPositions(ctx); !errors.Is(err, dataagent.ErrReadRejected) || !asterReadAuthorizationFailed(err) {
+				t.Fatalf("rejected refresh was not classified as authorization failure: %v", err)
+			}
+			if snapshot := feed.Snapshot(); snapshot.UnavailableReason != "Aster account reads were rejected; reauthorize Aster" {
+				t.Fatalf("rejected read lost its actionable reason: %+v", snapshot)
+			}
+		})
 	}
 }
 
