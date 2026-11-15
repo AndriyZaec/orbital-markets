@@ -169,6 +169,7 @@ function TradingAgentSession({
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
   const [aster, setAster] = useState(() => initialState('aster', asterOwner))
   const [phoenix, setPhoenix] = useState(() => initialState('phoenix', pacificaOwner))
+  const [phoenixDisconnectNoticeOwner, setPhoenixDisconnectNoticeOwner] = useState<string | null>(null)
   const owners = useRef({ pacifica: pacificaOwner, phoenix: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
   const revokedPacificaAgents = useRef(new Set<string>())
@@ -176,7 +177,10 @@ function TradingAgentSession({
 
   useEffect(() => restoreTradingAgent('pacifica', pacificaOwner, storage, setPacifica,
     () => ownerStillCurrent('pacifica', pacificaOwner, owners.current)), [pacificaOwner, storage])
-  useEffect(() => restoreTradingAgent('phoenix', pacificaOwner, storage, setPhoenix,
+  useEffect(() => restoreTradingAgent('phoenix', pacificaOwner, storage, (state) => {
+    setPhoenix(state)
+    if (pacificaOwner) setPhoenixDisconnectNoticeOwner((owner) => owner === pacificaOwner ? null : owner)
+  },
     () => ownerStillCurrent('phoenix', pacificaOwner, owners.current)), [pacificaOwner, storage])
   useEffect(() => restoreTradingAgent('hyperliquid', hyperliquidOwner, storage, setHyperliquid,
     () => ownerStillCurrent('hyperliquid', hyperliquidOwner, owners.current)), [hyperliquidOwner, storage])
@@ -408,7 +412,13 @@ function TradingAgentSession({
 
   const disconnectWallet = async (wallet: WalletKind) => {
     if (wallet === 'solana') {
-      await revokePhoenix()
+      const phoenixOwner = owners.current.phoenix
+      try {
+        await revokePhoenix()
+      } catch {
+        // Revoke retains keys/operation metadata; it must not prevent wallet disconnect.
+        setPhoenixDisconnectNoticeOwner(phoenixOwner)
+      }
       const ownerAddress = owners.current.pacifica
       if (ownerAddress) {
         setPacifica((current) => ({ ...current, status: 'disconnecting', error: null }))
@@ -480,7 +490,7 @@ function TradingAgentSession({
 
   return (
     <TradingAgentContext.Provider value={{
-      pacifica, hyperliquid, aster, phoenix, authorize, sign, disconnectWallet, revokePhoenix,
+      pacifica, hyperliquid, aster, phoenix, phoenixDisconnectNoticeOwner, authorize, sign, disconnectWallet, revokePhoenix,
     }}>
       {children}
     </TradingAgentContext.Provider>

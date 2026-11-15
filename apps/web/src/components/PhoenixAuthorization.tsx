@@ -14,6 +14,7 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
   const wallet = useWallet()
   const owner = wallet.connected ? wallet.publicKey?.toBase58() : null
   const state = agents.phoenix
+  const showDisconnectNotice = !owner && !!agents.phoenixDisconnectNoticeOwner
   const [replacement, setReplacement] = useState<{ owner: string; authority: string } | null>(null)
   const [revokeOwner, setRevokeOwner] = useState<string | null>(null)
   const busy = ['restoring', 'authorizing', 'disconnecting'].includes(state.status)
@@ -38,7 +39,8 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
 
   return <>
     <div className="flex flex-col gap-1.5">
-      {state.error && <p className="text-[10px] text-red-400" role="alert">{state.error}</p>}
+      {state.error && !showDisconnectNotice && <p className="text-[10px] text-red-400" role="alert">{state.error}</p>}
+      {showDisconnectNotice && <p className="text-[10px] text-muted-foreground">Phoenix authorization is still active. Reconnect this wallet to revoke it.</p>}
       {owner && !wallet.signTransaction && <p className="text-[10px] text-muted-foreground">This wallet must support transaction signing.</p>}
       <div className="flex items-center justify-end">
         {!owner ? <button type="button" className={accountActionStyles.primary} onClick={onConnect}>Connect</button> : (

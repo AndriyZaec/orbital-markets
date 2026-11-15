@@ -37,6 +37,7 @@ export interface TradingAgentManager {
   pacifica: TradingAgentState
   aster: TradingAgentState
   phoenix: TradingAgentState
+  phoenixDisconnectNoticeOwner: string | null
   authorize(venue: Venue, options?: { replaceExistingDelegate?: boolean; expectedOwner?: string; expectedAuthority?: string }): Promise<void>
   revokePhoenix(): Promise<void>
   sign(request: SigningRequest): Promise<SignedAction>
