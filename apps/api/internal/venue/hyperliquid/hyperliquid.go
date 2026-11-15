@@ -610,6 +610,7 @@ func parseRESTComponent(raw string, receivedAt time.Time, generation uint64) (fl
 		Status: venue.HealthAvailable, ReceivedAt: receivedAt, SourceGeneration: generation,
 	}
 	if invalidFloat(value, err) {
+		value = math.NaN()
 		health.Status = venue.HealthUnavailable
 		health.Reason = venue.HealthReasonInvalidValue
 	}

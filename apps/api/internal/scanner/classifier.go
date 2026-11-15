@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"math"
 	"time"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/domain"
@@ -18,7 +19,8 @@ func hasBidAsk(md venue.MarketData) bool {
 }
 
 func hasFunding(md venue.MarketData) bool {
-	return md.FundingRate != 0
+	// Adapters distinguish unknown funding from a real zero using non-finite values or omission.
+	return !math.IsNaN(md.FundingRate) && !math.IsInf(md.FundingRate, 0)
 }
 
 func hasPrice(md venue.MarketData) bool {

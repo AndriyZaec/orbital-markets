@@ -2,6 +2,7 @@ package hyperliquid
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -13,6 +14,35 @@ import (
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/scanner"
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
+
+func TestFundingDistinguishesUnknownFromZero(t *testing.T) {
+	for _, field := range []string{"", `,"funding":null`, `,"funding":""`, `,"funding":"invalid"`, `,"funding":"NaN"`, `,"funding":"Inf"`, `,"funding":"0"`} {
+		t.Run(field, func(t *testing.T) {
+			body := `[{"universe":[{"name":"SOL"}]},[{"markPx":"150","oraclePx":"149","funding":"0.001","openInterest":"1000"}]]`
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+			adapter := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+			adapter.marketURL = server.URL
+			adapter.pollREST(context.Background())
+			body = fmt.Sprintf(`[{"universe":[{"name":"SOL"}]},[{"markPx":"150","oraclePx":"149","openInterest":"1000"%s}]]`, field)
+			adapter.pollREST(context.Background())
+			snapshots, err := adapter.FetchMarketData(context.Background())
+			if err != nil || len(snapshots) != 1 {
+				t.Fatalf("snapshots = %+v, err = %v", snapshots, err)
+			}
+			snapshot := snapshots[0]
+			if field == `,"funding":"0"` {
+				if snapshot.FundingRate != 0 || snapshot.Health.Funding.Status != venue.HealthAvailable {
+					t.Fatalf("explicit zero not available: %+v", snapshot)
+				}
+			} else if !math.IsNaN(snapshot.FundingRate) || snapshot.Health.Funding.Status != venue.HealthUnavailable || snapshot.Health.Funding.Reason != venue.HealthReasonInvalidValue {
+				t.Fatalf("unknown funding not rejected: %+v", snapshot)
+			}
+		})
+	}
+}
 
 func TestRESTRefreshKeepsQuietMarketDiscoverableWithoutRefreshingBook(t *testing.T) {
 	now := time.Now().Add(-31 * time.Second)
