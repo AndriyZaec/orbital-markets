@@ -17,7 +17,7 @@ export { asterBuilderAddress, asterBuilderFeeRate } from './builder-config.ts'
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
 const orderChainId = 1666
 const ownerChainId = 56
-type AsterAgentName = 'OrbitalMarkets' | 'OrbitalMarketsStg'
+type AsterAgentName = 'OrbitalMarkets' | 'OrbitalStg'
 const builderName = 'OrbitalMarkets'
 const agentLifetime = 7 * 24 * 60 * 60 * 1000
 
@@ -82,7 +82,7 @@ export function buildAsterApproveAgentTypedData(action: Parameters<typeof buildA
 }
 
 function parseAsterAgentName(value: unknown): AsterAgentName {
-  if (value !== 'OrbitalMarkets' && value !== 'OrbitalMarketsStg') {
+  if (value !== 'OrbitalMarkets' && value !== 'OrbitalStg') {
     throw new Error('Orbital returned an invalid Aster agent name')
   }
   return value

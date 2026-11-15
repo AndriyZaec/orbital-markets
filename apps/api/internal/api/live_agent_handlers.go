@@ -218,6 +218,7 @@ func (s *Server) handleHyperliquidAgentApprove(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err := s.live.hlAgentApprover.ApproveAgent(r.Context(), request); err != nil {
+		s.logger.Warn("Hyperliquid agent approval rejected", "err", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Hyperliquid agent approval rejected"})
 		return
 	}

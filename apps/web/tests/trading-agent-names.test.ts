@@ -12,7 +12,7 @@ test('backend approval config names survive JSON parsing and typed data unchange
   const original = globalThis.fetch
   try {
     for (const venue of ['hyperliquid', 'aster'] as const) {
-      const names = venue === 'hyperliquid' ? ['Orbital Markets', 'OrbitalMarketsStg'] : ['OrbitalMarkets', 'OrbitalMarketsStg']
+      const names = venue === 'hyperliquid' ? ['Orbital Markets', 'OrbitalStg'] : ['OrbitalMarkets', 'OrbitalStg']
       for (const name of names) {
         globalThis.fetch = async (url) => {
           assert.equal(String(url), `/api/v1/live/agents/${venue}/approval-config`)
@@ -36,8 +36,15 @@ test('backend approval config names survive JSON parsing and typed data unchange
   }
 })
 
+test('every allowed Hyperliquid agent name fits the 16-character venue limit', () => {
+  for (const name of ['Orbital Markets', 'OrbitalStg']) {
+    const action = buildHyperliquidApproveAgentAction(agent, 1, now, name)
+    assert.ok([...action.agentName].length <= 16, `${name} exceeds the Hyperliquid name limit`)
+  }
+})
+
 test('approval builders reject every name outside each fixed allowlist before signing', () => {
-  for (const name of ['', 'Other', 'Orbital Markets Stg ', 'OrbitalMarketsStg\n', 'Orbital Markets valid_until 9999999999', 'OrbitalData', null, undefined, 123]) {
+  for (const name of ['', 'Other', 'Orbital Markets Stg ', 'OrbitalStg\n', 'OrbitalMarketsStg', 'Orbital Markets valid_until 9999999999', 'OrbitalData', null, undefined, 123]) {
     assert.throws(() => buildHyperliquidApproveAgentAction(agent, 1, now, name), /invalid Hyperliquid agent name/)
     assert.throws(() => buildAsterApproveAgentAction(owner, agent, now, name), /invalid Aster agent name/)
     const hl = buildHyperliquidApproveAgentAction(agent, 1, now, 'Orbital Markets')

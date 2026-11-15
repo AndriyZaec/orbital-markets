@@ -23,7 +23,7 @@ const (
 	maxAgentLifetime      = 30 * 24 * time.Hour
 	asterSignatureChainID = 56
 	DefaultAgentName      = "OrbitalMarkets"
-	StagingAgentName      = "OrbitalMarketsStg"
+	StagingAgentName      = "OrbitalStg"
 	asterBuilderName      = "OrbitalMarkets"
 )
 
@@ -32,7 +32,7 @@ func ParseAgentName(name string) (string, error) {
 		return DefaultAgentName, nil
 	}
 	if name != DefaultAgentName && name != StagingAgentName {
-		return "", fmt.Errorf("ASTER_AGENT_NAME must be OrbitalMarkets or OrbitalMarketsStg")
+		return "", fmt.Errorf("ASTER_AGENT_NAME must be OrbitalMarkets or OrbitalStg")
 	}
 	return name, nil
 }

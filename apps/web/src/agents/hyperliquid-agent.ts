@@ -11,7 +11,7 @@ import { hyperliquidBuilderAddress, hyperliquidBuilderFee, hyperliquidBuilderMax
 export { hyperliquidBuilderAddress, hyperliquidBuilderFee, hyperliquidBuilderMaxFeeRate } from './builder-config.ts'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
-type HyperliquidAgentName = 'Orbital Markets' | 'OrbitalMarketsStg'
+type HyperliquidAgentName = 'Orbital Markets' | 'OrbitalStg'
 const hyperliquidInfoUrl = 'https://api.hyperliquid.xyz/info'
 
 export interface HyperliquidApproveAgentAction {
@@ -94,7 +94,7 @@ export function buildHyperliquidApproveAgentTypedData(action: HyperliquidApprove
 }
 
 function parseHyperliquidAgentName(value: unknown): HyperliquidAgentName {
-  if (value !== 'Orbital Markets' && value !== 'OrbitalMarketsStg') {
+  if (value !== 'Orbital Markets' && value !== 'OrbitalStg') {
     throw new Error('Orbital returned an invalid Hyperliquid agent name')
   }
   return value

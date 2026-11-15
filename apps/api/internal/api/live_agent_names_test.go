@@ -14,10 +14,24 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	asterlive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/aster/live"
 	hllive "github.com/AndriyZaec/orbital-markets/apps/api/internal/venue/hyperliquid/live"
 )
+
+func TestHyperliquidAllowedAgentNamesFitVenueLimit(t *testing.T) {
+	for _, name := range []string{hllive.DefaultAgentName, hllive.StagingAgentName} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := hllive.ParseAgentName(name); err != nil {
+				t.Fatal(err)
+			}
+			if length := utf8.RuneCountInString(name); length > 16 {
+				t.Fatalf("Hyperliquid agent name %q has %d characters; maximum is 16", name, length)
+			}
+		})
+	}
+}
 
 func TestAgentApprovalNamesConfigAndFailClosed(t *testing.T) {
 	for _, test := range []struct {
@@ -27,7 +41,8 @@ func TestAgentApprovalNamesConfigAndFailClosed(t *testing.T) {
 		{"", "", 200, 200},
 		{hllive.StagingAgentName, asterlive.StagingAgentName, 200, 200},
 		{"Other", "", 503, 200},
-		{"", "OrbitalMarketsStg\n", 200, 503},
+		{"", "OrbitalStg\n", 200, 503},
+		{"OrbitalMarketsStg", "OrbitalMarketsStg", 503, 503},
 		{"bad name", "Other", 503, 503},
 	} {
 		t.Run(test.hl+"/"+test.aster, func(t *testing.T) {

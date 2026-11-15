@@ -19,7 +19,7 @@ import (
 
 const (
 	DefaultAgentName      = "Orbital Markets"
-	StagingAgentName      = "OrbitalMarketsStg"
+	StagingAgentName      = "OrbitalStg"
 	agentApprovalTimeout  = 10 * time.Second
 	maxApprovalResponse   = 64 << 10
 	maxApprovalAge        = 5 * time.Minute
@@ -31,7 +31,7 @@ func ParseAgentName(name string) (string, error) {
 		return DefaultAgentName, nil
 	}
 	if name != DefaultAgentName && name != StagingAgentName {
-		return "", fmt.Errorf("HYPERLIQUID_AGENT_NAME must be Orbital Markets or OrbitalMarketsStg")
+		return "", fmt.Errorf("HYPERLIQUID_AGENT_NAME must be Orbital Markets or OrbitalStg")
 	}
 	return name, nil
 }
