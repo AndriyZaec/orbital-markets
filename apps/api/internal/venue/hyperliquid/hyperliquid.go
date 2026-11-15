@@ -31,10 +31,12 @@ type metaResponse struct {
 }
 
 type metaAsset struct {
-	Name        string `json:"name"`
-	MaxLeverage int    `json:"maxLeverage"`
-	SzDecimals  int    `json:"szDecimals"`
-	IsDelisted  bool   `json:"isDelisted"`
+	Name         string `json:"name"`
+	MaxLeverage  int    `json:"maxLeverage"`
+	SzDecimals   int    `json:"szDecimals"`
+	IsDelisted   bool   `json:"isDelisted"`
+	OnlyIsolated bool   `json:"onlyIsolated"`
+	MarginMode   string `json:"marginMode"`
 }
 
 type assetCtx struct {
@@ -381,8 +383,9 @@ func (a *Adapter) pollREST(ctx context.Context) {
 	n := min(len(meta.Universe), len(ctxs))
 	// Preserve original universe indices for execution; only quote ingestion is
 	// filtered. Explicit flags remain authoritative even without an asset context.
+	// Isolated-only markets are inactive because opening uses cross margin.
 	for _, asset := range meta.Universe {
-		if asset.IsDelisted {
+		if asset.IsDelisted || asset.OnlyIsolated || asset.MarginMode == "strictIsolated" || asset.MarginMode == "noCross" {
 			a.inactive[asset.Name] = true
 			delete(a.assets, asset.Name)
 		} else if completeSnapshot {

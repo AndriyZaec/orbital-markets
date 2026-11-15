@@ -2,6 +2,7 @@ package hyperliquid
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,7 +14,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func TestDelistingStopsQuotesAndPreservesUniverseIndices(t *testing.T) {
+func TestInactiveMetadataStopsQuotesAndPreservesUniverseIndices(t *testing.T) {
+	for _, flags := range []string{
+		`"isDelisted":true`,
+		`"onlyIsolated":true`,
+		`"marginMode":"strictIsolated"`,
+		`"marginMode":"noCross"`,
+		`"onlyIsolated":true,"marginMode":"strictIsolated"`,
+	} {
+		t.Run(flags, func(t *testing.T) {
+			testInactiveMetadataStopsQuotesAndPreservesUniverseIndices(t, flags)
+		})
+	}
+}
+
+func testInactiveMetadataStopsQuotesAndPreservesUniverseIndices(t *testing.T, flags string) {
+	t.Helper()
 	body := `[{"universe":[{"name":"OLD","szDecimals":2},{"name":"BTC","szDecimals":3}]},
 		[{"markPx":"10","oraclePx":"10","funding":"0.0001","openInterest":"100"},
 		 {"markPx":"100","oraclePx":"100","funding":"0.0001","openInterest":"100"}]]`
@@ -32,18 +48,24 @@ func TestDelistingStopsQuotesAndPreservesUniverseIndices(t *testing.T) {
 	if len(adapter.assets) != 2 {
 		t.Fatal("initial active markets were not loaded")
 	}
-	body = `[{"universe":[{"name":"OLD","isDelisted":true,"szDecimals":2},{"name":"BTC","szDecimals":3}]},
+	body = fmt.Sprintf(`[{"universe":[{"name":"OLD",%s,"szDecimals":2},{"name":"BTC","szDecimals":3}]},
 		[{"markPx":"10","oraclePx":"10","funding":"0.0001","openInterest":"100"},
-		 {"markPx":"100","oraclePx":"100","funding":"0.0001","openInterest":"100"}]]`
+		 {"markPx":"100","oraclePx":"100","funding":"0.0001","openInterest":"100"}]]`, flags)
 	adapter.pollREST(context.Background())
 	generation := adapter.markStreamConnected()
 	adapter.applyBBO(generation, bboData{Coin: "OLD", BBO: []bboLevel{{Px: "9", Sz: "1"}, {Px: "11", Sz: "1"}}})
 	snapshots, err := adapter.FetchMarketData(context.Background())
 	if err != nil || len(snapshots) != 1 || snapshots[0].Asset != "BTC" {
-		t.Fatalf("quotes after delisting = %+v, err=%v", snapshots, err)
+		t.Fatalf("quotes after inactive metadata = %+v, err=%v", snapshots, err)
 	}
 	if index, ok := adapter.AssetMap().AssetIndex("BTC"); !ok || index != 1 {
 		t.Fatalf("BTC universe index = %d, %t; want 1", index, ok)
+	}
+	if index, ok := adapter.AssetMap().AssetIndex("OLD"); !ok || index != 0 {
+		t.Fatalf("inactive market universe index = %d, %t; want 0", index, ok)
+	}
+	if decimals, ok := adapter.AssetMap().SizeDecimals("OLD"); !ok || decimals != 2 {
+		t.Fatalf("inactive market size decimals = %d, %t; want 2", decimals, ok)
 	}
 	if assets := adapter.InactiveAssets(); len(assets) != 1 || assets[0] != "OLD" {
 		t.Fatalf("inactive assets = %v", assets)
@@ -51,34 +73,43 @@ func TestDelistingStopsQuotesAndPreservesUniverseIndices(t *testing.T) {
 	fail = true
 	adapter.pollREST(context.Background())
 	if len(adapter.InactiveAssets()) != 1 {
-		t.Fatal("failed request forgot delisting")
+		t.Fatal("failed request forgot inactive metadata")
 	}
 	fail = false
 	body = `[{"universe":[{"name":"BTC","szDecimals":3}]},
 		[{"markPx":"100","oraclePx":"100","funding":"0.0001","openInterest":"100"}]]`
 	adapter.pollREST(context.Background())
 	if len(adapter.InactiveAssets()) != 1 {
-		t.Fatal("omitted metadata forgot delisting")
+		t.Fatal("omitted metadata forgot inactive market")
 	}
 	body = `[{"universe":[{"name":"OLD","szDecimals":2}]},
 		[{"markPx":"10","oraclePx":"10","funding":"0.0001","openInterest":"100"}]]`
 	adapter.pollREST(context.Background())
 	if len(adapter.InactiveAssets()) != 0 || adapter.assets["OLD"] == nil {
-		t.Fatal("explicitly relisted market was not restored")
+		t.Fatal("explicitly active market was not restored")
 	}
 }
 
-func TestDelistingWithoutAssetContextStillRemovesMarket(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `[{"universe":[{"name":"OLD","isDelisted":true}]},[]]`)
-	}))
-	defer server.Close()
-	adapter := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	adapter.marketURL = server.URL
-	adapter.assets["OLD"] = &assetState{markPrice: 10}
-	adapter.pollREST(context.Background())
-	if len(adapter.assets) != 0 || len(adapter.InactiveAssets()) != 1 {
-		t.Fatal("explicit delisting was ignored without quote context")
+func TestInactiveMetadataWithoutAssetContextStillRemovesMarket(t *testing.T) {
+	for _, flags := range []string{
+		`"isDelisted":true`,
+		`"onlyIsolated":true`,
+		`"marginMode":"strictIsolated"`,
+		`"marginMode":"noCross"`,
+	} {
+		t.Run(flags, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `[{"universe":[{"name":"OLD",%s}]},[]]`, flags)
+			}))
+			defer server.Close()
+			adapter := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+			adapter.marketURL = server.URL
+			adapter.assets["OLD"] = &assetState{markPrice: 10}
+			adapter.pollREST(context.Background())
+			if len(adapter.assets) != 0 || len(adapter.InactiveAssets()) != 1 {
+				t.Fatal("explicit inactive metadata was ignored without quote context")
+			}
+		})
 	}
 }
 
