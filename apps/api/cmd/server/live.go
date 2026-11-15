@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ func startLive(
 	liveStore := executor.NewStore(writer, reader, logger)
 	signingStore := domain.NewSigningRequestStore()
 	liveDeps := api.NewLiveDeps(ctx, logger, signingStore, liveStore, hlAssetMap, pac, ast, asterReader, phoenixConfigs...)
+	liveDeps.ConfigureAgentNames(os.Getenv("HYPERLIQUID_AGENT_NAME"), os.Getenv("ASTER_AGENT_NAME"))
 	liveMonitor := executor.NewMonitor(logger, liveStore, market, liveDeps)
 	fundingSources := map[string]venue.FundingHistory{
 		"pacifica":    pac,

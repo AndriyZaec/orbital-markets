@@ -7,7 +7,7 @@ import {
   type AsterDataAgentApprovalTypedData,
   type AsterDataAgentPreparation,
 } from './aster-data-agent.ts'
-import { buildAsterApproveAgentTypedData } from './aster-approve-agent.ts'
+import { buildAsterApproveAgentTypedData as buildApproveAgentTypedData } from './aster-approve-agent.ts'
 import type { TradingAgentStore } from './storage.ts'
 import type { StoredTradingAgent } from './types'
 import { asterBuilderAddress, asterBuilderFeeRate } from './builder-config.ts'
@@ -17,14 +17,15 @@ export { asterBuilderAddress, asterBuilderFeeRate } from './builder-config.ts'
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
 const orderChainId = 1666
 const ownerChainId = 56
-const agentName = 'OrbitalMarkets'
+type AsterAgentName = 'OrbitalMarkets' | 'OrbitalMarketsStg'
+const builderName = 'OrbitalMarkets'
 const agentLifetime = 7 * 24 * 60 * 60 * 1000
 
 export interface AsterApproveAgentRequest {
   user: Address
   nonce: number
   signature: Hex
-  agentName: typeof agentName
+  agentName: AsterAgentName
   agentAddress: Address
   ipWhitelist: ''
   expired: number
@@ -35,7 +36,7 @@ export interface AsterApproveAgentRequest {
   signatureChainId: typeof ownerChainId
   builder?: Address
   maxFeeRate?: string
-  builderName?: typeof agentName
+  builderName?: typeof builderName
   builderNonce?: number
   builderSignature?: Hex
 }
@@ -51,13 +52,15 @@ export function buildAsterApproveAgentAction(
   user: string,
   agentAddress: string,
   now: number,
+  agentName: unknown,
 ): AsterApproveAgentAction {
+  const name = parseAsterAgentName(agentName)
   if (!isAddress(user) || !isAddress(agentAddress)) throw new Error('Invalid Aster owner or agent address')
   if (!Number.isSafeInteger(now) || now <= 0) throw new Error('Invalid Aster authorization time')
   return {
     user: user as Address,
     nonce: now * 1000,
-    agentName,
+    agentName: name,
     agentAddress: agentAddress as Address,
     ipWhitelist: '',
     expired: now + agentLifetime,
@@ -68,12 +71,22 @@ export function buildAsterApproveAgentAction(
     signatureChainId: ownerChainId,
     builder: asterBuilderAddress,
     maxFeeRate: asterBuilderFeeRate,
-    builderName: agentName,
+    builderName,
     builderNonce: now * 1000 + 1,
   }
 }
 
-export { buildAsterApproveAgentTypedData }
+export function buildAsterApproveAgentTypedData(action: Parameters<typeof buildApproveAgentTypedData>[0]) {
+  parseAsterAgentName(action.agentName)
+  return buildApproveAgentTypedData(action)
+}
+
+function parseAsterAgentName(value: unknown): AsterAgentName {
+  if (value !== 'OrbitalMarkets' && value !== 'OrbitalMarketsStg') {
+    throw new Error('Orbital returned an invalid Aster agent name')
+  }
+  return value
+}
 
 export function buildAsterApproveBuilderTypedData(action: AsterApproveAgentAction) {
   return {
@@ -117,6 +130,7 @@ export type AsterApprovalTypedData =
   | AsterDataAgentApprovalTypedData
 
 export async function authorizeAsterAgent(options: {
+  agentName: unknown
   storage: TradingAgentStore
   ownerAddress: string
   signTypedData: (typedData: AsterApprovalTypedData) => Promise<Hex>
@@ -133,6 +147,7 @@ export async function authorizeAsterAgent(options: {
   ownerStillCurrent?: () => boolean
   now?: () => number
 }): Promise<StoredTradingAgent> {
+  const agentName = parseAsterAgentName(options.agentName)
   const unresolved = await reconcilePendingAsterAgent(options)
   if (unresolved) return unresolved
   const generated = generateAsterAgent()
@@ -140,6 +155,7 @@ export async function authorizeAsterAgent(options: {
     options.ownerAddress,
     generated.agentAddress,
     options.now?.() ?? Date.now(),
+    agentName,
   )
   const readOnly = await options.prepareReadOnly(generated.agentAddress)
   const builderAlreadyApproved = await options.builderApproved(options.ownerAddress)

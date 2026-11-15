@@ -14,16 +14,16 @@ import (
 func TestApproveAgentRequestAllowsOnlyBoundedPerpetualAccess(t *testing.T) {
 	now := time.Now()
 	request := validApproveAgentRequest(now)
-	if err := request.Validate(now, testAsterBuilder()); err != nil {
+	if err := request.Validate(now, testAsterBuilder(), DefaultAgentName); err != nil {
 		t.Fatal(err)
 	}
 	request.CanWithdraw = true
-	if err := request.Validate(now, testAsterBuilder()); err == nil {
+	if err := request.Validate(now, testAsterBuilder(), DefaultAgentName); err == nil {
 		t.Fatal("withdraw-enabled Aster agent was accepted")
 	}
 	request = validApproveAgentRequest(now)
 	request.MaxFeeRate = "0.001"
-	if err := request.Validate(now, testAsterBuilder()); err == nil {
+	if err := request.Validate(now, testAsterBuilder(), DefaultAgentName); err == nil {
 		t.Fatal("altered Aster builder fee cap was accepted")
 	}
 }
@@ -71,7 +71,7 @@ func TestAgentApproverSkipsExistingBuilderApproval(t *testing.T) {
 	request.BuilderName = ""
 	request.BuilderNonce = 0
 	request.BuilderSignature = ""
-	if err := request.Validate(time.Now(), testAsterBuilder()); err != nil {
+	if err := request.Validate(time.Now(), testAsterBuilder(), DefaultAgentName); err != nil {
 		t.Fatal(err)
 	}
 	if err := NewAgentApprover(server.URL+"/agent", server.URL+"/builder", server.Client()).ApproveAgent(context.Background(), request); err != nil {
@@ -168,7 +168,7 @@ func validApproveAgentRequest(now time.Time) ApproveAgentRequest {
 		User:             "0x1111111111111111111111111111111111111111",
 		Nonce:            now.UnixMicro(),
 		Signature:        "0x" + strings.Repeat("1", 128) + "1b",
-		AgentName:        asterAgentName,
+		AgentName:        DefaultAgentName,
 		AgentAddress:     "0x2222222222222222222222222222222222222222",
 		Expired:          now.Add(7 * 24 * time.Hour).UnixMilli(),
 		CanPerpTrade:     true,
@@ -176,7 +176,7 @@ func validApproveAgentRequest(now time.Time) ApproveAgentRequest {
 		SignatureChainID: asterSignatureChainID,
 		Builder:          "0xe625a2d279815749c647daed24df41bc8dd14bfe",
 		MaxFeeRate:       "0.0002",
-		BuilderName:      asterAgentName,
+		BuilderName:      asterBuilderName,
 		BuilderNonce:     now.UnixMicro() + 1,
 		BuilderSignature: "0x" + strings.Repeat("2", 128) + "1c",
 	}

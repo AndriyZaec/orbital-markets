@@ -186,6 +186,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/live/close/", s.handleLiveClose)
 	s.mux.HandleFunc("POST /api/v1/live/kill", s.handleLiveKill)
 	s.mux.HandleFunc("POST /api/v1/live/agents/aster/approve", s.handleAsterAgentApprove)
+	s.mux.HandleFunc("GET /api/v1/live/agents/{venue}/approval-config", s.handleAgentApprovalConfig)
 	s.mux.HandleFunc("POST /api/v1/live/agents/aster/reconcile", s.handleAsterAgentReconcile)
 	s.mux.HandleFunc("POST /api/v1/live/aster/private/prepare", s.handleAsterPrivatePrepare)
 	s.mux.HandleFunc("POST /api/v1/live/aster/private/submit", s.handleAsterPrivateSubmit)

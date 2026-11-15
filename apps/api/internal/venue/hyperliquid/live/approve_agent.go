@@ -18,11 +18,23 @@ import (
 )
 
 const (
+	DefaultAgentName      = "Orbital Markets"
+	StagingAgentName      = "OrbitalMarketsStg"
 	agentApprovalTimeout  = 10 * time.Second
 	maxApprovalResponse   = 64 << 10
 	maxApprovalAge        = 5 * time.Minute
 	maxApprovalFutureSkew = 30 * time.Second
 )
+
+func ParseAgentName(name string) (string, error) {
+	if name == "" {
+		return DefaultAgentName, nil
+	}
+	if name != DefaultAgentName && name != StagingAgentName {
+		return "", fmt.Errorf("HYPERLIQUID_AGENT_NAME must be Orbital Markets or OrbitalMarketsStg")
+	}
+	return name, nil
+}
 
 var (
 	evmAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
@@ -112,9 +124,13 @@ func (r ApproveBuilderFeeRequest) SigningHash() ([32]byte, error) {
 	return result, nil
 }
 
-func (r ApproveAgentRequest) Validate(now time.Time) error {
+func (r ApproveAgentRequest) Validate(now time.Time, expectedName string) error {
+	name, err := ParseAgentName(expectedName)
+	if err != nil {
+		return err
+	}
 	if r.Action.Type != "approveAgent" || r.Action.HyperliquidChain != "Mainnet" ||
-		r.Action.AgentName != "Orbital Markets" {
+		r.Action.AgentName != name {
 		return fmt.Errorf("invalid Hyperliquid agent approval action")
 	}
 	if !evmAddressPattern.MatchString(r.Action.AgentAddress) {

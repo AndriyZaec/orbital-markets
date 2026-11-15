@@ -18,6 +18,7 @@ import type {
   PacificaRevokeAgentRequest,
 } from './pacifica-agent.ts'
 import { asterBuilderAddress, hyperliquidBuilderAddress } from './builder-config.ts'
+import { fetchAgentApprovalName } from './approval-config.ts'
 import {
   createTradingAgentStore,
   type TradingAgentStore,
@@ -276,6 +277,7 @@ function TradingAgentSession({
     if (chainId !== mainnet.id) await switchToAuthorizationChain(mainnet.id)
     const { authorizeHyperliquidAgent, hasApprovedHyperliquidBuilderFee } = await import('./hyperliquid-agent.ts')
     return authorizeHyperliquidAgent({
+      agentName: await fetchAgentApprovalName('hyperliquid'),
       storage,
       ownerAddress,
       chainId: mainnet.id,
@@ -301,6 +303,7 @@ function TradingAgentSession({
       import('./aster-data-agent.ts'),
     ])
     return authorizeAsterAgent({
+      agentName: await fetchAgentApprovalName('aster'),
       storage,
       ownerAddress,
       signTypedData: signAsterTypedData,

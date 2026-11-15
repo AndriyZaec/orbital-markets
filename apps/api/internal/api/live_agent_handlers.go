@@ -16,6 +16,33 @@ import (
 
 const maxAgentAuthorizationBody = 16 << 10
 
+func (s *Server) handleAgentApprovalConfig(w http.ResponseWriter, r *http.Request) {
+	if s.live == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live agent authorization unavailable"})
+		return
+	}
+	var name string
+	var err error
+	switch r.PathValue("venue") {
+	case "hyperliquid":
+		if s.live.hlAgentApprover != nil {
+			name, err = hllive.ParseAgentName(s.live.hlAgentName)
+		}
+	case "aster":
+		if s.live.asterAgentApprover != nil {
+			name, err = asterlive.ParseAgentName(s.live.asterAgentName)
+		}
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unsupported agent venue"})
+		return
+	}
+	if err != nil || name == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "live agent authorization unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"agent_name": name})
+}
+
 type asterAgentApprover interface {
 	ApproveAgent(context.Context, asterlive.ApproveAgentRequest) error
 }
@@ -61,7 +88,7 @@ func (s *Server) handleAsterAgentApprove(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	if err := request.Validate(time.Now(), *s.live.asterBuilder); err != nil {
+	if err := request.Validate(time.Now(), *s.live.asterBuilder, s.live.asterAgentName); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -171,7 +198,7 @@ func (s *Server) handleHyperliquidAgentApprove(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	if err := request.Validate(time.Now()); err != nil {
+	if err := request.Validate(time.Now(), s.live.hlAgentName); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

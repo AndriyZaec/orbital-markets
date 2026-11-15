@@ -54,11 +54,11 @@ func TestAgentApproverPropagatesVenueRejection(t *testing.T) {
 func TestApproveAgentRequestVerifiesOfficialOwnerSignature(t *testing.T) {
 	const nonce = int64(1_748_970_123_456)
 	request := validApproveAgentRequest(nonce)
-	if err := request.Validate(time.UnixMilli(nonce)); err != nil {
+	if err := request.Validate(time.UnixMilli(nonce), DefaultAgentName); err != nil {
 		t.Fatalf("official signature rejected: %v", err)
 	}
 	request.OwnerAddress = "0x0000000000000000000000000000000000000001"
-	if err := request.Validate(time.UnixMilli(nonce)); err == nil {
+	if err := request.Validate(time.UnixMilli(nonce), DefaultAgentName); err == nil {
 		t.Fatal("signature was accepted for the wrong owner")
 	}
 }
