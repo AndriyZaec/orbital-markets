@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import type { Hex } from 'viem'
-import { useAccount, useDisconnect, useSignTypedData, useSwitchChain } from 'wagmi'
+import { useAccount, useConnections, useDisconnect, useSignTypedData, useSwitchChain } from 'wagmi'
 import { bsc, mainnet } from 'wagmi/chains'
 
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
@@ -103,6 +103,7 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
   const evm = useAccount()
   const { signTypedDataAsync } = useSignTypedData()
   const { switchChainAsync } = useSwitchChain()
+  const evmConnections = useConnections()
   const { disconnectAsync: disconnectEvm } = useDisconnect()
   const pacificaOwner = solana.connected && solana.publicKey ? solana.publicKey.toBase58() : null
   const hyperliquidOwner = evm.isConnected && evm.address ? evm.address : null
@@ -124,7 +125,11 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
         ? signTypedDataAsync(typedData)
         : signTypedDataAsync(typedData)}
       disconnectSolana={() => solana.disconnect()}
-      disconnectEvm={disconnectEvm}
+      disconnectEvm={async () => {
+        for (const { connector } of evmConnections) {
+          await disconnectEvm({ connector })
+        }
+      }}
     >
       {children}
     </TradingAgentSession>

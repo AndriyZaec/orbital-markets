@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useWalletModal } from '@solana/wallet-adapter-react-ui'
-import { useConnect as useEvmConnect } from 'wagmi'
+import { useConfig, useConnect as useEvmConnect, useDisconnect } from 'wagmi'
+import { getConnections } from 'wagmi/actions'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
@@ -119,6 +120,14 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
   // itself as a separate entry, so the user can pick one instead of being
   // silently routed to whatever won window.ethereum.
   const { connect: evmConnect, connectors: evmConnectors } = useEvmConnect()
+  const evmConfig = useConfig()
+  const { disconnectAsync: disconnectEvm } = useDisconnect()
+
+  const disconnectOtherEvmConnections = async (selectedUid: string) => {
+    for (const { connector } of getConnections(evmConfig)) {
+      if (connector.uid !== selectedUid) await disconnectEvm({ connector })
+    }
+  }
 
   // Which venue's wallet picker modal is open. Overlay-style — matches how
   // the Solana wallet-adapter modal renders and keeps the venue card tidy.
@@ -185,7 +194,8 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       // If exactly one EVM connector is installed, skip the picker; else open
       // the inline picker so the user chooses which wallet to connect.
       if (evmConnectors.length === 1) {
-        evmConnect({ connector: evmConnectors[0] })
+        const connector = evmConnectors[0]
+        evmConnect({ connector }, { onSuccess: () => disconnectOtherEvmConnections(connector.uid) })
         return
       }
       setPickerOpen((v) => (v === venueId ? null : venueId))
@@ -201,7 +211,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
       manualConnectRequestedRef.current.hyperliquid = false
       manualConnectRequestedRef.current.aster = false
     }, 30_000)
-    evmConnect({ connector: c })
+    evmConnect({ connector: c }, { onSuccess: () => disconnectOtherEvmConnections(c.uid) })
     setPickerOpen(null)
   }
 

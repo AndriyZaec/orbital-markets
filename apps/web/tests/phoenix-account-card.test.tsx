@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => ({ disconnect: vi.fn().mockResolvedValue(undefine
 }))
 vi.mock('@solana/wallet-adapter-react-ui', () => ({ useWalletModal: () => ({ setVisible: vi.fn() }) }))
 vi.mock('@solana/wallet-adapter-react', () => ({ useWallet: () => ({ connected: true, publicKey: { toBase58: () => 'SolanaOwner' }, signTransaction: vi.fn() }) }))
-vi.mock('wagmi', () => ({ useConnect: () => ({ connect: vi.fn(), connectors: [] }) }))
+vi.mock('wagmi', () => ({ useConnect: () => ({ connect: vi.fn(), connectors: [] }),
+  useConfig: () => ({}), useDisconnect: () => ({ disconnectAsync: vi.fn() }),
+}))
 vi.mock('@/lib/analytics', () => ({ trackAnalytics: vi.fn() }))
 vi.mock('@/hooks/useLiveExecution', () => ({ useLiveExecution: () => ({ state: { phase: 'idle' } }) }))
 vi.mock('@/hooks/useTelegramLink', () => ({ useTelegramLink: () => ({}) }))

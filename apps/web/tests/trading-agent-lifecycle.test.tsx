@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({ evm: null as string | null,
 }))
 vi.mock('@solana/wallet-adapter-react', () => ({ useWallet: () => ({ connected: true, publicKey: { toBase58: () => 'SolanaOwner' } }) }))
 vi.mock('wagmi', () => ({ useAccount: () => ({ isConnected: !!mocks.evm, address: mocks.evm }),
+  useConnections: () => [],
   useDisconnect: () => ({}), useSignTypedData: () => ({}), useSwitchChain: () => ({}),
 }))
 vi.mock('@/agents/storage', () => ({ createTradingAgentStore: () => ({ restore: mocks.restore }) }))
