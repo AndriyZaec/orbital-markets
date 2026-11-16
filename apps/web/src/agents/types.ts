@@ -1,7 +1,6 @@
 import type { SignedAction, SigningRequest } from '@/types/signing'
 
 export type Venue = 'hyperliquid' | 'pacifica' | 'aster' | 'phoenix'
-export type WalletKind = 'evm' | 'solana'
 
 export interface StoredTradingAgent {
   version: 2
@@ -37,8 +36,10 @@ export interface TradingAgentManager {
   pacifica: TradingAgentState
   aster: TradingAgentState
   phoenix: TradingAgentState
+  phoenixDisconnectNoticeOwner: string | null
   authorize(venue: Venue, options?: { replaceExistingDelegate?: boolean; expectedOwner?: string; expectedAuthority?: string }): Promise<void>
   revokePhoenix(): Promise<void>
+  ensureHyperliquidTradingApproval(account: string): Promise<void>
   sign(request: SigningRequest): Promise<SignedAction>
-  disconnectWallet(wallet: WalletKind): Promise<void>
+  disconnectVenue(venue: Venue): Promise<void>
 }

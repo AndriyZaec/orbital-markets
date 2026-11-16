@@ -148,13 +148,13 @@ type marketStatsV2Envelope struct {
 }
 
 type marketStatsV2Wire struct {
-	Symbol             string  `json:"symbol"`
-	Timestamp          int64   `json:"timestamp"`
-	OpenInterest       float64 `json:"openInterest"`
-	MarkPrice          float64 `json:"markPrice"`
-	MidPrice           float64 `json:"midPrice"`
-	OraclePrice        float64 `json:"oraclePrice"`
-	CurrentFundingRate float64 `json:"currentFundingRate"` // Percentage points per funding interval.
+	Symbol             string   `json:"symbol"`
+	Timestamp          int64    `json:"timestamp"`
+	OpenInterest       float64  `json:"openInterest"`
+	MarkPrice          float64  `json:"markPrice"`
+	MidPrice           float64  `json:"midPrice"`
+	OraclePrice        float64  `json:"oraclePrice"`
+	CurrentFundingRate *float64 `json:"currentFundingRate"` // Percentage points per funding interval; required even when zero.
 }
 
 type orderbookEnvelope struct {
@@ -581,7 +581,7 @@ func (s *MarketStream) applyMarketStats(generation uint64, message marketStatsV2
 		}
 		if update.Timestamp <= 0 || !positiveFinite(update.MarkPrice) || !positiveFinite(update.OraclePrice) ||
 			update.OpenInterest < 0 || math.IsNaN(update.OpenInterest) || math.IsInf(update.OpenInterest, 0) ||
-			math.IsNaN(update.CurrentFundingRate) || math.IsInf(update.CurrentFundingRate, 0) {
+			update.CurrentFundingRate == nil || math.IsNaN(*update.CurrentFundingRate) || math.IsInf(*update.CurrentFundingRate, 0) {
 			return fmt.Errorf("invalid Phoenix market stats for %q", update.Symbol)
 		}
 		if update.MidPrice != 0 && !positiveFinite(update.MidPrice) {
@@ -593,7 +593,7 @@ func (s *MarketStream) applyMarketStats(generation uint64, message marketStatsV2
 			continue
 		}
 		// marketStatsV2 reports percentage points; internal rates are fractions.
-		nativeFundingRate := update.CurrentFundingRate / 100
+		nativeFundingRate := *update.CurrentFundingRate / 100
 		stats[update.Symbol] = LiveMarketStats{
 			Symbol: update.Symbol, MarkPrice: update.MarkPrice, MidPrice: update.MidPrice,
 			IndexPrice:        update.OraclePrice,

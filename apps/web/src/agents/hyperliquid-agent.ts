@@ -11,7 +11,7 @@ import { hyperliquidBuilderAddress, hyperliquidBuilderFee, hyperliquidBuilderMax
 export { hyperliquidBuilderAddress, hyperliquidBuilderFee, hyperliquidBuilderMaxFeeRate } from './builder-config.ts'
 
 const zeroAddress = '0x0000000000000000000000000000000000000000' as const
-const agentName = 'Orbital Markets'
+type HyperliquidAgentName = 'Orbital Markets' | 'OrbitalStg'
 const hyperliquidInfoUrl = 'https://api.hyperliquid.xyz/info'
 
 export interface HyperliquidApproveAgentAction {
@@ -20,7 +20,7 @@ export interface HyperliquidApproveAgentAction {
   hyperliquidChain: 'Mainnet'
   signatureChainId: Hex
   agentAddress: Address
-  agentName: string
+  agentName: HyperliquidAgentName
   nonce: number
 }
 
@@ -55,7 +55,9 @@ export function buildHyperliquidApproveAgentAction(
   agentAddress: string,
   chainId: number,
   nonce: number,
+  agentName: unknown,
 ): HyperliquidApproveAgentAction {
+  const name = parseHyperliquidAgentName(agentName)
   if (!/^0x[0-9a-fA-F]{40}$/.test(agentAddress)) throw new Error('Invalid Hyperliquid agent address')
   if (!Number.isSafeInteger(chainId) || chainId <= 0) throw new Error('Invalid wallet chain ID')
   if (!Number.isSafeInteger(nonce) || nonce <= 0) throw new Error('Invalid authorization nonce')
@@ -64,12 +66,13 @@ export function buildHyperliquidApproveAgentAction(
     hyperliquidChain: 'Mainnet',
     signatureChainId: toHex(chainId),
     agentAddress: agentAddress as Address,
-    agentName,
+    agentName: name,
     nonce,
   }
 }
 
 export function buildHyperliquidApproveAgentTypedData(action: HyperliquidApproveAgentAction) {
+  parseHyperliquidAgentName(action.agentName)
   return {
     domain: {
       name: 'HyperliquidSignTransaction',
@@ -88,6 +91,13 @@ export function buildHyperliquidApproveAgentTypedData(action: HyperliquidApprove
     primaryType: 'HyperliquidTransaction:ApproveAgent' as const,
     message: { ...action, nonce: BigInt(action.nonce) },
   }
+}
+
+function parseHyperliquidAgentName(value: unknown): HyperliquidAgentName {
+  if (value !== 'Orbital Markets' && value !== 'OrbitalStg') {
+    throw new Error('Orbital returned an invalid Hyperliquid agent name')
+  }
+  return value
 }
 
 export function buildHyperliquidApproveBuilderFeeAction(
@@ -130,6 +140,7 @@ export function buildHyperliquidApproveBuilderFeeTypedData(action: HyperliquidAp
 }
 
 export async function authorizeHyperliquidAgent(options: {
+  agentName: unknown
   storage: TradingAgentStore
   ownerAddress: string
   chainId: number
@@ -141,6 +152,7 @@ export async function authorizeHyperliquidAgent(options: {
   now?: () => number
 }): Promise<StoredTradingAgent> {
   if (!/^0x[0-9a-fA-F]{40}$/.test(options.ownerAddress)) throw new Error('Invalid Hyperliquid owner address')
+  const agentName = parseHyperliquidAgentName(options.agentName)
   let previousNonce = 0
   const nextNonce = () => {
     const current = options.now?.() ?? Date.now()
@@ -161,7 +173,7 @@ export async function authorizeHyperliquidAgent(options: {
   }
   const generated = generateHyperliquidAgent()
   const agentNonce = nextNonce()
-  const action = buildHyperliquidApproveAgentAction(generated.agentAddress, options.chainId, agentNonce)
+  const action = buildHyperliquidApproveAgentAction(generated.agentAddress, options.chainId, agentNonce, agentName)
   const ownerSignature = await options.signTypedData(buildHyperliquidApproveAgentTypedData(action))
   await options.relay({
     owner_address: options.ownerAddress as Address,

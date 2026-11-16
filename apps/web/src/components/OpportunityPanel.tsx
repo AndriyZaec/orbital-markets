@@ -188,7 +188,7 @@ export function OpportunityPanel({
   // balance stream). blockingReasons is already venue-prefixed and de-duped.
   const isFullyReady = liveExecutionSupported && selectedReadiness.every((readiness) => readiness.status === 'ready')
   const noSelectedWallets = liveExecutionSupported && selectedReadiness.every((readiness) => readiness.status === 'disconnected')
-  const accountsAuthorized = selectedReadiness.every((r) => r.status === 'ready' || (r.walletConnected && r.signerReady && r.agentReady))
+  const accountsAuthorized = selectedReadiness.every((r) => r.status === 'ready' || (r.walletConnected && r.agentReady))
   const accountsUpdating = mode === 'live' && accountsAuthorized && !isFullyReady && selectedReadiness.some((r) => !r.balanceReady)
   const accountActionRequired = mode === 'live' && !accountsAuthorized
   const executionUnavailable = mode === 'live' && accountsAuthorized && !isFullyReady && !accountsUpdating

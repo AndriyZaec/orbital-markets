@@ -12,8 +12,10 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
 }) {
   const agents = useTradingAgents()
   const wallet = useWallet()
-  const owner = wallet.connected ? wallet.publicKey?.toBase58() : null
   const state = agents.phoenix
+  const owner = state.ownerAddress
+  const signerReady = wallet.connected && wallet.publicKey?.toBase58() === owner && !!wallet.signTransaction
+  const showDisconnectNotice = !owner && !!agents.phoenixDisconnectNoticeOwner
   const [replacement, setReplacement] = useState<{ owner: string; authority: string } | null>(null)
   const [revokeOwner, setRevokeOwner] = useState<string | null>(null)
   const busy = ['restoring', 'authorizing', 'disconnecting'].includes(state.status)
@@ -38,17 +40,19 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
 
   return <>
     <div className="flex flex-col gap-1.5">
-      {state.error && <p className="text-[10px] text-red-400" role="alert">{state.error}</p>}
+      {state.error && !showDisconnectNotice && <p className="text-[10px] text-red-400" role="alert">{state.error}</p>}
+      {showDisconnectNotice && <p className="text-[10px] text-muted-foreground">Phoenix authorization is still active. Reconnect this wallet to revoke it.</p>}
       {owner && !wallet.signTransaction && <p className="text-[10px] text-muted-foreground">This wallet must support transaction signing.</p>}
       <div className="flex items-center justify-end">
-        {!owner ? <button type="button" className={accountActionStyles.primary} onClick={onConnect}>Connect</button> : (
+        {!owner ? <button type="button" disabled={disabled} className={accountActionStyles.primary} onClick={onConnect}>Connect</button> : (
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            {!signerReady && <button type="button" disabled={disabled || busy} className={accountActionStyles.primary} onClick={onConnect}>Connect</button>}
             <button type="button" className={authorized ? accountActionStyles.secondary : accountActionStyles.primary}
-              disabled={disabled || busy || !wallet.signTransaction} onClick={() => void authorize()}>
+              disabled={disabled || busy || !signerReady} onClick={() => void authorize()}>
               {authorizeLabel}
             </button>
             {canRevoke && <button type="button" className={accountActionStyles.secondary}
-              disabled={disabled || busy || !wallet.signTransaction} onClick={() => {
+              disabled={disabled || busy || !signerReady} onClick={() => {
                 if (hasActiveExposure) setRevokeOwner(owner)
                 else void agents.revokePhoenix().catch(() => {})
               }}>Revoke</button>}
@@ -66,7 +70,7 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => setRevokeOwner(null)}>Cancel</Button>
-          <Button disabled={disabled || busy || !wallet.signTransaction} onClick={() => {
+          <Button disabled={disabled || busy || !signerReady} onClick={() => {
             const confirmedOwner = revokeOwner
             setRevokeOwner(null)
             if (confirmedOwner && confirmedOwner === owner) void agents.revokePhoenix().catch(() => {})
@@ -83,7 +87,7 @@ export function PhoenixAuthorization({ disabled, hasActiveExposure, onConnect, o
         <p className="break-all font-mono text-xs">{replacement?.authority}</p>
         <DialogFooter>
           <Button variant="outline" onClick={() => setReplacement(null)}>Cancel</Button>
-          <Button disabled={disabled || busy} onClick={() => { const confirmed = replacement; setReplacement(null); if (confirmed) void authorize(true, confirmed.owner, confirmed.authority) }}>Replace delegate</Button>
+          <Button disabled={disabled || busy || !signerReady} onClick={() => { const confirmed = replacement; setReplacement(null); if (confirmed) void authorize(true, confirmed.owner, confirmed.authority) }}>Replace delegate</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

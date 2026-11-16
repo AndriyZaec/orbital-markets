@@ -129,7 +129,7 @@ func (s *Scanner) MarketData(ctx context.Context) []venue.MarketData {
 			continue
 		}
 		for _, snapshot := range data {
-			if isValid(snapshot, now) {
+			if isValid(snapshot, now) && hasFunding(snapshot) {
 				all = append(all, snapshot)
 			}
 		}
@@ -291,7 +291,7 @@ func (s *Scanner) collectByAsset(ctx context.Context) marketCollection {
 				}
 				collection.discoveryAssets[asset][venueName] = md.MarketKey
 			}
-			if !isValid(md, now) {
+			if !isValid(md, now) || !hasFunding(md) {
 				continue
 			}
 			collection.byAsset[md.Asset] = append(collection.byAsset[md.Asset], md)

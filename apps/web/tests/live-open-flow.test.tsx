@@ -22,6 +22,7 @@ vi.mock('@/hooks/useTradingAgents', () => ({ useTradingAgents: () => ({
   aster: { status: 'ready', agentAddress: 'aster-agent' },
   phoenix: { status: 'ready', agentAddress: 'phoenix-agent' },
   sign: mocks.sign,
+  ensureHyperliquidTradingApproval: async () => {},
 }) }))
 vi.mock('@/lib/live-events', () => ({ subscribeLiveSessionEvents: (
   _accounts: unknown, _sessionId: string, _connection: (connected: boolean) => void, listener: (data: unknown) => void,

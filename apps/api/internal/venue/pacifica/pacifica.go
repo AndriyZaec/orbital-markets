@@ -554,6 +554,7 @@ func parsePacificaComponent(
 		ReceivedAt: receivedAt, SourceGeneration: generation,
 	}
 	if invalidPacificaFloat(value, err) {
+		value = math.NaN()
 		health.Status = venue.HealthUnavailable
 		health.Reason = venue.HealthReasonInvalidValue
 	}

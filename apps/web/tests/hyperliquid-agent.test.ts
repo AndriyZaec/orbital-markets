@@ -24,7 +24,7 @@ const privateKey = '0x1111111111111111111111111111111111111111111111111111111111
 const agentAddress = '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A'
 
 test('Hyperliquid approveAgent typed data matches the selected-chain official fixture', async () => {
-  const action = buildHyperliquidApproveAgentAction(agentAddress, 1, 1_748_970_123_456)
+  const action = buildHyperliquidApproveAgentAction(agentAddress, 1, 1_748_970_123_456, 'Orbital Markets')
   const typedData = buildHyperliquidApproveAgentTypedData(action)
 
   assert.deepEqual(action, {
@@ -79,6 +79,7 @@ test('authorization relays no private key and persists only after venue acceptan
   const storage = new TestTradingAgentStore()
   let relayed = ''
   const agent = await authorizeHyperliquidAgent({
+    agentName: 'Orbital Markets',
     storage,
     ownerAddress: '0x14791697260E4c9A71f18484C9f997B308e59325',
     chainId: 1,
@@ -102,6 +103,7 @@ test('builder fee is approved before the Hyperliquid agent is persisted', async 
   const storage = new TestTradingAgentStore()
   let builderApproved = false
   await authorizeHyperliquidAgent({
+    agentName: 'Orbital Markets',
     storage,
     ownerAddress: '0x14791697260E4c9A71f18484C9f997B308e59325',
     chainId: 1,
@@ -132,6 +134,7 @@ test('an existing 2 bp builder allowance skips the repeat wallet approval', asyn
   const storage = new TestTradingAgentStore()
   let builderPrompted = false
   await authorizeHyperliquidAgent({
+    agentName: 'Orbital Markets',
     storage,
     ownerAddress: '0x14791697260E4c9A71f18484C9f997B308e59325',
     chainId: 1,

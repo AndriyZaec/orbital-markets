@@ -3,6 +3,7 @@ package pacifica
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -16,6 +17,35 @@ import (
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
+
+func TestFundingDistinguishesUnknownFromZero(t *testing.T) {
+	for _, field := range []string{"", `,"funding":null`, `,"funding":""`, `,"funding":"invalid"`, `,"funding":"NaN"`, `,"funding":"Inf"`, `,"funding":"0"`} {
+		t.Run(field, func(t *testing.T) {
+			now := time.Now()
+			adapter := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+			generation := adapter.markStreamConnected()
+			// Invalid updates must replace a previous valid rate, not preserve a fresh-looking value.
+			adapter.updatePrices(generation, []wsPrice{{Symbol: "SOL", Funding: "0.001"}})
+			var prices []wsPrice
+			if err := json.Unmarshal([]byte(fmt.Sprintf(`[{"symbol":"SOL","mark":"150","oracle":"149","mid":"149.5","open_interest":"1000","timestamp":%d%s}]`, now.UnixMilli(), field)), &prices); err != nil {
+				t.Fatal(err)
+			}
+			adapter.updatePrices(generation, prices)
+			snapshots, err := adapter.FetchMarketData(context.Background())
+			if err != nil || len(snapshots) != 1 {
+				t.Fatalf("snapshots = %+v, err = %v", snapshots, err)
+			}
+			snapshot := snapshots[0]
+			if field == `,"funding":"0"` {
+				if snapshot.FundingRate != 0 || snapshot.Health.Funding.Status != venue.HealthAvailable {
+					t.Fatalf("explicit zero not available: %+v", snapshot)
+				}
+			} else if !math.IsNaN(snapshot.FundingRate) || snapshot.Health.Funding.Status != venue.HealthUnavailable || snapshot.Health.Funding.Reason != venue.HealthReasonInvalidValue {
+				t.Fatalf("unknown funding not rejected: %+v", snapshot)
+			}
+		})
+	}
+}
 
 func TestConnectAndListenSendsHeartbeat(t *testing.T) {
 	heartbeat := make(chan struct{}, 1)

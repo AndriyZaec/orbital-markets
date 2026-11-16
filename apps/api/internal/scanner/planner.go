@@ -413,7 +413,7 @@ func (s *Scanner) FreshSnapshots(ctx context.Context, asset, venueA, venueB stri
 		}
 
 		for _, md := range data {
-			if md.Asset != asset || !isValid(md, time.Now()) {
+			if md.Asset != asset || !isValid(md, time.Now()) || !hasFunding(md) {
 				continue
 			}
 			if name == venueA {

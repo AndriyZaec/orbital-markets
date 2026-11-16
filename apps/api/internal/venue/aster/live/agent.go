@@ -22,8 +22,20 @@ const (
 	maxApprovalFutureSkew = 5 * time.Second
 	maxAgentLifetime      = 30 * 24 * time.Hour
 	asterSignatureChainID = 56
-	asterAgentName        = "OrbitalMarkets"
+	DefaultAgentName      = "OrbitalMarkets"
+	StagingAgentName      = "OrbitalStg"
+	asterBuilderName      = "OrbitalMarkets"
 )
+
+func ParseAgentName(name string) (string, error) {
+	if name == "" {
+		return DefaultAgentName, nil
+	}
+	if name != DefaultAgentName && name != StagingAgentName {
+		return "", fmt.Errorf("ASTER_AGENT_NAME must be OrbitalMarkets or OrbitalStg")
+	}
+	return name, nil
+}
 
 var ethereumSignaturePattern = regexp.MustCompile(`^0x[0-9a-fA-F]{130}$`)
 
@@ -49,12 +61,16 @@ type ApproveAgentRequest struct {
 	BuilderSignature string `json:"builderSignature,omitempty"`
 }
 
-func (r ApproveAgentRequest) Validate(now time.Time, builder BuilderConfig) error {
+func (r ApproveAgentRequest) Validate(now time.Time, builder BuilderConfig, expectedName string) error {
+	name, err := ParseAgentName(expectedName)
+	if err != nil {
+		return err
+	}
 	if !addressPattern.MatchString(r.User) || !addressPattern.MatchString(r.AgentAddress) ||
 		strings.EqualFold(r.User, r.AgentAddress) {
 		return fmt.Errorf("invalid Aster owner or agent address")
 	}
-	if r.AgentName != asterAgentName || r.IPWhitelist != "" || r.AsterChain != mainnetName ||
+	if r.AgentName != name || r.IPWhitelist != "" || r.AsterChain != mainnetName ||
 		r.SignatureChainID != asterSignatureChainID {
 		return fmt.Errorf("invalid Aster agent approval")
 	}
@@ -74,7 +90,7 @@ func (r ApproveAgentRequest) Validate(now time.Time, builder BuilderConfig) erro
 	}
 	hasBuilderApproval := r.Builder != "" || r.MaxFeeRate != "" || r.BuilderName != "" || r.BuilderNonce != 0 || r.BuilderSignature != ""
 	if hasBuilderApproval {
-		if !strings.EqualFold(r.Builder, builder.Address) || r.MaxFeeRate != builder.FeeRate || r.BuilderName != asterAgentName {
+		if !strings.EqualFold(r.Builder, builder.Address) || r.MaxFeeRate != builder.FeeRate || r.BuilderName != asterBuilderName {
 			return fmt.Errorf("invalid Aster builder approval")
 		}
 		builderNonceTime := time.UnixMicro(r.BuilderNonce)

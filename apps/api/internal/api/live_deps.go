@@ -46,7 +46,9 @@ type LiveDeps struct {
 	asterBuilder                  *asterlive.BuilderConfig
 	asterPrivate                  asterPrivateSubmitter
 	asterAgentApprover            asterAgentApprover
+	asterAgentName                string
 	hlAgentApprover               hyperliquidAgentApprover
+	hlAgentName                   string
 	hlBuilderApprover             hyperliquidBuilderApprover
 	pacificaAgentBinder           pacificaAgentBinder
 	pacificaAgentRevoker          pacificaAgentRevoker
@@ -55,6 +57,22 @@ type LiveDeps struct {
 	pacificaBuilderApprovalReader pacificaBuilderCodeApprovalReader
 	agentAuthorizations           *agentAuthorizationRegistry
 	agentOwnerLocks               [64]sync.Mutex
+}
+
+// ConfigureAgentNames runs at startup. Invalid configuration disables new
+// approvals for that venue; existing execution/recovery clients stay available.
+func (d *LiveDeps) ConfigureAgentNames(hlName, asterName string) {
+	var err error
+	d.hlAgentName, err = hllive.ParseAgentName(hlName)
+	if err != nil {
+		d.hlAgentApprover = nil
+		d.logger.Warn("Hyperliquid agent authorization disabled", "reason", err)
+	}
+	d.asterAgentName, err = asterlive.ParseAgentName(asterName)
+	if err != nil {
+		d.asterAgentApprover = nil
+		d.logger.Warn("Aster agent authorization disabled", "reason", err)
+	}
 }
 
 type accountLeverageSource interface {

@@ -18,15 +18,14 @@ import { accountRead } from '@/lib/account-read'
 export type VenueId = 'pacifica' | 'hyperliquid' | 'aster' | 'phoenix'
 
 export type VenueStatus =
-  | 'disconnected'       // no wallet
-  | 'wallet_connected'   // wallet present but signer or balance not yet ready
-  | 'signer_missing'     // wallet cannot produce required signatures
+  | 'disconnected'       // no linked account
+  | 'wallet_connected'   // account linked but authorization or balance not yet ready
   | 'agent_missing'      // owner wallet has not authorized a local trading agent
   | 'agent_authorizing'  // owner authorization is in progress
-  | 'balance_pending'    // signer OK; waiting on first account snapshot
+  | 'balance_pending'    // agent ready; waiting on first account snapshot
   | 'account_stale'      // snapshot present but too old
   | 'unavailable'        // authorization may be tested, but live execution is not enabled
-  | 'ready'              // wallet + signer + fresh account state
+  | 'ready'              // linked account + agent + fresh account state
   | 'error'              // authority reports an error
 
 export interface VenueReadiness {
@@ -34,8 +33,8 @@ export interface VenueReadiness {
   label: string
   address: string | null
   shortAddress: string | null
-  walletConnected: boolean
-  signerReady: boolean
+  walletConnected: boolean // Legacy field name: the venue has a linked address.
+  signerReady: boolean // The matching owner wallet can sign management actions.
   agentReady: boolean
   agentAddress: string | null
   agentStatus: TradingAgentState['status']
@@ -99,26 +98,6 @@ function shorten(addr: string | null): string | null {
   return `${addr.slice(0, 4)}…${addr.slice(-4)}`
 }
 
-// Map SigningReadiness → the fine-grained pieces we expose. Kept small so
-// authority-level changes stay isolated to one function.
-function fromAuthority(readiness: SigningReadiness): {
-  walletConnected: boolean
-  signerReady: boolean
-  errored: boolean
-} {
-  switch (readiness) {
-    case 'ready':
-      return { walletConnected: true, signerReady: true, errored: false }
-    case 'connected_cannot_sign':
-      return { walletConnected: true, signerReady: false, errored: false }
-    case 'error':
-      return { walletConnected: false, signerReady: false, errored: true }
-    case 'not_connected':
-    default:
-      return { walletConnected: false, signerReady: false, errored: false }
-  }
-}
-
 function buildReadiness(args: {
   venue: VenueId
   address: string | null
@@ -144,7 +123,8 @@ function buildReadiness(args: {
   const unavailableReason = args.unavailableReason ?? (balance.unavailable ? balance.reason : undefined) ??
     (venue === 'phoenix' && balance.phoenix?.registered_agent && balance.phoenix.registered_agent !== agent.agentAddress ? 'Phoenix local agent differs from the registered agent. Reauthorize Phoenix.' : undefined) ??
     (venue === 'phoenix' && balance.phoenix?.live_ready !== true ? balance.phoenix?.live_unavailable_reason || 'Phoenix live readiness verification required' : undefined)
-  const { walletConnected, signerReady, errored } = fromAuthority(authorityReadiness)
+  const signerReady = authorityReadiness === 'ready'
+  const walletConnected = !!address
   const ownerMatches = venue === 'hyperliquid' || venue === 'aster'
     ? agent.ownerAddress?.toLowerCase() === address?.toLowerCase()
     : agent.ownerAddress === address
@@ -155,12 +135,10 @@ function buildReadiness(args: {
   // the readiness layer still behaves sensibly. New backends drive both.
   const streamReady = balance.stream_ready ?? balance.connected
   const accountFresh = balance.fresh ?? balance.connected
-  const balanceReady = balanceConnected && signerReady && streamReady && accountFresh && !unavailableReason
+  const balanceReady = walletConnected && balanceConnected && streamReady && accountFresh && !unavailableReason
 
   const blockingReasons: string[] = []
-  if (errored) blockingReasons.push('Wallet reported an error')
   if (!walletConnected) blockingReasons.push('Wallet not connected')
-  else if (!signerReady) blockingReasons.push('Wallet cannot sign required messages')
   else if (agent.status === 'restoring') blockingReasons.push('Restoring authorization...')
   else if (agent.status === 'authorizing') blockingReasons.push('Authorization in progress')
   else if (agent.status === 'error') blockingReasons.push(agent.error || 'Authorization failed')
@@ -170,9 +148,7 @@ function buildReadiness(args: {
   else if (!accountFresh) blockingReasons.push(balance.reason || 'Account data stale — refreshing')
 
   let status: VenueStatus
-  if (errored) status = 'error'
-  else if (!walletConnected) status = 'disconnected'
-  else if (!signerReady) status = 'signer_missing'
+  if (!walletConnected) status = 'disconnected'
   else if (agent.status === 'restoring' || agent.status === 'authorizing') status = 'agent_authorizing'
   else if (!agentReady) status = agent.status === 'error' ? 'error' : 'agent_missing'
   else if (unavailableReason) status = 'unavailable'
@@ -196,10 +172,7 @@ function buildReadiness(args: {
     accountFresh,
     ageSeconds: typeof balance.age_seconds === 'number' ? balance.age_seconds : null,
     lastUpdated: balance.last_updated ?? null,
-    // Only surface a numeric balance when the wallet itself is connected.
-    // Backend subscribers keep running after wallet disconnect and can
-    // report `connected: true` with 0/0; the wallet is the authoritative
-    // signal for "does this user actually have this account right now".
+    // Bound accounts keep their account data independently of the owner wallet.
     equity: walletConnected && balanceReady && !unavailableReason ? balance.equity : null,
     available: walletConnected && balanceReady && !unavailableReason ? balance.available : null,
     balanceObservation: walletConnected ? balance.observation : undefined,
@@ -225,15 +198,9 @@ function useVenueReadinessState(): UseVenueReadinessResult {
   const ensuredRef = useRef(new Set<string>())
   const readyPairsTrackedRef = useRef<Set<string>>(new Set())
 
-  const pacSignerReady = authority.pacifica.readiness === 'ready'
-  const hlSignerReady = authority.hyperliquid.readiness === 'ready'
-  const asterSignerReady = authority.aster.readiness === 'ready'
   const ensureBindings = useMemo<VenueAddressMap>(() => Object.fromEntries([
-    ['pacifica', pacSignerReady ? pacAddr : null],
-    ['hyperliquid', hlSignerReady ? hlAddr : null],
-    ['aster', asterSignerReady ? authority.aster.address : null],
-    ['phoenix', authority.phoenix.readiness === 'ready' ? authority.phoenix.address : null],
-  ].filter((entry): entry is [string, string] => !!entry[1])), [asterSignerReady, authority.aster.address, authority.phoenix.address, authority.phoenix.readiness, hlAddr, hlSignerReady, pacAddr, pacSignerReady])
+    ['pacifica', pacAddr], ['hyperliquid', hlAddr], ['aster', authority.aster.address], ['phoenix', authority.phoenix.address],
+  ].filter((entry): entry is [string, string] => !!entry[1])), [authority.aster.address, authority.phoenix.address, hlAddr, pacAddr])
   const currentBindings = useRef('')
   currentBindings.current = liveAccountsKey(ensureBindings)
 

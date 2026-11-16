@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { useWalletModal } from '@solana/wallet-adapter-react-ui'
-import { useConnect as useEvmConnect } from 'wagmi'
+import { useConnectVenue } from '@/accounts/useConnectVenue'
 import { useVenueReadiness, type VenueReadiness, type VenueId } from '@/hooks/useVenueReadiness'
 import { useTradingAgents } from '@/hooks/useTradingAgents'
 import { useLiveExecution } from '@/hooks/useLiveExecution'
 import { useLivePositions } from '@/hooks/useLivePositions'
 import { useTelegramLink } from '@/hooks/useTelegramLink'
 import { trackAnalytics } from '@/lib/analytics'
-import { hasActiveLiveExposure, hasActiveLiveExposureForWallet } from '@/lib/live-events'
+import { hasActiveLiveExposure } from '@/lib/live-events'
 import { venueMetadata } from '@/lib/venue-metadata'
 import { cn } from '@/lib/utils'
-import type { WalletKind } from '@/agents/types'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -114,118 +112,34 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
     if (open) refreshBalances().catch(() => {})
   }, [open, refreshBalances])
 
-  const { setVisible: setSolModalVisible } = useWalletModal()
-  // `connectors` is EIP-6963-populated: each installed EVM wallet announces
-  // itself as a separate entry, so the user can pick one instead of being
-  // silently routed to whatever won window.ethereum.
-  const { connect: evmConnect, connectors: evmConnectors } = useEvmConnect()
-
-  // Which venue's wallet picker modal is open. Overlay-style — matches how
-  // the Solana wallet-adapter modal renders and keeps the venue card tidy.
-  const [pickerOpen, setPickerOpen] = useState<VenueId | null>(null)
-  const [pendingDisconnect, setPendingDisconnect] = useState<WalletKind | null>(null)
-  const previousWalletConnectedRef = useRef<Record<VenueId, boolean>>({
-    phoenix: false,
-    pacifica: false,
-    hyperliquid: false,
-    aster: false,
-  })
-  // Wallet providers restore persisted sessions on mount; only count a
-  // transition that follows an explicit connect action.
-  const manualConnectRequestedRef = useRef<Record<VenueId, boolean>>({
-    phoenix: false,
-    pacifica: false,
-    hyperliquid: false,
-    aster: false,
-  })
-
-  function requestManualConnect(venue: VenueId) {
-    manualConnectRequestedRef.current[venue] = true
-  }
+  const connection = useConnectVenue()
+  const [pendingDisconnect, setPendingDisconnect] = useState<VenueId | null>(null)
 
   useEffect(() => {
     // Preserve existing parent contract: this counts fully-ready venues.
     onConnectionChange?.(aggregate.readyCount)
   }, [aggregate.readyCount, onConnectionChange])
 
-  useEffect(() => {
-    const current: Record<VenueId, boolean> = {
-      phoenix: phoenix.walletConnected,
-      pacifica: pacifica.walletConnected,
-      hyperliquid: hyperliquid.walletConnected,
-      aster: aster.walletConnected,
-    }
-    for (const venue of ['pacifica', 'hyperliquid', 'aster', 'phoenix'] as const) {
-      if (
-        current[venue]
-        && !previousWalletConnectedRef.current[venue]
-        && manualConnectRequestedRef.current[venue]
-      ) {
-        trackAnalytics('wallet_connected', { venue })
-        manualConnectRequestedRef.current[venue] = false
-      }
-    }
-    previousWalletConnectedRef.current = current
-  }, [pacifica.walletConnected, hyperliquid.walletConnected, aster.walletConnected, phoenix.walletConnected])
-
-  const handleConnect = (venueId: string) => {
-    if (venueId === 'pacifica' || venueId === 'phoenix') {
-      requestManualConnect(venueId)
-      window.setTimeout(() => { manualConnectRequestedRef.current[venueId] = false }, 30_000)
-      setSolModalVisible(true)
-      return
-    }
-    if (venueId === 'hyperliquid' || venueId === 'aster') {
-      requestManualConnect('hyperliquid')
-      requestManualConnect('aster')
-      window.setTimeout(() => {
-        manualConnectRequestedRef.current.hyperliquid = false
-        manualConnectRequestedRef.current.aster = false
-      }, 30_000)
-      // If exactly one EVM connector is installed, skip the picker; else open
-      // the inline picker so the user chooses which wallet to connect.
-      if (evmConnectors.length === 1) {
-        evmConnect({ connector: evmConnectors[0] })
-        return
-      }
-      setPickerOpen((v) => (v === venueId ? null : venueId))
-    }
-  }
-
-  const handlePickEvmConnector = (connectorUid: string) => {
-    const c = evmConnectors.find((x) => x.uid === connectorUid)
-    if (!c) return
-    requestManualConnect('hyperliquid')
-    requestManualConnect('aster')
-    window.setTimeout(() => {
-      manualConnectRequestedRef.current.hyperliquid = false
-      manualConnectRequestedRef.current.aster = false
-    }, 30_000)
-    evmConnect({ connector: c })
-    setPickerOpen(null)
-  }
-
-  const disconnectWallet = async (wallet: WalletKind) => {
+  const disconnectVenue = async (venue: VenueId) => {
     try {
-      await tradingAgents.disconnectWallet(wallet)
+      await tradingAgents.disconnectVenue(venue)
     } catch {
       // The authorization UI owns the failure state.
     }
   }
 
   const handleDisconnect = (venueId: VenueId) => {
-    const wallet = venueId === 'pacifica' || venueId === 'phoenix' ? 'solana' : 'evm'
-    if (hasActiveLiveExposureForWallet(positions, wallet)) {
-      setPendingDisconnect(wallet)
+    if (hasActiveLiveExposure(positions.filter((position) => position.venue_a === venueId || position.venue_b === venueId))) {
+      setPendingDisconnect(venueId)
       return
     }
-    void disconnectWallet(wallet)
+    void disconnectVenue(venueId)
   }
 
   const confirmDisconnect = () => {
-    const wallet = pendingDisconnect
+    const venue = pendingDisconnect
     setPendingDisconnect(null)
-    if (wallet) void disconnectWallet(wallet)
+    if (venue && !agentChangeBlockedRef.current) void disconnectVenue(venue)
   }
 
   const handleAuthorize = async (venue: VenueId) => {
@@ -293,15 +207,12 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
             const readiness = getReadiness(venue.id)
             const isReady = readiness?.status === 'ready'
             const isErr = readiness?.status === 'error'
-            const solanaVenue = venue.id === 'pacifica' || venue.id === 'phoenix'
+            const sharedSolanaOwner = !!pacifica.address && pacifica.address === phoenix.address
             const disconnectBlocked = agentChangeBlocked || readiness?.agentStatus === 'restoring'
-              || (venue.id === 'pacifica' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))
-              || (venue.id === 'phoenix' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.pacifica.status))
+              || (sharedSolanaOwner && venue.id === 'pacifica' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))
+              || (sharedSolanaOwner && venue.id === 'phoenix' && ['restoring', 'authorizing', 'disconnecting'].includes(tradingAgents.pacifica.status))
               || readiness?.agentStatus === 'authorizing' || readiness?.agentStatus === 'disconnecting'
-              || (!solanaVenue && (hyperliquid.agentStatus === 'restoring'
-                || hyperliquid.agentStatus === 'authorizing' || hyperliquid.agentStatus === 'disconnecting'
-                || aster.agentStatus === 'restoring' || aster.agentStatus === 'authorizing'
-                || aster.agentStatus === 'disconnecting'))
+            const authorizeBlocked = agentChangeBlocked || disconnectBlocked || !readiness?.signerReady
 
             return (
               <div key={venue.id} role="group" aria-label={`${venue.name} account`}
@@ -352,15 +263,16 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                   <PhoenixAuthorization key={tradingAgents.phoenix.ownerAddress ?? 'no-owner'}
                     disabled={agentChangeBlocked || disconnectBlocked}
                     hasActiveExposure={hasActiveLiveExposure(positions.filter((position) => position.venue_a === 'phoenix' || position.venue_b === 'phoenix'))}
-                    onConnect={() => handleConnect('phoenix')}
+                    onConnect={() => connection.connect('phoenix')}
                     onDisconnect={() => handleDisconnect('phoenix')} />
                 ) : <div className="flex items-center justify-end">
                   {readiness?.walletConnected ? (
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      {!readiness.signerReady && <button onClick={() => connection.connect(venue.id)} disabled={agentChangeBlocked || disconnectBlocked} className={accountActionStyles.primary}>Connect</button>}
                       {!readiness.agentReady && (
                         <button
                           onClick={() => handleAuthorize(venue.id as VenueId)}
-                          disabled={readiness.agentStatus === 'restoring' || readiness.agentStatus === 'authorizing' || !readiness.signerReady || (venue.id === 'pacifica' && ['authorizing', 'disconnecting'].includes(tradingAgents.phoenix.status))}
+                          disabled={authorizeBlocked}
                           className={accountActionStyles.primary}
                         >
                           {readiness.agentStatus === 'restoring'
@@ -374,7 +286,7 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                         <>
                           <button
                             onClick={() => handleAuthorize(venue.id as VenueId)}
-                            disabled={agentChangeBlocked}
+                            disabled={authorizeBlocked}
                             className={accountActionStyles.secondary}
                           >
                             Reauthorize
@@ -383,21 +295,23 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
                       )}
                       <button
                         onClick={() => handleDisconnect(venue.id)}
-                        disabled={disconnectBlocked}
+                        disabled={disconnectBlocked || (venue.id === 'pacifica' && !readiness.signerReady && readiness.agentStatus !== 'missing')}
                         className={accountActionStyles.secondary}
                       >
-                        {venue.id === 'pacifica' ? 'Disconnect' : 'Disconnect EVM Wallet'}
+                        Disconnect
                       </button>
                     </div>
                   ) : (
                     <button
-                      onClick={() => handleConnect(venue.id)}
+                      onClick={() => connection.connect(venue.id)}
+                      disabled={agentChangeBlocked}
                       className={accountActionStyles.primary}
                     >
                       Connect
                     </button>
                   )}
                 </div>}
+                {connection.feedback?.venue === venue.id && <p className="mt-1.5 text-[10px] text-muted-foreground">{connection.feedback.text}</p>}
 
               </div>
             )
@@ -443,30 +357,43 @@ export function ConnectAccounts({ open, onConnectionChange, onClose }: Props) {
         </div>
       </div>
 
-      {pickerOpen && pickerOpen !== 'pacifica' && (
+      {connection.picker && (
         <EvmWalletPicker
-          venueName={pickerOpen === 'aster' ? 'Aster' : 'Hyperliquid'}
-          connectors={evmConnectors}
-          onPick={handlePickEvmConnector}
-          onClose={() => setPickerOpen(null)}
+          venueName={connection.picker.venue === 'aster' ? 'Aster' : 'Hyperliquid'}
+          connectors={connection.connectors}
+          onPick={connection.pickConnector}
+          onClose={connection.closePicker}
         />
       )}
+
+      <Dialog open={!!connection.choice} onOpenChange={(open) => { if (!open) connection.closeChoice() }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Connect {connection.choice ? venueMetadata(connection.choice.venue).label : 'account'}</DialogTitle>
+            <DialogDescription>Choose which wallet to use for this venue.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={agentChangeBlocked} onClick={() => void connection.useAnother()}>Use another wallet</Button>
+            <Button disabled={agentChangeBlocked} onClick={connection.useConnected}>Use {connection.choice?.address.slice(0, 6)}…{connection.choice?.address.slice(-4)}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={pendingDisconnect !== null} onOpenChange={(nextOpen) => {
         if (!nextOpen) setPendingDisconnect(null)
       }}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Disconnect wallet?</DialogTitle>
+            <DialogTitle>Disconnect {pendingDisconnect ? venueMetadata(pendingDisconnect).label : 'account'}?</DialogTitle>
             <DialogDescription>
-              Orbital will stop managing your open positions. Reconnect and authorize again, or close them on the venue.
+              Orbital will stop managing this venue's open positions. Reconnect and authorize again, or close them on the venue.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setPendingDisconnect(null)}>
               Cancel
             </Button>
-            <Button size="sm" onClick={confirmDisconnect}>
+            <Button size="sm" disabled={agentChangeBlocked} onClick={confirmDisconnect}>
               Disconnect
             </Button>
           </DialogFooter>

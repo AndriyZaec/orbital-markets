@@ -22,7 +22,7 @@ const agentAddress = '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A'
 const dataAgentAddress = '0x3333333333333333333333333333333333333333'
 
 test('Aster management approvals use the MetaMask-compatible BSC domain', async () => {
-  const action = buildAsterApproveAgentAction(ownerAddress, agentAddress, 1_748_970_123_456)
+  const action = buildAsterApproveAgentAction(ownerAddress, agentAddress, 1_748_970_123_456, 'OrbitalMarkets')
   const agentTypedData = buildAsterApproveAgentTypedData(action)
   const builderTypedData = buildAsterApproveBuilderTypedData(action)
 
@@ -54,6 +54,7 @@ test('Aster authorization relays no private key and persists only after acceptan
   const submissions: string[] = []
   const now = Date.now()
   const agent = await authorizeAsterAgent({
+    agentName: 'OrbitalMarkets',
     storage,
     ownerAddress,
     builderApproved: async () => false,
@@ -89,6 +90,7 @@ test('Aster reauthorization reuses an existing builder approval', async () => {
   const signatures: string[] = []
   let relayed: Record<string, unknown> | undefined
   await authorizeAsterAgent({
+    agentName: 'OrbitalMarkets',
     storage: new TestTradingAgentStore(),
     ownerAddress,
     builderApproved: async () => true,
@@ -110,6 +112,7 @@ test('Aster reauthorization reuses an existing builder approval', async () => {
 test('Aster authorization does not relay after the owner changes', async () => {
   let relayed = false
   await assert.rejects(authorizeAsterAgent({
+    agentName: 'OrbitalMarkets',
     storage: new TestTradingAgentStore(),
     ownerAddress,
     builderApproved: async () => false,
@@ -130,6 +133,7 @@ test('Aster authorization keeps the previous browser agent when execution approv
   let readOnlyAccepted = false
 
   await assert.rejects(authorizeAsterAgent({
+    agentName: 'OrbitalMarkets',
     storage,
     ownerAddress,
     builderApproved: async () => false,
@@ -150,6 +154,7 @@ test('Aster authorization recovers an accepted approval after the relay response
   await storage.save(previous)
 
   const agent = await authorizeAsterAgent({
+    agentName: 'OrbitalMarkets',
     storage,
     ownerAddress,
     builderApproved: async () => false,
@@ -175,6 +180,7 @@ test('Aster authorization retains the previous agent when reconciliation finds i
   await storage.save(previous)
 
   const agent = await authorizeAsterAgent({
+    agentName: 'OrbitalMarkets',
     storage,
     ownerAddress,
     builderApproved: async () => false,
@@ -197,6 +203,7 @@ test('Aster authorization reconciles an existing pending agent without another w
   let signed = false
 
   const agent = await authorizeAsterAgent({
+    agentName: 'OrbitalMarkets',
     storage,
     ownerAddress,
     builderApproved: async () => false,

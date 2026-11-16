@@ -2,6 +2,7 @@ package phoenix
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestAdapterPublishesNormalizedActiveMarket(t *testing.T) {
 	stream.mu.Unlock()
 	if err := stream.applyMarketStats(generation, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{
 		Symbol: "SOL", Timestamp: now.Add(-2 * time.Second).Unix(), OpenInterest: 50,
-		MarkPrice: 101, OraclePrice: 100, CurrentFundingRate: 0.02,
+		MarkPrice: 101, OraclePrice: 100, CurrentFundingRate: testFundingRate(0.02),
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +115,7 @@ func TestAdapterPublishesNormalizedActiveMarket(t *testing.T) {
 	stream.mu.Unlock()
 	if err := stream.applyMarketStats(nextGeneration, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{
 		Symbol: "SOL", Timestamp: now.Add(-time.Second).Unix(), OpenInterest: 50,
-		MarkPrice: 101, OraclePrice: 100, CurrentFundingRate: 0.02,
+		MarkPrice: 101, OraclePrice: 100, CurrentFundingRate: testFundingRate(0.02),
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -153,5 +154,50 @@ func TestAdapterReportsInactiveAssetsWithoutCategoryFiltering(t *testing.T) {
 	assets := adapter.InactiveAssets()
 	if len(assets) != 2 || assets[0] != "AAPL" || assets[1] != "OIL" {
 		t.Fatalf("inactive assets = %v", assets)
+	}
+}
+
+func testFundingRate(value float64) *float64 { return &value }
+
+func TestAdapterRejectsUnknownFundingWithoutPublishingZero(t *testing.T) {
+	for _, layout := range []string{
+		`{"channel":"marketStatsV2","stats":[%s]}`,
+		`{"stats":[%s],"channel":"marketStatsV2"}`,
+	} {
+		for _, field := range []string{"", `,"currentFundingRate":null`, `,"currentFundingRate":"invalid"`, `,"currentFundingRate":1e999`} {
+			t.Run(layout+field, func(t *testing.T) {
+				now := time.Unix(1794249281, 0).UTC()
+				stream := NewMarketStream(nil, discardLogger())
+				stream.now = func() time.Time { return now }
+				stream.replaceMetadata(ExchangeMetadata{Markets: []MarketMetadata{{Symbol: "SOL", Asset: "SOL", Status: "active", FundingInterval: time.Hour}}})
+				generation := stream.markConnected()
+				stream.haveExchangeSnapshot = true
+				if err := stream.applyOrderbook(generation, orderbookEnvelope{Symbol: "SOL", Orderbook: orderbookWire{Bids: [][]float64{{99, 2}}, Asks: [][]float64{{101, 2}}}}); err != nil {
+					t.Fatal(err)
+				}
+				message := func(field string) []byte {
+					return []byte(fmt.Sprintf(layout, `{"symbol":"SOL","timestamp":1794249280,"openInterest":1,"markPrice":100,"oraclePrice":100`+field+`}`))
+				}
+				adapter := &Adapter{stream: stream, logger: discardLogger(), now: func() time.Time { return now }}
+				if err := stream.applyMessage(generation, message(field)); err == nil {
+					t.Fatal("unknown funding accepted")
+				}
+				if markets, err := adapter.FetchMarketData(context.Background()); err != nil || len(markets) != 0 {
+					t.Fatalf("unknown funding published: %+v, err = %v", markets, err)
+				}
+				if err := stream.applyMessage(generation, message(`,"currentFundingRate":0`)); err != nil {
+					t.Fatal(err)
+				}
+				markets, err := adapter.FetchMarketData(context.Background())
+				if err != nil || len(markets) != 1 || markets[0].FundingRate != 0 || markets[0].Health.Funding.Status != venue.HealthAvailable {
+					t.Fatalf("explicit zero not available: %+v, err = %v", markets, err)
+				}
+				before := stream.Snapshot().Stats["SOL"]
+				now = now.Add(time.Second)
+				if err := stream.applyMessage(generation, message(field)); err == nil || stream.Snapshot().Stats["SOL"] != before {
+					t.Fatal("rejected funding update changed previous valid stats")
+				}
+			})
+		}
 	}
 }

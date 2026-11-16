@@ -112,7 +112,7 @@ func TestMarketStreamAppliesOrderedExchangeDeltasAtomically(t *testing.T) {
 		t.Fatalf("apply snapshot: %v", err)
 	}
 	if err := stream.applyMarketStats(1, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{
-		Symbol: "SOL", Timestamp: 10, MarkPrice: 100, OraclePrice: 100, CurrentFundingRate: 0.02,
+		Symbol: "SOL", Timestamp: 10, MarkPrice: 100, OraclePrice: 100, CurrentFundingRate: testFundingRate(0.02),
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestMarketStreamAcceptsPeriodicExchangeSnapshotsWithoutLosingLiveState(t *t
 	if err := stream.applyExchangeMessage(generation, message); err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.applyMarketStats(generation, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{Symbol: "SOL", Timestamp: 10, MarkPrice: 100, OraclePrice: 100}}}); err != nil {
+	if err := stream.applyMarketStats(generation, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{Symbol: "SOL", Timestamp: 10, MarkPrice: 100, OraclePrice: 100, CurrentFundingRate: testFundingRate(0)}}}); err != nil {
 		t.Fatal(err)
 	}
 	stream.mu.Lock()
@@ -238,8 +238,8 @@ func TestMarketStreamRejectsStatsBatchAtomically(t *testing.T) {
 	stream.mu.Unlock()
 
 	err := stream.applyMarketStats(1, marketStatsV2Envelope{Stats: []marketStatsV2Wire{
-		{Symbol: "SOL", Timestamp: 10, OpenInterest: 1, MarkPrice: 101, OraclePrice: 101},
-		{Symbol: "BTC", Timestamp: 10, OpenInterest: 1, MarkPrice: 0, OraclePrice: 101},
+		{Symbol: "SOL", Timestamp: 10, OpenInterest: 1, MarkPrice: 101, OraclePrice: 101, CurrentFundingRate: testFundingRate(0)},
+		{Symbol: "BTC", Timestamp: 10, OpenInterest: 1, MarkPrice: 0, OraclePrice: 101, CurrentFundingRate: testFundingRate(0)},
 	}})
 	if err == nil {
 		t.Fatal("expected invalid stats error")
@@ -278,7 +278,7 @@ func TestMarketStreamNotifiesWhenDynamicMarketBecomesPublishable(t *testing.T) {
 	stream.mu.Unlock()
 
 	if err := stream.applyMarketStats(generation, marketStatsV2Envelope{Stats: []marketStatsV2Wire{{
-		Symbol: "SOL", Timestamp: 10, OpenInterest: 1, MarkPrice: 100, OraclePrice: 100,
+		Symbol: "SOL", Timestamp: 10, OpenInterest: 1, MarkPrice: 100, OraclePrice: 100, CurrentFundingRate: testFundingRate(0),
 	}}}); err != nil {
 		t.Fatal(err)
 	}

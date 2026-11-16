@@ -797,7 +797,6 @@ const STATUS_VIEW: Record<
   ready:             { label: 'Ready',           color: 'text-green-400',        dot: 'bg-green-400' },
   disconnected:      { label: 'Not connected',   color: 'text-muted-foreground', dot: 'bg-muted-foreground' },
   wallet_connected:  { label: 'Wallet only',     color: 'text-yellow-400',       dot: 'bg-yellow-400' },
-  signer_missing:    { label: 'Signer missing',  color: 'text-yellow-400',       dot: 'bg-yellow-400' },
   agent_missing:     { label: 'Authorization required', color: 'text-yellow-400', dot: 'bg-yellow-400' },
   agent_authorizing: { label: 'Authorizing',     color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
   balance_pending:   { label: 'Pending',         color: 'text-cyan-400',         dot: 'bg-cyan-400', loading: true },
@@ -817,7 +816,7 @@ function VenueCard({ readiness, maskAmounts }: { readiness: VenueReadiness; mask
   const observation = accountObservation(readiness)
   const stale = observation && !readiness.balanceReady
   const view = STATUS_VIEW[readiness.status]
-  const showStatus = !observation || ['wallet_connected', 'signer_missing', 'agent_missing', 'agent_authorizing', 'error'].includes(readiness.status)
+  const showStatus = !observation || ['wallet_connected', 'agent_missing', 'agent_authorizing', 'error'].includes(readiness.status)
   const logo = venueMetadata(readiness.venue).logo
   // Display the owner's received observation independently of trading readiness;
   // an owner disconnect hides it, while a background refresh only dims it.

@@ -102,6 +102,31 @@ func TestMarketReadersShareScannerValidityRules(t *testing.T) {
 	}
 }
 
+func TestFreshSnapshotsRejectsNaNFunding(t *testing.T) {
+	for _, venueName := range []string{"hyperliquid", "pacifica"} {
+		t.Run(venueName, func(t *testing.T) {
+			now := time.Now()
+			left := healthyMarket("hyperliquid", "SOL", 0, now)
+			right := healthyMarket("pacifica", "SOL", 0, now)
+			leftAdapter := &leverageTestAdapter{name: left.Venue, data: []venue.MarketData{left}}
+			rightAdapter := &leverageTestAdapter{name: right.Venue, data: []venue.MarketData{right}}
+			s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), leftAdapter, rightAdapter)
+			if _, _, err := s.FreshSnapshots(context.Background(), "SOL", left.Venue, right.Venue); err != nil {
+				t.Fatalf("real zero funding was rejected: %v", err)
+			}
+			if venueName == left.Venue {
+				leftAdapter.data[0].FundingRate = math.NaN()
+			} else {
+				rightAdapter.data[0].FundingRate = math.NaN()
+			}
+			_, _, err := s.FreshSnapshots(context.Background(), "SOL", left.Venue, right.Venue)
+			if err == nil || err.Error() != "no data for SOL on "+venueName {
+				t.Fatalf("FreshSnapshots error = %v, want no data for SOL on %s", err, venueName)
+			}
+		})
+	}
+}
+
 func TestScanExcludesMarketsWithoutOpenInterest(t *testing.T) {
 	now := time.Now()
 	active := leverageTestAdapter{name: "aster", data: []venue.MarketData{{
