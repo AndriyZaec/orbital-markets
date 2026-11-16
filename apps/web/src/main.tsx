@@ -8,18 +8,23 @@ import { VenueReadinessProvider } from './hooks/useVenueReadiness'
 import { LiveExecutionProvider } from './hooks/useLiveExecution'
 import { TradingAgentProvider } from './agents/TradingAgentProvider'
 import { LivePositionsProvider } from './hooks/useLivePositions'
+import { VenueAccountsProvider } from './accounts/VenueAccountsProvider'
+import { SyncVenueAccountsWithWallets } from './accounts/SyncVenueAccountsWithWallets'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <GateProvider>
       <WalletProviders>
-        <TradingAgentProvider>
-          <LiveExecutionProvider>
-            <VenueReadinessProvider>
-              <LivePositionsProvider><App /></LivePositionsProvider>
-            </VenueReadinessProvider>
-          </LiveExecutionProvider>
-        </TradingAgentProvider>
+        <VenueAccountsProvider>
+          <SyncVenueAccountsWithWallets />
+          <TradingAgentProvider>
+            <LiveExecutionProvider>
+              <VenueReadinessProvider>
+                <LivePositionsProvider><App /></LivePositionsProvider>
+              </VenueReadinessProvider>
+            </LiveExecutionProvider>
+          </TradingAgentProvider>
+        </VenueAccountsProvider>
       </WalletProviders>
     </GateProvider>
   </StrictMode>,

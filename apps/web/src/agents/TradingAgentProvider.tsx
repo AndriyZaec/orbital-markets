@@ -5,6 +5,7 @@ import { useAccount, useConnections, useDisconnect, useSignTypedData, useSwitchC
 import { bsc, mainnet } from 'wagmi/chains'
 
 import { apiError, apiFetch, userErrorMessage } from '@/lib/api'
+import { useVenueAccounts } from '@/accounts/useVenueAccounts'
 import type { SigningRequest } from '@/types/signing'
 import type { AsterDataAgentApprovalTypedData } from './aster-data-agent.ts'
 import type { AsterApprovalTypedData, AsterApproveAgentRequest } from './aster-agent.ts'
@@ -105,15 +106,15 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
   const { switchChainAsync } = useSwitchChain()
   const evmConnections = useConnections()
   const { disconnectAsync: disconnectEvm } = useDisconnect()
-  const pacificaOwner = solana.connected && solana.publicKey ? solana.publicKey.toBase58() : null
-  const hyperliquidOwner = evm.isConnected && evm.address ? evm.address : null
-  const asterOwner = hyperliquidOwner
+  const { accounts } = useVenueAccounts()
+  const { pacifica: pacificaOwner, phoenix: phoenixOwner, hyperliquid: hyperliquidOwner, aster: asterOwner } = accounts
   const storage = browserStorage()
 
   return (
     <TradingAgentSession
       storage={storage}
       pacificaOwner={pacificaOwner}
+      phoenixOwner={phoenixOwner}
       hyperliquidOwner={hyperliquidOwner}
       asterOwner={asterOwner}
       chainId={evm.chainId}
@@ -140,6 +141,7 @@ function TradingAgentSession({
   children,
   storage,
   pacificaOwner,
+  phoenixOwner,
   hyperliquidOwner,
   asterOwner,
   chainId,
@@ -154,6 +156,7 @@ function TradingAgentSession({
   children: ReactNode
   storage: TradingAgentStore
   pacificaOwner: string | null
+  phoenixOwner: string | null
   hyperliquidOwner: string | null
   asterOwner: string | null
   chainId?: number
@@ -168,20 +171,20 @@ function TradingAgentSession({
   const [pacifica, setPacifica] = useState(() => initialState('pacifica', pacificaOwner))
   const [hyperliquid, setHyperliquid] = useState(() => initialState('hyperliquid', hyperliquidOwner))
   const [aster, setAster] = useState(() => initialState('aster', asterOwner))
-  const [phoenix, setPhoenix] = useState(() => initialState('phoenix', pacificaOwner))
+  const [phoenix, setPhoenix] = useState(() => initialState('phoenix', phoenixOwner))
   const [phoenixDisconnectNoticeOwner, setPhoenixDisconnectNoticeOwner] = useState<string | null>(null)
-  const owners = useRef({ pacifica: pacificaOwner, phoenix: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
+  const owners = useRef({ pacifica: pacificaOwner, phoenix: phoenixOwner, hyperliquid: hyperliquidOwner, aster: asterOwner })
   const builderApproval = useRef<{ ownerAddress: string; promise: Promise<void> } | null>(null)
   const revokedPacificaAgents = useRef(new Set<string>())
-  owners.current = { pacifica: pacificaOwner, phoenix: pacificaOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
+  owners.current = { pacifica: pacificaOwner, phoenix: phoenixOwner, hyperliquid: hyperliquidOwner, aster: asterOwner }
 
   useEffect(() => restoreTradingAgent('pacifica', pacificaOwner, storage, setPacifica,
     () => ownerStillCurrent('pacifica', pacificaOwner, owners.current)), [pacificaOwner, storage])
-  useEffect(() => restoreTradingAgent('phoenix', pacificaOwner, storage, (state) => {
+  useEffect(() => restoreTradingAgent('phoenix', phoenixOwner, storage, (state) => {
     setPhoenix(state)
-    if (pacificaOwner) setPhoenixDisconnectNoticeOwner((owner) => owner === pacificaOwner ? null : owner)
+    if (phoenixOwner) setPhoenixDisconnectNoticeOwner((owner) => owner === phoenixOwner ? null : owner)
   },
-    () => ownerStillCurrent('phoenix', pacificaOwner, owners.current)), [pacificaOwner, storage])
+    () => ownerStillCurrent('phoenix', phoenixOwner, owners.current)), [phoenixOwner, storage])
   useEffect(() => restoreTradingAgent('hyperliquid', hyperliquidOwner, storage, setHyperliquid,
     () => ownerStillCurrent('hyperliquid', hyperliquidOwner, owners.current)), [hyperliquidOwner, storage])
   useEffect(() => restoreTradingAgent('aster', asterOwner, storage, setAster,
@@ -189,7 +192,7 @@ function TradingAgentSession({
 
   const authorize = async (venue: Venue, options?: { replaceExistingDelegate?: boolean; expectedOwner?: string; expectedAuthority?: string }) => {
     const setState = venue === 'phoenix' ? setPhoenix : venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
-    const ownerAddress = venue === 'phoenix' || venue === 'pacifica' ? pacificaOwner : venue === 'aster' ? asterOwner : hyperliquidOwner
+    const ownerAddress = owners.current[venue]
     if (!ownerAddress) throw new Error(`Connect the ${venue} owner wallet first`)
     if (venue === 'phoenix' && options?.expectedOwner && options.expectedOwner !== ownerAddress) throw new Error('Phoenix owner changed before delegate replacement')
     setState({ venue, ownerAddress, agentAddress: null, status: 'authorizing', error: null })
@@ -370,9 +373,7 @@ function TradingAgentSession({
   const sign = async (request: SigningRequest) => {
     const { signWithStoredTradingAgent } = await import('./signing.ts')
     const solanaVenue = request.venue === 'pacifica' || request.venue === 'phoenix'
-    const currentOwner = solanaVenue
-      ? pacificaOwner
-      : request.venue === 'aster' ? asterOwner : hyperliquidOwner
+    const currentOwner = owners.current[request.venue]
     const matches = solanaVenue
       ? currentOwner === request.account
       : currentOwner?.toLowerCase() === request.account.toLowerCase()

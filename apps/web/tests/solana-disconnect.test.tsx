@@ -8,6 +8,7 @@ import { apiError } from '../src/lib/api'
 import { TestTradingAgentStore } from './trading-agent-test-store'
 import type { PhoenixResult } from '../src/agents/phoenix-agent'
 import type { StoredTradingAgent } from '../src/agents/types'
+import { WalletSyncedVenueAccounts } from './venue-accounts-test-provider'
 
 const mocks = vi.hoisted(() => ({
   connected: true, disconnect: vi.fn(), connect: vi.fn(),
@@ -56,7 +57,7 @@ function Actions() {
 }
 
 function renderSession() {
-  const view = render(<TradingAgentProvider><Actions /></TradingAgentProvider>)
+  const view = render(<TradingAgentProvider><Actions /></TradingAgentProvider>, { wrapper: WalletSyncedVenueAccounts })
   const setConnected = (connected: boolean) => {
     mocks.connected = connected
     view.rerender(<TradingAgentProvider><Actions /></TradingAgentProvider>)

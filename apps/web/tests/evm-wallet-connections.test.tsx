@@ -8,6 +8,7 @@ import { mock } from 'wagmi/connectors'
 import { TradingAgentProvider } from '../src/agents/TradingAgentProvider'
 import { ConnectAccounts } from '../src/components/ConnectAccounts'
 import { useTradingAgents } from '../src/hooks/useTradingAgents'
+import { WalletSyncedVenueAccounts } from './venue-accounts-test-provider'
 
 const storage = vi.hoisted(() => ({
   restore: vi.fn(async () => null),
@@ -65,7 +66,9 @@ function renderAccounts(config: Config) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<WagmiProvider config={config} reconnectOnMount={false}>
     <QueryClientProvider client={queryClient}>
-      <TradingAgentProvider><WalletState /><ConnectAccounts open onClose={() => {}} /></TradingAgentProvider>
+      <WalletSyncedVenueAccounts>
+        <TradingAgentProvider><WalletState /><ConnectAccounts open onClose={() => {}} /></TradingAgentProvider>
+      </WalletSyncedVenueAccounts>
     </QueryClientProvider>
   </WagmiProvider>)
 }
