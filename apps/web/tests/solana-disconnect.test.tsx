@@ -8,7 +8,9 @@ import { apiError } from '../src/lib/api'
 import { TestTradingAgentStore } from './trading-agent-test-store'
 import type { PhoenixResult } from '../src/agents/phoenix-agent'
 import type { StoredTradingAgent } from '../src/agents/types'
-import { WalletSyncedVenueAccounts } from './venue-accounts-test-provider'
+import { VenueAccountsProvider } from '../src/accounts/VenueAccountsProvider'
+import { useVenueAccounts } from '../src/accounts/useVenueAccounts'
+import { venueAccountsKey } from '../src/accounts/venue-accounts-storage'
 
 const mocks = vi.hoisted(() => ({
   connected: true, disconnect: vi.fn(), connect: vi.fn(),
@@ -47,9 +49,12 @@ vi.mock('@/agents/phoenix-agent', async (importOriginal) => {
 
 function Actions() {
   const agents = useTradingAgents()
+  const { link, accounts } = useVenueAccounts()
   return <>
     <PhoenixAuthorization key={agents.phoenix.ownerAddress ?? 'no-owner'} disabled={false} hasActiveExposure={false}
-      onConnect={mocks.connect} onDisconnect={() => void agents.disconnectWallet('solana').catch(() => {})} />
+      onConnect={() => { mocks.connect(); link('phoenix', owner) }} onDisconnect={() => void agents.disconnectVenue('phoenix').catch(() => {})} />
+    <button onClick={() => void agents.disconnectVenue('pacifica').catch(() => {})}>Disconnect Pacifica</button>
+    <output aria-label="Pacifica owner">{accounts.pacifica ?? 'none'}</output>
     <output aria-label="Phoenix agent">{agents.phoenix.agentAddress ?? 'none'}</output>
     <output aria-label="Phoenix status">{agents.phoenix.status}</output>
     <output aria-label="Pacifica status">{agents.pacifica.status}</output>
@@ -57,7 +62,7 @@ function Actions() {
 }
 
 function renderSession() {
-  const view = render(<TradingAgentProvider><Actions /></TradingAgentProvider>, { wrapper: WalletSyncedVenueAccounts })
+  const view = render(<TradingAgentProvider><Actions /></TradingAgentProvider>, { wrapper: VenueAccountsProvider })
   const setConnected = (connected: boolean) => {
     mocks.connected = connected
     view.rerender(<TradingAgentProvider><Actions /></TradingAgentProvider>)
@@ -76,6 +81,8 @@ function revokeResult(state: PhoenixResult['state']): PhoenixResult {
 }
 
 beforeEach(async () => {
+  localStorage.clear()
+  localStorage.setItem(venueAccountsKey, JSON.stringify({ pacifica: owner, phoenix: owner }))
   vi.clearAllMocks()
   mocks.connected = true
   storage.values.clear()
@@ -89,7 +96,7 @@ beforeEach(async () => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-it.each(['helper unavailable', 'wallet rejected'])('disconnects Solana after Phoenix %s, retains its key, and restores it on reconnect', async (failure) => {
+it.each(['helper unavailable', 'wallet rejected'])('unlinks only Phoenix after %s, retains its key, and restores it on reconnect', async (failure) => {
   renderSession()
   await waitFor(() => expect(screen.getByLabelText('Phoenix agent').textContent).toBe(phoenixAgent.agentAddress))
   if (failure === 'wallet rejected') {
@@ -97,9 +104,10 @@ it.each(['helper unavailable', 'wallet rejected'])('disconnects Solana after Pho
   }
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect', exact: true }))
   await screen.findByRole('button', { name: 'Connect', exact: true })
-  expect(mocks.disconnect).toHaveBeenCalledTimes(1)
-  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/v1/live/agents/pacifica/revoke'), expect.objectContaining({ method: 'POST' }))
-  expect(await storage.restore('pacifica', owner)).toBeNull()
+  expect(mocks.disconnect).not.toHaveBeenCalled()
+  expect(fetch).not.toHaveBeenCalled()
+  expect(await storage.restore('pacifica', owner)).not.toBeNull()
+  expect(screen.getByLabelText('Pacifica owner').textContent).toBe(owner)
   expect(await storage.loadForSigning('phoenix', owner)).toMatchObject(phoenixAgent)
   expect(screen.getAllByText(notice)).toHaveLength(1)
   expect(screen.getByText(notice).classList.contains('text-muted-foreground')).toBe(true)
@@ -126,37 +134,68 @@ it.each(['pending', 'unknown'])('disconnects after a %s Phoenix revoke and prese
   else mocks.reconcile.mockRejectedValue(new TypeError('Failed to fetch'))
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect', exact: true }))
   await screen.findByRole('button', { name: 'Connect', exact: true })
-  expect(mocks.disconnect).toHaveBeenCalledTimes(1)
+  expect(mocks.disconnect).not.toHaveBeenCalled()
   expect(await storage.loadForSigning('phoenix', owner)).toEqual(operation)
   expect((await storage.loadPendingForSigning('phoenix', owner))?.phoenixOperation).toEqual(operation.phoenixOperation)
-  expect(await storage.restore('pacifica', owner)).toBeNull()
+  expect(await storage.restore('pacifica', owner)).not.toBeNull()
   expect(screen.getAllByText(notice)).toHaveLength(1)
   expect(screen.queryByRole('alert')).toBeNull()
 })
 
-it('clears Phoenix keys after confirmed revoke, then revokes Pacifica and disconnects without a notice', async () => {
+it('clears Phoenix keys after confirmed revoke without touching Pacifica or disconnecting its wallet', async () => {
   renderSession()
   await waitFor(() => expect(screen.getByLabelText('Phoenix status').textContent).toBe('ready'))
   await storage.save(revokeOperation())
   mocks.reconcile.mockResolvedValue(revokeResult('confirmed'))
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect', exact: true }))
   await screen.findByRole('button', { name: 'Connect', exact: true })
-  expect(mocks.disconnect).toHaveBeenCalledTimes(1)
+  expect(mocks.disconnect).not.toHaveBeenCalled()
   expect(await storage.loadForSigning('phoenix', owner)).toBeNull()
   expect(await storage.loadPendingForSigning('phoenix', owner)).toBeNull()
-  expect(await storage.restore('pacifica', owner)).toBeNull()
+  expect(await storage.restore('pacifica', owner)).not.toBeNull()
   expect(screen.queryByText(notice)).toBeNull()
   expect(screen.queryByRole('alert')).toBeNull()
 })
 
-it('preserves existing Pacifica failure behavior when Phoenix revoke also fails', async () => {
+it('preserves existing Pacifica failure behavior and does not touch Phoenix', async () => {
   vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ error: 'Pacifica revoke rejected' }), { status: 502 }))
   renderSession()
   await waitFor(() => expect(screen.getByLabelText('Phoenix status').textContent).toBe('ready'))
-  fireEvent.click(screen.getByRole('button', { name: 'Disconnect', exact: true }))
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect Pacifica', exact: true }))
   await waitFor(() => expect(screen.getByLabelText('Pacifica status').textContent).toBe('error'))
   expect(mocks.disconnect).not.toHaveBeenCalled()
   expect(await storage.loadForSigning('pacifica', owner)).toEqual(pacificaAgent)
   expect(await storage.loadForSigning('phoenix', owner)).toEqual(phoenixAgent)
   expect(screen.queryByText(notice)).toBeNull()
+  expect(mocks.prepare).not.toHaveBeenCalled()
+  expect(screen.getByLabelText('Pacifica owner').textContent).toBe(owner)
+})
+
+it('disconnects Pacifica independently, then detaches Solana only after the last venue is unlinked', async () => {
+  renderSession()
+  await waitFor(() => expect(screen.getByLabelText('Phoenix status').textContent).toBe('ready'))
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect Pacifica', exact: true }))
+  await waitFor(() => expect(screen.getByLabelText('Pacifica owner').textContent).toBe('none'))
+  expect(await storage.restore('pacifica', owner)).toBeNull()
+  expect(await storage.restore('phoenix', owner)).not.toBeNull()
+  expect(screen.getByLabelText('Phoenix status').textContent).toBe('ready')
+  expect(mocks.disconnect).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect', exact: true }))
+  await screen.findByRole('button', { name: 'Connect', exact: true })
+  expect(mocks.disconnect).toHaveBeenCalledTimes(1)
+  expect(screen.getAllByText(notice)).toHaveLength(1)
+})
+
+it('allows Phoenix Disconnect without the owner wallet, preserving its key and Pacifica binding', async () => {
+  mocks.connected = false
+  renderSession()
+  await waitFor(() => expect(screen.getByLabelText('Phoenix status').textContent).toBe('ready'))
+  expect(screen.getByRole('button', { name: 'Revoke', exact: true }).hasAttribute('disabled')).toBe(true)
+  const disconnect = screen.getByRole('button', { name: 'Disconnect', exact: true })
+  expect(disconnect.hasAttribute('disabled')).toBe(false)
+  fireEvent.click(disconnect)
+  await screen.findByText(notice)
+  expect(await storage.loadForSigning('phoenix', owner)).toMatchObject(phoenixAgent)
+  expect(screen.getByLabelText('Pacifica owner').textContent).toBe(owner)
+  expect(mocks.disconnect).not.toHaveBeenCalled()
 })

@@ -7,12 +7,13 @@ const mocks = vi.hoisted(() => ({
   apiFetch: vi.fn(), refetch: vi.fn(), owner: 'SolanaOwner', agentOwner: 'SolanaOwner',
   liveReady: false,
   registeredAgent: 'phoenix-agent',
+  signerReady: true,
 }))
 vi.mock('@/lib/api', async (original) => ({ ...await original<typeof import('../src/lib/api')>(), apiFetch: mocks.apiFetch }))
 vi.mock('@/lib/analytics', () => ({ trackAnalytics: vi.fn() }))
 vi.mock('@/hooks/useVenueAuthority', () => ({ useVenueAuthority: () => ({
-  pacifica: { address: mocks.owner, readiness: 'ready' },
-  phoenix: { address: mocks.owner, readiness: 'ready' },
+  pacifica: { address: mocks.owner, readiness: mocks.signerReady ? 'ready' : 'not_connected' },
+  phoenix: { address: mocks.owner, readiness: mocks.signerReady ? 'ready' : 'not_connected' },
   hyperliquid: { address: null, readiness: 'not_connected' },
   aster: { address: null, readiness: 'not_connected' },
 }) }))
@@ -35,6 +36,7 @@ beforeEach(() => {
   mocks.refetch.mockReset().mockResolvedValue(undefined)
   mocks.owner = 'SolanaOwner'; mocks.agentOwner = 'SolanaOwner'; mocks.liveReady = false
   mocks.registeredAgent = 'phoenix-agent'
+  mocks.signerReady = true
 })
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
@@ -93,4 +95,14 @@ it('reports a global ensure failure instead of treating it as a per-venue result
   await waitFor(() => expect(result.current.ensureStatus).toBe('error'))
   expect(result.current.ensureError).toBeTruthy()
   expect(mocks.refetch).not.toHaveBeenCalled()
+})
+
+it('starts account feeds and permits agent trading without a connected owner wallet', async () => {
+  mocks.signerReady = false; mocks.liveReady = true
+  const { result } = renderHook(useVenueReadiness, { wrapper })
+  await waitFor(() => expect(result.current.ensureStatus).toBe('ready'))
+  expect(result.current.phoenix).toMatchObject({ status: 'ready', walletConnected: true, signerReady: false, agentReady: true, balanceReady: true })
+  expect(result.current.phoenix.blockingReasons).toEqual([])
+  expect(result.current.pacifica.blockingReasons).not.toContain('Wallet not connected')
+  expect(JSON.parse(mocks.apiFetch.mock.calls[0][1].body).accounts).toEqual({ pacifica: mocks.owner, phoenix: mocks.owner })
 })

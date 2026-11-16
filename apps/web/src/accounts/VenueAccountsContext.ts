@@ -7,6 +7,8 @@ export interface VenueAccountsManager {
   accounts: VenueAccounts
   link(venue: Venue, address: string): void
   unlink(venue: Venue): void
+  migrationPending: boolean
+  finishMigration(accounts: Partial<VenueAccounts>): void
 }
 
 export const VenueAccountsContext = createContext<VenueAccountsManager | null>(null)

@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('@solana/wallet-adapter-react', () => ({ useWallet: () => ({ connected: mocks.connected, publicKey: { toBase58: () => mocks.owner }, signTransaction: vi.fn() }) }))
 vi.mock('@/hooks/useTradingAgents', () => ({ useTradingAgents: () => ({
-  phoenix: { venue: 'phoenix', status: mocks.status, ownerAddress: mocks.owner, agentAddress: null, error: null },
+   phoenix: { venue: 'phoenix', status: mocks.status, ownerAddress: mocks.connected ? mocks.owner : null, agentAddress: null, error: null },
   authorize: mocks.authorize, revokePhoenix: mocks.revoke,
 }) }))
 vi.mock('@/hooks/useVenueReadiness', () => ({ useVenueReadiness: () => ({ phoenix: { status: 'unavailable', blockingReasons: ['Phoenix infrastructure not ready'] } }) }))

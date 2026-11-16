@@ -20,11 +20,9 @@ import type {
 } from './pacifica-agent.ts'
 import { asterBuilderAddress, hyperliquidBuilderAddress } from './builder-config.ts'
 import { fetchAgentApprovalName } from './approval-config.ts'
-import {
-  createTradingAgentStore,
-  type TradingAgentStore,
-} from './storage.ts'
-import type { TradingAgentState, Venue, WalletKind } from './types'
+import type { TradingAgentStore } from './storage.ts'
+import { browserStorage } from './browser-storage'
+import type { TradingAgentState, Venue } from './types'
 import { TradingAgentContext } from './TradingAgentContext'
 import type { OwnerTransactionSigner } from './phoenix-message.ts'
 
@@ -76,28 +74,7 @@ function restoreTradingAgent(venue: Venue, ownerAddress: string | null, storage:
   return () => { active = false }
 }
 
-let persistentStore: TradingAgentStore | null = null
 const volatilePendingPacificaRevocations = new Map<string, string>()
-
-function browserStorage(): TradingAgentStore {
-  if (typeof window === 'undefined') throw new Error('Trading authorization requires a browser session')
-  if (!persistentStore) {
-    try {
-      clearLegacyAgentStorage(window.sessionStorage)
-    } catch {
-      // The encrypted vault can still work when legacy Web Storage is unavailable.
-    }
-    persistentStore = createTradingAgentStore(window.indexedDB, window.crypto)
-  }
-  return persistentStore
-}
-
-function clearLegacyAgentStorage(storage: Storage): void {
-  for (let index = storage.length - 1; index >= 0; index -= 1) {
-    const key = storage.key(index)
-    if (key?.startsWith('orbital.agent.') && key.includes('.v1:')) storage.removeItem(key)
-  }
-}
 
 export function TradingAgentProvider({ children }: { children: ReactNode }) {
   const solana = useWallet()
@@ -106,7 +83,7 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
   const { switchChainAsync } = useSwitchChain()
   const evmConnections = useConnections()
   const { disconnectAsync: disconnectEvm } = useDisconnect()
-  const { accounts } = useVenueAccounts()
+  const { accounts, unlink } = useVenueAccounts()
   const { pacifica: pacificaOwner, phoenix: phoenixOwner, hyperliquid: hyperliquidOwner, aster: asterOwner } = accounts
   const storage = browserStorage()
 
@@ -117,6 +94,9 @@ export function TradingAgentProvider({ children }: { children: ReactNode }) {
       phoenixOwner={phoenixOwner}
       hyperliquidOwner={hyperliquidOwner}
       asterOwner={asterOwner}
+      unlink={unlink}
+      connectedSolanaOwner={solana.connected ? solana.publicKey?.toBase58() ?? null : null}
+      connectedEvmOwner={evm.isConnected ? evm.address ?? null : null}
       chainId={evm.chainId}
       switchToAuthorizationChain={(targetChainId) => switchChainAsync({ chainId: targetChainId })}
       solanaSignMessage={solana.signMessage}
@@ -144,6 +124,9 @@ function TradingAgentSession({
   phoenixOwner,
   hyperliquidOwner,
   asterOwner,
+  unlink,
+  connectedSolanaOwner,
+  connectedEvmOwner,
   chainId,
   switchToAuthorizationChain,
   solanaSignMessage,
@@ -159,6 +142,9 @@ function TradingAgentSession({
   phoenixOwner: string | null
   hyperliquidOwner: string | null
   asterOwner: string | null
+  unlink: (venue: Venue) => void
+  connectedSolanaOwner: string | null
+  connectedEvmOwner: string | null
   chainId?: number
   switchToAuthorizationChain: (chainId: typeof mainnet.id | typeof bsc.id) => Promise<unknown>
   solanaSignMessage?: (message: Uint8Array) => Promise<Uint8Array>
@@ -190,10 +176,19 @@ function TradingAgentSession({
   useEffect(() => restoreTradingAgent('aster', asterOwner, storage, setAster,
     () => ownerStillCurrent('aster', asterOwner, owners.current)), [asterOwner, storage])
 
+  const assertOwnerSigner = (venue: Venue) => {
+    const solanaVenue = venue === 'pacifica' || venue === 'phoenix'
+    const connected = solanaVenue ? connectedSolanaOwner : connectedEvmOwner
+    const owner = owners.current[venue]
+    const matches = owner && connected && (solanaVenue ? owner === connected : owner.toLowerCase() === connected.toLowerCase())
+    if (!matches) throw new Error(`Connect the ${venue} owner wallet first`)
+  }
+
   const authorize = async (venue: Venue, options?: { replaceExistingDelegate?: boolean; expectedOwner?: string; expectedAuthority?: string }) => {
     const setState = venue === 'phoenix' ? setPhoenix : venue === 'pacifica' ? setPacifica : venue === 'aster' ? setAster : setHyperliquid
     const ownerAddress = owners.current[venue]
     if (!ownerAddress) throw new Error(`Connect the ${venue} owner wallet first`)
+    assertOwnerSigner(venue)
     if (venue === 'phoenix' && options?.expectedOwner && options.expectedOwner !== ownerAddress) throw new Error('Phoenix owner changed before delegate replacement')
     setState({ venue, ownerAddress, agentAddress: null, status: 'authorizing', error: null })
     try {
@@ -210,6 +205,13 @@ function TradingAgentSession({
             ? authorizeAster(ownerAddress)
             : authorizeHyperliquid(ownerAddress)
       })
+      if (venue === 'hyperliquid') {
+        try {
+          await ensureHyperliquidBuilderFee(ownerAddress)
+        } catch {
+          // The agent is authorized. Execution preflight will retry the fee approval.
+        }
+      }
       if (!ownerStillCurrent(venue, ownerAddress, owners.current)) {
         throw new Error(`${venue} owner changed during agent authorization`)
       }
@@ -252,6 +254,7 @@ function TradingAgentSession({
   const revokePacificaAddress = async (ownerAddress: string, agentAddress: string) => {
     const revocationKey = `${ownerAddress}:${agentAddress}`
     if (revokedPacificaAgents.current.has(revocationKey)) return
+    assertOwnerSigner('pacifica')
     if (!solanaSignMessage) throw new Error('Solana wallet does not support message signing')
     const { revokePacificaAgent } = await import('./pacifica-agent.ts')
     await revokePacificaAgent({
@@ -287,13 +290,15 @@ function TradingAgentSession({
 
   const authorizeHyperliquid = async (ownerAddress: string) => {
     if (chainId !== mainnet.id) await switchToAuthorizationChain(mainnet.id)
-    const { authorizeHyperliquidAgent, hasApprovedHyperliquidBuilderFee } = await import('./hyperliquid-agent.ts')
+    const { authorizeHyperliquidAgent } = await import('./hyperliquid-agent.ts')
     return authorizeHyperliquidAgent({
       agentName: await fetchAgentApprovalName('hyperliquid'),
       storage,
       ownerAddress,
       chainId: mainnet.id,
-      builderFeeApproved: hasApprovedHyperliquidBuilderFee,
+      // Defer builder approval until the agent succeeds; fee cancellation must
+      // not turn a successful trading-agent authorization into a failure.
+      builderFeeApproved: async () => true,
       signTypedData: (typedData) => signTypedData(typedData),
       signBuilderTypedData: (typedData) => signTypedData(typedData),
       relay: (request) => relayAuthorization('/api/v1/live/agents/hyperliquid/approve', request),
@@ -347,6 +352,7 @@ function TradingAgentSession({
       }
       const { approveHyperliquidBuilderFee, hasApprovedHyperliquidBuilderFee } = await import('./hyperliquid-agent.ts')
       if (await hasApprovedHyperliquidBuilderFee(ownerAddress, hyperliquidBuilderAddress)) return
+      assertOwnerSigner('hyperliquid')
       if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
         throw new Error('Hyperliquid owner changed during builder approval')
       }
@@ -401,7 +407,10 @@ function TradingAgentSession({
     try {
       await withAgentLock('phoenix', ownerAddress, async () => {
         const { revokePhoenixAgent, createPhoenixTransport } = await import('./phoenix-agent.ts')
-        await revokePhoenixAgent({ storage, ownerAddress, transport: createPhoenixTransport(), signTransaction: solanaSignTransaction,
+        await revokePhoenixAgent({ storage, ownerAddress, transport: createPhoenixTransport(), signTransaction: solanaSignTransaction ? (transaction) => {
+          assertOwnerSigner('phoenix')
+          return solanaSignTransaction(transaction)
+        } : undefined,
           isCurrent: () => ownerStillCurrent('phoenix', ownerAddress, owners.current) })
       })
       if (ownerStillCurrent('phoenix', ownerAddress, owners.current)) setPhoenix(missingState('phoenix', ownerAddress))
@@ -411,87 +420,66 @@ function TradingAgentSession({
     }
   }
 
-  const disconnectWallet = async (wallet: WalletKind) => {
-    if (wallet === 'solana') {
-      const phoenixOwner = owners.current.phoenix
+  const disconnectVenue = async (venue: Venue) => {
+    const ownerAddress = owners.current[venue]
+    if (!ownerAddress) return
+    if (venue === 'phoenix') {
       try {
         await revokePhoenix()
       } catch {
-        // Revoke retains keys/operation metadata; it must not prevent wallet disconnect.
-        setPhoenixDisconnectNoticeOwner(phoenixOwner)
+        // Revoke retains keys/operation metadata; it must not prevent unlinking.
+        setPhoenixDisconnectNoticeOwner(ownerAddress)
       }
-      const ownerAddress = owners.current.pacifica
-      if (ownerAddress) {
-        setPacifica((current) => ({ ...current, status: 'disconnecting', error: null }))
-        try {
-          await withAgentLock('pacifica', ownerAddress, async () => {
-            const agent = await storage.restore('pacifica', ownerAddress)
-            await revokePacifica(ownerAddress)
-            await storage.clear('pacifica', ownerAddress)
-            if (agent) revokedPacificaAgents.current.delete(`${ownerAddress}:${agent.agentAddress}`)
-          })
-        } catch (error) {
-          setPacifica((current) => ({
-            ...current,
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Unable to disconnect Pacifica',
-          }))
-          throw error
-        }
-        if (!ownerStillCurrent('pacifica', ownerAddress, owners.current)) {
-          throw new Error('Pacifica owner changed during disconnect')
-        }
-        setPacifica(missingState('pacifica', ownerAddress))
-      }
+    } else if (venue === 'pacifica') {
+      setPacifica((current) => ({ ...current, status: 'disconnecting', error: null }))
       try {
-        await disconnectSolana()
-      } catch (error) {
-        const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
-        setPacifica({
-          ...missingState('pacifica', ownerAddress),
-          status: 'error',
-          error: `Pacifica authorization was removed, but the Solana wallet did not disconnect${detail}`,
+        await withAgentLock('pacifica', ownerAddress, async () => {
+          const agent = await storage.restore('pacifica', ownerAddress)
+          await revokePacifica(ownerAddress)
+          await storage.clear('pacifica', ownerAddress)
+          if (agent) revokedPacificaAgents.current.delete(`${ownerAddress}:${agent.agentAddress}`)
         })
+      } catch (error) {
+        setPacifica((current) => ({
+          ...current,
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Unable to disconnect Pacifica',
+        }))
         throw error
       }
-      return
-    }
-
-    const ownerAddress = owners.current.hyperliquid
-    if (ownerAddress) {
-      setHyperliquid((current) => ({ ...current, status: 'disconnecting', error: null }))
-      setAster((current) => ({ ...current, status: 'disconnecting', error: null }))
+      if (!ownerStillCurrent('pacifica', ownerAddress, owners.current)) {
+        throw new Error('Pacifica owner changed during disconnect')
+      }
+      setPacifica(missingState('pacifica', ownerAddress))
+    } else {
+      const setState = venue === 'aster' ? setAster : setHyperliquid
+      setState((current) => ({ ...current, status: 'disconnecting', error: null }))
       try {
-        await withAgentLock('aster', ownerAddress, () => withAgentLock('hyperliquid', ownerAddress, async () => {
-          await storage.clear('hyperliquid', ownerAddress)
-          setHyperliquid(missingState('hyperliquid', ownerAddress))
-          await storage.clear('aster', ownerAddress)
-          setAster(missingState('aster', ownerAddress))
-        }))
+        await withAgentLock(venue, ownerAddress, () => storage.clear(venue, ownerAddress))
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to disconnect EVM wallet'
-        setHyperliquid((current) => current.status === 'disconnecting' ? { ...current, status: 'error', error: message } : current)
-        setAster((current) => current.status === 'disconnecting' ? { ...current, status: 'error', error: message } : current)
+        setState((current) => ({ ...current, status: 'error', error: message }))
         throw error
       }
-      if (!ownerStillCurrent('hyperliquid', ownerAddress, owners.current)) {
-        throw new Error('EVM owner changed during disconnect')
-      }
+      setState(missingState(venue, ownerAddress))
     }
-    try {
-      await disconnectEvm()
-    } catch (error) {
-      const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
-      const message = `Local EVM authorizations were removed, but the wallet did not disconnect${detail}`
-      setHyperliquid({ ...missingState('hyperliquid', ownerAddress), status: 'error', error: message })
-      setAster({ ...missingState('aster', ownerAddress), status: 'error', error: message })
-      throw error
+    if (!ownerStillCurrent(venue, ownerAddress, owners.current)) throw new Error(`${venue} owner changed during disconnect`)
+    unlink(venue)
+    const solanaVenue = venue === 'pacifica' || venue === 'phoenix'
+    const connected = solanaVenue ? connectedSolanaOwner : connectedEvmOwner
+    const family: Venue[] = solanaVenue ? ['pacifica', 'phoenix'] : ['hyperliquid', 'aster']
+    const stillInUse = connected && family.some((other) => other !== venue && (solanaVenue
+      ? owners.current[other] === connected : owners.current[other]?.toLowerCase() === connected.toLowerCase()))
+    if (connected && !stillInUse) {
+      if (solanaVenue) await disconnectSolana()
+      else await disconnectEvm()
     }
   }
 
   return (
     <TradingAgentContext.Provider value={{
-      pacifica, hyperliquid, aster, phoenix, phoenixDisconnectNoticeOwner, authorize, sign, disconnectWallet, revokePhoenix,
+      pacifica, hyperliquid, aster, phoenix, phoenixDisconnectNoticeOwner, authorize, sign, disconnectVenue, revokePhoenix,
+      ensureHyperliquidTradingApproval: ensureHyperliquidBuilderFee,
     }}>
       {children}
     </TradingAgentContext.Provider>

@@ -380,6 +380,18 @@ function useLiveExecutionState() {
         }
       }
 
+      // Owner trading-fee approval must finish before either leg can be signed
+      // or submitted, including when Hyperliquid is the second leg.
+      if (venues.includes('hyperliquid')) {
+        try {
+          await tradingAgents.ensureHyperliquidTradingApproval(preparedAccounts.hyperliquid)
+        } catch {
+          const message = 'Connect your Hyperliquid wallet to approve trading fees.'
+          setState((s) => ({ ...s, phase: 'failed', notStarted: true, userMessage: message, error: message }))
+          return
+        }
+      }
+
       // 2. Sign every prepare request up front. If any fails, submit nothing.
       let signedLeg1: SignedAction[]
       try {

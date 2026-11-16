@@ -9,14 +9,14 @@ import { LiveExecutionProvider } from './hooks/useLiveExecution'
 import { TradingAgentProvider } from './agents/TradingAgentProvider'
 import { LivePositionsProvider } from './hooks/useLivePositions'
 import { VenueAccountsProvider } from './accounts/VenueAccountsProvider'
-import { SyncVenueAccountsWithWallets } from './accounts/SyncVenueAccountsWithWallets'
+import { MigrateVenueAccounts } from './accounts/MigrateVenueAccounts'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <GateProvider>
       <WalletProviders>
         <VenueAccountsProvider>
-          <SyncVenueAccountsWithWallets />
+          <MigrateVenueAccounts />
           <TradingAgentProvider>
             <LiveExecutionProvider>
               <VenueReadinessProvider>

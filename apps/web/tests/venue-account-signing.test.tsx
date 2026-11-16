@@ -46,6 +46,7 @@ function request(venue: 'aster' | 'phoenix', account = accounts[venue]): Signing
 }
 
 beforeEach(async () => {
+  localStorage.clear()
   storage.values.clear()
   for (const [venue, ownerAddress] of Object.entries(accounts)) {
     await storage.save({ version: 2, venue: venue as StoredTradingAgent['venue'], ownerAddress,
