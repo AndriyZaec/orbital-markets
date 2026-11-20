@@ -231,13 +231,10 @@ func (s *Service) Reconcile(ctx context.Context, owner, id string, stateProof St
 
 // Accounting is independent of exposure discovery: an unavailable transaction
 // event read must not delay hedging or turn an actual fill into an unknown fill.
-// Missing fee evidence remains explicitly incomplete and can be backfilled.
+// Persisted accounting is final even when the observed Flight fee is incomplete.
 func (s *Service) Account(ctx context.Context, a Attempt) (Attempt, error) {
 	b, ok := s.backend.(AccountingBackend)
-	if !ok || a.Fill == nil || a.State != "filled" {
-		return a, nil
-	}
-	if _, complete := a.Fill.TotalTradingFee(); complete {
+	if !ok || a.Fill == nil || a.State != "filled" || a.Fill.Accounting != nil {
 		return a, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
