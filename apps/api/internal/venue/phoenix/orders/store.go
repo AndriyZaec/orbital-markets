@@ -244,7 +244,9 @@ func (s *Store) AttachAccounting(ctx context.Context, a Attempt, observed Observ
 }
 
 func (s *Store) Unaccounted(ctx context.Context, owner string) ([]Attempt, error) {
-	rows, err := s.reader.QueryContext(ctx, `SELECT request_id FROM phoenix_order_attempts WHERE owner_account=? AND state='filled' AND json_extract(fill_json,'$.accounting.events.flight_fee_quote_lots') IS NULL ORDER BY created_at LIMIT 4`, owner)
+	// RFC3339Nano has variable fractional precision; compare timestamps, not text.
+	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano)
+	rows, err := s.reader.QueryContext(ctx, `SELECT request_id FROM phoenix_order_attempts WHERE owner_account=? AND state='filled' AND json_extract(fill_json,'$.accounting') IS NULL AND julianday(created_at)>=julianday(?) ORDER BY created_at LIMIT 4`, owner, cutoff)
 	if err != nil {
 		return nil, err
 	}
