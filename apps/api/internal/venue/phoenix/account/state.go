@@ -243,7 +243,9 @@ func (s *State) apply(generation uint64, m message, observedAt time.Time, stream
 		if err != nil {
 			return err
 		}
-		if s.haveSnapshot && (*m.Slot < s.snapshot.Slot || sequence < s.snapshot.Sequence) {
+		// Order state by sequence, as in the SDK's apply_delta, not by REST/WS slots:
+		// https://docs.rs/phoenix-rise-api/0.6.13/src/phoenix_rise_api/trader_state.rs.html#329-338
+		if s.haveSnapshot && sequence < s.snapshot.Sequence {
 			if stream {
 				return errors.New("Phoenix stream snapshot is behind current account state")
 			}
@@ -255,7 +257,11 @@ func (s *State) apply(generation uint64, m message, observedAt time.Time, stream
 		if err := boundedCross(cross); err != nil {
 			return err
 		}
-		s.snapshot.Cross, s.snapshot.Sequence = cross, sequence
+		// A lower-slot stream baseline with the same sequence confirms current state
+		// without replacing it, even if its contents differ from the REST snapshot.
+		if !(stream && s.haveSnapshot && sequence == s.snapshot.Sequence && *m.Slot < s.snapshot.Slot) {
+			s.snapshot.Cross, s.snapshot.Sequence = cross, sequence
+		}
 		s.haveSnapshot = true
 		if stream {
 			s.haveStreamSnapshot = true
@@ -284,9 +290,6 @@ func (s *State) apply(generation uint64, m message, observedAt time.Time, stream
 			if sequence == math.MaxUint64 || *delta.Sequence != sequence+1 {
 				return ErrSequenceGap
 			}
-			if *m.Slot < s.snapshot.Slot {
-				return errors.New("Phoenix delta slot regressed")
-			}
 			if err := applySubaccount(&cross, delta, false); err != nil {
 				return err
 			}
@@ -302,7 +305,7 @@ func (s *State) apply(generation uint64, m message, observedAt time.Time, stream
 	} else {
 		return fmt.Errorf("unknown Phoenix trader-state message type %q", m.MessageType)
 	}
-	s.snapshot.Slot = *m.Slot
+	s.snapshot.Slot = max(s.snapshot.Slot, *m.Slot)
 	if observedAt.After(s.snapshot.ObservedAt) {
 		s.snapshot.ObservedAt = observedAt
 	}

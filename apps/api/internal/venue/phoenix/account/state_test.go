@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,6 +125,7 @@ func TestDuplicatesIsolatedRowsAndOldReadsNeverRenewFreshness(t *testing.T) {
 	}
 	old := snapshotMessage(t)
 	*old.Slot = 99
+	*old.Subaccounts[0].Sequence = 40
 	if err := s.apply(generation, old, at.Add(29*time.Second), false); err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +179,123 @@ func TestPeriodicSnapshotReplacesRowsAndRefreshesUnchangedAccount(t *testing.T) 
 	after := s.Snapshot()
 	if !after.Fresh(at.Add(40*time.Second)) || len(after.Cross.Positions)+len(after.Cross.Orders)+len(after.Cross.Splines)+len(after.Cross.Triggers)+len(after.Cross.SpotCollaterals) != 0 {
 		t.Fatal("REST snapshot failed to replace or refresh idle state")
+	}
+}
+
+func TestStreamSnapshotConfirmsRESTStateWithLowerSlot(t *testing.T) {
+	for name, differentContent := range map[string]bool{"same content": false, "different content": true} {
+		t.Run(name, func(t *testing.T) {
+			s, err := NewState(owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			generation := s.begin()
+			s.connected(generation)
+			at := time.Now().UTC()
+			if err := s.apply(generation, snapshotMessage(t), at, false); err != nil {
+				t.Fatal(err)
+			}
+			before := s.Snapshot()
+			if before.Synchronized {
+				t.Fatal("REST bootstrap authorized stream without baseline")
+			}
+			m := snapshotMessage(t)
+			*m.Slot = before.Slot - 2
+			if differentContent {
+				m.Subaccounts[0].Collateral = "1"
+				m.Subaccounts[0].Positions = nil
+			}
+			observedAt := at.Add(time.Second)
+			if err := s.apply(generation, m, observedAt, true); err != nil {
+				t.Fatalf("stream baseline rejected: %v", err)
+			}
+			after := s.Snapshot()
+			if !after.Fresh(observedAt) || after.UnavailableReason != "" || !after.ObservedAt.Equal(observedAt) || !after.PositionsUpdatedAt.Equal(observedAt) {
+				t.Fatalf("stream baseline did not synchronize account: %+v", after)
+			}
+			if after.Sequence != before.Sequence || after.Slot != before.Slot || !reflect.DeepEqual(after.Cross, before.Cross) {
+				t.Fatal("same-sequence lower-slot stream snapshot replaced REST state")
+			}
+		})
+	}
+}
+
+func TestSnapshotWithOlderSequenceCannotReplaceCurrentState(t *testing.T) {
+	for name, stream := range map[string]bool{"REST": false, "stream": true} {
+		t.Run(name, func(t *testing.T) {
+			s, generation, at := readyState(t)
+			before := s.Snapshot()
+			m := snapshotMessage(t)
+			*m.Subaccounts[0].Sequence = before.Sequence - 1
+			*m.Slot = before.Slot + 1
+			err := s.apply(generation, m, at.Add(time.Second), stream)
+			if stream {
+				if err == nil || !strings.Contains(err.Error(), "behind") {
+					t.Fatalf("expected behind error: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("stale REST snapshot was not silently ignored: %v", err)
+			}
+			after := s.Snapshot()
+			if after.Sequence != before.Sequence || after.Slot != before.Slot || !after.ObservedAt.Equal(before.ObservedAt) || !reflect.DeepEqual(after.Cross, before.Cross) {
+				t.Fatal("older sequence replaced or refreshed current state")
+			}
+			if stream && (after.Synchronized || !after.PositionsUpdatedAt.IsZero()) {
+				t.Fatal("older stream snapshot left account synchronized")
+			}
+		})
+	}
+}
+
+func TestDeltaAfterRESTRefreshUsesSequenceDespiteLowerSlot(t *testing.T) {
+	for name, gap := range map[string]bool{"next sequence": false, "sequence gap": true} {
+		t.Run(name, func(t *testing.T) {
+			s, generation, at := readyState(t)
+			rest := snapshotMessage(t)
+			*rest.Slot += 3
+			if err := s.apply(generation, rest, at.Add(15*time.Second), false); err != nil {
+				t.Fatal(err)
+			}
+			before := s.Snapshot()
+			m := deltaMessage(t)
+			*m.Slot = before.Slot - 1
+			if gap {
+				*m.Deltas[0].Sequence = before.Sequence + 2
+			}
+			observedAt := at.Add(16 * time.Second)
+			err := s.apply(generation, m, observedAt, true)
+			after := s.Snapshot()
+			if gap {
+				if !errors.Is(err, ErrSequenceGap) {
+					t.Fatalf("expected sequence gap: %v", err)
+				}
+				if after.Synchronized || !after.PositionsUpdatedAt.IsZero() || after.Sequence != before.Sequence || after.Slot != before.Slot || !reflect.DeepEqual(after.Cross, before.Cross) {
+					t.Fatal("sequence gap applied or left authoritative state")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("next-sequence lower-slot delta rejected: %v", err)
+			}
+			if !after.Fresh(observedAt) || !after.ObservedAt.Equal(observedAt) || after.Slot != before.Slot || after.Sequence != before.Sequence+1 || after.Cross.Collateral != "9007199254740994" || after.Cross.Positions["ETH"].BasePositionLots != "2500" {
+				t.Fatalf("delta did not update account while retaining REST slot: %+v", after)
+			}
+		})
+	}
+}
+
+func TestNewerSequenceSnapshotRetainsHigherSlot(t *testing.T) {
+	s, generation, at := readyState(t)
+	before := s.Snapshot()
+	m := snapshotMessage(t)
+	*m.Slot = before.Slot - 1
+	*m.Subaccounts[0].Sequence = before.Sequence + 1
+	m.Subaccounts[0].Collateral = "1"
+	if err := s.apply(generation, m, at.Add(time.Second), true); err != nil {
+		t.Fatal(err)
+	}
+	if after := s.Snapshot(); after.Slot != before.Slot || after.Sequence != before.Sequence+1 || after.Cross.Collateral != "1" || !after.Fresh(at.Add(time.Second)) {
+		t.Fatalf("newer snapshot rejected or reduced slot: %+v", after)
 	}
 }
 
@@ -261,7 +380,6 @@ func TestMalformedDeltaRowCannotMutateEarlierRows(t *testing.T) {
 			m.Deltas[0].Splines = []json.RawMessage{json.RawMessage(`{"symbol":"BTC","change":"updated","spline":{}}`)}
 		},
 		func(m *message) { m.Deltas[0].Orders[0].Orders[0].OrderSequenceNumber = "-1" },
-		func(m *message) { *m.Slot = 99 },
 	} {
 		s, generation, at := readyState(t)
 		before := s.Snapshot().Cross
