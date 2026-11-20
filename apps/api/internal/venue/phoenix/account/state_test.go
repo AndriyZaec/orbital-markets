@@ -220,6 +220,31 @@ func TestStreamSnapshotConfirmsRESTStateWithLowerSlot(t *testing.T) {
 	}
 }
 
+func TestRESTSnapshotWithLowerSlotCannotReplaceOrRefreshCurrentState(t *testing.T) {
+	s, err := NewState(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := s.begin()
+	s.connected(generation)
+	at := time.Now().UTC()
+	if err := s.apply(generation, snapshotMessage(t), at, false); err != nil {
+		t.Fatal(err)
+	}
+	before := s.Snapshot()
+	m := snapshotMessage(t)
+	*m.Slot = before.Slot - 1
+	m.Subaccounts[0].Collateral = "1"
+	m.Subaccounts[0].Positions = nil
+	if err := s.apply(generation, m, at.Add(time.Second), false); err != nil {
+		t.Fatalf("lower-slot REST snapshot was not silently ignored: %v", err)
+	}
+	after := s.Snapshot()
+	if after.Sequence != before.Sequence || after.Slot != before.Slot || !after.ObservedAt.Equal(before.ObservedAt) || !reflect.DeepEqual(after.Cross, before.Cross) {
+		t.Fatal("lower-slot REST snapshot replaced or refreshed current state")
+	}
+}
+
 func TestSnapshotWithOlderSequenceCannotReplaceCurrentState(t *testing.T) {
 	for name, stream := range map[string]bool{"REST": false, "stream": true} {
 		t.Run(name, func(t *testing.T) {

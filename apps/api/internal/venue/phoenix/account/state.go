@@ -243,9 +243,9 @@ func (s *State) apply(generation uint64, m message, observedAt time.Time, stream
 		if err != nil {
 			return err
 		}
-		// Order state by sequence, as in the SDK's apply_delta, not by REST/WS slots:
+		// Order stream state by sequence, as in the SDK's apply_delta:
 		// https://docs.rs/phoenix-rise-api/0.6.13/src/phoenix_rise_api/trader_state.rs.html#329-338
-		if s.haveSnapshot && sequence < s.snapshot.Sequence {
+		if s.haveSnapshot && (sequence < s.snapshot.Sequence || (!stream && *m.Slot < s.snapshot.Slot)) {
 			if stream {
 				return errors.New("Phoenix stream snapshot is behind current account state")
 			}
