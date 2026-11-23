@@ -380,6 +380,10 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		writeOpenBlockedError(w, err)
 		return
 	}
+	if err := s.scanner.CheckOpenOrders(r.Context(), opp.Asset, leg1Amount, planVenues...); err != nil {
+		writeOpenBlockedError(w, err)
+		return
+	}
 	progress.Stage("signing_requests")
 	if err := r.Context().Err(); err != nil {
 		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Preparation timed out. Try again shortly.", "code": "PREPARE_TIMEOUT"})

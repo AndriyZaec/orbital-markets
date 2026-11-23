@@ -19,6 +19,8 @@ func writeOpenBlockedError(w http.ResponseWriter, err error) bool {
 	switch blocked.Reason {
 	case venue.OpenBlockOpenInterestCap:
 		message = fmt.Sprintf("%s isn't accepting new positions in %s right now. Choose another opportunity.", venueDisplayName(blocked.Venue), blocked.Asset)
+	case venue.OpenBlockIsolatedOnly:
+		message = fmt.Sprintf("%s only supports isolated positions in %s. Choose another opportunity.", venueDisplayName(blocked.Venue), blocked.Asset)
 	case scanner.OpenBlockDataUnavailable:
 		code = "OPEN_MARKET_STATUS_UNAVAILABLE"
 		message = fmt.Sprintf("%s market availability is temporarily unavailable. Try again shortly.", venueDisplayName(blocked.Venue))

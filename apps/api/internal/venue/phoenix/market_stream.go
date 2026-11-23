@@ -128,14 +128,16 @@ type wsExchangeAccounts struct {
 }
 
 type wsMarketConfig struct {
-	Symbol           string          `json:"symbol"`
-	MarketStatus     string          `json:"marketStatus"`
-	MarketPubkey     string          `json:"marketPubkey"`
-	SplinePubkey     string          `json:"splinePubkey"`
-	TickSize         int64           `json:"tickSize"`
-	BaseLotsDecimals int             `json:"baseLotsDecimals"`
-	FundingConfig    wsFundingConfig `json:"fundingConfig"`
-	LeverageTiers    []leverageTier  `json:"leverageTiers"`
+	Symbol                  string          `json:"symbol"`
+	MarketStatus            string          `json:"marketStatus"`
+	MarketPubkey            string          `json:"marketPubkey"`
+	SplinePubkey            string          `json:"splinePubkey"`
+	TickSize                int64           `json:"tickSize"`
+	BaseLotsDecimals        int             `json:"baseLotsDecimals"`
+	FundingConfig           wsFundingConfig `json:"fundingConfig"`
+	LeverageTiers           []leverageTier  `json:"leverageTiers"`
+	OpenInterestCapBaseLots *stringUint64   `json:"openInterestCapBaseLots"`
+	IsolatedOnly            *bool           `json:"isolatedOnly"`
 }
 
 type wsFundingConfig struct {
@@ -804,8 +806,10 @@ func normalizeWSMarket(config wsMarketConfig) (MarketMetadata, error) {
 		Symbol: config.Symbol, MarketStatus: config.MarketStatus,
 		MarketPubkey: config.MarketPubkey, SplinePubkey: config.SplinePubkey,
 		TickSize: config.TickSize, BaseLotsDecimals: config.BaseLotsDecimals,
-		FundingIntervalSeconds: config.FundingConfig.FundingIntervalSeconds,
-		LeverageTiers:          config.LeverageTiers,
+		FundingIntervalSeconds:  config.FundingConfig.FundingIntervalSeconds,
+		LeverageTiers:           config.LeverageTiers,
+		OpenInterestCapBaseLots: config.OpenInterestCapBaseLots,
+		IsolatedOnly:            config.IsolatedOnly,
 	})
 }
 
@@ -870,13 +874,25 @@ func applyMarketParameterUpdate(markets map[string]MarketMetadata, symbol string
 		return fmt.Errorf("Phoenix market parameter delta references unknown market %q", symbol)
 	}
 	var update struct {
-		Kind string          `json:"kind"`
-		New  json.RawMessage `json:"new"`
+		Kind        string          `json:"kind"`
+		New         json.RawMessage `json:"new"`
+		NewBaseLots *stringUint64   `json:"new_base_lots"`
 	}
 	if err := json.Unmarshal(raw, &update); err != nil {
 		return fmt.Errorf("decode Phoenix market parameter update for %q: %w", symbol, err)
 	}
 	switch update.Kind {
+	case "openInterestCapUpdated":
+		if update.NewBaseLots == nil {
+			return errors.New("Phoenix cap update missing base lots")
+		}
+		market.OpenInterestCapBaseLots = uint64(*update.NewBaseLots)
+	case "isolatedOnlyUpdated":
+		var isolated *bool
+		if err := json.Unmarshal(update.New, &isolated); err != nil || isolated == nil {
+			return errors.New("invalid Phoenix isolated-only update")
+		}
+		market.IsolatedOnly = *isolated
 	case "leverageTiersUpdated":
 		var tiers []leverageTier
 		if err := json.Unmarshal(update.New, &tiers); err != nil {

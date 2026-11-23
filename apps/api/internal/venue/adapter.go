@@ -97,6 +97,8 @@ type InactiveAssetSource interface {
 }
 
 const OpenBlockOpenInterestCap = "open_interest_cap"
+const OpenBlockIsolatedOnly = "isolated_only"
+const OpenBlockDataUnavailable = "open_status_unavailable"
 
 // OpenBlockedAssetSource reports temporary opening restrictions, not delistings.
 // Consumers must not apply these restrictions to history or reduce-only orders.
@@ -108,6 +110,12 @@ type OpenBlockedAssetSource interface {
 // Discovery can still use the last known list from OpenBlockedAssetSource.
 type OpenBlockReadinessSource interface {
 	OpenBlockDataReady() bool
+}
+
+// OpenOrderBlockSource checks size-dependent opening restrictions before either
+// leg is signed. The amount is the normalized common base quantity, not notional.
+type OpenOrderBlockSource interface {
+	CheckOpenOrder(ctx context.Context, asset string, amount float64) (string, error)
 }
 
 // OpenInterestDemandSink accepts a complete set of venue market keys whose

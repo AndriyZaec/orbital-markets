@@ -1,13 +1,14 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/AndriyZaec/orbital-markets/apps/api/internal/venue"
 )
 
-const OpenBlockDataUnavailable = "open_status_unavailable"
+const OpenBlockDataUnavailable = venue.OpenBlockDataUnavailable
 
 type OpenBlockedError struct {
 	Venue, Asset, Reason string
@@ -51,6 +52,27 @@ func (s *Scanner) checkKnownOpenBlocks(asset string, venues ...string) error {
 	for _, name := range venues {
 		if reason, found := blocked[name][strings.ToUpper(asset)]; found {
 			return &OpenBlockedError{Venue: name, Asset: asset, Reason: reason}
+		}
+	}
+	return nil
+}
+
+func (s *Scanner) CheckOpenOrders(ctx context.Context, asset string, amount float64, venues ...string) error {
+	for _, name := range venues {
+		for _, adapter := range s.adapters {
+			if adapter.Name() != name {
+				continue
+			}
+			if source, ok := adapter.(venue.OpenOrderBlockSource); ok {
+				reason, err := source.CheckOpenOrder(ctx, asset, amount)
+				if err != nil {
+					s.logger.Warn("opening restriction check unavailable", "venue", name, "asset", asset, "err", err)
+					reason = OpenBlockDataUnavailable
+				}
+				if reason != "" {
+					return &OpenBlockedError{Venue: name, Asset: asset, Reason: reason}
+				}
+			}
 		}
 	}
 	return nil
