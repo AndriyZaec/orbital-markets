@@ -98,6 +98,8 @@ type Adapter struct {
 	mu               sync.RWMutex
 	assets           map[string]*assetState
 	inactive         map[string]bool
+	openBlocked      map[string]string
+	openBlockedAt    time.Time
 	assetMap         *AssetMap
 	logger           *slog.Logger
 	client           *http.Client
@@ -292,6 +294,7 @@ func (a *Adapter) Run(ctx context.Context) {
 
 	go a.restLoop(ctx)
 	go a.wsLoop(ctx)
+	go a.openInterestCapLoop(ctx)
 
 	<-ctx.Done()
 }

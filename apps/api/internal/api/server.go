@@ -339,6 +339,9 @@ func (s *Server) handleBuildPlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func writePlanError(w http.ResponseWriter, status int, err error) {
+	if writeOpenBlockedError(w, err) {
+		return
+	}
 	var opportunityStatusErr *scanner.OpportunityStatusError
 	if errors.As(err, &opportunityStatusErr) {
 		writeJSON(w, status, map[string]any{
