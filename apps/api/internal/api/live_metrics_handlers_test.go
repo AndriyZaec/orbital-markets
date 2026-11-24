@@ -64,13 +64,15 @@ func TestAnalyticsHandlersLogDatabaseFailures(t *testing.T) {
 
 type weeklyLifecycleAdapter struct {
 	inactive []string
+	blocked  map[string]string
 }
 
 func (a *weeklyLifecycleAdapter) Name() string { return "hyperliquid" }
 func (a *weeklyLifecycleAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 	return nil, nil
 }
-func (a *weeklyLifecycleAdapter) InactiveAssets() []string { return a.inactive }
+func (a *weeklyLifecycleAdapter) InactiveAssets() []string             { return a.inactive }
+func (a *weeklyLifecycleAdapter) OpenBlockedAssets() map[string]string { return a.blocked }
 
 func TestWeeklyAPRFiltersDelistedPairsWithoutMutatingHistoryCache(t *testing.T) {
 	database, err := appdb.Open(filepath.Join(t.TempDir(), "weekly-lifecycle.db"))
@@ -103,6 +105,10 @@ func TestWeeklyAPRFiltersDelistedPairsWithoutMutatingHistoryCache(t *testing.T) 
 	}
 	if report := load(); len(report.Rows) != 3 {
 		t.Fatalf("initial rows = %v", report.Rows)
+	}
+	adapter.blocked = map[string]string{"OLD": venue.OpenBlockOpenInterestCap}
+	if report := load(); len(report.Rows) != 3 {
+		t.Fatalf("temporary cap changed weekly APR: %v", report.Rows)
 	}
 	adapter.inactive = []string{"old"}
 	report := load()

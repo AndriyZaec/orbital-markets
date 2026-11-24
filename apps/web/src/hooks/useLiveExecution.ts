@@ -83,6 +83,7 @@ export interface LiveExecutionState {
   leg2Request: SigningRequest | null
   leg1Fill: LegFillView | null
   leg2Fill: LegFillView | null
+  leg2Rejected?: boolean
   mismatch: number | null
   positionId: string | null
   unwound: boolean
@@ -112,6 +113,7 @@ const INITIAL_STATE: LiveExecutionState = {
   leg2Request: null,
   leg1Fill: null,
   leg2Fill: null,
+  leg2Rejected: false,
   mismatch: null,
   positionId: null,
   unwound: false,
@@ -139,6 +141,7 @@ interface AdvanceResp {
   status: AdvanceStatus
   leg1_fill?: LegFillView
   leg2_fill?: LegFillView
+  leg2_rejected?: boolean
   signing_requests?: SigningRequest[] // [leg2 open]
   mismatch?: number
   position_id?: string
@@ -188,6 +191,7 @@ function useLiveExecutionState() {
         phase: responsePhase(result, current),
         leg1Fill: recordedFill(result.leg1_fill, current.leg1Fill),
         leg2Fill: recordedFill(result.leg2_fill, current.leg2Fill),
+        leg2Rejected: result.leg2_rejected ?? current.leg2Rejected,
         mismatch: result.mismatch ?? current.mismatch,
         positionId: result.position_id ?? current.positionId,
         reason: result.reason ?? current.reason,
@@ -577,6 +581,7 @@ function useLiveExecutionState() {
           ...s,
           phase: 'awaiting_leg2_retry',
           leg2Fill: recordedFill(adv2.leg2_fill, s.leg2Fill),
+          leg2Rejected: adv2.leg2_rejected ?? s.leg2Rejected,
           leg2Request: retryReq,
           mismatch: adv2.mismatch ?? null,
           reason: adv2.reason ?? null,
@@ -640,6 +645,7 @@ function useLiveExecutionState() {
         ...s,
         phase: responsePhase(adv2, s),
         leg2Fill: recordedFill(adv2.leg2_fill, s.leg2Fill),
+        leg2Rejected: adv2.leg2_rejected ?? s.leg2Rejected,
         mismatch: adv2.mismatch ?? null,
         positionId: adv2.position_id ?? null,
         reason: adv2.reason ?? null,

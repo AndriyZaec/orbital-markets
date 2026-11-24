@@ -87,12 +87,18 @@ func (s *Scanner) marketDataUpdates(ctx context.Context) <-chan struct{} {
 
 func (s *Scanner) Opportunities() []domain.Opportunity {
 	inactive := s.InactiveAssets()
+	blocked := s.OpenBlockedAssets()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]domain.Opportunity, 0, len(s.opps))
 	for _, opportunity := range s.opps {
 		asset := strings.ToUpper(opportunity.Asset)
 		if inactive[opportunity.VenuePair.VenueA][asset] || inactive[opportunity.VenuePair.VenueB][asset] {
+			continue
+		}
+		_, blockedA := blocked[opportunity.VenuePair.VenueA][asset]
+		_, blockedB := blocked[opportunity.VenuePair.VenueB][asset]
+		if blockedA || blockedB {
 			continue
 		}
 		out = append(out, cloneOpportunity(opportunity))

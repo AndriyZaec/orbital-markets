@@ -36,7 +36,7 @@ function useCountdownToExpiry(expiresAt: string | null) {
   return remaining
 }
 
-type LegStatus = 'pending' | 'signing' | 'submitting' | 'checking' | 'accepted' | 'partial' | 'failed' | 'unwound' | 'skipped'
+type LegStatus = 'pending' | 'signing' | 'submitting' | 'checking' | 'accepted' | 'partial' | 'failed' | 'rejected' | 'unwound' | 'skipped'
 
 function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatus {
   switch (phase) {
@@ -59,7 +59,7 @@ function leg1Status(phase: ExecutionPhase, unwindStatus: UnwindStatus): LegStatu
   }
 }
 
-function leg2Status(phase: ExecutionPhase, fill: LegFillView | null): LegStatus {
+function leg2Status(phase: ExecutionPhase, fill: LegFillView | null, rejected = false): LegStatus {
   switch (phase) {
     case 'awaiting_leg2': return 'signing'
     case 'submitting_leg2': return 'submitting'
@@ -68,7 +68,7 @@ function leg2Status(phase: ExecutionPhase, fill: LegFillView | null): LegStatus 
     case 'open': return 'accepted'
     case 'recovering': return 'checking'
     case 'degraded': return fill && fill.filled_amount > 0 ? 'partial' : 'failed'
-    case 'aborted': return 'skipped'
+    case 'aborted': return rejected ? 'rejected' : 'skipped'
     default: return 'pending'
   }
 }
@@ -81,6 +81,7 @@ const STATUS_STYLE: Record<LegStatus, { dot: string; text: string; label: string
   accepted: { dot: 'bg-green-400', text: 'text-green-400', label: 'Filled' },
   partial: { dot: 'bg-orange-400', text: 'text-orange-400', label: 'Partial fill' },
   failed: { dot: 'bg-red-400', text: 'text-red-400', label: 'Failed' },
+  rejected: { dot: 'bg-red-400', text: 'text-red-400', label: 'Rejected' },
   unwound: { dot: 'bg-orange-400', text: 'text-orange-400', label: 'Closed' },
   skipped: { dot: 'bg-zinc-600', text: 'text-muted-foreground', label: 'Not attempted' },
 }
@@ -95,7 +96,7 @@ function LegCard({
       status === 'accepted' ? 'border-green-500/20 bg-green-500/[0.03]'
       : status === 'partial' ? 'border-orange-500/20 bg-orange-500/[0.03]'
       : status === 'checking' ? 'border-blue-500/20 bg-blue-500/[0.03]'
-      : status === 'failed' ? 'border-red-500/20 bg-red-500/[0.03]'
+      : status === 'failed' || status === 'rejected' ? 'border-red-500/20 bg-red-500/[0.03]'
       : status === 'unwound' ? 'border-orange-500/20 bg-orange-500/[0.03]'
       : status === 'signing' || status === 'submitting' ? 'border-yellow-500/20 bg-yellow-500/[0.03]'
       : 'border-border bg-white/[0.02]'
@@ -228,7 +229,7 @@ export function LiveExecutionModal({ state, onRetry, onClose, onViewPositions }:
           {state.phase !== 'idle' && !notStarted && (
             <div className="flex flex-col gap-3 mb-4">
               <LegCard label="Leg 1 · Riskier" venue={leg1Venue} status={leg1Status(phase, state.unwindStatus)} amount={leg1Amount} fill={state.leg1Fill} />
-              <LegCard label="Leg 2 · Hedge" venue={leg2Venue} status={leg2Status(phase, state.leg2Fill)} amount={leg2Amount} fill={state.leg2Fill} />
+              <LegCard label="Leg 2 · Hedge" venue={leg2Venue} status={leg2Status(phase, state.leg2Fill, state.leg2Rejected)} amount={leg2Amount} fill={state.leg2Fill} />
             </div>
           )}
 

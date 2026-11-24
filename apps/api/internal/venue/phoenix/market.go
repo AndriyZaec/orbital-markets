@@ -39,18 +39,23 @@ type ExchangeAccounts struct {
 }
 
 type MarketMetadata struct {
-	Symbol          string
-	Asset           string
-	Status          string
-	MarketPubkey    string
-	SplinePubkey    string
-	BaseLotDecimals int
-	TickSize        uint64
-	AmountIncrement float64
-	PriceIncrement  float64
-	FundingInterval time.Duration
-	MaxLeverage     int
-	OpenInterest    float64
+	Symbol                  string
+	Asset                   string
+	Status                  string
+	MarketPubkey            string
+	SplinePubkey            string
+	BaseLotDecimals         int
+	TickSize                uint64
+	AmountIncrement         float64
+	PriceIncrement          float64
+	FundingInterval         time.Duration
+	MaxLeverage             int
+	OpenInterest            float64
+	OpenInterestBaseLots    uint64
+	HaveOpenInterest        bool
+	OpenInterestCapBaseLots uint64
+	IsolatedOnly            bool
+	OpeningPolicyKnown      bool
 }
 
 type exchangeResponse struct {
@@ -70,15 +75,17 @@ type exchangeAuthorities struct {
 }
 
 type marketConfig struct {
-	Symbol                 string               `json:"symbol"`
-	MarketStatus           string               `json:"marketStatus"`
-	MarketPubkey           string               `json:"marketPubkey"`
-	SplinePubkey           string               `json:"splinePubkey"`
-	TickSize               int64                `json:"tickSize"`
-	BaseLotsDecimals       int                  `json:"baseLotsDecimals"`
-	FundingIntervalSeconds int64                `json:"fundingIntervalSeconds"`
-	LeverageTiers          []leverageTier       `json:"leverageTiers"`
-	StatsSnapshot          *marketStatsSnapshot `json:"statsSnapshot"`
+	Symbol                  string               `json:"symbol"`
+	MarketStatus            string               `json:"marketStatus"`
+	MarketPubkey            string               `json:"marketPubkey"`
+	SplinePubkey            string               `json:"splinePubkey"`
+	TickSize                int64                `json:"tickSize"`
+	BaseLotsDecimals        int                  `json:"baseLotsDecimals"`
+	FundingIntervalSeconds  int64                `json:"fundingIntervalSeconds"`
+	LeverageTiers           []leverageTier       `json:"leverageTiers"`
+	StatsSnapshot           *marketStatsSnapshot `json:"statsSnapshot"`
+	OpenInterestCapBaseLots *stringUint64        `json:"openInterestCapBaseLots"`
+	IsolatedOnly            *bool                `json:"isolatedOnly"`
 }
 
 type leverageTier struct {
@@ -86,7 +93,7 @@ type leverageTier struct {
 }
 
 type marketStatsSnapshot struct {
-	OpenInterestBaseLots stringUint64 `json:"openInterestBaseLots"`
+	OpenInterestBaseLots *stringUint64 `json:"openInterestBaseLots"`
 }
 
 type stringUint64 uint64
@@ -186,8 +193,8 @@ func normalizeMarketConfig(config marketConfig) (MarketMetadata, error) {
 	}
 
 	openInterest := 0.0
-	if config.StatsSnapshot != nil {
-		openInterest = float64(config.StatsSnapshot.OpenInterestBaseLots) * amountIncrement
+	if config.StatsSnapshot != nil && config.StatsSnapshot.OpenInterestBaseLots != nil {
+		openInterest = float64(*config.StatsSnapshot.OpenInterestBaseLots) * amountIncrement
 		if openInterest < 0 || math.IsNaN(openInterest) || math.IsInf(openInterest, 0) {
 			return MarketMetadata{}, errors.New("invalid open interest")
 		}
@@ -196,7 +203,7 @@ func normalizeMarketConfig(config marketConfig) (MarketMetadata, error) {
 	if asset == "" {
 		return MarketMetadata{}, errors.New("empty normalized asset")
 	}
-	return MarketMetadata{
+	market := MarketMetadata{
 		Symbol: config.Symbol, Asset: asset, Status: config.MarketStatus,
 		MarketPubkey: config.MarketPubkey, SplinePubkey: config.SplinePubkey,
 		BaseLotDecimals: config.BaseLotsDecimals, TickSize: uint64(config.TickSize),
@@ -204,7 +211,18 @@ func normalizeMarketConfig(config marketConfig) (MarketMetadata, error) {
 		PriceIncrement:  priceIncrement,
 		FundingInterval: time.Duration(config.FundingIntervalSeconds) * time.Second,
 		MaxLeverage:     int(math.Floor(maxLeverage)), OpenInterest: openInterest,
-	}, nil
+	}
+	if config.StatsSnapshot != nil && config.StatsSnapshot.OpenInterestBaseLots != nil {
+		market.OpenInterestBaseLots, market.HaveOpenInterest = uint64(*config.StatsSnapshot.OpenInterestBaseLots), true
+	}
+	if config.IsolatedOnly != nil {
+		market.IsolatedOnly = *config.IsolatedOnly
+	}
+	if config.OpenInterestCapBaseLots != nil {
+		market.OpenInterestCapBaseLots = uint64(*config.OpenInterestCapBaseLots)
+	}
+	market.OpeningPolicyKnown = config.IsolatedOnly != nil && config.OpenInterestCapBaseLots != nil
+	return market, nil
 }
 
 func validMarketStatus(status string) bool {

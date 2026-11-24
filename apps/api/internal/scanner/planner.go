@@ -110,6 +110,9 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if opp == nil {
 		return nil, fmt.Errorf("opportunity not found: %s", opportunityID)
 	}
+	if err := s.checkKnownOpenBlocks(opp.Asset, opp.VenuePair.VenueA, opp.VenuePair.VenueB); err != nil {
+		return nil, err
+	}
 	if opp.Status != domain.OpportunityAvailable {
 		return nil, &OpportunityStatusError{
 			ID: opportunityID, Status: opp.Status, Reasons: opp.AvailabilityReasons,

@@ -13,11 +13,37 @@ import (
 )
 
 type prepareMarketAdapter struct {
-	mu   sync.RWMutex
-	data venue.MarketData
+	mu               sync.RWMutex
+	data             venue.MarketData
+	openBlocked      map[string]string
+	openBlockUnready bool
+	openOrderCheck   func(context.Context, string, float64) (string, error)
 }
 
 func (a *prepareMarketAdapter) Name() string { return a.data.Venue }
+func (a *prepareMarketAdapter) OpenBlockedAssets() map[string]string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make(map[string]string, len(a.openBlocked))
+	for asset, reason := range a.openBlocked {
+		out[asset] = reason
+	}
+	return out
+}
+func (a *prepareMarketAdapter) OpenBlockDataReady() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return !a.openBlockUnready
+}
+func (a *prepareMarketAdapter) CheckOpenOrder(ctx context.Context, asset string, amount float64) (string, error) {
+	a.mu.RLock()
+	check := a.openOrderCheck
+	a.mu.RUnlock()
+	if check != nil {
+		return check(ctx, asset, amount)
+	}
+	return "", nil
+}
 func (a *prepareMarketAdapter) FetchMarketData(context.Context) ([]venue.MarketData, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

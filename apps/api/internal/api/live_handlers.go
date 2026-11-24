@@ -115,6 +115,12 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 		notional = *req.RequestedNotional
 	}
 	// 1. Build a fresh execution plan
+	if opp := s.scanner.FindOpportunity(req.OpportunityID); opp != nil {
+		if err := s.scanner.CheckOpenAvailability(opp.Asset, opp.VenuePair.VenueA, opp.VenuePair.VenueB); err != nil {
+			writeOpenBlockedError(w, err)
+			return
+		}
+	}
 	progress.Stage("quotes")
 	// Pending preview liquidity is resolved by the mandatory fresh depth check
 	// before signing below; warnings are presentation, not readiness evidence.
@@ -370,6 +376,14 @@ func (s *Server) handleLivePrepare(w http.ResponseWriter, r *http.Request) {
 	leg1, leg2 = finalLeg1, finalLeg2
 	// Both are on the riskier leg's venue/wallet and signed together up front,
 	// so the backend holds a signature-free escape the moment leg 1 fills.
+	if err := s.scanner.CheckOpenAvailability(opp.Asset, planVenues...); err != nil {
+		writeOpenBlockedError(w, err)
+		return
+	}
+	if err := s.scanner.CheckOpenOrders(r.Context(), opp.Asset, leg1Amount, planVenues...); err != nil {
+		writeOpenBlockedError(w, err)
+		return
+	}
 	progress.Stage("signing_requests")
 	if err := r.Context().Err(); err != nil {
 		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "Preparation timed out. Try again shortly.", "code": "PREPARE_TIMEOUT"})
