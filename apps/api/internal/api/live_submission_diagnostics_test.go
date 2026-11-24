@@ -89,6 +89,14 @@ func TestHedgeRejectionReasonsSurviveInitialAndRetryFlowsWithoutPublicExposure(t
 		t.Fatal(err)
 	}
 	publicStatus, _ := json.Marshal(status)
+	for _, body := range []string{firstResponse, response.Body.String(), string(publicStatus)} {
+		var public struct {
+			Leg2Rejected bool `json:"leg2_rejected"`
+		}
+		if err := json.Unmarshal([]byte(body), &public); err != nil || !public.Leg2Rejected {
+			t.Fatalf("structured hedge rejection signal missing: %s err=%v", body, err)
+		}
+	}
 	events, err := s.liveStore.GetEvents(ctx, session.Plan.ID)
 	if err != nil {
 		t.Fatal(err)

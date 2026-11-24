@@ -57,6 +57,7 @@ func (s *Server) liveSessionStatusSnapshot(
 	if err != nil || validateDurableSessionOwnership(record, session) != nil {
 		return response, nil
 	}
+	response["leg2_rejected"] = len(session.SubmissionRejections) > 0
 	position, err := s.liveStore.GetPositionForBindings(ctx, session.Plan.ID, record.AccountBindings)
 	if err != nil {
 		return response, nil

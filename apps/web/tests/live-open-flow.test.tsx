@@ -81,6 +81,33 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('prepare integration with the signing and advance flow', () => {
+  it.each(['hedge rejected twice', 'leg 1 underfilled'] as const)('shows the correct aborted hedge status after %s', async (scenario) => {
+    const rejected = scenario === 'hedge rejected twice'
+    const rejectionDetail = 'Cannot increase position when open interest is at cap'
+    mocks.apiFetch.mockResolvedValueOnce(prepareResponse())
+    if (rejected) {
+      mocks.apiFetch
+        .mockResolvedValueOnce(Response.json({ status: 'awaiting_leg2_sign',
+          leg1_fill: { filled_amount: 1, avg_price: 100, status: 'filled' },
+          signing_requests: [signingRequest('hyperliquid', 'open')] }))
+        .mockResolvedValueOnce(Response.json({ status: 'awaiting_leg2_retry_sign', leg2_rejected: true,
+          reason: rejectionDetail, signing_requests: [{ ...signingRequest('hyperliquid', 'open'), id: 'retry', client_order_id: 'retry' }] }))
+        .mockResolvedValueOnce(Response.json({ status: 'aborted', unwind_status: 'confirmed', leg2_rejected: true, reason: rejectionDetail }))
+    } else {
+      mocks.apiFetch.mockResolvedValueOnce(Response.json({ status: 'aborted', unwind_status: 'confirmed',
+        leg1_fill: { filled_amount: .4, avg_price: 100, status: 'partial_fill' } }))
+    }
+    const { result } = renderHook(useLiveExecution, { wrapper })
+    await act(async () => { await result.current.executeLive(intent()) })
+    expect(result.current.state.phase).toBe('aborted')
+    expect(result.current.state.leg2Rejected).toBe(rejected)
+    expect(mocks.apiFetch).toHaveBeenCalledTimes(rejected ? 4 : 2)
+    render(<LiveExecutionModal state={result.current.state} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
+    expect(screen.getByText(rejected ? 'Rejected' : 'Not attempted')).toBeTruthy()
+    expect(screen.queryByText(rejected ? 'Not attempted' : 'Rejected')).toBeNull()
+    expect(screen.queryByText(rejectionDetail)).toBeNull()
+  })
+
   it.each(['confirmed', 'unconfirmed'] as const)('normalizes a failed hedge response using %s unwind evidence', async (unwind_status) => {
     mocks.apiFetch.mockResolvedValueOnce(prepareResponse())
       .mockResolvedValueOnce(Response.json({ status: 'awaiting_leg2_sign', leg1_fill: { filled_amount: .6, avg_price: 100, status: 'filled' },
@@ -103,9 +130,10 @@ describe('prepare integration with the signing and advance flow', () => {
     await act(async () => { await result.current.executeLive(intent()) })
     expect(result.current.state.phase).toBe('recovering')
     expect(mocks.sessionEvent).toBeTruthy()
-    act(() => mocks.sessionEvent?.({ status: 'failed', remaining_exposure: [],
+    act(() => mocks.sessionEvent?.({ status: 'failed', remaining_exposure: [], leg2_rejected: true,
       leg1_fill: { filled_amount: 0, avg_price: 0, status: 'unconfirmed' } }))
     expect(result.current.state.phase).toBe('degraded')
+    expect(result.current.state.leg2Rejected).toBe(true)
     expect(result.current.state.leg1Fill?.filled_amount).toBe(.6)
     render(<LiveExecutionModal state={result.current.state} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Try Again' })).toBeNull()

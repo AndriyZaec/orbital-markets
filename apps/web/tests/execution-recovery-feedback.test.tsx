@@ -17,6 +17,13 @@ function state(unwindStatus: UnwindStatus, exposure = false): LiveExecutionState
 }
 afterEach(cleanup)
 
+it.each([false, true])('labels an aborted hedge using structured rejection evidence (rejected=%s)', (rejected) => {
+  render(<LiveExecutionModal state={{ ...state('confirmed'), leg2Rejected: rejected }} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
+  expect(screen.getByText(rejected ? 'Rejected' : 'Not attempted')).toBeTruthy()
+  expect(screen.queryByText(rejected ? 'Not attempted' : 'Rejected')).toBeNull()
+  expect(screen.queryByText(/instruction bytes manifest|Leg 2 signing failed/)).toBeNull()
+})
+
 it('shows confirmed closure rather than a never-opened failure for a failed response with a known fill', () => {
   render(<LiveExecutionModal state={{ ...state('confirmed'), phase: 'failed' }} onRetry={vi.fn()} onClose={vi.fn()} onViewPositions={vi.fn()} />)
   expect(screen.getByText('Open safely aborted')).toBeTruthy()

@@ -64,9 +64,10 @@ func TestInvalidHedgeUnwindOutcomeMatchesDurableSessionStatus(t *testing.T) {
 			response := httptest.NewRecorder()
 			s.recoverInvalidHedge(response, ctx, session, "leg-2 retry rejected")
 			var body struct {
-				Status    string `json:"status"`
-				Unwind    string `json:"unwind_status"`
-				Remaining []any  `json:"remaining_exposure"`
+				Status       string `json:"status"`
+				Unwind       string `json:"unwind_status"`
+				Remaining    []any  `json:"remaining_exposure"`
+				Leg2Rejected bool   `json:"leg2_rejected"`
 			}
 			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
@@ -74,12 +75,18 @@ func TestInvalidHedgeUnwindOutcomeMatchesDurableSessionStatus(t *testing.T) {
 			if body.Status != tc.status || body.Unwind != tc.unwind {
 				t.Fatalf("immediate response = %s, want %s/%s", response.Body.String(), tc.status, tc.unwind)
 			}
+			if body.Leg2Rejected {
+				t.Fatal("reason text without a recorded rejection became rejection evidence")
+			}
 			stored, err := s.liveSessionStatusSnapshot(ctx, session.ID, bindings.Accounts)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if stored["status"] != tc.status {
 				t.Fatalf("HTTP/SSE session snapshot disagrees with immediate response: %+v", stored)
+			}
+			if stored["leg2_rejected"] != false {
+				t.Fatal("session status invented a hedge rejection")
 			}
 			if tc.status == "aborted" && (stored["unwind_status"] != "confirmed" || len(body.Remaining) != 0) {
 				t.Fatalf("clean abort lost confirmed closure evidence: %+v", stored)

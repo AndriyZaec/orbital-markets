@@ -20,8 +20,10 @@ dist/
 *.swp
 *.swo
 
-# Claude Code
+# AI agent configuration
 .claude/
+/.agents/
+/AGENTS.md
 
 # Database
 *.db
