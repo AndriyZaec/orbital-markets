@@ -57,6 +57,9 @@ func TestPlanDepthSupportsAcknowledgedImpactAndRejectsInsufficientDepth(t *testi
 	if err != nil || !plan.Executable || !plan.Liquidity.RequiresAcknowledgement || math.Abs(plan.Liquidity.Impact-0.1) > 1e-12 {
 		t.Fatalf("high impact must be acknowledgeable, not blocked: %+v, %v", plan, err)
 	}
+	if containsWarning(plan.Warnings, "fill beyond BBO is unknown") {
+		t.Fatalf("verified L2 plan still reports unknown depth: %v", plan.Warnings)
+	}
 	if source.amount != plan.BaseAmount || math.Abs(plan.BaseAmount-500.0/100.1) > 1e-12 {
 		t.Fatal("legs were sized independently")
 	}
@@ -75,6 +78,9 @@ func TestPlanDepthSupportsAcknowledgedImpactAndRejectsInsufficientDepth(t *testi
 	if err != nil || blocked.Executable || blocked.Liquidity.Status != "insufficient" {
 		t.Fatalf("insufficient quote: %+v, %v", blocked, err)
 	}
+	if containsWarning(blocked.Warnings, "fill beyond BBO is unknown") {
+		t.Fatalf("known insufficient depth is reported as unknown: %v", blocked.Warnings)
+	}
 	source.err = liquidity.ErrUnavailable
 	fallback, err := s.BuildPlan(context.Background(), opp.ID, 2, 100)
 	if err != nil || !fallback.Executable || fallback.Liquidity.Status != "bbo" {
@@ -83,6 +89,9 @@ func TestPlanDepthSupportsAcknowledgedImpactAndRejectsInsufficientDepth(t *testi
 	blocked, err = s.BuildPlan(context.Background(), opp.ID, 2, 500)
 	if err != nil || blocked.Executable || blocked.Liquidity.Status != "unavailable" {
 		t.Fatalf("unknown depth beyond BBO: %+v, %v", blocked, err)
+	}
+	if !containsWarning(blocked.Warnings, "fill beyond BBO is unknown") {
+		t.Fatalf("unverified oversized plan lost its depth warning: %v", blocked.Warnings)
 	}
 }
 
