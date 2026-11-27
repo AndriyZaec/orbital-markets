@@ -251,13 +251,6 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 	if !shortDepthAvailable {
 		warnings = append(warnings, fmt.Sprintf("%s: missing bid depth for short leg", shortSnap.Venue))
 	}
-	if bestPriceCapacity > 0 && notional > bestPriceCapacity {
-		warnings = append(warnings, fmt.Sprintf(
-			"requested notional $%.2f exceeds visible best-price capacity $%.2f; fill beyond BBO is unknown",
-			notional,
-			bestPriceCapacity,
-		))
-	}
 	switch slippageLevel {
 	case domain.SlippageWarn:
 		warnings = append(warnings, fmt.Sprintf("entry cost %.2f%%: elevated slippage", totalCosts*100))
@@ -351,6 +344,14 @@ func (s *Scanner) BuildPlanWithLeverageCaps(
 			plan.Executable = false
 			plan.Warnings = append(plan.Warnings, err.Error())
 		}
+	}
+	if bestPriceCapacity > 0 && notional > bestPriceCapacity &&
+		(plan.Liquidity == nil || plan.Liquidity.Status == "unavailable") {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"requested notional $%.2f exceeds visible best-price capacity $%.2f; fill beyond BBO is unknown",
+			notional,
+			bestPriceCapacity,
+		))
 	}
 	return plan, nil
 }
